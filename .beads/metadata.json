@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "parvi",
+  "project_id": "11e13009-2c82-4a84-a557-9695de14f12b"
+}
