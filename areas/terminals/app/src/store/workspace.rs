@@ -160,14 +160,7 @@ pub enum TileState<'a> {
     Ended(&'a str),
 }
 
-/// The link's state as a tile needs it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LinkState {
-    Connecting,
-    Open,
-    Lost,
-    Refused,
-}
+pub use parvi_app_kit::link::client::LinkState;
 
 impl Workspace {
     /// The tabs on the bar.

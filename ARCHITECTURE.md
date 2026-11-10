@@ -82,12 +82,22 @@ a frame kind, or take a kind the link or the shell owns, naming both.
 
 - **Host and Hub.** A `Host` is a cheap handle on the `Hub`, the state the
   shell and every page share: the fleet link, settings, status line, toast and
-  the stack of menus and layers. Through it a page lists live nodes, makes
-  HTTP requests, sends frames, turns channels on, reports, opens menus and
-  layers, keeps its section of `app.json`, and asks.
-- **Events.** The hub never calls a page. A frame of a page's kinds, an ask it
-  answers or a closed layer's dismiss reaches the shell as a hub event after
-  the update that caused it, so a page may use its Host inside its own update.
+  the stack of menus and layers. Through it a page lists live nodes and where
+  each device is, makes HTTP requests, sends frames, turns channels on,
+  reports, opens menus and layers, posts desktop notifications (the shell
+  owns the one click handler and runs the page's click), redials, keeps its
+  section of `app.json`, and asks.
+- **Taps.** A page whose frames are too many for the UI thread (terminal
+  screens) registers a tap: the network thread hands it every frame first,
+  and the page wakes itself at most once per paint.
+- **Events.** The hub never calls a page. A frame of a page's kinds, a link
+  to a node opening or going, an ask it answers or a closed layer's dismiss
+  reaches the shell as a hub event after the update that caused it, so a page
+  may use its Host inside its own update.
+- **Tabs and chords.** A page may draw its own part of the tab bar (the
+  terminals draw their workspace tabs there). A chord marked `everywhere`
+  works from every page, as CHROTE's terminal chords do, and brings its page
+  forward when it acts.
 - **Asks.** Pages never depend on each other. An `Ask` (send a reference, open
   a path, reveal a thing) is plain data that goes to the page declaring it
   answers it; when none does, the asker gets an `unanswered` error and the

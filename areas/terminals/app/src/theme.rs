@@ -10,6 +10,10 @@ pub mod size {
     pub use parvi_app_kit::theme::size::*;
 
     pub const STRIP: f32 = 44.;
+    /// A tab's name field while it is renamed in place.
+    pub const TAB_FIELD: f32 = 180.;
+    /// A shell's `>_` mark, as a share of the mark's size.
+    pub const SHELL_MARK: f32 = 0.8;
     pub const RAIL: f32 = 260.;
     pub const TILE_HEAD: f32 = 34.;
     pub const TILE_GAP: f32 = 6.;
@@ -49,8 +53,6 @@ pub mod size {
 
 /// How much of a thing shows when it steps back.
 pub mod fade {
-    pub use parvi_app_kit::theme::fade::*;
-
     /// A device that went away: its windows and rows.
     pub const DIMMED: f32 = 0.5;
 }
@@ -98,4 +100,10 @@ pub mod place {
             .fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
         DEVICES[h as usize % DEVICES.len()]
     }
+}
+
+/// The colours of the harness marks that keep their own.
+pub mod mark {
+    /// Claude Code's critter, in Anthropic's clay.
+    pub const CLAUDE: &str = "#D97757";
 }

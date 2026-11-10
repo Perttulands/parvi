@@ -108,9 +108,38 @@ pub fn width(remembered: Option<f32>, room: f32) -> f32 {
     wanted.min((room - size::DRAWER_ROOM).max(size::DRAWER_MIN))
 }
 
+/// An attachment's size in 1024s: B, KB, MB, GB, TB; one decimal below 10.
+pub fn bytes(n: u64) -> String {
+    if n == 0 {
+        return "0 B".into();
+    }
+    let units = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= 1024. && i < units.len() - 1 {
+        v /= 1024.;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{n} B")
+    } else if v < 10. {
+        format!("{v:.1} {}", units[i])
+    } else {
+        format!("{v:.0} {}", units[i])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sizes_read_in_1024s() {
+        assert_eq!(bytes(0), "0 B");
+        assert_eq!(bytes(512), "512 B");
+        assert_eq!(bytes(8 * 1024 * 1024 * 1024 - 100 * 1024 * 1024), "7.9 GB");
+        assert_eq!(bytes(280 * 1024u64.pow(3)), "280 GB");
+    }
 
     #[test]
     fn the_reference_comes_first_then_the_note_then_the_files() {

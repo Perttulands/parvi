@@ -5,6 +5,7 @@
 use super::clusters::Clusters;
 use alacritty_terminal::event::{Event as TermEvent, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::Processor;
 
@@ -119,6 +120,22 @@ impl Screen {
     /// How many rows from the top must stay in view when the grid is taller
     /// than its box: down to the cursor on the live screen, all of them when
     /// reading back.
+    /// The lines on screen, as read, each without its trailing blanks.
+    pub fn text(&self) -> String {
+        let grid = self.term.grid();
+        let offset = grid.display_offset() as i32;
+        (0..self.rows as i32)
+            .map(|row| {
+                (0..self.cols)
+                    .map(|c| grid[Point::new(Line(row - offset), Column(c))].c)
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     pub fn rows_to_show(&self) -> usize {
         if self.scrolled_back() {
             return self.rows;
@@ -131,7 +148,6 @@ impl Screen {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alacritty_terminal::index::{Column, Line, Point};
 
     fn row_text(s: &Screen, row: i32) -> String {
         let grid = s.term.grid();
