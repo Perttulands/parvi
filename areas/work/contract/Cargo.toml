@@ -1,0 +1,16 @@
+[package]
+name = "parvi-work-contract"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+parvi-core = { path = "../../../kit/core" }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

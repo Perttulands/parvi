@@ -1,0 +1,28 @@
+[package]
+name = "parvi-work"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+parvi-core = { path = "../../../kit/core" }
+parvi-node-kit = { path = "../../../kit/node-kit" }
+parvi-work-contract = { path = "../contract" }
+anyhow = "1"
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+tokio = { version = "1", features = ["full", "test-util"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+parvi-testkit = { path = "../../../kit/testkit" }
+tower = { version = "0.5", features = ["util"] }
+futures-util = "0.3"
+tokio-tungstenite = "0.29"

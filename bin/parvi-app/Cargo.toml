@@ -26,6 +26,7 @@ log = "0.4"
 # The pages, one line each, as in PAGES.
 parvi-terminals-app = { path = "../../areas/terminals/app" }
 parvi-scheduled-app = { path = "../../areas/scheduled/app" }
+parvi-work-app = { path = "../../areas/work/app" }
 
 # Linux builds are for testing on an invisible X display; the product is Windows.
 [target.'cfg(target_os = "linux")'.dependencies]

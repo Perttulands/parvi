@@ -8,7 +8,11 @@ use parvi_app_kit::Build;
 use parvi_app_shell::start;
 use std::borrow::Cow;
 
-pub const PAGES: &[Build] = &[parvi_terminals_app::build, parvi_scheduled_app::build];
+pub const PAGES: &[Build] = &[
+    parvi_terminals_app::build,
+    parvi_scheduled_app::build,
+    parvi_work_app::build,
+];
 
 fn fonts() -> Vec<Cow<'static, [u8]>> {
     vec![
