@@ -15,7 +15,7 @@ use parvi_app_kit::hub::{HubEvent, Surface};
 use parvi_app_kit::page::Meta;
 use parvi_app_kit::{Build, Error, Host, Hub, Mounted, declared, mount as mount_page};
 use parvi_core::frame::{overlap, reserved};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 /// How long the keys a chord was typed with stay on screen.
@@ -35,6 +35,8 @@ pub struct Shell {
     /// Pages whose drawing failed, and why, until Try again.
     pub(crate) failed: HashMap<&'static str, String>,
     pub(crate) view: ViewControl,
+    /// Pages whose channels are on: the one shown, and those docked.
+    channels_on: HashSet<&'static str>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -151,6 +153,7 @@ impl Shell {
             keys,
             failed: HashMap::new(),
             view: ViewControl::default(),
+            channels_on: HashSet::new(),
             _subscriptions: subscriptions,
         }
     }
@@ -169,26 +172,39 @@ impl Shell {
     }
 
     /// Shows page `i`: the one shown before hides and turns its channels
-    /// off, this one turns its on.
+    /// off unless its dock is open, this one turns its on.
     pub fn show(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
         if self.shown == Some(i) {
             return;
         }
-        if let Some(old) = self.shown {
-            let page = &self.pages[old];
-            page.shown(false, window, cx);
-            for kind in page.meta.channels {
-                self.host.channel(*kind, false, cx);
-            }
+        let old = self.shown.replace(i);
+        if let Some(old) = old {
+            self.pages[old].shown(false, window, cx);
+            self.sync_channels(old, cx);
         }
-        self.shown = Some(i);
-        let page = &self.pages[i];
-        for kind in page.meta.channels {
-            self.host.channel(*kind, true, cx);
-        }
-        page.shown(true, window, cx);
+        self.sync_channels(i, cx);
+        self.pages[i].shown(true, window, cx);
         self.refocus(window, cx);
         cx.notify();
+    }
+
+    /// Turns page `i`'s channels on while it shows or its dock is open,
+    /// and off otherwise.
+    fn sync_channels(&mut self, i: usize, cx: &mut Context<Self>) {
+        let meta = self.pages[i].meta;
+        let wanted = self.shown == Some(i) || self.hub.read(cx).docked(meta.id);
+        let on = self.channels_on.contains(meta.id);
+        if wanted == on {
+            return;
+        }
+        if wanted {
+            self.channels_on.insert(meta.id);
+        } else {
+            self.channels_on.remove(meta.id);
+        }
+        for kind in meta.channels {
+            self.host.channel(*kind, wanted, cx);
+        }
     }
 
     /// Shows the page with this id. False when there is none.
@@ -229,6 +245,11 @@ impl Shell {
             }
             HubEvent::Show(id) => {
                 self.show_id(id, window, cx);
+            }
+            HubEvent::Dock(id) => {
+                if let Some(i) = self.index_of(id) {
+                    self.sync_channels(i, cx);
+                }
             }
             HubEvent::SettingChanged(id) => {
                 if let Some(i) = self.index_of(id) {

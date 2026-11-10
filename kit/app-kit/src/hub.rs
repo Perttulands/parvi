@@ -74,6 +74,8 @@ pub enum HubEvent {
     Layers { closed: Vec<Surface> },
     /// A setting page `page` declares was changed for it.
     SettingChanged(&'static str),
+    /// Page `page` opened or closed its dock.
+    Dock(&'static str),
     /// The link to `node` changed state; `None` when the app no longer
     /// follows that node. Every page hears it.
     Link {
@@ -103,6 +105,9 @@ pub struct Hub {
     models: HashMap<TypeId, Model>,
     /// What an answer opened beside each page, by the page.
     beside: HashMap<&'static str, AnyView>,
+    /// The docks open beside every page, by the page that supplies each,
+    /// in the order they opened.
+    docks: Vec<(&'static str, AnyView)>,
 }
 
 /// A read model: its entity, and the page that publishes it once one has.
@@ -150,6 +155,7 @@ impl Hub {
             clicks: HashMap::new(),
             models: HashMap::new(),
             beside: HashMap::new(),
+            docks: vec![],
         }
     }
 
@@ -542,6 +548,33 @@ impl Hub {
             Some(view) => self.beside.insert(page, view),
             None => self.beside.remove(page),
         };
+        cx.notify();
+    }
+
+    /// The docks open, in the order they opened, by the page each is from.
+    pub fn docks(&self) -> Vec<(&'static str, AnyView)> {
+        self.docks.clone()
+    }
+
+    pub fn docked(&self, page: &str) -> bool {
+        self.docks.iter().any(|(p, _)| *p == page)
+    }
+
+    /// Opens `view` as `page`'s dock, in place of one it had, or closes it.
+    pub fn set_dock(&mut self, page: &'static str, view: Option<AnyView>, cx: &mut Context<Self>) {
+        let at = self.docks.iter().position(|(p, _)| *p == page);
+        match (at, view) {
+            (Some(i), Some(view)) => self.docks[i].1 = view,
+            (None, Some(view)) => {
+                self.docks.push((page, view));
+                cx.emit(HubEvent::Dock(page));
+            }
+            (Some(i), None) => {
+                self.docks.remove(i);
+                cx.emit(HubEvent::Dock(page));
+            }
+            (None, None) => return,
+        }
         cx.notify();
     }
 

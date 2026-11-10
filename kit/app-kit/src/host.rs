@@ -397,6 +397,26 @@ impl Host {
         self.update(cx, |h, cx| h.set_beside(page, None, cx));
     }
 
+    /// Opens this page's dock: `view` stays beside whichever page shows,
+    /// at the window's side, until [`Host::close_dock`]; a dock already
+    /// open shows `view` instead. While it is open the page's channels stay
+    /// on, so its frames keep arriving while another page shows.
+    pub fn show_dock(&self, view: AnyView, cx: &mut App) {
+        let page = self.page;
+        self.update(cx, |h, cx| h.set_dock(page, Some(view), cx));
+    }
+
+    /// Closes this page's dock; its channels go off unless it shows.
+    pub fn close_dock(&self, cx: &mut App) {
+        let page = self.page;
+        self.update(cx, |h, cx| h.set_dock(page, None, cx));
+    }
+
+    /// Whether this page's dock is open.
+    pub fn docked(&self, cx: &App) -> bool {
+        self.read(cx, |h| h.docked(self.page)).unwrap_or(false)
+    }
+
     /// The read model of type `T` pages share: one page publishes it, any
     /// page reads and observes it, built in any order. `None` only while
     /// the app closes.

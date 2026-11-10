@@ -233,6 +233,25 @@ impl Shell {
         boundary::failed(&t, meta.title, &why, retry)
     }
 
+    /// The docks pages keep open beside every page, at the window's side;
+    /// each view sets its own width.
+    fn render_docks(&self, t: &Theme, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let docks = self.hub.read(cx).docks();
+        docks
+            .into_iter()
+            .map(|(page, view)| {
+                div()
+                    .debug_selector(move || format!("dock-{page}"))
+                    .flex_none()
+                    .h_full()
+                    .border_l_1()
+                    .border_color(t.divider)
+                    .child(view)
+                    .into_any_element()
+            })
+            .collect()
+    }
+
     /// The layers on the stack that cover `cover`, bottom first.
     fn render_layers(&mut self, cover: Cover, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let stack: Vec<Surface> = self.hub.read(cx).stack.iter().cloned().collect();
@@ -433,12 +452,20 @@ impl Render for Shell {
             .child(self.render_tab_bar(window, cx))
             .child(
                 div()
-                    .id("page")
                     .flex_1()
                     .min_h_0()
-                    .relative()
-                    .child(page)
-                    .children(self.render_layers(Cover::Page, cx)),
+                    .flex()
+                    .child(
+                        div()
+                            .id("page")
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .relative()
+                            .child(page)
+                            .children(self.render_layers(Cover::Page, cx)),
+                    )
+                    .children(self.render_docks(&t, cx)),
             )
             .child(self.render_status(cx))
             .children(self.render_layers(Cover::Window, cx))
