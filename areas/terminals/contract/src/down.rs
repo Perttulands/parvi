@@ -27,6 +27,14 @@ pub enum Seat {
     Other,
 }
 
+/// Every session the app follows, across nodes, as the terminals page last
+/// heard them: the read model it publishes for other pages
+/// (`parvi_app_kit::Host::model`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SessionList {
+    pub sessions: Vec<Session>,
+}
+
 /// A session as one node lists it.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct Session {

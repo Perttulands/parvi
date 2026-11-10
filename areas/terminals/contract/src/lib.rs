@@ -8,7 +8,9 @@ use parvi_core::frame::Kinds;
 
 mod down;
 pub mod session_copy;
-pub use down::{AgentEvent, Down, EventKind, Harness, Launcher, Pane, Seat, Session, decode_down};
+pub use down::{
+    AgentEvent, Down, EventKind, Harness, Launcher, Pane, Seat, Session, SessionList, decode_down,
+};
 
 /// Every frame kind the area owns, both ways. 0x1b (the fleet's nodes) and
 /// 0x04, 0x1c, 0x1d and 0x2a (settings) keep their numbers for those areas.

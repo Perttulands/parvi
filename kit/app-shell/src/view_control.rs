@@ -190,7 +190,7 @@ impl Shell {
         }
         self.show(i, window, cx);
         if let Some(ask) = open.reveal {
-            self.pages[i].answer(ask, window, cx);
+            self.pages[i].answer(ask, "", window, cx);
         }
         Ok(self.view_snapshot())
     }

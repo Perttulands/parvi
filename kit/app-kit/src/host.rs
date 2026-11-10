@@ -14,17 +14,21 @@ use crate::settings::Place;
 use gpui::{
     AnyView, App, Context, Entity, FocusHandle, Pixels, Point, SystemNotification, Task, WeakEntity,
 };
+use parvi_core::frame::{Kinds, owns};
 use parvi_core::{Error, NodeId};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 /// A page's handle on the hub. Cloning it is cheap.
 #[derive(Clone)]
 pub struct Host {
     page: &'static str,
+    /// The page's frame kinds: all its taps see.
+    kinds: Kinds,
     hub: WeakEntity<Hub>,
 }
 
@@ -190,6 +194,7 @@ impl Host {
     pub fn new(hub: &Entity<Hub>) -> Self {
         Self {
             page: "",
+            kinds: &[],
             hub: hub.downgrade(),
         }
     }
@@ -198,10 +203,11 @@ impl Host {
         self.page
     }
 
-    /// The same hub, for page `page`.
-    pub fn for_page(&self, page: &'static str) -> Host {
+    /// The same hub, for page `page`, whose frame kinds are `kinds`.
+    pub fn for_page(&self, page: &'static str, kinds: Kinds) -> Host {
         Host {
             page,
+            kinds,
             hub: self.hub.clone(),
         }
     }
@@ -286,10 +292,14 @@ impl Host {
             .unwrap_or_default()
     }
 
-    /// Hands every frame from every node to `tap` on the network thread
-    /// first, from now on (see [`Tap`]).
+    /// Hands every frame of this page's kinds, from every node, to `tap`
+    /// on the network thread first, from now on (see [`Tap`]). Frames of
+    /// other kinds never reach it.
     pub fn tap(&self, tap: Tap, cx: &App) {
-        self.read(cx, |h| h.fleet.tap(tap));
+        let kinds = self.kinds;
+        let mine: Tap =
+            Arc::new(move |node, kind, body| owns(kinds, kind) && tap(node, kind, body));
+        self.read(cx, |h| h.fleet.tap(mine));
     }
 
     /// Turns a channel on or off on every node, and on each node that comes
@@ -366,8 +376,53 @@ impl Host {
     /// Hands `ask` to the page that answers it. When none does, the status
     /// line says so and so does the error.
     pub fn ask(&self, ask: Ask, cx: &mut App) -> Result<(), Error> {
-        self.update(cx, |h, cx| h.ask(ask, cx))
+        let from = self.page;
+        self.update(cx, |h, cx| h.ask(from, ask, cx))
             .unwrap_or_else(|| Err(Error::new("closed", "The app is closing.")))
+    }
+
+    /// The view an answer put beside this page, if one is open there.
+    pub fn beside(&self, cx: &App) -> Option<AnyView> {
+        self.read(cx, |h| h.beside(self.page)).flatten()
+    }
+
+    /// Answers a beside ask ([`Ask::beside`]): `view` opens beside page
+    /// `asker`, which draws it where its layout has room, and stays shown.
+    pub fn show_beside(&self, asker: &'static str, view: AnyView, cx: &mut App) {
+        self.update(cx, |h, cx| h.set_beside(asker, Some(view), cx));
+    }
+
+    /// Closes what is beside page `page` (its asker, or the answerer).
+    pub fn close_beside(&self, page: &'static str, cx: &mut App) {
+        self.update(cx, |h, cx| h.set_beside(page, None, cx));
+    }
+
+    /// The read model of type `T` pages share: one page publishes it, any
+    /// page reads and observes it, built in any order. `None` only while
+    /// the app closes.
+    pub fn model<T: Default + 'static>(&self, cx: &mut App) -> Option<Entity<T>> {
+        self.update(cx, |h, cx| h.model::<T>(cx))
+    }
+
+    /// Publishes `value` as the read model `T`, for every page that reads
+    /// it; refused when another page publishes `T`.
+    /// Readers hear only a value that differs from the last.
+    pub fn publish<T: Default + PartialEq + 'static>(
+        &self,
+        value: T,
+        cx: &mut App,
+    ) -> Result<(), Error> {
+        let page = self.page;
+        let model = self
+            .update(cx, |h, cx| h.publisher::<T>(page, cx))
+            .unwrap_or_else(|| Err(Error::new("closed", "The app is closing.")))?;
+        model.update(cx, |m, cx| {
+            if *m != value {
+                *m = value;
+                cx.notify();
+            }
+        });
+        Ok(())
     }
 
     /// Dials every link again now, instead of waiting out its backoff.

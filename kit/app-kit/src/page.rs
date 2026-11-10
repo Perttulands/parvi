@@ -64,8 +64,17 @@ pub trait Page: Render + Sized + 'static {
     /// The page came forward (`true`) or went behind another.
     fn shown(&mut self, _shown: bool, _window: &mut Window, _cx: &mut Context<Self>) {}
 
-    /// An ask of a kind it answers.
-    fn answer(&mut self, _ask: Ask, _window: &mut Window, _cx: &mut Context<Self>) {}
+    /// An ask of a kind it answers, from page `from` (`""`: the shell). A
+    /// beside ask ([`Ask::beside`]) is answered with
+    /// [`Host::show_beside`] and leaves `from` shown.
+    fn answer(
+        &mut self,
+        _ask: Ask,
+        _from: &'static str,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+    }
 
     /// Its chords, live while it shows; those marked
     /// [`Chord::everywhere`] are live while any page shows.
@@ -114,7 +123,7 @@ pub fn mount<P: Page>(
     cx: &mut App,
     make: impl FnOnce(Host, &mut Window, &mut Context<P>) -> P,
 ) -> Mounted {
-    let host = host.for_page(P::ID);
+    let host = host.for_page(P::ID, P::KINDS);
     let entity = cx.new(|cx| make(host, window, cx));
     Mounted {
         meta: Meta {
@@ -149,8 +158,8 @@ impl Mounted {
     pub fn shown(&self, shown: bool, window: &mut Window, cx: &mut App) {
         self.slot.shown(shown, window, cx)
     }
-    pub fn answer(&self, ask: Ask, window: &mut Window, cx: &mut App) {
-        self.slot.answer(ask, window, cx)
+    pub fn answer(&self, ask: Ask, from: &'static str, window: &mut Window, cx: &mut App) {
+        self.slot.answer(ask, from, window, cx)
     }
     pub fn chords(&self, cx: &App) -> Vec<Chord> {
         self.slot.chords(cx)
@@ -171,7 +180,7 @@ trait Slot {
     fn link(&self, node: &NodeId, state: Option<LinkState>, window: &mut Window, cx: &mut App);
     fn tabs(&self, shown: bool, window: &mut Window, cx: &mut App) -> Option<AnyElement>;
     fn shown(&self, shown: bool, window: &mut Window, cx: &mut App);
-    fn answer(&self, ask: Ask, window: &mut Window, cx: &mut App);
+    fn answer(&self, ask: Ask, from: &'static str, window: &mut Window, cx: &mut App);
     fn chords(&self, cx: &App) -> Vec<Chord>;
     fn focus(&self, cx: &App) -> Option<FocusHandle>;
     fn redraws(&self, viewer: EntityId, cx: &mut App) -> Subscription;
@@ -196,8 +205,8 @@ impl<P: Page> Slot for Entity<P> {
     fn shown(&self, shown: bool, window: &mut Window, cx: &mut App) {
         self.update(cx, |p, cx| p.shown(shown, window, cx))
     }
-    fn answer(&self, ask: Ask, window: &mut Window, cx: &mut App) {
-        self.update(cx, |p, cx| p.answer(ask, window, cx))
+    fn answer(&self, ask: Ask, from: &'static str, window: &mut Window, cx: &mut App) {
+        self.update(cx, |p, cx| p.answer(ask, from, window, cx))
     }
     fn chords(&self, cx: &App) -> Vec<Chord> {
         self.read(cx).chords(cx)

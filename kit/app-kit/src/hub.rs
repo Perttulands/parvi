@@ -16,8 +16,11 @@ use crate::link::socket::{Event, Net};
 use crate::menu::Menu;
 use crate::settings::Settings;
 use crate::theme::motion;
-use gpui::{Context, EventEmitter, SystemNotification, Task};
+use gpui::{
+    AnyEntity, AnyView, AppContext, Context, Entity, EventEmitter, SystemNotification, Task,
+};
 use parvi_core::{Error, NodeId};
+use std::any::{TypeId, type_name};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -58,8 +61,12 @@ pub enum HubEvent {
         kind: u8,
         body: Vec<u8>,
     },
-    /// Page `to` answers this.
-    Ask { to: &'static str, ask: Ask },
+    /// Page `to` answers this, which page `from` asked (`""`: the shell).
+    Ask {
+        to: &'static str,
+        from: &'static str,
+        ask: Ask,
+    },
     /// Show this page.
     Show(&'static str),
     /// The stack changed: the keyboard goes to the top layer, or back to
@@ -90,6 +97,16 @@ pub struct Hub {
     away: HashSet<String>,
     /// What a click on each desktop notification posted does, by its tag.
     clicks: HashMap<String, Run>,
+    /// The read models pages share, by type.
+    models: HashMap<TypeId, Model>,
+    /// What an answer opened beside each page, by the page.
+    beside: HashMap<&'static str, AnyView>,
+}
+
+/// A read model: its entity, and the page that publishes it once one has.
+struct Model {
+    entity: AnyEntity,
+    publisher: Option<&'static str>,
 }
 
 impl EventEmitter<HubEvent> for Hub {}
@@ -129,6 +146,8 @@ impl Hub {
             heard: HashSet::new(),
             away: HashSet::new(),
             clicks: HashMap::new(),
+            models: HashMap::new(),
+            beside: HashMap::new(),
         }
     }
 
@@ -452,9 +471,71 @@ impl Hub {
         true
     }
 
-    /// Hands `ask` to the page that answers it. When none does, the status
-    /// line says so and so does the error.
-    pub fn ask(&mut self, ask: Ask, cx: &mut Context<Self>) -> Result<(), Error> {
+    /// The read model `T`, made empty by whichever page reaches it first.
+    pub fn model<T: Default + 'static>(&mut self, cx: &mut Context<Self>) -> Entity<T> {
+        self.models
+            .entry(TypeId::of::<T>())
+            .or_insert_with(|| Model {
+                entity: cx.new(|_| T::default()).into_any(),
+                publisher: None,
+            })
+            .entity
+            .clone()
+            .downcast::<T>()
+            .expect("a model is kept by its own type")
+    }
+
+    /// The read model `T` for page `page` to publish; refused when another
+    /// page publishes it.
+    pub fn publisher<T: Default + 'static>(
+        &mut self,
+        page: &'static str,
+        cx: &mut Context<Self>,
+    ) -> Result<Entity<T>, Error> {
+        let entity = self.model::<T>(cx);
+        let model = self
+            .models
+            .get_mut(&TypeId::of::<T>())
+            .expect("made just now");
+        match model.publisher {
+            Some(other) if other != page => Err(Error::new(
+                "published_twice",
+                format!("{other} and {page} both publish {}", type_name::<T>()),
+            )),
+            _ => {
+                model.publisher = Some(page);
+                Ok(entity)
+            }
+        }
+    }
+
+    /// What is open beside `page`.
+    pub fn beside(&self, page: &str) -> Option<AnyView> {
+        self.beside.get(page).cloned()
+    }
+
+    /// Opens `view` beside `page`, or closes what is there.
+    pub fn set_beside(
+        &mut self,
+        page: &'static str,
+        view: Option<AnyView>,
+        cx: &mut Context<Self>,
+    ) {
+        match view {
+            Some(view) => self.beside.insert(page, view),
+            None => self.beside.remove(page),
+        };
+        cx.notify();
+    }
+
+    /// Hands `ask`, from page `from`, to the page that answers it. When
+    /// none does, the status line says so and so does the error.
+    pub fn ask(
+        &mut self,
+        from: &'static str,
+        ask: Ask,
+        cx: &mut Context<Self>,
+    ) -> Result<(), Error> {
         let to = self
             .answers
             .iter()
@@ -462,7 +543,7 @@ impl Hub {
             .map(|(id, _)| *id);
         match to {
             Some(to) => {
-                cx.emit(HubEvent::Ask { to, ask });
+                cx.emit(HubEvent::Ask { to, from, ask });
                 Ok(())
             }
             None => {

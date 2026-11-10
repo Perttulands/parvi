@@ -1,7 +1,8 @@
 //! The Terminals page in the app against a real node (terminals over a
 //! scratch tmux, started through the testkit): a session attached to a
 //! window takes what is typed and shows its output, and a toy page hands a
-//! reference into that session through the Send ask. Linux and macOS only;
+//! reference into that session through the Send ask; other pages read the
+//! sessions the page publishes and open views beside it. Linux and macOS only;
 //! skips without tmux unless `PARVI_REQUIRE_TMUX=1`.
 #![cfg(unix)]
 
@@ -17,6 +18,7 @@ use parvi_app_shell::Shell;
 use parvi_node_kit::Build;
 use parvi_terminals_app::Terminals;
 use parvi_terminals_app::store::sessions::Key;
+use parvi_terminals_contract::SessionList;
 use parvi_testkit::node::Node;
 use parvi_testkit::tmux::Server;
 
@@ -295,5 +297,46 @@ fn an_ask_that_names_a_session_aims_send_at_it_not_at_the_focused_one(cx: &mut T
         }),
         "alpha has the focus; the ask names beta"
     );
+    let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
+}
+
+struct Note;
+
+impl Render for Note {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().child("beside")
+    }
+}
+
+#[gpui::test]
+fn other_pages_read_the_sessions_and_open_views_beside_them(cx: &mut TestAppContext) {
+    let Some(running) = start("terminals-page-shared") else {
+        return;
+    };
+    let (shell, cx, settings) = open_with_alpha(&running, "shared", cx);
+    let toy = shell.read_with(cx, |s, _| Host::new(s.hub()).for_page("toy", &[]));
+    let sessions = cx
+        .update(|_, cx| toy.model::<SessionList>(cx))
+        .expect("the hub");
+    let listed = sessions.read_with(cx, |l, _| {
+        l.sessions
+            .iter()
+            .map(|s| format!("{}/{}", s.node, s.name))
+            .collect::<Vec<_>>()
+    });
+    assert!(
+        listed.contains(&format!("{}/alpha", running.node)),
+        "{listed:?}"
+    );
+    assert!(cx.debug_bounds("terminals-beside").is_none());
+    cx.update(|_, cx| toy.show_beside("terminals", cx.new(|_| Note).into(), cx));
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("terminals-beside").is_some(),
+        "drawn beside"
+    );
+    cx.update(|_, cx| toy.close_beside("terminals", cx));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("terminals-beside").is_none(), "closed");
     let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
 }

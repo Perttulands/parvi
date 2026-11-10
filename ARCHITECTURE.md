@@ -87,8 +87,8 @@ A page is a build function in `bin/parvi-app`'s `PAGES`, held by the shell in
 every node has that area off), its frame kinds, the channels it turns on while
 shown, the asks it answers and its chords. The shell owns the window, the tab
 bar, the dismissal stack, the leader, the status line and the node connection,
-and refuses pages that share an id or a frame kind, or take a kind the link or
-the shell owns, naming both.
+and refuses pages that share an id or a frame kind, take a kind the link or the
+shell owns, or whose `everywhere` chords share a key, naming both.
 
 - **Host and Hub.** A `Host` is a cheap handle on the `Hub`, the state the
   shell and every page share: the fleet link, settings, status line, toast and
@@ -98,8 +98,8 @@ the shell owns, naming both.
   owns the one click handler and runs the page's click), redials, keeps its
   section of `app.json`, and asks.
 - **Taps.** A page whose frames are too many for the UI thread (terminal
-  screens) registers a tap: the network thread hands it every frame first,
-  and the page wakes itself at most once per paint.
+  screens) registers a tap: the network thread hands it every frame of the
+  page's own kinds first, and the page wakes itself at most once per paint.
 - **Events.** The hub never calls a page. A frame of a page's kinds, a link
   to a node opening or going, an ask it answers or a closed layer's dismiss
   reaches the shell as a hub event after the update that caused it, so a page
@@ -111,7 +111,15 @@ the shell owns, naming both.
 - **Asks.** Pages never depend on each other. An `Ask` (send a reference, open
   a path, reveal a thing) is plain data that goes to the page declaring it
   answers it; when none does, the asker gets an `unanswered` error and the
-  status line says so. View control's `open` reaches pages the same way.
+  status line says so. View control's `open` reaches pages the same way. A
+  beside ask (open a path beside) leaves the asker shown: the answering page
+  hands it a view (`Host::show_beside`), which the asker draws where its
+  layout has room (`Host::beside`), as the terminals draw a file a link
+  named.
+- **Read models.** What one page knows that others show (the terminals' session
+  list) is a plain type in its area's `contract`, published by that page
+  (`Host::publish`) and read and observed by any page (`Host::model`), built in
+  any order. A second publisher is refused.
 - **Tests.** An app area's test drives `parvi-app-shell` with its own page, or
   pages it defines, against a testkit or fake node, building no other area.
 

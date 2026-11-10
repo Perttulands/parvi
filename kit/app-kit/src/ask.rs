@@ -59,6 +59,12 @@ impl Ask {
         }
     }
 
+    /// Whether it is answered beside the page that asked (see
+    /// [`crate::Host::show_beside`]), leaving that page shown.
+    pub fn beside(&self) -> bool {
+        matches!(self, Ask::OpenPath { beside: true, .. })
+    }
+
     /// What it asks, in words for the status line.
     pub fn describe(&self) -> String {
         match self {

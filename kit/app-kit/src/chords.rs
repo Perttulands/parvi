@@ -70,6 +70,20 @@ impl Chord {
     }
 }
 
+impl Chord {
+    /// Whether one key could run both: the same key after the leader, or
+    /// the same Alt key where Shift does not tell them apart.
+    pub fn clashes(&self, other: &Chord) -> bool {
+        let direct = match (&self.direct, &other.direct) {
+            (Some(a), Some(b)) => {
+                a.key == b.key && (a.shift.is_none() || b.shift.is_none() || a.shift == b.shift)
+            }
+            _ => false,
+        };
+        self.leader == other.leader || direct
+    }
+}
+
 pub const LEADER_LABEL: &str = "Ctrl+Shift+Space";
 /// How long the leader waits for its key with nothing pressed.
 pub const LEADER_WINDOW: Duration = Duration::from_millis(1500);

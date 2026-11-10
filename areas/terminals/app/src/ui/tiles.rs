@@ -113,6 +113,19 @@ impl Terminals {
         if self.settings.sessions_open {
             row = row.child(self.render_rail(window, cx));
         }
+        // What another page opened beside the terminals (a file a link
+        // named), between the rail and the windows.
+        if let Some(beside) = self.host.beside(cx) {
+            row = row.child(
+                div()
+                    .id("terminals-beside")
+                    .debug_selector(|| "terminals-beside".into())
+                    .w(px(size::BESIDE))
+                    .flex_none()
+                    .h_full()
+                    .child(beside),
+            );
+        }
         row.child(
             div()
                 .flex_1()

@@ -39,7 +39,8 @@ pub struct Shell {
 }
 
 /// Makes every page, refusing two pages of one id or two that take the
-/// same frame kinds, and any that takes a kind the link or the shell owns.
+/// same frame kinds, any that takes a kind the link or the shell owns, and
+/// two whose chords live everywhere share a key.
 pub fn mount(
     builds: &[Build],
     hub: &Entity<Hub>,
@@ -52,6 +53,8 @@ pub fn mount(
         .collect();
     let metas: Vec<Meta> = pages.iter().map(|p| p.meta).collect();
     check(&metas)?;
+    let chords: Vec<_> = pages.iter().map(|p| (p.meta.id, p.chords(cx))).collect();
+    check_chords(&chords)?;
     Ok(pages)
 }
 
@@ -81,6 +84,27 @@ pub fn check(pages: &[Meta]) -> Result<(), Error> {
                     "kinds_overlap",
                     format!("{} and {} take the same frame kinds", a.id, b.id),
                 ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Chords live everywhere are live together, so two pages' must not share
+/// a key: refused, naming both pages and the chords.
+pub fn check_chords(pages: &[(&'static str, Vec<Chord>)]) -> Result<(), Error> {
+    let everywhere = |chords: &[Chord]| -> Vec<Chord> {
+        chords.iter().filter(|c| c.everywhere).cloned().collect()
+    };
+    for (i, (a, mine)) in pages.iter().enumerate() {
+        for (b, theirs) in &pages[i + 1..] {
+            for x in everywhere(mine) {
+                if let Some(y) = everywhere(theirs).iter().find(|y| x.clashes(y)) {
+                    return Err(Error::new(
+                        "chords_twice",
+                        format!("{a}'s {} and {b}'s {} take the same key", x.label, y.label),
+                    ));
+                }
             }
         }
     }
@@ -188,10 +212,12 @@ impl Shell {
                     log::warn!("a frame of kind {kind:#04x} from {node} that no page takes");
                 }
             }
-            HubEvent::Ask { to, ask } => {
+            HubEvent::Ask { to, from, ask } => {
                 if let Some(i) = self.index_of(to) {
-                    self.show(i, window, cx);
-                    self.pages[i].answer(ask.clone(), window, cx);
+                    if !ask.beside() {
+                        self.show(i, window, cx);
+                    }
+                    self.pages[i].answer(ask.clone(), from, window, cx);
                 }
             }
             HubEvent::Show(id) => {
@@ -440,5 +466,28 @@ mod tests {
         assert_eq!(link.message, "a takes frame kinds the link owns");
         let shell = check(&[meta("a", &[0xb8..=0xb8])]).unwrap_err();
         assert_eq!(shell.message, "a takes frame kinds the shell owns");
+    }
+
+    #[test]
+    fn chords_two_pages_keep_everywhere_refuse_to_share_a_key() {
+        let chord = |leader, label: &str| Chord::new(leader, label, |_, _| {});
+        let a = vec![
+            chord("t", "Tabs").everywhere().alt("1", None),
+            chord("x", "Only here"),
+        ];
+        let fine = vec![
+            chord("u", "Up").everywhere().alt("2", Some(false)),
+            chord("t", "Its own t, only while shown"),
+        ];
+        assert!(check_chords(&[("a", a.clone()), ("b", fine)]).is_ok());
+        let by_leader = vec![chord("t", "Toast").everywhere()];
+        let e = check_chords(&[("a", a.clone()), ("b", by_leader)]).unwrap_err();
+        assert_eq!(e.code, "chords_twice");
+        assert_eq!(e.message, "a's Tabs and b's Toast take the same key");
+        let by_alt = vec![chord("y", "One").everywhere().alt("1", Some(true))];
+        assert!(check_chords(&[("a", a.clone()), ("b", by_alt)]).is_err());
+        let shifted = vec![chord("y", "Shifted").everywhere().alt("w", Some(true))];
+        let plain = vec![chord("z", "Plain").everywhere().alt("w", Some(false))];
+        assert!(check_chords(&[("a", shifted), ("b", plain)]).is_ok());
     }
 }

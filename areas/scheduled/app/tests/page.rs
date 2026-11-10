@@ -1,6 +1,7 @@
 //! The Scheduled page opens in the app against a real node (terminals and
 //! scheduled over a scratch tmux, started through the testkit) and lists a
-//! task made through the CLI. Linux and macOS only; skips without tmux
+//! task made through the CLI, and offers the sessions the terminals page
+//! publishes. Linux and macOS only; skips without tmux
 //! unless `PARVI_REQUIRE_TMUX=1`.
 #![cfg(unix)]
 
@@ -8,8 +9,10 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use gpui::{Modifiers, TestAppContext, VisualTestContext};
+use parvi_app_kit::Host;
 use parvi_app_kit::link::client::LinkState;
 use parvi_node_kit::{Build, cli};
+use parvi_terminals_contract::{Session, SessionList};
 use parvi_testkit::node::Node;
 use parvi_testkit::tmux::{Server, eventually, session_text};
 use serde_json::json;
@@ -167,6 +170,30 @@ fn the_page_lists_a_task_made_through_the_cli(cx: &mut TestAppContext) {
     cx.simulate_click(at, Modifiers::none());
     until(cx, "the detail to open", |cx| {
         cx.debug_bounds("task-run").is_some()
+    });
+
+    // The sessions a new task may send to are those the terminals page
+    // publishes: a session only that list names is offered.
+    shell.update(cx, |s, cx| {
+        let list = SessionList {
+            sessions: vec![Session {
+                node: node.to_string(),
+                name: "listed-only".into(),
+                ..Session::default()
+            }],
+        };
+        let terminals = Host::new(s.hub()).for_page("terminals", &[]);
+        terminals.publish(list, cx).expect("one publisher");
+    });
+    let at = cx
+        .debug_bounds("scheduled-new")
+        .expect("the New task button")
+        .center();
+    cx.simulate_click(at, Modifiers::none());
+    let pick = format!("pick-{node}-:listed-only");
+    until(cx, "the published session to be offered", |cx| {
+        cx.debug_bounds(Box::leak(pick.clone().into_boxed_str()))
+            .is_some()
     });
     let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
 }

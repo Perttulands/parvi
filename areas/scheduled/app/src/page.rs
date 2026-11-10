@@ -1,10 +1,9 @@
 //! The page: what it reads from each node, what the form changes, and the
 //! requests that save, act and delete. Drawing is in [`crate::view`].
 
-use std::collections::BTreeMap;
 use std::time::Duration;
 
-use gpui::{AppContext, Context, Entity, Window};
+use gpui::{App, AppContext, Context, Entity, Window};
 use parvi_app_kit::host::Request;
 use parvi_app_kit::hub::now_ms;
 use parvi_app_kit::link::client::LinkState;
@@ -12,7 +11,7 @@ use parvi_app_kit::widgets::field::{FieldEvent, TextField};
 use parvi_app_kit::{Host, Page};
 use parvi_core::NodeId;
 use parvi_scheduled_contract::{INTENT, INTENT_VALUE, PATH, Target, Task};
-use serde::Deserialize;
+use parvi_terminals_contract::SessionList;
 use serde_json::{Value, json};
 
 use crate::ACTOR;
@@ -60,8 +59,8 @@ pub struct ScheduledPage {
     pub(crate) host: Host,
     pub(crate) state: Scheduled,
     pub(crate) fields: Fields,
-    /// Each node's sessions as last listed.
-    pub(crate) sessions: BTreeMap<String, Vec<Session>>,
+    /// The sessions the terminals page hears, across nodes.
+    sessions: Option<Entity<SessionList>>,
     /// The page is on show.
     shown: bool,
     /// The countdown clock runs (only while the page is shown).
@@ -83,7 +82,7 @@ impl Page for ScheduledPage {
         cx: &mut Context<Self>,
     ) {
         if self.shown && state == Some(LinkState::Open) {
-            self.read_node(node.as_str(), cx);
+            self.read(node.as_str(), cx);
         }
     }
 
@@ -129,11 +128,15 @@ impl ScheduledPage {
             time: make(Field::Time, "HH:MM", false),
             cron: make(Field::Cron, "minute hour day month weekday", false),
         };
+        let sessions = host.model::<SessionList>(cx);
+        if let Some(sessions) = &sessions {
+            cx.observe(sessions, |_, _, cx| cx.notify()).detach();
+        }
         ScheduledPage {
             host,
             state: Scheduled::default(),
             fields,
-            sessions: BTreeMap::new(),
+            sessions,
             shown: false,
             ticking: false,
         }
@@ -181,15 +184,28 @@ impl ScheduledPage {
     /// Reads every live node's tasks (the page opened).
     pub(crate) fn read_all(&mut self, cx: &mut Context<Self>) {
         for node in self.host.nodes(cx) {
-            self.read_node(node.id.as_str(), cx);
+            self.read(node.id.as_str(), cx);
         }
         self.tick(cx);
     }
 
-    /// Reads a node's tasks and the sessions they may send to.
-    fn read_node(&mut self, node: &str, cx: &mut Context<Self>) {
-        self.read(node, cx);
-        self.list_sessions(node, cx);
+    /// The sessions on `node` a task may send to, by name.
+    pub(crate) fn sessions_on(&self, node: &str, cx: &App) -> Vec<Session> {
+        let Some(list) = &self.sessions else {
+            return vec![];
+        };
+        let mut sessions: Vec<Session> = list
+            .read(cx)
+            .sessions
+            .iter()
+            .filter(|s| s.node == node)
+            .map(|s| Session {
+                name: s.name.clone(),
+                user: s.user.clone(),
+            })
+            .collect();
+        sessions.sort_by(|a, b| a.name.cmp(&b.name));
+        sessions
     }
 
     /// Reads one node's tasks, once.
@@ -208,29 +224,6 @@ impl ScheduledPage {
                     .entry(at)
                     .or_default()
                     .listed(status, &body);
-                cx.notify();
-            },
-            cx,
-        );
-    }
-
-    /// Asks a node's terminals for the sessions a task may send to.
-    fn list_sessions(&mut self, node: &str, cx: &mut Context<Self>) {
-        let call = json!({
-            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-            "params": { "name": "session_list", "arguments": {} },
-        });
-        let request = Request::new("POST", NodeId(node.to_string()), "/mcp").json(&call);
-        let at = node.to_string();
-        self.ask(
-            request,
-            move |page, status, body, cx| {
-                let sessions = if (200..300).contains(&status) {
-                    sessions_of(&body)
-                } else {
-                    vec![]
-                };
-                page.sessions.insert(at, sessions);
                 cx.notify();
             },
             cx,
@@ -466,46 +459,4 @@ impl ScheduledPage {
         );
         cx.notify();
     }
-}
-
-/// The sessions in a `session_list` tool call's answer over MCP.
-fn sessions_of(body: &[u8]) -> Vec<Session> {
-    #[derive(Deserialize)]
-    struct Answer {
-        result: Reply,
-    }
-    #[derive(Deserialize)]
-    struct Reply {
-        content: Vec<Text>,
-    }
-    #[derive(Deserialize)]
-    struct Text {
-        text: String,
-    }
-    #[derive(Deserialize)]
-    struct Listed {
-        sessions: Vec<Named>,
-    }
-    #[derive(Deserialize)]
-    struct Named {
-        name: String,
-        user: Option<String>,
-    }
-    let Ok(answer) = serde_json::from_slice::<Answer>(body) else {
-        return vec![];
-    };
-    let Some(text) = answer.result.content.first() else {
-        return vec![];
-    };
-    let mut sessions: Vec<Session> = serde_json::from_str::<Listed>(&text.text)
-        .map(|l| l.sessions)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|s| Session {
-            name: s.name,
-            user: s.user,
-        })
-        .collect();
-    sessions.sort_by(|a, b| a.name.cmp(&b.name));
-    sessions
 }

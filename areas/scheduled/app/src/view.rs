@@ -41,6 +41,7 @@ impl Render for ScheduledPage {
             )
             .child(
                 kit::button(&t, "scheduled-new", "New task", Kind::Primary)
+                    .debug_selector(|| "scheduled-new".into())
                     .on_click(cx.listener(|page, _, _, cx| page.new_task(cx))),
             );
         let sc = &self.state;
@@ -538,9 +539,10 @@ impl ScheduledPage {
         let mut picker = div().flex().flex_col().gap(px(8.));
         for node in self.host.nodes(cx) {
             let id = node.id.as_str();
-            let Some(sessions) = self.sessions.get(id).filter(|s| !s.is_empty()) else {
+            let sessions = self.sessions_on(id, cx);
+            if sessions.is_empty() {
                 continue;
-            };
+            }
             if form.id.is_some() && id != form.node {
                 continue;
             }
@@ -549,12 +551,11 @@ impl ScheduledPage {
                 let target = s.target();
                 let on = form.node == id && form.targets.contains(&target);
                 let (session, at) = (s.clone(), id.to_string());
+                let selector = format!("pick-{id}-{}", target_key(&target));
                 row = row.child(
                     div()
-                        .id(SharedString::from(format!(
-                            "pick-{id}-{}",
-                            target_key(&target)
-                        )))
+                        .id(SharedString::from(selector.clone()))
+                        .debug_selector(move || selector)
                         .flex()
                         .items_center()
                         .gap(px(4.))

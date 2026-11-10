@@ -1,7 +1,8 @@
 //! Pages plug into the shell through `Page` and `Host` alone: two toy
 //! pages, made here, each reach the node, the status line, menus, layers,
-//! chords and each other through their Host, against a fake node this
-//! test starts. A third, whose area every node turned off, has no tab.
+//! chords and each other through their Host (asks, a view beside the
+//! asker, a read model), against a fake node this test starts. A third,
+//! whose area every node turned off, has no tab.
 
 use futures_util::{SinkExt, StreamExt};
 use gpui::{
@@ -11,6 +12,7 @@ use gpui::{
 use parvi_app_kit::chords::Chord;
 use parvi_app_kit::host::{Layer, Request};
 use parvi_app_kit::link::client::LinkState;
+use parvi_app_kit::link::socket::Tap;
 use parvi_app_kit::menu::MenuRow;
 use parvi_app_kit::{Answers, Ask, Build, Host, Mounted, Page, mount};
 use parvi_app_shell::Shell;
@@ -22,6 +24,12 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_tungstenite::tungstenite::Message;
 
 const TOY: u8 = 0xc0;
+/// Beta's kind.
+const BETA_KIND: u8 = 0xc1;
+
+/// A read model Alpha publishes: how many toy frames it heard.
+#[derive(Default, PartialEq)]
+struct Heard(usize);
 
 thread_local! {
     static ALPHA: RefCell<Option<Entity<Alpha>>> = const { RefCell::new(None) };
@@ -32,6 +40,8 @@ struct Alpha {
     host: Host,
     me: WeakEntity<Alpha>,
     heard: Vec<String>,
+    /// The kinds its tap was handed.
+    tapped: Arc<Mutex<Vec<u8>>>,
     answer: Option<String>,
     revealed: Option<String>,
     chord: usize,
@@ -43,10 +53,18 @@ impl Alpha {
     fn build(host: Host, window: &mut Window, cx: &mut gpui::App) -> Mounted {
         mount(host, window, cx, |host, _, cx| {
             ALPHA.with(|a| *a.borrow_mut() = Some(cx.entity()));
+            let tapped = Arc::new(Mutex::new(vec![]));
+            let seen = tapped.clone();
+            let tap: Tap = Arc::new(move |_, kind, _| {
+                seen.lock().expect("tapped").push(kind);
+                false
+            });
+            host.tap(tap, cx);
             Alpha {
                 host,
                 me: cx.entity().downgrade(),
                 heard: vec![],
+                tapped,
                 answer: None,
                 revealed: None,
                 chord: 0,
@@ -67,6 +85,9 @@ impl Page for Alpha {
     fn frame(&mut self, node: &NodeId, _: u8, body: &[u8], _: &mut Window, cx: &mut Context<Self>) {
         self.heard
             .push(format!("{node}:{}", String::from_utf8_lossy(body)));
+        self.host
+            .publish(Heard(self.heard.len()), cx)
+            .expect("Alpha alone publishes Heard");
         cx.notify();
     }
 
@@ -90,7 +111,7 @@ impl Page for Alpha {
         .detach();
     }
 
-    fn answer(&mut self, ask: Ask, _: &mut Window, cx: &mut Context<Self>) {
+    fn answer(&mut self, ask: Ask, _: &'static str, _: &mut Window, cx: &mut Context<Self>) {
         if let Ask::Reveal { id, .. } = ask {
             self.revealed = Some(id);
         }
@@ -122,6 +143,8 @@ impl Render for Note {
 impl Render for Alpha {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (menu_host, layer_host) = (self.host.clone(), self.host.clone());
+        let open_host = self.host.clone();
+        let beside = self.host.beside(cx);
         let (me, me2) = (self.me.clone(), self.me.clone());
         div()
             .size_full()
@@ -164,21 +187,55 @@ impl Render for Alpha {
                         layer_host.layer(layer, cx);
                     })),
             )
+            .child(
+                div()
+                    .id("toy-open")
+                    .debug_selector(|| "toy-open".into())
+                    .w(px(80.))
+                    .h(px(30.))
+                    .child("Open beside")
+                    .on_click(move |_, _, cx| {
+                        let ask = Ask::OpenPath {
+                            node: NodeId("toy-node".into()),
+                            path: "/notes.txt".into(),
+                            beside: true,
+                        };
+                        open_host.ask(ask, cx).expect("Beta answers it");
+                    }),
+            )
+            .children(beside.map(|view| {
+                div()
+                    .debug_selector(|| "toy-beside".into())
+                    .w(px(120.))
+                    .h(px(30.))
+                    .child(view)
+            }))
     }
 }
 
 struct Beta {
     host: Host,
     refused: Option<String>,
+    frames: Vec<String>,
+    /// Alpha's read model, as Beta sees it.
+    heard: Entity<Heard>,
+    /// What it was asked to open, and by whom.
+    opened: Option<(String, &'static str)>,
 }
 
 impl Beta {
     fn build(host: Host, window: &mut Window, cx: &mut gpui::App) -> Mounted {
         mount(host, window, cx, |host, _, cx| {
             BETA.with(|b| *b.borrow_mut() = Some(cx.entity()));
+            // Read before Alpha publishes: built in any order.
+            let heard = host.model::<Heard>(cx).expect("the hub");
+            cx.observe(&heard, |_, _, cx| cx.notify()).detach();
             Beta {
                 host,
                 refused: None,
+                frames: vec![],
+                heard,
+                opened: None,
             }
         })
     }
@@ -187,6 +244,22 @@ impl Beta {
 impl Page for Beta {
     const ID: &'static str = "toy-b";
     const TITLE: &'static str = "Beta";
+    const KINDS: parvi_core::frame::Kinds = &[BETA_KIND..=BETA_KIND];
+    const ANSWERS: &'static [Answers] = &[Answers::OpenPath];
+
+    fn frame(&mut self, _: &NodeId, _: u8, body: &[u8], _: &mut Window, cx: &mut Context<Self>) {
+        self.frames.push(String::from_utf8_lossy(body).into());
+        cx.notify();
+    }
+
+    /// Opens the path beside the page that asked.
+    fn answer(&mut self, ask: Ask, from: &'static str, _: &mut Window, cx: &mut Context<Self>) {
+        if let Ask::OpenPath { path, beside, .. } = ask {
+            assert!(beside, "Alpha asks to open beside it");
+            self.opened = Some((path, from));
+            self.host.show_beside(from, cx.new(|_| Note).into(), cx);
+        }
+    }
 }
 
 impl Render for Beta {
@@ -316,8 +389,11 @@ async fn serve(mut stream: tokio::net::TcpStream, heard: Arc<Mutex<Vec<Vec<u8>>>
         heard.lock().expect("heard").push(bytes.to_vec());
         if bytes[..] == [TOY, 1] {
             let toy = [&[TOY][..], b"ping"].concat();
-            if ws.send(Message::Binary(toy.into())).await.is_err() {
-                return;
+            let beta = [&[BETA_KIND][..], b"pong"].concat();
+            for frame in [toy, beta] {
+                if ws.send(Message::Binary(frame.into())).await.is_err() {
+                    return;
+                }
             }
         }
     }
@@ -410,6 +486,26 @@ fn two_toy_pages_plug_in_through_their_host(cx: &mut TestAppContext) {
     });
     assert!(heard.lock().expect("heard").contains(&vec![TOY, 1]));
 
+    // Alpha's tap saw its own kind only: not the hello, not Beta's frame,
+    // which reached Beta.
+    let b = BETA.with(|b| b.borrow().clone()).expect("Beta was made");
+    until(cx, "Beta's frame", |cx| {
+        b.read_with(cx, |b, _| !b.frames.is_empty())
+    });
+    assert_eq!(
+        *a.read_with(cx, |a, _| a.tapped.clone()).lock().unwrap(),
+        [TOY]
+    );
+
+    // Beta reads what Alpha publishes; no other page may publish it.
+    assert_eq!(b.read_with(cx, |b, cx| b.heard.read(cx).0), 1);
+    let refused = shell.update(cx, |s, cx| {
+        let other = Host::new(s.hub()).for_page("toy-b", &[]);
+        other.publish(Heard(9), cx).unwrap_err()
+    });
+    assert_eq!(refused.code, "published_twice");
+    assert_eq!(b.read_with(cx, |b, cx| b.heard.read(cx).0), 1);
+
     // Its chord, by Alt and by the leader.
     cx.simulate_keystrokes("alt-t");
     cx.run_until_parked();
@@ -430,6 +526,18 @@ fn two_toy_pages_plug_in_through_their_host(cx: &mut TestAppContext) {
     assert!(a.read_with(cx, |a, _| a.dismissed));
     assert!(shell.read_with(cx, |s, cx| s.hub().read(cx).stack.is_empty()));
 
+    // Opened beside Alpha by Beta, Alpha staying shown.
+    click(cx, "toy-open");
+    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy-a"));
+    assert_eq!(
+        b.read_with(cx, |b, _| b.opened.clone()),
+        Some(("/notes.txt".into(), "toy-a"))
+    );
+    assert!(
+        cx.debug_bounds("toy-beside").is_some(),
+        "drawn beside Alpha"
+    );
+
     // Beta, by its tab; Alpha's channel goes off as it hides.
     click(cx, "tab-toy-b");
     assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy-b"));
@@ -439,7 +547,6 @@ fn two_toy_pages_plug_in_through_their_host(cx: &mut TestAppContext) {
 
     // Beta reaches Alpha only by asking; what nobody answers says so.
     click(cx, "toy-ask-none");
-    let b = BETA.with(|b| b.borrow().clone()).expect("Beta was made");
     assert_eq!(
         b.read_with(cx, |b, _| b.refused.clone()).as_deref(),
         Some("unanswered")

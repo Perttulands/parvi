@@ -26,7 +26,7 @@ use parvi_app_kit::widgets::field::{self, FieldEvent, TextField};
 use parvi_app_kit::{Answers, Ask, Page};
 use parvi_core::NodeId;
 use parvi_core::frame::Kinds;
-use parvi_terminals_contract::{Launch, decode_down};
+use parvi_terminals_contract::{Launch, SessionList, decode_down};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
@@ -559,9 +559,20 @@ impl Terminals {
     /// launched session's message delivered, and the panes watched.
     fn after_news(&mut self, cx: &mut Context<Self>) {
         self.remember_sessions(cx);
+        self.publish_sessions(cx);
         self.send_waited(cx);
         self.sync(cx);
         cx.notify();
+    }
+
+    /// Tells other pages the sessions as now heard ([`SessionList`]).
+    fn publish_sessions(&mut self, cx: &mut Context<Self>) {
+        let list = SessionList {
+            sessions: self.fleet.all.clone(),
+        };
+        if let Err(e) = self.host.publish(list, cx) {
+            self.report(&e.message, true, None);
+        }
     }
 
     /// Where a node is, as it said last.
@@ -1347,7 +1358,7 @@ impl Page for Terminals {
 
     /// Send to Session with what another page hands over, aimed at the
     /// session the ask names, else at the focused window's.
-    fn answer(&mut self, ask: Ask, window: &mut Window, cx: &mut Context<Self>) {
+    fn answer(&mut self, ask: Ask, _: &'static str, window: &mut Window, cx: &mut Context<Self>) {
         if let Ask::Send { reference, target } = ask {
             let target = match target {
                 Some(t) => Some(Key {

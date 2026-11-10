@@ -15,6 +15,8 @@ pub mod size {
     /// A shell's `>_` mark, as a share of the mark's size.
     pub const SHELL_MARK: f32 = 0.8;
     pub const RAIL: f32 = 260.;
+    /// What another page opens beside the windows (a file a link named).
+    pub const BESIDE: f32 = 560.;
     pub const TILE_HEAD: f32 = 34.;
     pub const TILE_GAP: f32 = 6.;
     /// How far either side of the gap between two windows still counts as
