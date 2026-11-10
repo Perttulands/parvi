@@ -9,8 +9,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use serde::Deserialize;
-use serde_json::json;
+use parvi_brain_contract::{Changes, Collections, Listing, Results, Save};
 
 use super::{Brain, Refusal};
 
@@ -40,20 +39,11 @@ fn param<'a>(params: &'a HashMap<String, String>, name: &str) -> &'a str {
 
 async fn search(State(brain): State<Arc<Brain>>, Query(params): Params) -> Response {
     let results = brain.search(param(&params, "q")).await;
-    answer(results.map(|results| json!({ "results": results })))
+    answer(results.map(|results| Results { results }))
 }
 
 async fn page(State(brain): State<Arc<Brain>>, Query(params): Params) -> Response {
     answer(brain.page(param(&params, "path")).await)
-}
-
-/// The body of `PUT /api/brain/page`.
-#[derive(Deserialize)]
-struct Save {
-    path: String,
-    content: String,
-    #[serde(default)]
-    summary: String,
 }
 
 async fn save(
@@ -80,12 +70,15 @@ async fn save(
 
 async fn collections(State(brain): State<Arc<Brain>>) -> Response {
     let found = brain.collections().await;
-    answer(found.map(|collections| json!({ "collections": collections })))
+    answer(found.map(|collections| Collections { collections }))
 }
 
 async fn collection(State(brain): State<Arc<Brain>>, Query(params): Params) -> Response {
     let found = brain.collection(param(&params, "name")).await;
-    answer(found.map(|read| json!({ "pages": read.found, "error": read.error })))
+    answer(found.map(|read| Listing {
+        pages: read.found,
+        error: read.error,
+    }))
 }
 
 async fn changes(State(brain): State<Arc<Brain>>, Query(params): Params) -> Response {
@@ -100,5 +93,8 @@ async fn changes(State(brain): State<Arc<Brain>>, Query(params): Params) -> Resp
         },
     };
     let found = brain.changes(limit).await;
-    answer(found.map(|read| json!({ "changes": read.found, "error": read.error })))
+    answer(found.map(|read| Changes {
+        changes: read.found,
+        error: read.error,
+    }))
 }

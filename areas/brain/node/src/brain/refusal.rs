@@ -3,6 +3,9 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use parvi_brain_contract::{
+    BAD_REQUEST, BRAIN_ERROR, CONFLICT, FORBIDDEN, NOT_FOUND, TOO_LARGE, UNAVAILABLE,
+};
 
 #[derive(Debug, PartialEq)]
 pub struct Refusal {
@@ -29,12 +32,12 @@ impl IntoResponse for Refusal {
 
 pub fn code(status: StatusCode) -> &'static str {
     match status.as_u16() {
-        400 => "bad_request",
-        403 => "forbidden",
-        404 => "not_found",
-        409 => "conflict",
-        413 => "too_large",
-        503 => "unavailable",
-        _ => "brain_error",
+        400 => BAD_REQUEST,
+        403 => FORBIDDEN,
+        404 => NOT_FOUND,
+        409 => CONFLICT,
+        413 => TOO_LARGE,
+        503 => UNAVAILABLE,
+        _ => BRAIN_ERROR,
     }
 }

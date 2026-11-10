@@ -4,7 +4,6 @@
 //! `PageReader`, `LibraryView`; Parvi `ui/src/brain/store.ts`). Plain data;
 //! the page draws it and makes the requests.
 
-use serde::Deserialize;
 use std::collections::BTreeSet;
 
 /// How long typing must rest before a search goes out (CHROTE `SETTLE_MS`).
@@ -14,32 +13,7 @@ pub const LIMIT: usize = 50;
 
 pub use parvi_brain_contract::{Collection, Commit, Found as Hit, Link, Listed, Page, PageRef};
 
-#[derive(Deserialize)]
-struct Collections {
-    collections: Vec<Collection>,
-}
-
-#[derive(Deserialize)]
-struct Listing {
-    pages: Vec<Listed>,
-    #[serde(default)]
-    error: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct Change {
-    #[serde(flatten)]
-    commit: Commit,
-    #[serde(default)]
-    pages: Vec<PageRef>,
-}
-
-#[derive(Deserialize)]
-struct Changes {
-    changes: Vec<Change>,
-    #[serde(default)]
-    error: Option<String>,
-}
+use parvi_brain_contract::{Changes, Collections, Listing, Results};
 
 /// An edit in hand: the reader shows the editor instead of the page.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -49,11 +23,6 @@ pub struct Edit {
     /// Discard was pressed once; a second press throws the edit away.
     pub discarding: bool,
     pub saving: bool,
-}
-
-#[derive(Deserialize)]
-struct Results {
-    results: Vec<Hit>,
 }
 
 #[derive(Default)]
