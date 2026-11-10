@@ -9,4 +9,5 @@ publish = false
 workspace = true
 
 [dependencies]
+parvi-core = { path = "../../../kit/core" }
 serde = { version = "1", features = ["derive"] }

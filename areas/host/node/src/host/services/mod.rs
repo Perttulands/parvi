@@ -270,10 +270,14 @@ async fn act(
                 Outcome::Failed => StatusCode::BAD_GATEWAY,
                 Outcome::Unconfirmed => StatusCode::ACCEPTED,
             };
+            let error = (outcome == Outcome::Failed).then(|| {
+                parvi_core::Error::new(parvi_host_contract::SERVICE_FAILED, errors.join("; "))
+            });
             let body = parvi_host_contract::ServiceAction {
                 service,
                 errors,
                 outcome,
+                error,
             };
             (code, Json(body)).into_response()
         }

@@ -161,4 +161,6 @@ pub struct ServiceAction {
     pub service: Service,
     pub errors: Vec<String>,
     pub outcome: Outcome,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub error: Option<parvi_core::Error>,
 }

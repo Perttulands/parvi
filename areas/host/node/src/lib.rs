@@ -1,15 +1,14 @@
 //! Host readings and service management.
+mod commands;
 pub mod host;
-use parvi_core::Error;
 use parvi_node_kit::{Area, BoxFuture, Built, Channel, Client, Command, Listing, Setup};
 use serde::Deserialize;
-use serde_json::{Value, json};
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc};
 use tokio::{sync::mpsc, task::JoinHandle};
 
 pub const LISTING: Listing = Listing {
     name: "host",
-    kinds: &[parvi_host_contract::HOST..=parvi_host_contract::HOST],
+    kinds: &[parvi_host_contract::HOST..=parvi_host_contract::HOST_EVENT],
     commands: &[
         "host_show",
         "service_list",
@@ -65,20 +64,11 @@ impl Area for HostArea {
         }))
     }
     fn commands(&self) -> Vec<Command> {
-        ["host_show", "service_list", "service_show", "service_start", "service_stop", "service_restart"].into_iter().map(|name| {
-   let (services, events, node) = (self.services.clone(), self.events.clone(), self.node.clone());
-   Command::new(name, name, move || if name == "host_show" || name == "service_list" { json!({"type":"object","properties":{}}) } else { json!({"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}) }, move |args: Value| { let (services, events, node) = (services.clone(), events.clone(), node.clone()); async move {
-    let bad = |e: String| Error::new(parvi_host_contract::BAD_REQUEST, e);
-    if name == "host_show" { let mut v = host::now(Duration::from_millis(500), &events).await; v["node"] = json!(node); return Ok(v); }
-    if name == "service_list" { return Ok(json!({"node":node,"services":services.list().await.map_err(|e|e.error())?})); }
-    let id = args["id"].as_str().ok_or_else(|| bad("id is required".into()))?;
-    if name == "service_show" { return Ok(json!({"node":node,"service":services.one(id).await.map_err(|e|e.error())?})); }
-    let action = name.strip_prefix("service_").unwrap();
-    let (service, errors, outcome) = services.act(id, action).await.map_err(|e|e.error())?;
-    if !errors.is_empty() { return Err(Error::new(parvi_host_contract::SERVICE_FAILED, errors.join("; "))); }
-    Ok(json!({"node":node,"service":service,"errors":errors,"outcome":outcome}))
-   }})
-  }).collect()
+        commands::commands(
+            self.services.clone(),
+            self.events.clone(),
+            self.node.clone(),
+        )
     }
 }
 struct Stream {
@@ -93,6 +83,7 @@ impl Channel for Stream {
             if let Ok(on) = host::decode_on(&frame) {
                 if let Some(task) = self.task.take() {
                     task.abort();
+                    let _ = task.await;
                 }
                 while self.rx.try_recv().is_ok() {}
                 if on {
