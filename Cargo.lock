@@ -4099,6 +4099,7 @@ dependencies = [
  "anyhow",
  "jiff",
  "parvi-node-kit",
+ "parvi-scheduled",
  "parvi-terminals",
  "parvi-testkit",
  "serde_json",
@@ -4117,6 +4118,7 @@ dependencies = [
  "log",
  "parvi-app-kit",
  "parvi-core",
+ "parvi-scheduled-app",
  "serde",
  "serde_json",
  "tokio",
@@ -4178,6 +4180,57 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "toml 1.2.1+spec-1.1.0",
+]
+
+[[package]]
+name = "parvi-scheduled"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "futures-util",
+ "jiff",
+ "libc",
+ "parvi-core",
+ "parvi-node-kit",
+ "parvi-scheduled-contract",
+ "parvi-term",
+ "parvi-terminals",
+ "parvi-testkit",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+]
+
+[[package]]
+name = "parvi-scheduled-app"
+version = "0.0.1"
+dependencies = [
+ "gpui-pre",
+ "jiff",
+ "parvi-app",
+ "parvi-app-kit",
+ "parvi-core",
+ "parvi-node-kit",
+ "parvi-scheduled",
+ "parvi-scheduled-contract",
+ "parvi-terminals",
+ "parvi-testkit",
+ "serde",
+ "serde_json",
+ "tokio",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "parvi-scheduled-contract"
+version = "0.0.1"
+dependencies = [
+ "jiff",
+ "parvi-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
