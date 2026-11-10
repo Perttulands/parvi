@@ -23,7 +23,7 @@ use parvi_app_kit::host::Status;
 use parvi_app_kit::menu::MenuRow;
 use parvi_app_kit::settings::Place;
 use parvi_app_kit::widgets::field::{self, FieldEvent, TextField};
-use parvi_app_kit::{Answers, Ask, Page};
+use parvi_app_kit::{Answers, Ask, Page, Setting};
 use parvi_core::NodeId;
 use parvi_core::frame::Kinds;
 use parvi_terminals_contract::{Launch, SessionList, decode_down};
@@ -1320,6 +1320,21 @@ impl Page for Terminals {
     const AREA: Option<&'static str> = Some(crate::NAME);
     const KINDS: Kinds = parvi_terminals_contract::KINDS;
     const ANSWERS: &'static [Answers] = &[Answers::Send];
+    const SETTINGS: &'static [Setting] = crate::store::settings::DECLARED;
+
+    /// The Settings page changed one of ours: taken, the rest as it is.
+    fn settings_changed(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        match self.host.setting::<Settings>(cx) {
+            Ok(fresh) => self.settings.take_declared(fresh.mend()),
+            Err(e) => self.report(
+                &format!("The terminals' settings did not read: {}", e.message),
+                true,
+                None,
+            ),
+        }
+        self.flush(cx);
+        cx.notify();
+    }
 
     fn frame(
         &mut self,

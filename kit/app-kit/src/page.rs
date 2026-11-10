@@ -3,6 +3,7 @@
 
 use crate::ask::{Answers, Ask};
 use crate::chords::Chord;
+use crate::declared::Setting;
 use crate::host::Host;
 use crate::link::client::LinkState;
 use gpui::{
@@ -26,6 +27,9 @@ pub trait Page: Render + Sized + 'static {
     const CHANNELS: &'static [u8] = &[];
     /// The asks this page answers; [`Page::answer`] gets them.
     const ANSWERS: &'static [Answers] = &[];
+    /// The settings the shell's Settings page lists for it, kept in its
+    /// section of `app.json`.
+    const SETTINGS: &'static [Setting] = &[];
 
     /// A frame of one of its kinds, from `node`.
     fn frame(
@@ -76,6 +80,10 @@ pub trait Page: Render + Sized + 'static {
     ) {
     }
 
+    /// One of its [`Page::SETTINGS`] was changed in its section: it reads
+    /// its section again.
+    fn settings_changed(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}
+
     /// Its chords, live while it shows; those marked
     /// [`Chord::everywhere`] are live while any page shows.
     fn chords(&self, _cx: &App) -> Vec<Chord> {
@@ -100,6 +108,7 @@ pub struct Meta {
     pub kinds: Kinds,
     pub channels: &'static [u8],
     pub answers: &'static [Answers],
+    pub settings: &'static [Setting],
 }
 
 impl Meta {
@@ -133,6 +142,7 @@ pub fn mount<P: Page>(
             kinds: P::KINDS,
             channels: P::CHANNELS,
             answers: P::ANSWERS,
+            settings: P::SETTINGS,
         },
         slot: Box::new(entity),
     }
@@ -161,6 +171,9 @@ impl Mounted {
     pub fn answer(&self, ask: Ask, from: &'static str, window: &mut Window, cx: &mut App) {
         self.slot.answer(ask, from, window, cx)
     }
+    pub fn settings_changed(&self, window: &mut Window, cx: &mut App) {
+        self.slot.settings_changed(window, cx)
+    }
     pub fn chords(&self, cx: &App) -> Vec<Chord> {
         self.slot.chords(cx)
     }
@@ -181,6 +194,7 @@ trait Slot {
     fn tabs(&self, shown: bool, window: &mut Window, cx: &mut App) -> Option<AnyElement>;
     fn shown(&self, shown: bool, window: &mut Window, cx: &mut App);
     fn answer(&self, ask: Ask, from: &'static str, window: &mut Window, cx: &mut App);
+    fn settings_changed(&self, window: &mut Window, cx: &mut App);
     fn chords(&self, cx: &App) -> Vec<Chord>;
     fn focus(&self, cx: &App) -> Option<FocusHandle>;
     fn redraws(&self, viewer: EntityId, cx: &mut App) -> Subscription;
@@ -207,6 +221,9 @@ impl<P: Page> Slot for Entity<P> {
     }
     fn answer(&self, ask: Ask, from: &'static str, window: &mut Window, cx: &mut App) {
         self.update(cx, |p, cx| p.answer(ask, from, window, cx))
+    }
+    fn settings_changed(&self, window: &mut Window, cx: &mut App) {
+        self.update(cx, |p, cx| p.settings_changed(window, cx))
     }
     fn chords(&self, cx: &App) -> Vec<Chord> {
         self.read(cx).chords(cx)

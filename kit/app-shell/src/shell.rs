@@ -4,6 +4,7 @@
 //! answers it, the keyboard to the top layer. It knows no page by name.
 
 use crate::keys::KeysPanel;
+use crate::settings_page::SettingsPage;
 use crate::view_control::{self, ViewControl};
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, KeyDownEvent, Subscription, Task, Window,
@@ -13,7 +14,7 @@ use parvi_app_kit::host::{Cover, Layer};
 use parvi_app_kit::hub::{HubEvent, Surface};
 use parvi_app_kit::link::frames;
 use parvi_app_kit::page::Meta;
-use parvi_app_kit::{Build, Error, Host, Hub, Mounted};
+use parvi_app_kit::{Build, Error, Host, Hub, Mounted, declared, mount as mount_page};
 use parvi_core::frame::overlap;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -38,19 +39,25 @@ pub struct Shell {
     _subscriptions: Vec<Subscription>,
 }
 
-/// Makes every page, refusing two pages of one id or two that take the
-/// same frame kinds, any that takes a kind the link or the shell owns, and
-/// two whose chords live everywhere share a key.
+/// Makes every page, then the Settings page listing what they declare,
+/// refusing two pages of one id or two that take the same frame kinds, any
+/// that takes a kind the link or the shell owns or declares a setting
+/// twice, and two whose chords live everywhere share a key.
 pub fn mount(
     builds: &[Build],
     hub: &Entity<Hub>,
     window: &mut Window,
     cx: &mut App,
 ) -> Result<Vec<Mounted>, Error> {
-    let pages: Vec<Mounted> = builds
+    let mut pages: Vec<Mounted> = builds
         .iter()
         .map(|b| b(Host::new(hub), window, cx))
         .collect();
+    let declaring: Vec<Meta> = pages.iter().map(|p| p.meta).collect();
+    let settings_hub = hub.clone();
+    pages.push(mount_page(Host::new(hub), window, cx, |_, window, cx| {
+        SettingsPage::new(settings_hub, declaring, window, cx)
+    }));
     let metas: Vec<Meta> = pages.iter().map(|p| p.meta).collect();
     check(&metas)?;
     let chords: Vec<_> = pages.iter().map(|p| (p.meta.id, p.chords(cx))).collect();
@@ -71,6 +78,12 @@ pub fn check(pages: &[Meta]) -> Result<(), Error> {
                     format!("{} takes frame kinds {owner} owns", a.id),
                 ));
             }
+        }
+        if let Some(key) = declared::twice(a.settings) {
+            return Err(Error::new(
+                "setting_twice",
+                format!("{} declares its setting {key} twice", a.id),
+            ));
         }
         for b in &pages[i + 1..] {
             if a.id == b.id {
@@ -222,6 +235,11 @@ impl Shell {
             }
             HubEvent::Show(id) => {
                 self.show_id(id, window, cx);
+            }
+            HubEvent::SettingChanged(id) => {
+                if let Some(i) = self.index_of(id) {
+                    self.pages[i].settings_changed(window, cx);
+                }
             }
             HubEvent::Layers { closed } => {
                 for s in closed {
@@ -451,6 +469,7 @@ mod tests {
             kinds,
             channels: &[],
             answers: &[],
+            settings: &[],
         }
     }
 
@@ -466,6 +485,13 @@ mod tests {
         assert_eq!(link.message, "a takes frame kinds the link owns");
         let shell = check(&[meta("a", &[0xb8..=0xb8])]).unwrap_err();
         assert_eq!(shell.message, "a takes frame kinds the shell owns");
+        const LOUD: parvi_app_kit::Setting = parvi_app_kit::Setting::toggle("loud", "Loud", false);
+        let twice = Meta {
+            settings: &[LOUD, LOUD],
+            ..meta("a", &[])
+        };
+        let e = check(&[twice]).unwrap_err();
+        assert_eq!(e.message, "a declares its setting loud twice");
     }
 
     #[test]

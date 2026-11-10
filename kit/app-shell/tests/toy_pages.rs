@@ -14,7 +14,7 @@ use parvi_app_kit::host::{Layer, Request};
 use parvi_app_kit::link::client::LinkState;
 use parvi_app_kit::link::socket::Tap;
 use parvi_app_kit::menu::MenuRow;
-use parvi_app_kit::{Answers, Ask, Build, Host, Mounted, Page, mount};
+use parvi_app_kit::{Answers, Ask, Build, Host, Mounted, Page, Setting, mount};
 use parvi_app_shell::Shell;
 use parvi_core::NodeId;
 use std::cell::RefCell;
@@ -47,6 +47,8 @@ struct Alpha {
     chord: usize,
     row: usize,
     dismissed: bool,
+    /// Its section as last read when a setting changed.
+    settings: Option<serde_json::Value>,
 }
 
 impl Alpha {
@@ -70,6 +72,7 @@ impl Alpha {
                 chord: 0,
                 row: 0,
                 dismissed: false,
+                settings: None,
             }
         })
     }
@@ -81,6 +84,14 @@ impl Page for Alpha {
     const KINDS: parvi_core::frame::Kinds = &[TOY..=TOY];
     const CHANNELS: &'static [u8] = &[TOY];
     const ANSWERS: &'static [Answers] = &[Answers::Reveal("toy")];
+    const SETTINGS: &'static [Setting] = &[
+        Setting::toggle("loud", "Loud", false),
+        Setting::number("size", "Size", 1., (1., 3., 1.)),
+    ];
+
+    fn settings_changed(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.settings = Some(self.host.setting(cx).expect("its section reads"));
+    }
 
     fn frame(&mut self, node: &NodeId, _: u8, body: &[u8], _: &mut Window, cx: &mut Context<Self>) {
         self.heard
@@ -559,6 +570,19 @@ fn two_toy_pages_plug_in_through_their_host(cx: &mut TestAppContext) {
         Some("42")
     );
 
+    // The Settings page lists the shell's settings and what Alpha declares;
+    // a change goes into Alpha's section, and Alpha hears it.
+    click(cx, "tab-settings");
+    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("settings"));
+    click(cx, "setting-toy-a-loud");
+    click(cx, "setting-toy-a-size-up");
+    assert_eq!(
+        a.read_with(cx, |a, _| a.settings.clone()),
+        Some(serde_json::json!({"loud": true, "size": 2.0}))
+    );
+    click(cx, "setting-app-keys");
+    assert!(!shell.read_with(cx, |s, cx| s.hub().read(cx).settings.keys));
+
     let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
 }
 
@@ -579,6 +603,8 @@ fn with_no_pages_the_shell_connects_to_its_node(cx: &mut TestAppContext) {
         })
     });
     assert_eq!(status(&shell, cx), "Connected to rig (test), Parvi 0.0.1");
-    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), None);
+    // Only the shell's own Settings page, from which the node is set.
+    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("settings"));
+    assert!(cx.debug_bounds("tab-settings").is_some());
     let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
 }

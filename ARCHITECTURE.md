@@ -21,8 +21,12 @@ engine/         terminal engine, session holder, mission engine
 ```
 
 Each directory under an area, `kit/`, `bin/` and `engine/` is one crate. The
-areas are terminals, files, work, brain, host, scheduled, settings, agents and
-missions.
+areas are terminals, files, work, brain, host, scheduled, agents and missions;
+fleet becomes one after the first release. Launching sessions and agent events
+live in terminals. Settings is not an area: the shell's Settings page lists
+what pages declare. While areas move in parallel, only the foundation's owner
+and the lead edit `kit/` and `bin/`; an area agent that needs a change there
+files a bead.
 
 ## Rules the compiler holds
 
@@ -116,6 +120,11 @@ shell owns, or whose `everywhere` chords share a key, naming both.
   hands it a view (`Host::show_beside`), which the asker draws where its
   layout has room (`Host::beside`), as the terminals draw a file a link
   named.
+- **Settings.** A page declares its settings beside it (`Page::SETTINGS`: key,
+  label, control, default). The shell's Settings page lists the shell's own
+  (node, keys) and each page's under its title, keeps a change under its key in
+  the page's section of `app.json`, and tells the page
+  (`Page::settings_changed`). A key declared twice refuses to start.
 - **Read models.** What one page knows that others show (the terminals' session
   list) is a plain type in its area's `contract`, published by that page
   (`Host::publish`) and read and observed by any page (`Host::model`), built in

@@ -4,6 +4,7 @@
 
 mod chrome;
 mod keys;
+mod settings_page;
 pub mod shell;
 pub mod view_control;
 

@@ -4,6 +4,7 @@
 
 use super::workspace::Workspace;
 use crate::theme::size;
+use parvi_app_kit::Setting;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 
@@ -38,6 +39,27 @@ pub struct Settings {
     /// restarts too.
     pub kept: BTreeMap<String, Vec<Kept>>,
 }
+
+/// What the Settings page lists for the terminals, each under its field's
+/// name here.
+pub const DECLARED: &[Setting] = &[
+    Setting::number(
+        "font_size",
+        "Font size",
+        size::TERM_DEFAULT as f64,
+        (size::TERM_MIN as f64, size::TERM_MAX as f64, 1.),
+    ),
+    Setting::toggle("copy_on_select", "Copy on select", true)
+        .note("A selection is copied as the mouse is released."),
+    Setting::toggle("notify", "Report when done", true)
+        .note("The launcher asks a harness to report when it finishes."),
+    Setting::toggle("event_marks", "Mark reports", true)
+        .note("A report marks its session's row and the tab holding it."),
+    Setting::toggle("event_toast", "Toast reports", true),
+    Setting::toggle("event_tone", "Play a tone", false),
+    Setting::toggle("event_desktop", "Desktop notifications", true)
+        .note("While the window is not active."),
+];
 
 /// A session as remembered: enough to list it while its device is away.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -76,6 +98,18 @@ fn mended<'de, D: Deserializer<'de>>(d: D) -> Result<Workspace, D::Error> {
 }
 
 impl Settings {
+    /// Takes what the Settings page sets ([`DECLARED`]) from `fresh`,
+    /// keeping the rest as the page has it.
+    pub fn take_declared(&mut self, fresh: Settings) {
+        self.font_size = fresh.font_size;
+        self.copy_on_select = fresh.copy_on_select;
+        self.notify = fresh.notify;
+        self.event_marks = fresh.event_marks;
+        self.event_toast = fresh.event_toast;
+        self.event_tone = fresh.event_tone;
+        self.event_desktop = fresh.event_desktop;
+    }
+
     /// Brings what was read within bounds.
     pub fn mend(mut self) -> Self {
         self.font_size = self.font_size.clamp(size::TERM_MIN, size::TERM_MAX);
@@ -91,6 +125,31 @@ mod tests {
         serde_json::from_str::<Settings>(text)
             .ok()
             .map(Settings::mend)
+    }
+
+    /// The declarations name these fields, with their defaults, and a
+    /// change to any of them is taken; nothing else is.
+    #[test]
+    fn what_the_settings_page_lists_is_these_fields() {
+        let defaults = serde_json::to_value(Settings::default()).unwrap();
+        let mut changed = defaults.clone();
+        for setting in DECLARED {
+            let kept = &defaults[setting.key];
+            assert_eq!(*kept, setting.default_value(), "{}'s default", setting.key);
+            changed[setting.key] = match kept {
+                serde_json::Value::Bool(b) => (!b).into(),
+                _ => setting.stepped(kept, 1.),
+            };
+        }
+        changed["sessions_open"] = false.into();
+        let fresh: Settings = serde_json::from_value(changed.clone()).unwrap();
+        let mut mine = Settings::default();
+        mine.take_declared(fresh);
+        let taken = serde_json::to_value(&mine).unwrap();
+        for setting in DECLARED {
+            assert_eq!(taken[setting.key], changed[setting.key], "{}", setting.key);
+        }
+        assert_eq!(taken["sessions_open"], true, "not declared, not taken");
     }
 
     #[test]

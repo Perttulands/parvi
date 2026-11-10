@@ -4,6 +4,7 @@
 pub mod ask;
 pub mod chords;
 pub mod clock;
+pub mod declared;
 pub mod host;
 pub mod hub;
 pub mod layers;
@@ -16,6 +17,7 @@ pub mod theme;
 pub mod widgets;
 
 pub use ask::{Answers, Ask};
+pub use declared::{Control, Setting};
 pub use host::Host;
 pub use hub::Hub;
 pub use page::{Build, Mounted, Page, mount};

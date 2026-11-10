@@ -72,6 +72,8 @@ pub enum HubEvent {
     /// The stack changed: the keyboard goes to the top layer, or back to
     /// the page, and what closed runs its dismiss.
     Layers { closed: Vec<Surface> },
+    /// A setting page `page` declares was changed for it.
+    SettingChanged(&'static str),
     /// The link to `node` changed state; `None` when the app no longer
     /// follows that node. Every page hears it.
     Link {
@@ -507,6 +509,21 @@ impl Hub {
                 Ok(entity)
             }
         }
+    }
+
+    /// Keeps `value` for the setting `key` page `page` declares, and tells
+    /// the page.
+    pub fn set_value(
+        &mut self,
+        page: &'static str,
+        key: &str,
+        value: serde_json::Value,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.set_value(page, key, value);
+        self.save(cx);
+        cx.emit(HubEvent::SettingChanged(page));
+        cx.notify();
     }
 
     /// What is open beside `page`.

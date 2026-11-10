@@ -136,6 +136,26 @@ impl Settings {
         Ok(())
     }
 
+    /// What page `id`'s section keeps under `key`.
+    pub fn value(&self, id: &str, key: &str) -> Option<&Value> {
+        self.sections.get(id)?.get(key)
+    }
+
+    /// Keeps `value` under `key` in page `id`'s section, leaving the rest
+    /// of it as it is.
+    pub fn set_value(&mut self, id: &str, key: &str, value: Value) {
+        let section = self
+            .sections
+            .entry(id.to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        if !section.is_object() {
+            *section = Value::Object(Map::new());
+        }
+        if let Value::Object(section) = section {
+            section.insert(key.to_string(), value);
+        }
+    }
+
     /// Writes through a temporary file, so a crash never leaves half a file.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
