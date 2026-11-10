@@ -1,7 +1,7 @@
 //! Reads GitHub's answer to `item.graphql` into an [`Item`] with its family.
 
 use anyhow::{Context, Result, bail};
-use parvi_work_contract::WorkRef;
+use parvi_work_ref::WorkRef;
 use serde::Deserialize;
 
 use super::item::{Family, Item};

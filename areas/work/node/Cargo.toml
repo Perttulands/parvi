@@ -12,6 +12,7 @@ workspace = true
 parvi-core = { path = "../../../kit/core" }
 parvi-node-kit = { path = "../../../kit/node-kit" }
 parvi-work-contract = { path = "../contract" }
+parvi-work-ref = { path = "../../../engine/work-ref" }
 anyhow = "1"
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 serde = { version = "1", features = ["derive"] }

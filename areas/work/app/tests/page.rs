@@ -61,7 +61,9 @@ fn start() -> Option<Running> {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
             BD.set(script.to_string_lossy().into_owned()).unwrap();
-            let config = format!("[terminals]\nsocket = {:?}\n[work]\nprojects = [{:?}]\n", tmux.socket_path(), format!("beads {}", dir.display()));
+            let launch = dir.join("launch.conf");
+            std::fs::write(&launch, format!("folder {}\n", dir.display())).unwrap();
+            let config = format!("[terminals]\nsocket = {:?}\nlaunch = {:?}\n[work]\nprojects = [{:?}]\n", tmux.socket_path(), launch, format!("beads {}", dir.display()));
             let node = Node::start(AREAS, &config).await.unwrap();
             ready.send(Some((node.url(), node.id()))).unwrap();
             while stopped.try_recv().is_err() { tokio::time::sleep(Duration::from_millis(50)).await; }
@@ -148,17 +150,70 @@ fn opens_a_work_item_and_sends_its_reference_to_a_session(cx: &mut TestAppContex
     until(cx, "peek", |cx| cx.debug_bounds("peek-attach").is_some());
     click(cx, "peek-attach");
     until(cx, "terminal", |cx| !shown(cx).trim().is_empty());
-    click(cx, "tab-work");
-    until(cx, "fixture item", |cx| {
-        cx.debug_bounds("work-row-fixture-1").is_some()
+    // Alt+B docks Work while Terminals stays open; the dock alone watches
+    // the Work channel and a row opens its card on the Work page.
+    cx.simulate_keystrokes("alt-b");
+    until(cx, "fixture in dock", |cx| {
+        cx.debug_bounds("work-column-row-fixture-1").is_some()
     });
-    click(cx, "work-row-fixture-1");
+    assert!(cx.debug_bounds("dock-work").is_some());
+    click(cx, "work-column-row-fixture-1");
     until(cx, "item card", |cx| cx.debug_bounds("work-card").is_some());
+    cx.simulate_keystrokes("alt-b");
+    until(cx, "dock closed", |cx| {
+        cx.debug_bounds("dock-work").is_none()
+    });
+    until(cx, "send action", |cx| {
+        cx.debug_bounds("work-send").is_some()
+    });
     click(cx, "work-send");
     until(cx, "send drawer", |cx| cx.debug_bounds("send-go").is_some());
     click(cx, "send-go");
     until(cx, "reference in session", |cx| {
         shown(cx).contains("bead fixture-1: Read the fixture")
     });
+    until(cx, "send drawer closed", |cx| {
+        cx.debug_bounds("send-go").is_none()
+    });
+    click(cx, "tab-work");
+    until(cx, "start action", |cx| {
+        cx.debug_bounds("work-start").is_some()
+    });
+    let host = shell.read_with(cx, |shell, _| Host::new(shell.hub()));
+    let sessions = cx
+        .update(|_, cx| host.model::<parvi_terminals_contract::SessionList>(cx))
+        .unwrap();
+    click(cx, "work-start");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        cx.run_until_parked();
+        let found = sessions.read_with(cx, |list, _| {
+            list.sessions
+                .iter()
+                .any(|s| s.node == running.node && s.name == "fixture-1")
+        });
+        if found {
+            break;
+        }
+        if Instant::now() >= deadline {
+            let names = sessions.read_with(cx, |list, _| {
+                list.sessions
+                    .iter()
+                    .map(|s| s.name.clone())
+                    .collect::<Vec<_>>()
+            });
+            let status = shell.read_with(cx, |shell, cx| {
+                shell
+                    .hub()
+                    .read(cx)
+                    .status
+                    .as_ref()
+                    .map(|s| (s.text.clone(), s.failure))
+            });
+            panic!("item session did not start: sessions {names:?}, status {status:?}");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
     std::fs::remove_dir_all(settings).unwrap();
 }

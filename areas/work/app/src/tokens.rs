@@ -57,3 +57,5 @@ pub const COLUMN_UPDATED_W: f32 = 76.;
 pub const COLUMN_IDLE_W: f32 = 52.;
 pub const COLUMN_SIZE_W: f32 = 56.;
 pub const COLUMN_KIDS_W: f32 = 48.;
+
+pub const DOCK_WIDTH: f32 = 360.;

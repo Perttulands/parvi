@@ -60,8 +60,8 @@ impl Item {
     /// when `store` is given because the id alone does not place it, or
     /// `issue <owner>/<repo>#<n>: <title>`.
     pub fn reference_line(&self, store: Option<&str>) -> String {
-        let name = match crate::parse_resolved(&self.reference) {
-            Ok(r @ crate::WorkRef::Issue { .. }) => format!("issue {}", r.short()),
+        let name = match parvi_work_ref::parse_resolved(&self.reference) {
+            Ok(r @ parvi_work_ref::WorkRef::Issue { .. }) => format!("issue {}", r.short()),
             _ => match store {
                 Some(folder) => format!("bead {} ({folder})", self.id),
                 None => format!("bead {}", self.id),

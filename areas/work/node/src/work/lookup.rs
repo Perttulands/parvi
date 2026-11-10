@@ -3,7 +3,7 @@
 //! when asked (`docs/work.md`, The seam).
 
 use anyhow::{Context, Result, bail};
-use parvi_work_contract::{WorkRef, Written};
+use parvi_work_ref::{WorkRef, Written};
 use tokio::task::JoinSet;
 
 use super::config::Project;
@@ -15,7 +15,7 @@ impl Work {
     /// id resolves only when exactly one configured store has its prefix,
     /// and not while a store's prefix cannot be read.
     pub async fn resolve(&self, text: &str) -> Result<WorkRef> {
-        let id = match parvi_work_contract::parse(text)? {
+        let id = match parvi_work_ref::parse(text)? {
             Written::Ref(r) => return Ok(r),
             Written::Bead(id) => id,
         };
@@ -73,8 +73,7 @@ impl Work {
     /// with its store's folder when another configured store shares the
     /// Bead's prefix.
     pub async fn reference_line(&self, item: &Item) -> String {
-        let Ok(WorkRef::Bead { folder, id, .. }) =
-            parvi_work_contract::parse_resolved(&item.reference)
+        let Ok(WorkRef::Bead { folder, id, .. }) = parvi_work_ref::parse_resolved(&item.reference)
         else {
             return item.reference_line(None);
         };
@@ -236,7 +235,7 @@ mod tests {
             format!("bead:n2:{}#tst-1", projects[0].name()),
             "bead:n1:/elsewhere#tst-1".into(),
         ] {
-            let r = parvi_work_contract::parse_resolved(&missing).unwrap();
+            let r = parvi_work_ref::parse_resolved(&missing).unwrap();
             assert!(work.item(&r).await.is_err(), "{missing}");
         }
     }

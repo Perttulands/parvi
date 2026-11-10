@@ -1,4 +1,5 @@
 //! Work's table, filters and item card.
+mod column;
 mod fit;
 mod graph_view;
 mod natural;
@@ -10,7 +11,8 @@ mod tokens;
 mod view;
 
 use gpui::{
-    App, AppContext, Context, Entity, FocusHandle, KeyDownEvent, UniformListScrollHandle, Window,
+    App, AppContext, Context, Entity, FocusHandle, KeyDownEvent, UniformListScrollHandle,
+    WeakEntity, Window,
 };
 use parvi_app_kit::ask::{Answers, Ask};
 use parvi_app_kit::hub::now_ms;
@@ -31,6 +33,8 @@ pub fn build(host: Host, window: &mut Window, cx: &mut App) -> Mounted {
 
 pub struct Work {
     host: Host,
+    me: WeakEntity<Work>,
+    sessions: Option<Entity<parvi_terminals_contract::SessionList>>,
     focus: FocusHandle,
     search: Entity<TextField>,
     rail_search: Entity<TextField>,
@@ -81,6 +85,16 @@ impl Page for Work {
             self.open_wanted(cx);
         }
     }
+    fn chords(&self, _: &App) -> Vec<parvi_app_kit::chords::Chord> {
+        let me = self.me.clone();
+        vec![
+            parvi_app_kit::chords::Chord::new("b", "Work column", move |_, cx| {
+                let _ = me.update(cx, |work, cx| work.toggle_column(cx));
+            })
+            .alt("b", Some(false))
+            .everywhere(),
+        ]
+    }
     fn focus(&self, _: &App) -> Option<FocusHandle> {
         Some(self.focus.clone())
     }
@@ -104,8 +118,11 @@ impl Work {
             },
         )
         .detach();
+        let sessions = host.model::<parvi_terminals_contract::SessionList>(cx);
         Self {
             host,
+            me: cx.weak_entity(),
+            sessions,
             focus: cx.focus_handle(),
             search,
             rail_search,
@@ -441,16 +458,60 @@ impl Work {
     }
     pub fn send(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(row) = self.selected_row() {
-            let line = self.board.rows[row].line(&self.board);
+            let item = &self.board.rows[row];
+            let line = item.line(&self.board);
+            let node = self.node_for_project(item.project);
+            let folder = self.board.projects[item.project].checkout.as_deref();
+            let target = self.sessions.as_ref().and_then(|list| {
+                list.read(cx)
+                    .sessions
+                    .iter()
+                    .find(|session| {
+                        Some(session.node.as_str()) == node.as_deref()
+                            && session
+                                .cwd
+                                .as_deref()
+                                .zip(folder)
+                                .is_some_and(|(a, b)| same_folder(a, b))
+                    })
+                    .map(|session| parvi_app_kit::ask::SessionTarget {
+                        node: NodeId(session.node.clone()),
+                        user: session.user.clone().unwrap_or_default(),
+                        name: session.name.clone(),
+                    })
+            });
             let _ = self.host.ask(
                 Ask::Send {
                     reference: line,
-                    target: None,
+                    target,
                 },
                 cx,
             );
         }
     }
+    /// Ask the terminals page to start a session in this item's checkout.
+    pub fn start_session(&mut self, cx: &mut Context<Self>) {
+        let Some(row) = self.selected_row() else {
+            return;
+        };
+        let item = &self.board.rows[row];
+        let project = &self.board.projects[item.project];
+        let (Some(folder), Some(node)) = (
+            project.checkout.clone(),
+            self.node_for_project(item.project),
+        ) else {
+            return;
+        };
+        let _ = self.host.ask(
+            Ask::Launch {
+                node: NodeId(node),
+                folder,
+                name: session_name(&project.label, &item.id),
+            },
+            cx,
+        );
+    }
+
     pub fn let_go(&mut self) {
         self.trail.clear();
         self.card = false;
@@ -523,4 +584,34 @@ impl Work {
             self.follow_row(row, cx);
         }
     }
+}
+
+/// Two spellings of the same checkout, including a home-relative path.
+fn same_folder(a: &str, b: &str) -> bool {
+    let a = a.trim_end_matches(['/', '\\']);
+    let b = b.trim_end_matches(['/', '\\']);
+    a == b
+        || (b.starts_with("~/") && a.ends_with(&b[1..]))
+        || (a.starts_with("~/") && b.ends_with(&a[1..]))
+}
+
+/// Suggest a tmux-safe name; the answering page resolves collisions.
+fn session_name(project: &str, id: &str) -> String {
+    let short = project.rsplit('/').next().unwrap_or(project);
+    let id = id.trim_start_matches('#');
+    let raw = if id.starts_with(short) {
+        id.to_string()
+    } else {
+        format!("{short}-{id}")
+    };
+    raw.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .take(48)
+        .collect()
 }

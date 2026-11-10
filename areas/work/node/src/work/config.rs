@@ -55,7 +55,7 @@ impl Config {
             let project = match key {
                 "beads" => {
                     let folder = trim_separators(rest);
-                    if !parvi_work_contract::is_absolute(folder) {
+                    if !parvi_work_ref::is_absolute(folder) {
                         bail!(
                             "{}: a Beads store is named by its absolute project folder",
                             at()
@@ -145,7 +145,7 @@ fn is_windows_absolute(path: &str) -> bool {
 }
 
 fn is_repo_name(name: &str) -> bool {
-    matches!(name.split_once('/'), Some((owner, repo)) if parvi_work_contract::is_repo_part(owner) && parvi_work_contract::is_repo_part(repo))
+    matches!(name.split_once('/'), Some((owner, repo)) if parvi_work_ref::is_repo_part(owner) && parvi_work_ref::is_repo_part(repo))
 }
 
 #[cfg(test)]

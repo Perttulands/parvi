@@ -445,3 +445,41 @@ fn reveal_selects_the_named_nodes_copy(cx: &mut TestAppContext) {
         })
     });
 }
+
+#[gpui::test]
+fn a_column_row_opens_its_item(cx: &mut TestAppContext) {
+    let (work, cx) = page(cx);
+    cx.update(|_, cx| {
+        work.update(cx, |w, cx| {
+            w.slice.only_project("/srv/data/context");
+            w.reslice();
+            let moving = crate::store::work::column::moving(&w.board);
+            let group = moving
+                .groups
+                .iter()
+                .find(|g| w.board.projects[g.project].label == "ctx")
+                .unwrap();
+            w.open_from_column(group.ready[0], cx);
+        })
+    });
+    assert_eq!(selected(&work, cx).as_deref(), Some("ctx-old"));
+    assert!(work.read_with(cx, |w, _| w.card));
+}
+
+#[test]
+fn session_names() {
+    use parvi_terminals_contract::session_copy::next_name;
+    assert_eq!(super::session_name("example/project", "#42"), "project-42");
+    assert_eq!(super::session_name("ctx", "ctx-1a.2"), "ctx-1a-2");
+    assert_eq!(
+        next_name(&super::session_name("o/r", "#1"), &["r-1", "r-1-2"]),
+        "r-1-3"
+    );
+}
+
+#[test]
+fn folders_written_two_ways_match() {
+    assert!(super::same_folder("/home/example/project/", "~/project"));
+    assert!(super::same_folder("/srv/x", "/srv/x/"));
+    assert!(!super::same_folder("/srv/x", "/srv/y"));
+}

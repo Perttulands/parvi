@@ -526,6 +526,13 @@ impl Work {
                     .on_click(cx.listener(|w, _, _, cx| w.back(cx))),
             );
         }
+        if p.checkout.is_some() {
+            head = head.child(
+                kit::button(&t, "w-start", "Start session", Kind::Primary)
+                    .debug_selector(|| "work-start".into())
+                    .on_click(cx.listener(|w, _, _, cx| w.start_session(cx))),
+            );
+        }
         head = head
             .child(
                 kit::button(&t, "w-send", "Send…", Kind::Quiet)

@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 parvi-core = { path = "../../../kit/core" }
+parvi-work-ref = { path = "../../../engine/work-ref" }
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
