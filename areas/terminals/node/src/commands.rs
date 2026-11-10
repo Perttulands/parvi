@@ -248,7 +248,7 @@ async fn copy(ctx: &Ctx, args: &Value) -> Result<Value> {
         bail!("Working directory unavailable");
     }
     let launcher = ctx.launcher.get();
-    let index = parvi_term::session_copy::harness_index(
+    let index = parvi_terminals_contract::session_copy::harness_index(
         &facts.command,
         launcher.harnesses.iter().map(|h| h.command.as_str()),
     )
@@ -260,7 +260,7 @@ async fn copy(ctx: &Ctx, args: &Value) -> Result<Value> {
         .filter(|s| s.user == source.user)
         .map(|s| s.name.as_str())
         .collect();
-    let name = parvi_term::session_copy::next_name(&source.name, &taken);
+    let name = parvi_terminals_contract::session_copy::next_name(&source.name, &taken);
     let launch = Launch {
         harness: harness.id.clone(),
         folder: facts.path.clone(),

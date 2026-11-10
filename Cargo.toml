@@ -8,6 +8,7 @@ members = [
   "engine/holder",
   "areas/terminals/contract",
   "areas/terminals/node",
+  "areas/terminals/app",
   "areas/scheduled/contract",
   "areas/scheduled/node",
   "areas/scheduled/app",

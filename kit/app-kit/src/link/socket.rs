@@ -1,10 +1,11 @@
 //! One socket to one node, on the network thread: connect, read frames, and
 //! dial again with backoff when it drops.
-//! It knows nothing about stores or views: it hands frames to its caller.
+//! It knows nothing about stores or views: it hands frames to its caller,
+//! after the taps a page set have had their pick.
 
 use futures_util::{SinkExt, StreamExt};
 use parvi_core::{Hello, PROTOCOL};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::sync::{Notify, mpsc};
 use tokio_tungstenite::tungstenite::Message;
@@ -24,6 +25,15 @@ pub enum Event {
     /// The socket went, or could not be opened; the link dials again by itself.
     Closed(LinkId, String),
 }
+
+/// Takes frames on the network thread, before they reach the UI: given the
+/// node a frame came from, its kind and body, it says whether it took the
+/// frame. A page whose frames come fast and only feed its own state (a
+/// terminal's output) keeps them off the UI thread this way, and wakes
+/// itself when there is something new to draw.
+pub type Tap = Arc<dyn Fn(&str, u8, &[u8]) -> bool + Send + Sync>;
+
+type Taps = Arc<RwLock<Vec<Tap>>>;
 
 /// The UI's handle on a link. Dropping it closes the socket.
 pub struct Link {
@@ -46,6 +56,7 @@ impl Link {
 #[derive(Clone)]
 pub struct Net {
     rt: tokio::runtime::Handle,
+    taps: Taps,
 }
 
 impl Net {
@@ -64,14 +75,34 @@ impl Net {
             .expect("network thread");
         Self {
             rt: rx.recv().expect("network runtime"),
+            taps: Taps::default(),
         }
     }
 
-    pub fn open(&self, id: LinkId, url: String, events: async_channel::Sender<Event>) -> Link {
+    /// Opens a link to `url`, which reaches node `target` (`None`: the node
+    /// that answers, by its hello).
+    pub fn open(
+        &self,
+        id: LinkId,
+        url: String,
+        target: Option<String>,
+        events: async_channel::Sender<Event>,
+    ) -> Link {
         let (out, rx) = mpsc::unbounded_channel();
         let redial = Arc::new(Notify::new());
-        self.rt.spawn(run(id, url, rx, redial.clone(), events));
+        let to = To {
+            id,
+            url,
+            target,
+            taps: self.taps.clone(),
+        };
+        self.rt.spawn(run(to, rx, redial.clone(), events));
         Link { out, redial }
+    }
+
+    /// Adds a tap every link's frames pass first, for as long as the app runs.
+    pub fn tap(&self, tap: Tap) {
+        self.taps.write().expect("taps").push(tap);
     }
 
     pub fn runtime(&self) -> &tokio::runtime::Handle {
@@ -84,16 +115,24 @@ pub fn backoff(attempt: u32) -> Duration {
     Duration::from_secs((1u64 << attempt.min(5)).min(30))
 }
 
-async fn run(
+/// Where a link goes, and what it hands frames to first.
+struct To {
     id: LinkId,
     url: String,
+    target: Option<String>,
+    taps: Taps,
+}
+
+async fn run(
+    to: To,
     mut out: mpsc::UnboundedReceiver<Vec<u8>>,
     redial: Arc<Notify>,
     events: async_channel::Sender<Event>,
 ) {
+    let id = to.id;
     let mut attempt = 0u32;
     loop {
-        let why = match session(id, &url, &mut out, &events).await {
+        let why = match session(&to, &mut out, &events).await {
             Ending::Dropped => return,
             Ending::Refused => {
                 // Wait for an explicit redial: the version will not change by itself.
@@ -166,14 +205,14 @@ fn why(e: &tokio_tungstenite::tungstenite::Error) -> String {
 }
 
 async fn session(
-    id: LinkId,
-    url: &str,
+    to: &To,
     out: &mut mpsc::UnboundedReceiver<Vec<u8>>,
     events: &async_channel::Sender<Event>,
 ) -> Ending {
+    let id = to.id;
     let ws = match tokio::time::timeout(
         Duration::from_secs(5),
-        tokio_tungstenite::connect_async(url),
+        tokio_tungstenite::connect_async(to.url.as_str()),
     )
     .await
     {
@@ -188,8 +227,10 @@ async fn session(
     let (mut tx, mut rx) = ws.split();
     // Anything queued before this socket belongs to the last one.
     while out.try_recv().is_ok() {}
-    let mut open = false;
+    // The node the frames are from, once it has said hello.
+    let mut node = None;
     loop {
+        let open = node.is_some();
         tokio::select! {
             frame = out.recv() => {
                 let Some(frame) = frame else { return Ending::Dropped };
@@ -204,10 +245,10 @@ async fn session(
                     Some(Err(e)) => return Ending::Lost(why(&e), open),
                     Some(Ok(_)) => continue,
                 };
-                if !open {
+                let Some(node) = &node else {
                     match Hello::decode(&bytes) {
                         Some(hello) if hello.protocol == PROTOCOL => {
-                            open = true;
+                            node = Some(to.target.clone().unwrap_or_else(|| hello.node.clone()));
                             if events.send(Event::Opened(id, hello)).await.is_err() {
                                 return Ending::Dropped;
                             }
@@ -218,8 +259,11 @@ async fn session(
                         }
                     }
                     continue;
-                }
+                };
                 let Some((&kind, body)) = bytes.split_first() else { continue };
+                if to.taps.read().expect("taps").iter().any(|tap| tap(node, kind, body)) {
+                    continue;
+                }
                 if events.send(Event::Frame(id, kind, body.to_vec())).await.is_err() {
                     return Ending::Dropped;
                 }

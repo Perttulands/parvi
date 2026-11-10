@@ -77,10 +77,12 @@ impl Client {
         self.state = LinkState::Connecting;
         self.reason = None;
         self.misses = 0;
-        self.link = Some(
-            self.net
-                .open(self.link_id, ws_url(base, self.target.as_deref()), events),
-        );
+        self.link = Some(self.net.open(
+            self.link_id,
+            ws_url(base, self.target.as_deref()),
+            self.target.clone(),
+            events,
+        ));
     }
 
     /// The node's id: the one it was addressed by, or the one it said.

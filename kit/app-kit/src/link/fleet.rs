@@ -8,7 +8,7 @@
 use super::client::{Client, LinkState, Notice};
 use super::frames::Peer;
 use super::serving::{self, Candidate, Move, Situation};
-use super::socket::{Event, Net};
+use super::socket::{Event, Net, Tap};
 use crate::settings::Place;
 use std::collections::{BTreeMap, HashSet};
 
@@ -291,6 +291,11 @@ impl Fleet {
         for c in self.links_mut() {
             c.channel(kind, on);
         }
+    }
+
+    /// Hands every link's frames to `tap` first (see [`Tap`]).
+    pub fn tap(&self, tap: Tap) {
+        self.net.tap(tap);
     }
 
     /// Sends a frame to one node. False when it is not reached now.

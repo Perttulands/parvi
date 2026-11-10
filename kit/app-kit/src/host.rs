@@ -6,12 +6,16 @@
 use crate::ask::Ask;
 use crate::chords::Run;
 use crate::hub::{Hub, HubEvent, Surface};
+use crate::link::client::LinkState;
 use crate::link::http;
+use crate::link::socket::Tap;
 use crate::menu::{Menu, MenuRow};
+use crate::settings::Place;
 use gpui::{AnyView, App, Context, Entity, FocusHandle, Pixels, Point, Task, WeakEntity};
 use parvi_core::{Error, NodeId};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, SystemTime};
 
@@ -265,6 +269,25 @@ impl Host {
     pub fn send(&self, node: &NodeId, frame: Vec<u8>, cx: &App) -> bool {
         self.read(cx, |h| h.fleet.send(node.as_str(), frame))
             .unwrap_or(false)
+    }
+
+    /// The state of the link to `node`; `None` when the app follows no
+    /// such node (it went from the fleet, or was never in it).
+    pub fn link(&self, node: &NodeId, cx: &App) -> Option<LinkState> {
+        self.read(cx, |h| h.link(node.as_str())).flatten()
+    }
+
+    /// The fleet as last seen, by node: each node's device and environment,
+    /// also while it is away.
+    pub fn places(&self, cx: &App) -> BTreeMap<String, Place> {
+        self.read(cx, |h| h.settings.places.clone())
+            .unwrap_or_default()
+    }
+
+    /// Hands every frame from every node to `tap` on the network thread
+    /// first, from now on (see [`Tap`]).
+    pub fn tap(&self, tap: Tap, cx: &App) {
+        self.read(cx, |h| h.fleet.tap(tap));
     }
 
     /// Turns a channel on or off on every node, and on each node that comes

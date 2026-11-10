@@ -7,6 +7,7 @@ use parvi_core::Error;
 use parvi_core::frame::Kinds;
 
 mod down;
+pub mod session_copy;
 pub use down::{AgentEvent, Down, EventKind, Harness, Launcher, Pane, Seat, Session, decode_down};
 
 /// Every frame kind the area owns, both ways. 0x1b (the fleet's nodes) and

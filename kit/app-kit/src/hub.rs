@@ -18,7 +18,7 @@ use crate::settings::Settings;
 use crate::theme::motion;
 use gpui::{Context, EventEmitter, Task};
 use parvi_core::{Error, NodeId};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime};
@@ -65,6 +65,12 @@ pub enum HubEvent {
     /// The stack changed: the keyboard goes to the top layer, or back to
     /// the page, and what closed runs its dismiss.
     Layers { closed: Vec<Surface> },
+    /// The link to `node` changed state; `None` when the app no longer
+    /// follows that node. Every page hears it.
+    Link {
+        node: NodeId,
+        state: Option<LinkState>,
+    },
 }
 
 pub struct Hub {
@@ -154,9 +160,11 @@ impl Hub {
     /// the link did is told in the status line.
     pub fn handle(&mut self, ev: Event, cx: &mut Context<Self>) {
         let was = self.fleet.here().state;
+        let links = self.links();
         for (node, n) in self.fleet.handle(ev, &self.settings.places) {
             self.notice(node, n, cx);
         }
+        self.links_changed(links, cx);
         self.remember_fleet(cx);
         self.track(cx);
         let here = self.fleet.here();
@@ -203,6 +211,40 @@ impl Hub {
                 }
             }
         }
+    }
+
+    /// Each followed node's link state, by node.
+    fn links(&self) -> BTreeMap<String, LinkState> {
+        self.fleet
+            .clients()
+            .iter()
+            .map(|c| (c.node(), c.state))
+            .filter(|(n, _)| !n.is_empty())
+            .collect()
+    }
+
+    /// Tells the pages of each link that changed since `before`.
+    fn links_changed(&mut self, before: BTreeMap<String, LinkState>, cx: &mut Context<Self>) {
+        let now = self.links();
+        for (node, state) in &now {
+            if before.get(node) != Some(state) {
+                cx.emit(HubEvent::Link {
+                    node: NodeId(node.clone()),
+                    state: Some(*state),
+                });
+            }
+        }
+        for node in before.keys().filter(|n| !now.contains_key(*n)) {
+            cx.emit(HubEvent::Link {
+                node: NodeId(node.clone()),
+                state: None,
+            });
+        }
+    }
+
+    /// The state of the link to `node`; `None` when the app follows no such node.
+    pub fn link(&self, node: &str) -> Option<LinkState> {
+        self.fleet.get(node).map(|c| c.state)
     }
 
     /// The configured node by its device, or by its address before it has

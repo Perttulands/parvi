@@ -4,6 +4,7 @@
 use crate::ask::{Answers, Ask};
 use crate::chords::Chord;
 use crate::host::Host;
+use crate::link::client::LinkState;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EntityId, FocusHandle, IntoElement, Render,
     Subscription, Window,
@@ -32,6 +33,17 @@ pub trait Page: Render + Sized + 'static {
         _node: &NodeId,
         _kind: u8,
         _body: &[u8],
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+    }
+
+    /// The link to `node` changed state; `None` when the app no longer
+    /// follows that node.
+    fn link(
+        &mut self,
+        _node: &NodeId,
+        _state: Option<LinkState>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) {
@@ -115,6 +127,9 @@ impl Mounted {
     pub fn frame(&self, node: &NodeId, kind: u8, body: &[u8], window: &mut Window, cx: &mut App) {
         self.slot.frame(node, kind, body, window, cx)
     }
+    pub fn link(&self, node: &NodeId, state: Option<LinkState>, window: &mut Window, cx: &mut App) {
+        self.slot.link(node, state, window, cx)
+    }
     pub fn shown(&self, shown: bool, window: &mut Window, cx: &mut App) {
         self.slot.shown(shown, window, cx)
     }
@@ -137,6 +152,7 @@ trait Slot {
     fn entity_id(&self) -> EntityId;
     fn draw(&self, window: &mut Window, cx: &mut App) -> AnyElement;
     fn frame(&self, node: &NodeId, kind: u8, body: &[u8], window: &mut Window, cx: &mut App);
+    fn link(&self, node: &NodeId, state: Option<LinkState>, window: &mut Window, cx: &mut App);
     fn shown(&self, shown: bool, window: &mut Window, cx: &mut App);
     fn answer(&self, ask: Ask, window: &mut Window, cx: &mut App);
     fn chords(&self, cx: &App) -> Vec<Chord>;
@@ -153,6 +169,9 @@ impl<P: Page> Slot for Entity<P> {
     }
     fn frame(&self, node: &NodeId, kind: u8, body: &[u8], window: &mut Window, cx: &mut App) {
         self.update(cx, |p, cx| p.frame(node, kind, body, window, cx))
+    }
+    fn link(&self, node: &NodeId, state: Option<LinkState>, window: &mut Window, cx: &mut App) {
+        self.update(cx, |p, cx| p.link(node, state, window, cx))
     }
     fn shown(&self, shown: bool, window: &mut Window, cx: &mut App) {
         self.update(cx, |p, cx| p.shown(shown, window, cx))

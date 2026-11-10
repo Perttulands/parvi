@@ -7,7 +7,6 @@ mod owned;
 mod rendition;
 mod screen;
 pub mod search;
-pub mod session_copy;
 mod utf8;
 pub mod waiting;
 

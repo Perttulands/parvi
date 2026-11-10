@@ -208,6 +208,11 @@ impl Shell {
                 }
                 self.refocus(window, cx);
             }
+            HubEvent::Link { node, state } => {
+                for p in &self.pages {
+                    p.link(node, *state, window, cx);
+                }
+            }
         }
         cx.notify();
     }

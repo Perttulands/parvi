@@ -1,4 +1,5 @@
-//! Shared session copy selection rules.
+//! Session copy's rules, which the node's command and the app's menu share:
+//! which launcher entry runs what a session runs, and the copy's name.
 
 /// Find the launcher entry whose command matches the running program.
 /// Shells match an empty launcher command. Paths and Windows executables are normalized.
