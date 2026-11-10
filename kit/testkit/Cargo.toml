@@ -1,0 +1,18 @@
+[package]
+name = "parvi-testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+parvi-node-kit = { path = "../node-kit" }
+parvi-term = { path = "../../engine/term" }
+parvi-core = { path = "../core" }
+anyhow = "1"
+axum = { version = "0.8", default-features = false }
+serde_json = { version = "1", features = ["preserve_order"] }
+tokio = { version = "1", features = ["full"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

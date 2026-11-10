@@ -1,0 +1,33 @@
+[package]
+name = "parvi-holder"
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+description = "Parvi's Windows session holder: a detached per-user process that owns ConPTY sessions."
+repository = "https://github.com/Perttulands/parvi"
+publish = false
+
+[dependencies]
+anyhow = "1"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
+vt100 = "0.16"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_System_Console",
+  "Win32_System_JobObjects",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_ProcessStatus",
+  "Win32_UI_Accessibility",
+] }

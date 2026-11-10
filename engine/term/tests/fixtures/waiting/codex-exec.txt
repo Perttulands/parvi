@@ -1,0 +1,17 @@
+› run the test suite
+
+• I'll run the tests with cargo.
+
+  Would you like to run the following command?
+
+  Environment: local
+
+  Reason: Running the project's tests needs access outside the sandbox.
+
+  $ cargo test --quiet
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with `cargo test` (p)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel

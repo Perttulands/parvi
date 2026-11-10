@@ -1,0 +1,40 @@
+[package]
+name = "parvi"
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+description = "The server in your hands: a browser view over tmux and the host."
+repository = "https://github.com/Perttulands/parvi"
+publish = false
+
+[dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "ws"] }
+anyhow = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "process", "io-util", "sync", "time", "signal"]
+ }
+vt100 = "0.15"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[build-dependencies]
+flate2 = "1"
+
+[dev-dependencies]
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+tokio-tungstenite = "0.27"
+vt100 = "0.15"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+~
+~
+~
+~
+~
+~
+~
+"/srv/parvi-example/Cargo.toml" 31 lines, 790 bytes

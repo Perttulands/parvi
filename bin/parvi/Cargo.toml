@@ -1,0 +1,18 @@
+[package]
+name = "parvi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+parvi-node-kit = { path = "../../kit/node-kit" }
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
+# The areas, one line each, as in AREAS.
+parvi-terminals = { path = "../../areas/terminals/node" }
+
+[dev-dependencies]
+parvi-testkit = { path = "../../kit/testkit" }
+serde_json = "1"
+jiff = "0.2"

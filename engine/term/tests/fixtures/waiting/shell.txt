@@ -1,0 +1,40 @@
+ls -la /srv/parvi-example; git -C /srv/parvi-example log --oneline -5
+worker@workstation:/srv/parvi-example$ ls -la /srv/parvi-example; git -C /srv/parvi-example log --oneline -5
+total 52
+drwxrwxrwx 1 worker worker  4096 Oct 30 03:09 .
+drwxrwxrwx 1 worker worker  4096 Oct 30 02:42 ..
+-rwxrwxrwx 1 worker worker  4096 Oct 30 03:09 .Cargo.toml.swp
+drwxrwxrwx 1 worker worker  4096 Oct 30 03:08 .git
+-rwxrwxrwx 1 worker worker    34 Oct 29 23:07 .gitattributes
+drwxrwxrwx 1 worker worker  4096 Oct 29 21:39 .github
+-rwxrwxrwx 1 worker worker    34 Oct 29 23:07 .gitignore
+-rwxrwxrwx 1 worker worker 20299 Oct 30 03:03 Cargo.lock
+-rwxrwxrwx 1 worker worker   790 Oct 30 03:03 Cargo.toml
+-rwxrwxrwx 1 worker worker  1089 Oct 29 21:02 LICENSE
+-rwxrwxrwx 1 worker worker  9201 Oct 29 20:59 PITCH.md
+-rwxrwxrwx 1 worker worker  1152 Oct 29 23:07 README.md
+drwxrwxrwx 1 worker worker  4096 Oct 30 03:07 bench
+-rwxrwxrwx 1 worker worker  3280 Oct 29 23:07 build.rs
+drwxrwxrwx 1 worker worker  4096 Oct 30 03:07 docs
+drwxrwxrwx 1 worker worker  4096 Oct 30 03:07 examples
+drwxrwxrwx 1 worker worker  4096 Oct 30 03:08 src
+drwxrwxrwx 1 worker worker  4096 Oct 29 21:18 target
+drwxrwxrwx 1 worker worker  4096 Oct 30 03:09 tests
+drwxrwxrwx 1 worker worker  4096 Oct 29 23:07 ui
+e4378b3 (HEAD -> m2/waiting, origin/main, origin/HEAD) Merge pull request #41 from Perttulands/m2/search
+9762430 (origin/m2/search, m2/search) Measure search over 50 sessions with full history, and document the frames
+ff13f62 Search panel, and Peek at a line of history
+8a48837 Search every pane's scrollback, from the server
+3528f44 Merge pull request #40 from Perttulands/m2/launch
+worker@workstation:/srv/parvi-example$
+
+
+
+
+
+
+
+
+
+
+

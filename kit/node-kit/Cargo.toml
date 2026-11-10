@@ -1,0 +1,28 @@
+[package]
+name = "parvi-node-kit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+parvi-core = { path = "../core" }
+parvi-term = { path = "../../engine/term" }
+anyhow = "1"
+axum = { version = "0.8", features = ["ws"] }
+futures-util = "0.3"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+jiff = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+tokio = { version = "1", features = ["full"] }
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std", "display"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tokio-tungstenite = "0.29"
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }

@@ -32,12 +32,42 @@ missions.
    client actions and its commands; one command definition yields the CLI verb
    and the MCP tool. An app area hands `app-kit` its page, actions and chords.
    The binaries hold only the list of areas. Adding to an area touches that
-   area's directory and nothing else; adding an area adds one line to each list.
+   area's directory and nothing else; adding an area adds one line to each list
+   and one dependency line to that binary's `Cargo.toml`.
 3. **Dependencies point one way.** `contract` depends on `core`. `node` depends
    on its `contract` and `node-kit`; `app` on its `contract` and `app-kit`. An
    area that needs another uses that area's `contract`, or a narrow interface
    the other area's `node` crate exports. Cargo rejects cycles. Node crates never
    depend on the GUI toolkit, and app crates never depend on the web server.
+
+## Node areas
+
+A node area is a name and a build function in `bin/parvi`'s `AREAS`. Built from
+the node's `Setup` (its identity, folder, address, config and event log), it
+answers with an `Area`: its frame kinds, HTTP routes, commands, a channel for
+each `/ws` client, and a stop. Before serving, `node-kit` refuses areas that
+share a name, a frame kind or a command, naming both; kind `0x00`, the hello,
+is the node's own.
+
+- **Frames.** The first byte of a `/ws` frame is its kind. A client's frame
+  goes to the channel of the area owning its kind; each channel pushes its own.
+- **Commands.** A command is a `noun_verb` name, a description, an input
+  schema and a call answering JSON or the error shape. `node-kit` serves it as
+  an MCP tool on `/mcp` and as the CLI verb `parvi noun verb`. A `node`
+  argument names where it runs; a node reaches only itself for now.
+- **Config.** `config.toml` in the node's folder has a `[node]` section and one
+  section per area, read by that area. `enabled = false` leaves an area unbuilt
+  and listed as off in `/api/health`; a section no area reads refuses to start.
+- **Provided interfaces.** What one area offers others goes through a narrow
+  trait in `node-kit` and a slot in `Setup` that the providing area fills
+  while it is built. `Sessions` (list, follow, deliver text to, and start
+  terminal sessions) is the first; terminals provides it, and an area reading
+  an empty slot gets a `not_provided` error rather than a dependency on
+  terminals.
+- **Hooks.** `parvi hook <url> [--then command...]` is how an outside
+  program's own hook reports to the node: it posts its payload to the URL an
+  area gave it and runs `--then` regardless. The URL carries what the area
+  needs, such as the session and event.
 
 ## Why this shape
 
