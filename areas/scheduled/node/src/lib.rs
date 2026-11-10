@@ -2,8 +2,7 @@
 //! schedule (#189), CHROTE's scheduler ported (`docs/scheduled-tasks.md`).
 //! It serves CHROTE's HTTP API ([`parvi_scheduled_contract`]) and the
 //! `scheduled_*` commands, and delivers through the node's
-//! [`parvi_node_kit::Sessions`], so a node needs an area providing them
-//! (terminals) built before this one.
+//! [`parvi_term::Sessions`], so a node needs an area providing them.
 //!
 //! What differs from CHROTE: it re-reads every task every 30 seconds. Here
 //! the node keeps when each task is next due, and its one timer sleeps until
@@ -39,7 +38,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use axum::Router;
-use parvi_node_kit::{Area, BoxFuture, Command, Setup};
+use parvi_node_kit::{Area, BoxFuture, Built, Command, Setup};
+use parvi_term::Sessions;
 use serde::Deserialize;
 use tokio::task::JoinHandle;
 
@@ -68,42 +68,41 @@ struct ScheduledArea {
     running: Mutex<Vec<JoinHandle<()>>>,
 }
 
-/// Builds the area from `[scheduled]`: reads the tasks, follows session
-/// renames and starts the timer.
-pub fn build(setup: &Setup) -> Result<Arc<dyn Area>> {
+/// Builds the area from `[scheduled]`; once every area is built, reads the
+/// tasks, follows session renames and starts the timer.
+pub fn build(setup: &Setup) -> Result<Built> {
     let section: Section = setup.config.section(NAME)?;
     let dir = match &section.dir {
         Some(dir) => setup.config.path(dir),
         None => setup.dir.join("scheduled-tasks"),
     };
-    let sessions = setup
-        .sessions
-        .get()
-        .context("scheduled delivers into sessions")?;
-    let scheduled = Arc::new(
-        Scheduled::new(dir, Arc::new(SessionsRunner::new(sessions.clone())))
-            .with_events(setup.events.clone()),
-    );
-    scheduled.prime()?;
-    // A renamed session keeps its tasks.
-    let mut running = scheduled.follow_renames(sessions.as_ref());
-    // Tasks that fell due while the node was down fire once tmux's sessions
-    // are listed, not into an empty list.
-    running.push(tokio::spawn({
-        let (scheduled, mut listed) = (scheduled.clone(), sessions.watch());
-        async move {
-            let first = listed.changed();
-            let _ = tokio::time::timeout(SESSIONS_LISTED_WITHIN, first).await;
-            scheduled.run().await
-        }
-    }));
-    Ok(Arc::new(ScheduledArea {
-        ctx: Arc::new(Ctx {
-            node: setup.node.id.clone(),
-            scheduled,
-        }),
-        running: Mutex::new(running),
-    }))
+    let (node, events) = (setup.node.id.clone(), setup.events.clone());
+    Built::then(move |provided| {
+        let sessions = provided
+            .get::<dyn Sessions>()
+            .context("scheduled delivers into sessions")?;
+        let scheduled = Arc::new(
+            Scheduled::new(dir, Arc::new(SessionsRunner::new(sessions.clone())))
+                .with_events(events),
+        );
+        scheduled.prime()?;
+        // A renamed session keeps its tasks.
+        let mut running = scheduled.follow_renames(sessions.as_ref());
+        // Tasks that fell due while the node was down fire once tmux's
+        // sessions are listed, not into an empty list.
+        running.push(tokio::spawn({
+            let (scheduled, mut listed) = (scheduled.clone(), sessions.watch());
+            async move {
+                let first = listed.changed();
+                let _ = tokio::time::timeout(SESSIONS_LISTED_WITHIN, first).await;
+                scheduled.run().await
+            }
+        }));
+        Ok(Arc::new(ScheduledArea {
+            ctx: Arc::new(Ctx { node, scheduled }),
+            running: Mutex::new(running),
+        }) as Arc<dyn Area>)
+    })
 }
 
 impl Area for ScheduledArea {

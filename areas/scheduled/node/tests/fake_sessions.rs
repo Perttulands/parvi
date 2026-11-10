@@ -1,7 +1,7 @@
 //! The scheduled area over the testkit's stand-in sessions: no tmux and no
 //! terminals, so these run everywhere. It delivers a run into the right
-//! session, follows a rename, says why a session refused, and is refused
-//! when it is listed before the area providing sessions.
+//! session, follows a rename, says why a session refused, and finds the
+//! sessions wherever they are listed.
 
 use parvi_node_kit::Build;
 use parvi_testkit::node::Node;
@@ -91,16 +91,35 @@ async fn a_renamed_session_keeps_its_tasks_and_a_refusal_is_reported() {
     node.stop().await;
 }
 
+/// The list's order does not matter: scheduled listed first still reaches
+/// the sessions; with no area providing them it is refused, saying so.
 #[tokio::test(flavor = "multi_thread")]
-async fn scheduled_listed_before_the_sessions_area_is_refused_with_what_to_change() {
-    let early: &[(&str, Build)] = &[
+async fn scheduled_finds_the_sessions_wherever_they_are_listed_and_says_when_none_are() {
+    let first: &[(&str, Build)] = &[
         (parvi_scheduled::NAME, parvi_scheduled::build),
         (sessions::NAME, sessions::build),
     ];
-    let error = match Node::start(early, "").await {
+    let node = Node::start(first, "").await.unwrap();
+    node.fake_sessions().add("alpha");
+    let made = node
+        .call(
+            "scheduled_create",
+            json!({ "name": "nudge", "prompt": "wake up", "sessions": ["alpha"], "every": 60 }),
+        )
+        .await
+        .unwrap();
+    let id = made["task"]["id"].as_str().unwrap();
+    node.call("scheduled_run", json!({ "id": id }))
+        .await
+        .unwrap();
+    assert_eq!(node.fake_sessions().delivered().len(), 1);
+    node.stop().await;
+
+    let alone: &[(&str, Build)] = &[(parvi_scheduled::NAME, parvi_scheduled::build)];
+    let error = match Node::start(alone, "").await {
         Ok(_) => panic!("scheduled started without sessions"),
         Err(error) => format!("{error:#}"),
     };
     assert!(error.contains("starting scheduled"), "{error}");
-    assert!(error.contains("must be built before it"), "{error}");
+    assert!(error.contains("no area on this node provides"), "{error}");
 }

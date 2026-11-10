@@ -37,7 +37,7 @@ use crate::config::Config;
 use crate::events::{self, Log};
 use crate::identity::{Identity, Ports};
 use crate::mcp::Mcp;
-use crate::{Area, Build, Command, Setup, address};
+use crate::{Area, Build, Built, Command, Provided, Setup, address};
 
 /// How a node is started.
 pub struct Options {
@@ -59,8 +59,8 @@ struct Shared {
 pub struct Running {
     pub address: SocketAddr,
     pub node: Identity,
-    /// The node's sessions, if an area provides them.
-    pub sessions: crate::Provided<dyn crate::Sessions>,
+    /// What its areas provide one another.
+    pub provided: Provided,
     shared: Arc<Shared>,
     events: Arc<Log>,
     stop: oneshot::Sender<()>,
@@ -101,16 +101,31 @@ pub async fn start(options: Options, areas: &[(&'static str, Build)]) -> Result<
         config,
         address,
         events: events.clone(),
-        sessions: crate::Provided::new("sessions"),
+        provided: Provided::default(),
     };
-    let mut built: Vec<Arc<dyn Area>> = Vec::new();
+    // Each area is built and fills what it provides, then those that read
+    // what others provide finish: the list's order does not matter.
+    let mut started = Vec::new();
     let mut off = Vec::new();
     for &(name, build) in areas {
         if !setup.config.enabled(name)? {
             off.push(name);
             continue;
         }
-        let area = build(&setup).map_err(|error| unbuilt(name, error))?;
+        started.push((
+            name,
+            build(&setup).with_context(|| format!("starting {name}"))?,
+        ));
+    }
+    setup.provided.seal();
+    let mut built: Vec<Arc<dyn Area>> = Vec::new();
+    for (name, area) in started {
+        let area = match area {
+            Built::Now(area) => area,
+            Built::Then(finish) => {
+                finish(&setup.provided).with_context(|| format!("starting {name}"))?
+            }
+        };
         if area.name() != name {
             return Err(Error::new(
                 "area_conflict",
@@ -169,7 +184,7 @@ pub async fn start(options: Options, areas: &[(&'static str, Build)]) -> Result<
     Ok(Running {
         address,
         node,
-        sessions: setup.sessions.clone(),
+        provided: setup.provided.clone(),
         shared,
         events,
         stop,
@@ -282,24 +297,5 @@ impl IntoResponse for Failure {
     fn into_response(self) -> Response {
         let body = serde_json::json!({ "error": self.1 });
         (self.0, axum::Json(body)).into_response()
-    }
-}
-
-/// Why `name` could not be built. An area that reads a slot another area
-/// fills fails with `not_provided` when the filling area comes later in the
-/// list, so that error says what to change.
-fn unbuilt(name: &str, error: anyhow::Error) -> anyhow::Error {
-    let early = error
-        .chain()
-        .filter_map(|cause| cause.downcast_ref::<Error>())
-        .any(|cause| cause.code == "not_provided");
-    let error = error.context(format!("starting {name}"));
-    if early {
-        error.context(format!(
-            "{name} reads what another area provides, which must be built before it: \
-             list that area earlier, or turn it on"
-        ))
-    } else {
-        error
     }
 }

@@ -352,6 +352,26 @@ pub fn pane_text(engine: &Engine, session: &str) -> Option<String> {
     Some(pane.text.clone())
 }
 
+/// The first pane of the session named `session` as the node's sessions
+/// read it, one line per row, once its screen is read.
+pub fn session_text(sessions: &dyn parvi_term::Sessions, session: &str) -> Option<String> {
+    let listed = sessions.list();
+    let (pane, _, _) = *listed.iter().find(|s| s.name == session)?.panes.first()?;
+    let screen = sessions.screen(pane)?;
+    let rows: Vec<String> = (screen.rows.iter())
+        .map(|row| {
+            let line: String = (row.iter())
+                .map(|cell| match (cell.text.as_str(), cell.width) {
+                    ("", 1) => " ",
+                    (text, _) => text,
+                })
+                .collect();
+            line.trim_end().to_owned()
+        })
+        .collect();
+    Some(rows.join("\n"))
+}
+
 pub fn capture(server: &Server, session: &str) -> String {
     server.run(&["capture-pane", "-p", "-t", session])
 }

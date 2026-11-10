@@ -1,12 +1,12 @@
-//! The terminals area as other areas reach it ([`parvi_node_kit::Sessions`]).
+//! The terminals area as other areas reach it ([`parvi_term::Sessions`]).
 
 use std::sync::Arc;
 
 use anyhow::Context;
-use parvi_node_kit::{BoxFuture, Renames, Sessions, Start};
-use parvi_term::Engine;
+use parvi_term::backend::Reply;
 use parvi_term::control::PaneId;
-use parvi_term::engine::{Delivering, SessionInfo};
+use parvi_term::engine::{Delivering, PaneStream, SessionInfo};
+use parvi_term::{Renames, Screen, SessionRef, SessionSpec, Sessions, Start};
 use tokio::sync::watch;
 
 use crate::hub::Hub;
@@ -36,7 +36,7 @@ impl Sessions for Provided {
     }
 
     /// CHROTE's pane for an unattended send.
-    fn active_pane<'a>(&'a self, session: &'a str) -> BoxFuture<'a, anyhow::Result<PaneId>> {
+    fn active_pane<'a>(&'a self, session: &'a str) -> Reply<'a, PaneId> {
         Box::pin(async move {
             let listed = self.hub.sessions();
             let info = listed
@@ -76,16 +76,11 @@ impl Sessions for Provided {
         self.hub.pane(pane).map_or(pane, |(_, id)| id)
     }
 
-    fn deliver(
-        &self,
-        pane: PaneId,
-        text: String,
-        enter: bool,
-    ) -> BoxFuture<'_, anyhow::Result<Delivering>> {
+    fn deliver(&self, pane: PaneId, text: String, enter: bool) -> Reply<'_, Delivering> {
         Box::pin(self.hub.deliver(pane, text, enter))
     }
 
-    fn start(&self, start: Start) -> BoxFuture<'_, anyhow::Result<String>> {
+    fn start(&self, start: Start) -> Reply<'_, String> {
         Box::pin(async move {
             let launcher = self.launcher.get();
             let config = Config {
@@ -112,8 +107,47 @@ impl Sessions for Provided {
         })
     }
 
-    fn engine(&self) -> Arc<Engine> {
-        self.hub.own_engine()
+    fn create(&self, spec: SessionSpec) -> Reply<'_, SessionRef> {
+        Box::pin(async move { self.hub.own_engine().create_session(spec).await })
+    }
+
+    fn find<'a>(&'a self, name: &'a str) -> Reply<'a, Option<SessionRef>> {
+        Box::pin(async move { self.hub.own_engine().find_session(name).await })
+    }
+
+    fn verify<'a>(&'a self, seat: &'a SessionRef) -> Reply<'a, ()> {
+        Box::pin(async move { self.hub.own_engine().verify_session(seat).await })
+    }
+
+    fn kill<'a>(&'a self, seat: &'a SessionRef) -> Reply<'a, ()> {
+        Box::pin(async move { self.hub.own_engine().kill_session(seat).await })
+    }
+
+    fn follow(&self, pane: PaneId) -> Option<PaneStream> {
+        self.hub.subscribe(pane)
+    }
+
+    fn screen(&self, pane: PaneId) -> Option<Screen> {
+        let (server, local) = self.hub.pane(pane)?;
+        server.engine.read_screen(local)
+    }
+
+    fn input(&self, pane: PaneId, bytes: Vec<u8>) -> Reply<'_, ()> {
+        Box::pin(self.hub.send_input(pane, bytes))
+    }
+
+    fn pid(&self, pane: PaneId) -> Reply<'_, u32> {
+        Box::pin(async move {
+            let (server, local) = self.hub.pane(pane).context("unknown pane")?;
+            let target = format!("%{local}");
+            let pid = server
+                .backend()
+                .command(&["display-message", "-p", "-t", &target, "#{pane_pid}"])
+                .await?;
+            pid.trim()
+                .parse()
+                .with_context(|| format!("pane {pane} has no process id: {pid:?}"))
+        })
     }
 }
 

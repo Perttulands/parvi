@@ -10,7 +10,6 @@ workspace = true
 
 [dependencies]
 parvi-core = { path = "../core" }
-parvi-term = { path = "../../engine/term" }
 anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }
 futures-util = "0.3"

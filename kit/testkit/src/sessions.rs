@@ -1,19 +1,20 @@
 //! A stand-in for the area that provides the node's sessions, for a test of
 //! an area that only lists sessions and delivers text to them: no tmux, no
-//! terminals. List `[(sessions::NAME, sessions::build)]` before the area
-//! under test, then reach the fake through [`crate::node::Node::fake_sessions`].
+//! terminals. List `(sessions::NAME, sessions::build)` with the area under
+//! test, then reach the fake through [`crate::node::Node::fake_sessions`].
 //!
-//! It has no engine: [`Sessions::engine`] panics, so an area that runs seats
-//! needs the real thing.
+//! It runs no programs: its seats, screens and input refuse, so an area that
+//! runs seats needs the real thing.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use anyhow::bail;
-use parvi_node_kit::{Area, BoxFuture, Renames, Sessions, Setup, Start};
-use parvi_term::Engine;
+use parvi_node_kit::{Area, BoxFuture, Built, Setup};
+use parvi_term::backend::Reply;
 use parvi_term::control::PaneId;
-use parvi_term::engine::{Activity, Delivering, SessionInfo};
+use parvi_term::engine::{Activity, Delivering, PaneStream, SessionInfo};
+use parvi_term::{Renames, Screen, SessionRef, SessionSpec, Sessions, Start};
 use tokio::sync::{broadcast, watch};
 
 /// The stand-in's area name.
@@ -131,7 +132,7 @@ impl Sessions for FakeSessions {
         vec![(None, self.renames.subscribe())]
     }
 
-    fn active_pane<'a>(&'a self, session: &'a str) -> BoxFuture<'a, anyhow::Result<PaneId>> {
+    fn active_pane<'a>(&'a self, session: &'a str) -> Reply<'a, PaneId> {
         Box::pin(async move {
             let state = self.state.lock().unwrap();
             match state.sessions.iter().find(|s| s.id == session) {
@@ -145,12 +146,7 @@ impl Sessions for FakeSessions {
         pane
     }
 
-    fn deliver(
-        &self,
-        pane: PaneId,
-        text: String,
-        enter: bool,
-    ) -> BoxFuture<'_, anyhow::Result<Delivering>> {
+    fn deliver(&self, pane: PaneId, text: String, enter: bool) -> Reply<'_, Delivering> {
         Box::pin(async move {
             let Some(session) = self.named(pane) else {
                 bail!("no pane {pane}");
@@ -168,15 +164,43 @@ impl Sessions for FakeSessions {
         })
     }
 
-    fn start(&self, start: Start) -> BoxFuture<'_, anyhow::Result<String>> {
+    fn start(&self, start: Start) -> Reply<'_, String> {
         Box::pin(async move {
             let user = (!start.user.is_empty()).then_some(start.user.as_str());
             Ok(self.add_for(user, &start.name))
         })
     }
 
-    fn engine(&self) -> Arc<Engine> {
-        panic!("the fake sessions have no engine: a test that needs one starts terminals")
+    fn create(&self, _spec: SessionSpec) -> Reply<'_, SessionRef> {
+        Box::pin(async { bail!("the fake sessions run no seats") })
+    }
+
+    fn find<'a>(&'a self, _name: &'a str) -> Reply<'a, Option<SessionRef>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn verify<'a>(&'a self, _seat: &'a SessionRef) -> Reply<'a, ()> {
+        Box::pin(async { bail!("the fake sessions run no seats") })
+    }
+
+    fn kill<'a>(&'a self, _seat: &'a SessionRef) -> Reply<'a, ()> {
+        Box::pin(async { bail!("the fake sessions run no seats") })
+    }
+
+    fn follow(&self, _pane: PaneId) -> Option<PaneStream> {
+        None
+    }
+
+    fn screen(&self, _pane: PaneId) -> Option<Screen> {
+        None
+    }
+
+    fn input(&self, pane: PaneId, _bytes: Vec<u8>) -> Reply<'_, ()> {
+        Box::pin(async move { bail!("the fake sessions take no input (pane {pane})") })
+    }
+
+    fn pid(&self, pane: PaneId) -> Reply<'_, u32> {
+        Box::pin(async move { bail!("the fake sessions run no programs (pane {pane})") })
     }
 }
 
@@ -202,11 +226,11 @@ impl Area for Fake {
     }
 }
 
-/// Provides a [`FakeSessions`] to the areas built after this one.
-pub fn build(setup: &Setup) -> anyhow::Result<Arc<dyn Area>> {
+/// Provides a [`FakeSessions`] to the node's other areas.
+pub fn build(setup: &Setup) -> anyhow::Result<Built> {
     let fake = Arc::new(FakeSessions::new());
-    setup.sessions.provide(fake.clone())?;
+    setup.provided.provide::<dyn Sessions>(fake.clone())?;
     let node = setup.node.id.to_string();
     FAKES.lock().unwrap().insert(node.clone(), fake);
-    Ok(Arc::new(Fake { node }))
+    Built::now(Fake { node })
 }

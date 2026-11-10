@@ -63,12 +63,14 @@ is the node's own.
 - **Config.** `config.toml` in the node's folder has a `[node]` section and one
   section per area, read by that area. `enabled = false` leaves an area unbuilt
   and listed as off in `/api/health`; a section no area reads refuses to start.
-- **Provided interfaces.** What one area offers others goes through a narrow
-  trait in `node-kit` and a slot in `Setup` that the providing area fills
-  while it is built. `Sessions` (list, follow, deliver text to, and start
-  terminal sessions) is the first; terminals provides it, and an area reading
-  an empty slot gets a `not_provided` error rather than a dependency on
-  terminals.
+- **Provided interfaces.** What one area offers others is a narrow trait that
+  lives with its provider's contract or engine crate, never in `node-kit`. The
+  provider fills the slot keyed by that trait (`setup.provided.provide`) while
+  it is built; a reader answers `Built::then` and reads the slot once every
+  area is built, so the order of `AREAS` never matters. A slot filled twice is
+  refused, and an empty one reads as `not_provided`. `Sessions` (in
+  `engine/term`: list, follow, deliver to, start, and run a mission's seats)
+  is the first; terminals provides it.
 - **Hooks.** `parvi hook <url> [--then command...]` is how an outside
   program's own hook reports to the node: it posts its payload to the URL an
   area gave it and runs `--then` regardless. The URL carries what the area

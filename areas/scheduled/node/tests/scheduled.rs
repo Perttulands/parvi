@@ -6,7 +6,7 @@
 use axum::http::Method;
 use parvi_node_kit::{Build, NodeClient, cli};
 use parvi_testkit::node::Node;
-use parvi_testkit::tmux::{Server, capture, eventually, pane_text};
+use parvi_testkit::tmux::{Server, capture, eventually, session_text};
 use serde_json::{Value, json};
 
 const AREAS: &[(&str, Build)] = &[
@@ -20,9 +20,11 @@ async fn start(name: &str, extra: &str) -> Option<(Node, Server)> {
     tmux.new_session("alpha", 100, 30);
     let config = format!("[terminals]\nsocket = {:?}\n{extra}", tmux.socket_path());
     let node = Node::start(AREAS, &config).await.unwrap();
-    let engine = node.sessions().engine();
+    let sessions = node.sessions();
     eventually("alpha's pane read", || {
-        pane_text(&engine, "alpha")?.contains('$').then_some(())
+        session_text(sessions.as_ref(), "alpha")?
+            .contains('$')
+            .then_some(())
     })
     .await;
     Some((node, tmux))

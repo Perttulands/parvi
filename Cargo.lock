@@ -4228,7 +4228,6 @@ dependencies = [
  "jiff",
  "libc",
  "parvi-core",
- "parvi-term",
  "serde",
  "serde_json",
  "tokio",

@@ -14,7 +14,8 @@ use parvi_core::Error;
 use parvi_core::Hello;
 use parvi_core::frame::Kinds;
 use parvi_node_kit::{
-    Area, BoxFuture, Build, Channel, Client, Command, Config, NodeClient, Options, Running, Setup,
+    Area, BoxFuture, Build, Built, Channel, Client, Command, Config, NodeClient, Options, Running,
+    Setup,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -84,12 +85,12 @@ impl Channel for Lamp {
     }
 }
 
-fn lights(_: &Setup) -> anyhow::Result<Arc<dyn Area>> {
-    Ok(Arc::new(Lights {
+fn lights(_: &Setup) -> anyhow::Result<Built> {
+    Built::now(Lights {
         name: "lights",
         kinds: LIGHTS,
         command: "lights_switch",
-    }))
+    })
 }
 
 async fn start(areas: &[(&'static str, Build)], config: &str) -> anyhow::Result<Running> {
@@ -235,12 +236,12 @@ async fn refusal(first: Build, second: Build) -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn areas_that_would_share_a_kind_a_name_or_a_command_refuse_to_start() {
-    fn lamps_sharing_a_kind(_: &Setup) -> anyhow::Result<Arc<dyn Area>> {
-        Ok(Arc::new(Lights {
+    fn lamps_sharing_a_kind(_: &Setup) -> anyhow::Result<Built> {
+        Built::now(Lights {
             name: "lamps",
             kinds: &[0x61..=0x62],
             command: "lamps_switch",
-        }))
+        })
     }
     let error = refusal(lights, lamps_sharing_a_kind).await;
     assert!(
@@ -248,12 +249,12 @@ async fn areas_that_would_share_a_kind_a_name_or_a_command_refuse_to_start() {
         "{error}"
     );
 
-    fn lamps_sharing_a_command(_: &Setup) -> anyhow::Result<Arc<dyn Area>> {
-        Ok(Arc::new(Lights {
+    fn lamps_sharing_a_command(_: &Setup) -> anyhow::Result<Built> {
+        Built::now(Lights {
             name: "lamps",
             kinds: &[0x70..=0x70],
             command: "lights_switch",
-        }))
+        })
     }
     let error = refusal(lights, lamps_sharing_a_command).await;
     assert!(
@@ -261,12 +262,12 @@ async fn areas_that_would_share_a_kind_a_name_or_a_command_refuse_to_start() {
         "{error}"
     );
 
-    fn lamps_named_lights(_: &Setup) -> anyhow::Result<Arc<dyn Area>> {
-        Ok(Arc::new(Lights {
+    fn lamps_named_lights(_: &Setup) -> anyhow::Result<Built> {
+        Built::now(Lights {
             name: "lights",
             kinds: &[0x70..=0x70],
             command: "lamps_switch",
-        }))
+        })
     }
     // Listed as lamps, it calls itself lights.
     let error = refusal(lights, lamps_named_lights).await;
@@ -281,12 +282,12 @@ async fn areas_that_would_share_a_kind_a_name_or_a_command_refuse_to_start() {
     };
     assert!(error.contains("two areas are named lights"), "{error}");
 
-    fn hello_taker(_: &Setup) -> anyhow::Result<Arc<dyn Area>> {
-        Ok(Arc::new(Lights {
+    fn hello_taker(_: &Setup) -> anyhow::Result<Built> {
+        Built::now(Lights {
             name: "lamps",
             kinds: &[0x00..=0x00],
             command: "lamps_switch",
-        }))
+        })
     }
     let error = refusal(lights, hello_taker).await;
     assert!(
@@ -304,33 +305,105 @@ async fn a_section_no_area_reads_refuses_to_start() {
     assert!(error.contains("lamps"), "{error}");
 }
 
-/// An area that reads the sessions slot while it is built.
-fn reader(setup: &Setup) -> anyhow::Result<Arc<dyn Area>> {
-    setup.sessions.get()?;
-    lights(setup)
+/// What one area offers others: a word to say.
+trait Word: Send + Sync {
+    fn word(&self) -> &'static str;
 }
 
-/// An area that reads a slot nothing has filled yet is refused with what to
-/// change, not just that the slot is empty.
-#[tokio::test(flavor = "multi_thread")]
-async fn an_area_built_before_the_area_it_needs_says_so() {
-    let error = match start(&[("lights", reader)], "").await {
-        Ok(_) => panic!("an area read an empty slot"),
-        Err(error) => format!("{error:#}"),
-    };
-    assert!(error.contains("starting lights"), "{error}");
-    assert!(error.contains("must be built before it"), "{error}");
-    assert!(error.contains("no area on this node provides"), "{error}");
-    // Other failures to build carry no such advice.
-    fn broken(_: &Setup) -> anyhow::Result<Arc<dyn Area>> {
-        anyhow::bail!("out of lamps")
+impl Word for Lights {
+    fn word(&self) -> &'static str {
+        "bright"
     }
-    let error = match start(&[("lights", broken)], "").await {
-        Ok(_) => panic!("a broken area started"),
+}
+
+/// Lights that offer their word to other areas.
+fn offering(_: &Setup) -> anyhow::Result<Built> {
+    Ok(Built::Now(Arc::new(Lights {
+        name: "lights",
+        kinds: LIGHTS,
+        command: "lights_switch",
+    })))
+}
+
+fn offering_word(setup: &Setup) -> anyhow::Result<Built> {
+    setup.provided.provide::<dyn Word>(Arc::new(Lights {
+        name: "lights",
+        kinds: LIGHTS,
+        command: "lights_switch",
+    }))?;
+    offering(setup)
+}
+
+/// Lamps that read the word lights offer, and answer it as their command.
+fn reading_word(_: &Setup) -> anyhow::Result<Built> {
+    Built::then(|provided| {
+        let word = provided.get::<dyn Word>()?.word();
+        Ok(Arc::new(Said { word }) as Arc<dyn Area>)
+    })
+}
+
+struct Said {
+    word: &'static str,
+}
+
+impl Area for Said {
+    fn name(&self) -> &'static str {
+        "lamps"
+    }
+
+    fn commands(&self) -> Vec<Command> {
+        let word = self.word;
+        vec![Command::new(
+            "lamps_say",
+            "Says the word the lights offer.",
+            || json!({ "type": "object" }),
+            move |_| async move { Ok(json!(word)) },
+        )]
+    }
+}
+
+/// An area reads what another provides wherever the two are listed; read
+/// while areas are still being built it is refused, and with no provider
+/// it is `not_provided`.
+#[tokio::test(flavor = "multi_thread")]
+async fn areas_read_what_others_provide_in_any_order() {
+    for areas in [
+        [("lamps", reading_word as Build), ("lights", offering_word)],
+        [("lights", offering_word), ("lamps", reading_word)],
+    ] {
+        let node = start(&areas, "").await.unwrap();
+        let said = node.provided.get::<dyn Word>().unwrap().word();
+        assert_eq!(said, "bright");
+        let url = format!("http://{}/", node.address);
+        let call = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": { "name": "lamps_say", "arguments": {} },
+        });
+        let (answer, _) = NodeClient::new(Some(&url))
+            .unwrap()
+            .request(Method::POST, "/mcp", Some(call), None)
+            .await
+            .unwrap();
+        assert_eq!(answer["result"]["content"][0]["text"], r#""bright""#);
+        node.stop().await.unwrap();
+    }
+
+    let error = match start(&[("lamps", reading_word), ("lights", offering)], "").await {
+        Ok(_) => panic!("an area read what nobody provides"),
         Err(error) => format!("{error:#}"),
     };
-    assert!(error.contains("out of lamps"), "{error}");
-    assert!(!error.contains("must be built before it"), "{error}");
+    assert!(error.contains("starting lamps"), "{error}");
+    assert!(error.contains("no area on this node provides"), "{error}");
+
+    fn reading_early(setup: &Setup) -> anyhow::Result<Built> {
+        setup.provided.get::<dyn Word>()?;
+        offering(setup)
+    }
+    let error = match start(&[("lights", offering_word), ("lamps", reading_early)], "").await {
+        Ok(_) => panic!("an area read a slot while areas were being built"),
+        Err(error) => format!("{error:#}"),
+    };
+    assert!(error.contains("Built::then"), "{error}");
 }
 
 const UPGRADE: &str = "Connection: Upgrade\r\nUpgrade: websocket\r\n\

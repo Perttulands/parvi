@@ -12,8 +12,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use parvi_node_kit::{BoxFuture, Sessions};
+use parvi_node_kit::BoxFuture;
 use parvi_scheduled_contract::Target;
+use parvi_term::Sessions;
 use parvi_term::engine::{Delivering, SessionInfo};
 
 use crate::service::Runner;

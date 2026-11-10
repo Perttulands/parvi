@@ -5,9 +5,10 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use parvi_testkit::node::Node as TestNode;
-use parvi_testkit::tmux::{Server, capture, eventually, pane_text};
+use parvi_testkit::tmux::{Server, capture, eventually, session_text};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -41,9 +42,9 @@ impl Node {
         let node = TestNode::start(&[(parvi_terminals::NAME, parvi_terminals::build)], &config)
             .await
             .unwrap();
-        let engine = node.sessions().engine();
+        let sessions = node.sessions();
         eventually("alpha's pane read", || {
-            let text = pane_text(&engine, "alpha")?;
+            let text = session_text(sessions.as_ref(), "alpha")?;
             text.contains('$').then_some(())
         })
         .await;
@@ -503,11 +504,14 @@ async fn launches_an_agent_in_any_folder() {
     );
 
     // Copy uses the source's current folder and chooses its next free family name.
-    let engine = node.node.sessions().engine();
-    engine.refresh_facts();
+    // A client connecting has every session's facts read again.
+    let (_client, _) = tokio_tungstenite::connect_async(node.node.ws())
+        .await
+        .unwrap();
+    let sessions = node.node.sessions();
     eventually("fresh session facts", || {
-        engine
-            .sessions()
+        sessions
+            .list()
             .iter()
             .find(|s| s.name == "fresh")
             .and_then(|s| s.facts.as_ref())
@@ -545,5 +549,58 @@ async fn launches_an_agent_in_any_folder() {
     assert!(unknown.unwrap_err().contains("no harness"));
     let names = node.tmux.run(&["list-sessions", "-F", "#{session_name}"]);
     assert!(!names.contains("bad"), "{names}");
+    node.stop().await;
+}
+
+/// A seat, as a mission runs its agents: created on the node's own server
+/// with its environment, found by name, followed, typed into and read, its
+/// program's pid known, and killed only as the session that was created.
+#[tokio::test(flavor = "multi_thread")]
+async fn seats_run_through_the_sessions_terminals_provide() {
+    let Some(node) = Node::start("seats").await else {
+        return;
+    };
+    let sessions = node.node.sessions();
+    let spec = parvi_term::SessionSpec {
+        name: "seat".into(),
+        cwd: node.folder.clone(),
+        env: [("SEAT_WORD".to_string(), "kept".to_string())].into(),
+        command: vec!["sh".into()],
+        cols: 90,
+        rows: 20,
+    };
+    let seat = sessions.create(spec).await.unwrap();
+    assert_eq!(sessions.find("seat").await.unwrap(), Some(seat.clone()));
+    assert_eq!(
+        sessions.find("sea").await.unwrap(),
+        None,
+        "names match exactly"
+    );
+    sessions.verify(&seat).await.unwrap();
+    let pane = seat.pane_id;
+    let mut followed = eventually("the seat followed", || sessions.follow(pane)).await;
+    assert!(sessions.pid(pane).await.unwrap() > 1);
+    sessions
+        .input(pane, b"echo seat-$SEAT_WORD\r".to_vec())
+        .await
+        .unwrap();
+    let update = tokio::time::timeout(Duration::from_secs(5), followed.updates.recv()).await;
+    assert!(
+        matches!(update, Ok(Ok(_))),
+        "the seat's screen changes reach it"
+    );
+    eventually("the seat's echo on its screen", || {
+        let screen = sessions.screen(pane)?;
+        (screen.rows.iter())
+            .any(|row| {
+                let line: String = row.iter().map(|cell| cell.text.as_str()).collect();
+                line.trim() == "seat-kept"
+            })
+            .then_some(())
+    })
+    .await;
+    sessions.kill(&seat).await.unwrap();
+    assert!(sessions.verify(&seat).await.is_err());
+    assert_eq!(sessions.find("seat").await.unwrap(), None);
     node.stop().await;
 }

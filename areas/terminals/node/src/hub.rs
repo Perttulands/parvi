@@ -34,7 +34,7 @@ const LISTED_WITHIN: Duration = Duration::from_secs(5);
 /// The most servers one hub follows.
 pub const MAX_SERVERS: usize = 1 << (32 - PANE_BITS);
 
-pub use parvi_node_kit::Renames;
+pub use parvi_term::Renames;
 
 /// One tmux server and who owns it.
 pub struct Server {

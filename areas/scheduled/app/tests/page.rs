@@ -11,7 +11,7 @@ use gpui::{Modifiers, TestAppContext, VisualTestContext};
 use parvi_app_kit::link::client::LinkState;
 use parvi_node_kit::{Build, cli};
 use parvi_testkit::node::Node;
-use parvi_testkit::tmux::{Server, eventually, pane_text};
+use parvi_testkit::tmux::{Server, eventually, session_text};
 use serde_json::json;
 
 const AREAS: &[(&str, Build)] = &[
@@ -50,9 +50,11 @@ fn start() -> Option<Running> {
             tmux.new_session("alpha", 100, 30);
             let config = format!("[terminals]\nsocket = {:?}\n", tmux.socket_path());
             let node = Node::start(AREAS, &config).await.expect("a node");
-            let engine = node.sessions().engine();
+            let sessions = node.sessions();
             eventually("alpha's pane read", || {
-                pane_text(&engine, "alpha")?.contains('$').then_some(())
+                session_text(sessions.as_ref(), "alpha")?
+                    .contains('$')
+                    .then_some(())
             })
             .await;
             let args: Vec<String> = [

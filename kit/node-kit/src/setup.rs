@@ -1,15 +1,17 @@
-//! What an area is built from.
+//! What an area is built from, and the slots areas fill for one another.
 
+use std::any::{Any, TypeId, type_name};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use parvi_core::Error;
 
 use crate::config::Config;
 use crate::events::Log;
 use crate::identity::Identity;
-use crate::sessions::Sessions;
 
 pub struct Setup {
     pub node: Identity,
@@ -21,48 +23,75 @@ pub struct Setup {
     /// Where the node serves.
     pub address: SocketAddr,
     pub events: Arc<Log>,
-    /// The node's sessions, once the area that has them is built.
-    pub sessions: Provided<dyn Sessions>,
+    /// What areas offer one another: filled while areas are built, read
+    /// once every area is ([`crate::Built::then`]).
+    pub provided: Provided,
 }
 
-/// Something one area provides and others use. Areas are built in the
-/// binary's order and may hold on to this, reading it when they need it.
-pub struct Provided<T: ?Sized> {
-    what: &'static str,
-    value: Arc<OnceLock<Arc<T>>>,
+/// What areas provide one another, one value per interface: an area fills
+/// a slot by the trait it offers (`provided.provide::<dyn Sessions>(..)`)
+/// as it is built, and any area reads it by the same type once every area
+/// is built, so the order of the binary's list never matters. The trait
+/// lives with its provider (its contract or engine crate), not here.
+#[derive(Clone, Default)]
+pub struct Provided {
+    slots: Arc<Mutex<HashMap<TypeId, Box<dyn Any + Send + Sync>>>>,
+    /// Every area is built: slots are read, no longer filled.
+    built: Arc<AtomicBool>,
 }
 
-impl<T: ?Sized> Clone for Provided<T> {
-    fn clone(&self) -> Self {
-        Provided {
-            what: self.what,
-            value: self.value.clone(),
+impl Provided {
+    /// Fills the slot for `T`; refused if another area did, or once every
+    /// area is built.
+    pub fn provide<T: ?Sized + Send + Sync + 'static>(&self, value: Arc<T>) -> Result<(), Error> {
+        if self.built.load(Ordering::Acquire) {
+            return Err(Error::new(
+                "provided_late",
+                format!(
+                    "{} is provided after every area was built",
+                    type_name::<T>()
+                ),
+            ));
         }
-    }
-}
-
-impl<T: ?Sized> Provided<T> {
-    pub fn new(what: &'static str) -> Self {
-        Provided {
-            what,
-            value: Arc::new(OnceLock::new()),
+        let mut slots = self.slots.lock().unwrap();
+        if slots.contains_key(&TypeId::of::<T>()) {
+            return Err(Error::new(
+                "provided_twice",
+                format!("two areas provide {}", type_name::<T>()),
+            ));
         }
+        slots.insert(TypeId::of::<T>(), Box::new(value));
+        Ok(())
     }
 
-    /// Provides it; refused if another area already did.
-    pub fn provide(&self, value: Arc<T>) -> Result<(), Error> {
-        self.value
-            .set(value)
-            .map_err(|_| Error::new("provided_twice", format!("two areas provide {}", self.what)))
+    /// What fills the slot for `T`. Read only once every area is built:
+    /// an area that needs it finishes in [`crate::Built::then`].
+    pub fn get<T: ?Sized + Send + Sync + 'static>(&self) -> Result<Arc<T>, Error> {
+        if !self.built.load(Ordering::Acquire) {
+            return Err(Error::new(
+                "provided_early",
+                format!(
+                    "{} is read while areas are still being built: read it in Built::then",
+                    type_name::<T>()
+                ),
+            ));
+        }
+        let slots = self.slots.lock().unwrap();
+        slots
+            .get(&TypeId::of::<T>())
+            .and_then(|value| value.downcast_ref::<Arc<T>>())
+            .cloned()
+            .ok_or_else(|| {
+                Error::new(
+                    "not_provided",
+                    format!("no area on this node provides {}", type_name::<T>()),
+                )
+            })
     }
 
-    pub fn get(&self) -> Result<Arc<T>, Error> {
-        self.value.get().cloned().ok_or_else(|| {
-            Error::new(
-                "not_provided",
-                format!("no area on this node provides {}", self.what),
-            )
-        })
+    /// Every area is built: from now on slots are read, not filled.
+    pub(crate) fn seal(&self) {
+        self.built.store(true, Ordering::Release);
     }
 }
 
@@ -70,15 +99,35 @@ impl<T: ?Sized> Provided<T> {
 mod tests {
     use super::*;
 
+    trait Greeting: Send + Sync {
+        fn word(&self) -> &'static str;
+    }
+
+    struct Hello;
+
+    impl Greeting for Hello {
+        fn word(&self) -> &'static str {
+            "hello"
+        }
+    }
+
     #[test]
-    fn provided_once_and_read_by_whoever_holds_it() {
-        let slot: Provided<str> = Provided::new("a greeting");
-        let held = slot.clone();
-        assert_eq!(held.get().unwrap_err().code, "not_provided");
-        slot.provide(Arc::from("hello")).unwrap();
-        assert_eq!(&*held.get().unwrap(), "hello");
-        let twice = slot.provide(Arc::from("again")).unwrap_err();
+    fn a_slot_is_filled_once_while_building_and_read_after() {
+        let provided = Provided::default();
+        let held = provided.clone();
+        let early = held.get::<dyn Greeting>().err().unwrap();
+        assert_eq!(early.code, "provided_early");
+        provided.provide::<dyn Greeting>(Arc::new(Hello)).unwrap();
+        let twice = provided
+            .provide::<dyn Greeting>(Arc::new(Hello))
+            .unwrap_err();
         assert_eq!(twice.code, "provided_twice");
-        assert!(twice.message.contains("a greeting"));
+        assert!(twice.message.contains("Greeting"), "{}", twice.message);
+        provided.seal();
+        assert_eq!(held.get::<dyn Greeting>().unwrap().word(), "hello");
+        let missing = held.get::<str>().err().unwrap();
+        assert_eq!(missing.code, "not_provided");
+        let late = provided.provide::<str>(Arc::from("late")).unwrap_err();
+        assert_eq!(late.code, "provided_late");
     }
 }

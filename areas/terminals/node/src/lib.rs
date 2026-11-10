@@ -1,6 +1,6 @@
 //! The terminals area: every session on the tmux servers the node follows
 //! (the service user's own and other Unix users'), on the socket, as
-//! commands and through [`parvi_node_kit::Sessions`] for other areas.
+//! commands and through [`parvi_term::Sessions`] for other areas.
 //!
 //! Its config section, `[terminals]`:
 //!
@@ -36,9 +36,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use parvi_core::Error;
 use parvi_core::frame::Kinds;
-use parvi_node_kit::{Area, BoxFuture, Channel, Client, Command, Failure, Setup};
-use parvi_term::Engine;
+use parvi_node_kit::{Area, BoxFuture, Built, Channel, Client, Command, Failure, Setup};
 use parvi_term::backend::tmux::Socket;
+use parvi_term::{Engine, Sessions};
 use serde::Deserialize;
 
 use agent_events::hooks::{self, Hooks};
@@ -70,8 +70,8 @@ struct Terminals {
 }
 
 /// Builds the area from `[terminals]`, and provides the node's
-/// [`parvi_node_kit::Sessions`].
-pub fn build(setup: &Setup) -> Result<Arc<dyn Area>> {
+/// [`parvi_term::Sessions`].
+pub fn build(setup: &Setup) -> Result<Built> {
     let section: Section = setup.config.section(NAME)?;
     if section.socket.is_some() && section.socket_name.is_some() {
         bail!("{NAME}: give socket or socket_name, not both");
@@ -100,17 +100,19 @@ pub fn build(setup: &Setup) -> Result<Arc<dyn Area>> {
         eprintln!("parvi: launches run without completion hooks: {error}");
     }
     let hub = Arc::new(hub.with_hooks(hooks));
-    setup.sessions.provide(Arc::new(sessions::Provided {
-        hub: hub.clone(),
-        launcher: launcher.clone(),
-    }))?;
-    Ok(Arc::new(Terminals {
+    setup
+        .provided
+        .provide::<dyn Sessions>(Arc::new(sessions::Provided {
+            hub: hub.clone(),
+            launcher: launcher.clone(),
+        }))?;
+    Built::now(Terminals {
         ctx: Arc::new(Ctx {
             node: setup.node.id.clone(),
             hub,
             launcher,
         }),
-    }))
+    })
 }
 
 /// The servers `[terminals]` names, the service user's own first.

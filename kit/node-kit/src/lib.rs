@@ -15,12 +15,10 @@ pub mod identity;
 pub mod mcp;
 mod ring;
 pub mod serve;
-mod sessions;
 mod setup;
 
-pub use area::{Area, BoxFuture, Build, Channel, Client, Command};
+pub use area::{Area, BoxFuture, Build, Built, Channel, Client, Command, Finish};
 pub use client::{NodeClient, NodeError};
 pub use config::Config;
 pub use serve::{Failure, Options, Running, start};
-pub use sessions::{Renames, Sessions, Start};
 pub use setup::{Provided, Setup};

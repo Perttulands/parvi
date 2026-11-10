@@ -72,10 +72,10 @@ impl Node {
     }
 
     /// The node's sessions, as the area providing them provides them.
-    pub fn sessions(&self) -> std::sync::Arc<dyn parvi_node_kit::Sessions> {
+    pub fn sessions(&self) -> std::sync::Arc<dyn parvi_term::Sessions> {
         self.running()
-            .sessions
-            .get()
+            .provided
+            .get::<dyn parvi_term::Sessions>()
             .expect("an area provides sessions")
     }
 
