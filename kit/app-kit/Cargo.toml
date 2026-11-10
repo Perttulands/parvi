@@ -1,0 +1,26 @@
+[package]
+name = "parvi-app-kit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "What an app area plugs into: tokens, widgets, the node link, Host and Page."
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+parvi-core = { path = "../core" }
+gpui = { package = "gpui-pre", version = "=0.3.11" }
+async-channel = "2"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+time = { version = "0.3", features = ["local-offset"] }
+tokio = { version = "1", features = ["rt", "net", "sync", "macros", "time", "io-util"] }
+tokio-tungstenite = "0.29"
+unicode-segmentation = "1"
+
+[dev-dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.11", features = ["test-support"] }

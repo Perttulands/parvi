@@ -1,0 +1,458 @@
+//! The state the shell and every page share: the link to the nodes, the
+//! settings, the status line and toast, and the one stack of layers. Pages
+//! reach it through their [`Host`](crate::Host); the shell holds it and
+//! hears its [`HubEvent`]s. The hub never calls a page, so a page may use
+//! its Host from inside its own update.
+
+use crate::ask::{Answers, Ask};
+use crate::chords::Run;
+use crate::clock::hhmm;
+use crate::host::{Layer, Node, Status};
+use crate::layers::{self, Stack};
+use crate::link::client::{LinkState, Notice};
+use crate::link::devices;
+use crate::link::fleet::Fleet;
+use crate::link::socket::{Event, Net};
+use crate::menu::Menu;
+use crate::settings::Settings;
+use crate::theme::motion;
+use gpui::{Context, EventEmitter, Task};
+use parvi_core::{Error, NodeId};
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::rc::Rc;
+use std::time::{Duration, Instant, SystemTime};
+
+pub struct Toast {
+    pub text: String,
+    pub at: Instant,
+}
+
+/// What is on the dismissal stack: a menu, or a layer.
+#[derive(Clone)]
+pub enum Surface {
+    Menu(Menu),
+    Layer(Layer),
+}
+
+/// The stack's name for the one open menu.
+const MENU: &str = "menu";
+
+impl layers::Layer for Surface {
+    fn kind(&self) -> &str {
+        match self {
+            Surface::Menu(_) => MENU,
+            Surface::Layer(l) => &l.name,
+        }
+    }
+    fn passing(&self) -> bool {
+        matches!(self, Surface::Menu(_))
+    }
+}
+
+/// What the shell hears from the hub, after the update that caused it.
+pub enum HubEvent {
+    /// A frame for the page whose kinds hold it.
+    Frame {
+        node: NodeId,
+        kind: u8,
+        body: Vec<u8>,
+    },
+    /// Page `to` answers this.
+    Ask { to: &'static str, ask: Ask },
+    /// Show this page.
+    Show(&'static str),
+    /// The stack changed: the keyboard goes to the top layer, or back to
+    /// the page, and what closed runs its dismiss.
+    Layers { closed: Vec<Surface> },
+}
+
+pub struct Hub {
+    pub fleet: Fleet,
+    pub settings: Settings,
+    settings_path: Option<PathBuf>,
+    save_task: Option<Task<()>>,
+    pub status: Option<Status>,
+    pub toast: Option<Toast>,
+    toast_task: Option<Task<()>>,
+    pub stack: Stack<Surface>,
+    /// The asks each page answers, by page id.
+    answers: Vec<(&'static str, &'static [Answers])>,
+    /// Nodes whose link is open, as last tracked.
+    heard: HashSet<String>,
+    /// Devices said to be away.
+    away: HashSet<String>,
+}
+
+impl EventEmitter<HubEvent> for Hub {}
+
+pub fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+impl Hub {
+    /// The hub with the settings at `settings_path` (none: nothing is
+    /// kept), not yet dialling. Link events arrive on `events`.
+    pub fn new(
+        net: Net,
+        events: async_channel::Sender<Event>,
+        settings_path: Option<PathBuf>,
+    ) -> Self {
+        let (settings, notice) = match &settings_path {
+            Some(p) => Settings::load(p),
+            None => (
+                Settings::default(),
+                Some("No config folder; settings will not be kept.".into()),
+            ),
+        };
+        Self {
+            fleet: Fleet::new(net, events),
+            settings,
+            settings_path,
+            save_task: None,
+            status: notice.map(Status::failure),
+            toast: None,
+            toast_task: None,
+            stack: Stack::default(),
+            answers: vec![],
+            heard: HashSet::new(),
+            away: HashSet::new(),
+        }
+    }
+
+    /// What each page answers, as the shell mounted them.
+    pub fn set_answers(&mut self, answers: Vec<(&'static str, &'static [Answers])>) {
+        self.answers = answers;
+    }
+
+    /// Dials the configured node.
+    pub fn connect(&mut self, cx: &mut Context<Self>) {
+        let node = self.settings.node.clone();
+        self.fleet.connect(&node);
+        cx.notify();
+    }
+
+    /// Dials every link again now.
+    pub fn redial(&mut self, cx: &mut Context<Self>) {
+        self.fleet.redial();
+        cx.notify();
+    }
+
+    /// A status action that dials again.
+    fn reconnect(cx: &mut Context<Self>) -> (String, Run) {
+        let hub = cx.entity().downgrade();
+        let run: Run = Rc::new(move |_, cx| {
+            let _ = hub.update(cx, |h, cx| h.redial(cx));
+        });
+        ("Reconnect".into(), run)
+    }
+
+    /// A link event: the fleet takes it; frames go to the pages, and what
+    /// the link did is told in the status line.
+    pub fn handle(&mut self, ev: Event, cx: &mut Context<Self>) {
+        let was = self.fleet.here().state;
+        for (node, n) in self.fleet.handle(ev, &self.settings.places) {
+            self.notice(node, n, cx);
+        }
+        self.remember_fleet(cx);
+        self.track(cx);
+        let here = self.fleet.here();
+        if was != here.state && here.state == LinkState::Refused {
+            let why = here.reason.clone().unwrap_or_default();
+            let (label, run) = Self::reconnect(cx);
+            self.status = Some(Status {
+                action: Some((label, run)),
+                ..Status::failure(why)
+            });
+        }
+        cx.notify();
+    }
+
+    fn notice(&mut self, node: String, n: Notice, cx: &mut Context<Self>) {
+        match n {
+            Notice::Frame { kind, body } => cx.emit(HubEvent::Frame {
+                node: NodeId(node),
+                kind,
+                body,
+            }),
+            Notice::Nodes(_) | Notice::Serving(None) => {}
+            Notice::Serving(Some(through)) => {
+                let name = self
+                    .settings
+                    .places
+                    .get(&through)
+                    .map(|p| format!("{} ({})", p.device, p.environment))
+                    .unwrap_or(through);
+                let text = format!("{} is away; trying {name}", self.home_name());
+                self.status = Some(Status::failure(text));
+            }
+            Notice::Opened if Some(node.as_str()) != self.fleet.here_id() => {}
+            Notice::Opened => {
+                if let Some(h) = self.fleet.here().hello.clone() {
+                    let to = format!("{} ({}), Parvi {}", h.device, h.environment, h.version);
+                    let text = match self.fleet.away() {
+                        Some(_) => {
+                            format!("Connected through {to} while {} is away", self.home_name())
+                        }
+                        None => format!("Connected to {to}"),
+                    };
+                    self.status = Some(Status::new(text));
+                }
+            }
+        }
+    }
+
+    /// The configured node by its device, or by its address before it has
+    /// said hello.
+    fn home_name(&self) -> String {
+        self.fleet
+            .home_device()
+            .map(str::to_string)
+            .unwrap_or_else(|| self.settings.node.clone())
+    }
+
+    /// Keeps `places` the last known fleet: each node's device, environment
+    /// and address. Nodes the configured node no longer lists go.
+    fn remember_fleet(&mut self, cx: &mut Context<Self>) {
+        let places = &mut self.settings.places;
+        let before = places.clone();
+        for c in self.fleet.clients() {
+            let node = c.node();
+            if node.is_empty() {
+                continue;
+            }
+            let p = places.entry(node).or_default();
+            if let Some(h) = &c.hello {
+                p.device = h.device.clone();
+                p.environment = h.environment.clone();
+            }
+        }
+        for peer in &self.fleet.peers {
+            let p = places.entry(peer.node.clone()).or_default();
+            p.device = peer.device.clone();
+            p.environment = peer.environment.clone();
+            if !peer.address.is_empty() {
+                p.address = peer.address.clone();
+            }
+        }
+        // A node serving while the configured one is away may list a cold
+        // fleet (it has not probed since nobody asked), the configured node
+        // missing: forget nothing until the configured node serves again.
+        if self.fleet.listed
+            && self.fleet.away().is_none()
+            && let Some(here) = self.fleet.here_id()
+        {
+            let peers = &self.fleet.peers;
+            places.retain(|n, _| n == here || peers.iter().any(|p| p.node == *n));
+        }
+        if *places != before {
+            self.save(cx);
+        }
+    }
+
+    /// Stamps a node that stopped answering with when it was last heard,
+    /// so an away device says since when, also after a restart; says in
+    /// the status line when a device goes and comes back.
+    fn track(&mut self, cx: &mut Context<Self>) {
+        let before = self.heard.clone();
+        let now = now_ms();
+        let mut stamped = false;
+        // A link still dialling for the first time (a new serving node's
+        // peers) has not lost its node: only one that went says it left.
+        let links: Vec<(String, LinkState)> = self
+            .fleet
+            .clients()
+            .iter()
+            .map(|c| (c.node(), c.state))
+            .filter(|(n, s)| !n.is_empty() && *s != LinkState::Connecting)
+            .collect();
+        for (node, state) in links {
+            if state == LinkState::Open {
+                self.heard.insert(node);
+            } else if self.heard.remove(&node)
+                && let Some(p) = self.settings.places.get_mut(&node)
+            {
+                p.seen = Some(now);
+                stamped = true;
+            }
+        }
+        if stamped {
+            self.save(cx);
+        }
+        let (gone, came) = devices::changed(&self.settings.places, &before, &self.heard);
+        let serving = self.fleet.here().hello.as_ref().map(|h| h.device.clone());
+        for device in gone {
+            let line = devices::away_line(&device, Some(&hhmm(now)));
+            let mut status = Status::new(line);
+            if serving.as_deref() == Some(device.as_str()) {
+                status.action = Some(Self::reconnect(cx));
+            }
+            self.status = Some(status);
+            self.away.insert(device);
+        }
+        for device in came {
+            if self.away.remove(&device) && serving.as_deref() != Some(device.as_str()) {
+                self.status = Some(Status::new(format!("{device} is back")));
+            }
+        }
+    }
+
+    pub fn report(&mut self, status: Status, cx: &mut Context<Self>) {
+        self.status = Some(status);
+        cx.notify();
+    }
+
+    pub fn toast(&mut self, text: &str, cx: &mut Context<Self>) {
+        let at = Instant::now();
+        self.toast = Some(Toast {
+            text: text.to_string(),
+            at,
+        });
+        self.toast_task = Some(cx.spawn(async move |this, cx| {
+            // Two wakes: one to start fading, one to go.
+            cx.background_executor()
+                .timer(Duration::from_millis(
+                    motion::TOAST_IN + motion::TOAST_SHOWN,
+                ))
+                .await;
+            let _ = this.update(cx, |_, cx| cx.notify());
+            cx.background_executor()
+                .timer(Duration::from_millis(motion::TOAST_OUT))
+                .await;
+            let _ = this.update(cx, |h, cx| {
+                if h.toast.as_ref().is_some_and(|t| t.at == at) {
+                    h.toast = None;
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    /// Writes the settings soon: a burst of changes is one write.
+    pub fn save(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.settings_path.clone() else {
+            return;
+        };
+        self.save_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(250))
+                .await;
+            let Ok(snapshot) = this.read_with(cx, |h, _| h.settings.clone()) else {
+                return;
+            };
+            let saved = cx
+                .background_executor()
+                .spawn(async move { snapshot.save(&path) })
+                .await;
+            if let Err(e) = saved {
+                let _ = this.update(cx, |h, cx| {
+                    h.report(
+                        Status::failure(format!("Settings could not be saved: {e}")),
+                        cx,
+                    );
+                });
+            }
+        }));
+    }
+
+    /// Opens a surface over the others.
+    pub fn open(&mut self, s: Surface, cx: &mut Context<Self>) {
+        let closed: Vec<Surface> = self
+            .stack
+            .iter()
+            .filter(|x| layers::Layer::passing(*x))
+            .cloned()
+            .collect();
+        self.stack.open(s);
+        cx.emit(HubEvent::Layers { closed });
+        cx.notify();
+    }
+
+    /// Closes the surface of this kind and whatever opened above it.
+    pub fn close(&mut self, kind: &str, cx: &mut Context<Self>) {
+        let closed = self.stack.close(kind);
+        if !closed.is_empty() {
+            cx.emit(HubEvent::Layers { closed });
+            cx.notify();
+        }
+    }
+
+    /// Closes the open menu, if one is.
+    pub fn close_menu(&mut self, cx: &mut Context<Self>) {
+        self.close(MENU, cx)
+    }
+
+    /// Escape: the top surface closes. False when nothing was open.
+    pub fn dismiss(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(top) = self.stack.dismiss() else {
+            return false;
+        };
+        cx.emit(HubEvent::Layers { closed: vec![top] });
+        cx.notify();
+        true
+    }
+
+    /// Hands `ask` to the page that answers it. When none does, the status
+    /// line says so and so does the error.
+    pub fn ask(&mut self, ask: Ask, cx: &mut Context<Self>) -> Result<(), Error> {
+        let to = self
+            .answers
+            .iter()
+            .find(|(_, a)| a.iter().any(|a| ask.answered_by(a)))
+            .map(|(id, _)| *id);
+        match to {
+            Some(to) => {
+                cx.emit(HubEvent::Ask { to, ask });
+                Ok(())
+            }
+            None => {
+                let e = Error::new(
+                    "unanswered",
+                    format!("Nothing here can {}.", ask.describe()),
+                );
+                self.report(Status::failure(e.message.clone()), cx);
+                Err(e)
+            }
+        }
+    }
+
+    /// The nodes that answer now, serving node first.
+    pub fn live_nodes(&self) -> Vec<Node> {
+        self.fleet
+            .clients()
+            .iter()
+            .filter(|c| c.state == LinkState::Open)
+            .filter_map(|c| {
+                let h = c.hello.as_ref()?;
+                Some(Node {
+                    id: NodeId(c.node()),
+                    device: h.device.clone(),
+                    environment: h.environment.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// The areas every node reached has turned off; none before any hello.
+    pub fn areas_off(&self) -> Vec<String> {
+        let hellos: Vec<_> = self
+            .fleet
+            .clients()
+            .iter()
+            .filter_map(|c| c.hello.as_ref())
+            .collect();
+        let Some(first) = hellos.first() else {
+            return vec![];
+        };
+        first
+            .off
+            .iter()
+            .filter(|a| hellos.iter().all(|h| h.off.contains(a)))
+            .cloned()
+            .collect()
+    }
+}

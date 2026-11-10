@@ -11,11 +11,11 @@ areas/<area>/
 kit/
     core/       ids (node + local id), the error shape, the frame envelope
     node-kit/   what a node area plugs into: events, config, registration
-    app-kit/    what an app area plugs into: tokens, widgets, node link, registration
+    app-kit/    what an app area plugs into: tokens, widgets, node link, Host and Page
     testkit/    starts a node holding only the areas a test names
 bin/
     parvi/      the node and CLI: a list of areas
-    parvi-app/  the native app: a list of area views
+    parvi-app/  the native app: the shell and its list of pages
 engine/         terminal engine, session holder, mission engine
 ```
 
@@ -30,7 +30,8 @@ missions.
    second declaration and no document keeping two in step.
 2. **Areas register themselves.** A node area hands `node-kit` its routes, its
    client actions and its commands; one command definition yields the CLI verb
-   and the MCP tool. An app area hands `app-kit` its page, actions and chords.
+   and the MCP tool. An app area hands `app-kit` its page, which declares its
+   frame kinds, channels, the asks it answers and its chords.
    The binaries hold only the list of areas. Adding to an area touches that
    area's directory and nothing else; adding an area adds one line to each list
    and one dependency line to that binary's `Cargo.toml`.
@@ -68,6 +69,31 @@ is the node's own.
   program's own hook reports to the node: it posts its payload to the URL an
   area gave it and runs `--then` regardless. The URL carries what the area
   needs, such as the session and event.
+
+## App pages
+
+A page is a build function in `bin/parvi-app`'s `PAGES`. Built from a `Host`,
+it answers with one entity implementing `app-kit`'s `Page`: an id, a title, the
+node area it needs (its tab hides while every node has that area off), its
+frame kinds, the channels it turns on while shown, the asks it answers and its
+chords. The shell owns the window, the tab bar, the dismissal stack, the leader,
+the status line and the node connection, and refuses pages that share an id or
+a frame kind, or take a kind the link or the shell owns, naming both.
+
+- **Host and Hub.** A `Host` is a cheap handle on the `Hub`, the state the
+  shell and every page share: the fleet link, settings, status line, toast and
+  the stack of menus and layers. Through it a page lists live nodes, makes
+  HTTP requests, sends frames, turns channels on, reports, opens menus and
+  layers, keeps its section of `app.json`, and asks.
+- **Events.** The hub never calls a page. A frame of a page's kinds, an ask it
+  answers or a closed layer's dismiss reaches the shell as a hub event after
+  the update that caused it, so a page may use its Host inside its own update.
+- **Asks.** Pages never depend on each other. An `Ask` (send a reference, open
+  a path, reveal a thing) is plain data that goes to the page declaring it
+  answers it; when none does, the asker gets an `unanswered` error and the
+  status line says so. View control's `open` reaches pages the same way.
+- **Tests.** `parvi-app` is a library and a binary, so a test drives the shell
+  with pages it defines against a fake node.
 
 ## Why this shape
 

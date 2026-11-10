@@ -1,0 +1,476 @@
+//! Pages plug into the shell through `Page` and `Host` alone: two toy
+//! pages, made here, each reach the node, the status line, menus, layers,
+//! chords and each other through their Host, against a fake node this
+//! test starts. A third, whose area every node turned off, has no tab.
+
+use futures_util::{SinkExt, StreamExt};
+use gpui::{
+    Entity, Modifiers, TestAppContext, VisualTestContext, WeakEntity, Window, div, point,
+    prelude::*, px,
+};
+use parvi_app::Shell;
+use parvi_app_kit::chords::Chord;
+use parvi_app_kit::host::{Layer, Request};
+use parvi_app_kit::link::client::LinkState;
+use parvi_app_kit::menu::MenuRow;
+use parvi_app_kit::{Answers, Ask, Build, Host, Mounted, Page, mount};
+use parvi_core::NodeId;
+use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio_tungstenite::tungstenite::Message;
+
+const TOY: u8 = 0xc0;
+
+thread_local! {
+    static ALPHA: RefCell<Option<Entity<Alpha>>> = const { RefCell::new(None) };
+    static BETA: RefCell<Option<Entity<Beta>>> = const { RefCell::new(None) };
+}
+
+struct Alpha {
+    host: Host,
+    me: WeakEntity<Alpha>,
+    heard: Vec<String>,
+    answer: Option<String>,
+    revealed: Option<String>,
+    chord: usize,
+    row: usize,
+    dismissed: bool,
+}
+
+impl Alpha {
+    fn build(host: Host, window: &mut Window, cx: &mut gpui::App) -> Mounted {
+        mount(host, window, cx, |host, _, cx| {
+            ALPHA.with(|a| *a.borrow_mut() = Some(cx.entity()));
+            Alpha {
+                host,
+                me: cx.entity().downgrade(),
+                heard: vec![],
+                answer: None,
+                revealed: None,
+                chord: 0,
+                row: 0,
+                dismissed: false,
+            }
+        })
+    }
+}
+
+impl Page for Alpha {
+    const ID: &'static str = "toy-a";
+    const TITLE: &'static str = "Alpha";
+    const KINDS: parvi_core::frame::Kinds = &[TOY..=TOY];
+    const CHANNELS: &'static [u8] = &[TOY];
+    const ANSWERS: &'static [Answers] = &[Answers::Reveal("toy")];
+
+    fn frame(&mut self, node: &NodeId, _: u8, body: &[u8], _: &mut Window, cx: &mut Context<Self>) {
+        self.heard
+            .push(format!("{node}:{}", String::from_utf8_lossy(body)));
+        cx.notify();
+    }
+
+    fn shown(&mut self, shown: bool, _: &mut Window, cx: &mut Context<Self>) {
+        if !shown || self.answer.is_some() {
+            return;
+        }
+        let asked = self
+            .host
+            .request(Request::get(NodeId::default(), "/toy"), cx);
+        cx.spawn(async move |this, cx| {
+            let got = asked.await;
+            let _ = this.update(cx, |p, cx| {
+                p.answer = Some(match got {
+                    Ok(a) => format!("{} {}", a.status, String::from_utf8_lossy(&a.body)),
+                    Err(e) => e.to_string(),
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn answer(&mut self, ask: Ask, _: &mut Window, cx: &mut Context<Self>) {
+        if let Ask::Reveal { id, .. } = ask {
+            self.revealed = Some(id);
+        }
+        cx.notify();
+    }
+
+    fn chords(&self, _: &gpui::App) -> Vec<Chord> {
+        let me = self.me.clone();
+        vec![
+            Chord::new("t", "Toy chord", move |_, cx| {
+                let _ = me.update(cx, |p, cx| {
+                    p.chord += 1;
+                    cx.notify();
+                });
+            })
+            .alt("t", Some(false)),
+        ]
+    }
+}
+
+struct Note;
+
+impl Render for Note {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().child("A note")
+    }
+}
+
+impl Render for Alpha {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (menu_host, layer_host) = (self.host.clone(), self.host.clone());
+        let (me, me2) = (self.me.clone(), self.me.clone());
+        div()
+            .size_full()
+            .flex()
+            .gap(px(10.))
+            .child(
+                div()
+                    .id("toy-menu")
+                    .debug_selector(|| "toy-menu".into())
+                    .w(px(80.))
+                    .h(px(30.))
+                    .child("Menu")
+                    .on_click(move |_, _, cx| {
+                        let me = me.clone();
+                        let row = MenuRow::new("Toy row", move |_, cx| {
+                            let _ = me.update(cx, |p, cx| {
+                                p.row += 1;
+                                cx.notify();
+                            });
+                        });
+                        menu_host.menu(vec![row], point(px(300.), px(300.)), cx);
+                    }),
+            )
+            .child(
+                div()
+                    .id("toy-layer")
+                    .debug_selector(|| "toy-layer".into())
+                    .w(px(80.))
+                    .h(px(30.))
+                    .child("Layer")
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        let me = me2.clone();
+                        let layer =
+                            Layer::new("note", cx.new(|_| Note)).on_dismiss(move |_, cx| {
+                                let _ = me.update(cx, |p, cx| {
+                                    p.dismissed = true;
+                                    cx.notify();
+                                });
+                            });
+                        layer_host.layer(layer, cx);
+                    })),
+            )
+    }
+}
+
+struct Beta {
+    host: Host,
+    refused: Option<String>,
+}
+
+impl Beta {
+    fn build(host: Host, window: &mut Window, cx: &mut gpui::App) -> Mounted {
+        mount(host, window, cx, |host, _, cx| {
+            BETA.with(|b| *b.borrow_mut() = Some(cx.entity()));
+            Beta {
+                host,
+                refused: None,
+            }
+        })
+    }
+}
+
+impl Page for Beta {
+    const ID: &'static str = "toy-b";
+    const TITLE: &'static str = "Beta";
+}
+
+impl Render for Beta {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let host = self.host.clone();
+        div()
+            .size_full()
+            .flex()
+            .child(
+                div()
+                    .id("toy-ask")
+                    .debug_selector(|| "toy-ask".into())
+                    .w(px(80.))
+                    .h(px(30.))
+                    .child("Ask")
+                    .on_click(move |_, _, cx| {
+                        let ask = Ask::Reveal {
+                            what: "toy".into(),
+                            id: "42".into(),
+                            node: None,
+                            part: None,
+                        };
+                        host.ask(ask, cx).expect("Alpha answers it");
+                    }),
+            )
+            .child(
+                div()
+                    .id("toy-ask-none")
+                    .debug_selector(|| "toy-ask-none".into())
+                    .w(px(80.))
+                    .h(px(30.))
+                    .child("Ask nobody")
+                    .on_click(cx.listener(|b, _, _, cx| {
+                        let ask = Ask::Send {
+                            reference: "x".into(),
+                        };
+                        b.refused = b.host.ask(ask, cx).err().map(|e| e.code);
+                        cx.notify();
+                    })),
+            )
+    }
+}
+
+/// A page whose area every node has turned off.
+struct Gamma;
+
+impl Page for Gamma {
+    const ID: &'static str = "toy-c";
+    const TITLE: &'static str = "Gamma";
+    const AREA: Option<&'static str> = Some("dark");
+}
+
+impl Render for Gamma {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
+
+fn gamma(host: Host, window: &mut Window, cx: &mut gpui::App) -> Mounted {
+    mount(host, window, cx, |_, _, _| Gamma)
+}
+
+const PAGES: &[Build] = &[Alpha::build, Beta::build, gamma];
+
+/// A node of one environment: it says hello with area `dark` off, answers
+/// `GET /toy`, and once the toy channel is on sends one toy frame. What
+/// the app sends it is kept in `heard`.
+fn fake_node(heard: Arc<Mutex<Vec<Vec<u8>>>>) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+    let address = listener.local_addr().expect("its address");
+    listener.set_nonblocking(true).expect("nonblocking");
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime");
+        rt.block_on(async move {
+            let listener = tokio::net::TcpListener::from_std(listener).expect("listener");
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                tokio::spawn(serve(stream, heard.clone()));
+            }
+        });
+    });
+    format!("http://{address}")
+}
+
+async fn serve(mut stream: tokio::net::TcpStream, heard: Arc<Mutex<Vec<Vec<u8>>>>) {
+    let mut head = [0u8; 64];
+    let Ok(n) = stream.peek(&mut head).await else {
+        return;
+    };
+    if !head[..n].starts_with(b"GET /ws") {
+        let mut request = vec![0u8; 4096];
+        let _ = stream.read(&mut request).await;
+        let (status, body) = if head[..n].starts_with(b"GET /toy ") {
+            ("200 OK", r#"{"word":"pong"}"#)
+        } else {
+            ("404 Not Found", r#"{"error":"no such route"}"#)
+        };
+        let answer = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = stream.write_all(answer.as_bytes()).await;
+        return;
+    }
+    let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
+        return;
+    };
+    let hello = serde_json::json!({
+        "node": "toy-node", "device": "rig", "environment": "test",
+        "version": "0.0.1", "protocol": 16, "off": ["dark"],
+    });
+    let mut frame = vec![0x00];
+    frame.extend_from_slice(hello.to_string().as_bytes());
+    if ws.send(Message::Binary(frame.into())).await.is_err() {
+        return;
+    }
+    while let Some(Ok(msg)) = ws.next().await {
+        let Message::Binary(bytes) = msg else {
+            continue;
+        };
+        heard.lock().expect("heard").push(bytes.to_vec());
+        if bytes[..] == [TOY, 1] {
+            let toy = [&[TOY][..], b"ping"].concat();
+            if ws.send(Message::Binary(toy.into())).await.is_err() {
+                return;
+            }
+        }
+    }
+}
+
+/// Runs the app until `ok`, or fails naming `what` after ten seconds.
+fn until(
+    cx: &mut VisualTestContext,
+    what: &str,
+    mut ok: impl FnMut(&mut VisualTestContext) -> bool,
+) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        cx.run_until_parked();
+        if ok(cx) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn click(cx: &mut VisualTestContext, selector: &'static str) {
+    cx.run_until_parked();
+    let at = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} is not drawn"))
+        .center();
+    cx.simulate_click(at, Modifiers::none());
+    cx.run_until_parked();
+}
+
+fn settings_path(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("parvi-app-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a scratch folder");
+    dir.join("app.json")
+}
+
+fn status(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> String {
+    shell.read_with(cx, |s, cx| {
+        s.hub()
+            .read(cx)
+            .status
+            .as_ref()
+            .map(|s| s.text.clone())
+            .unwrap_or_default()
+    })
+}
+
+fn alpha() -> Entity<Alpha> {
+    ALPHA.with(|a| a.borrow().clone()).expect("Alpha was made")
+}
+
+#[gpui::test]
+fn two_toy_pages_plug_in_through_their_host(cx: &mut TestAppContext) {
+    let heard = Arc::new(Mutex::new(vec![]));
+    let node = fake_node(heard.clone());
+    let settings = settings_path("toy-pages");
+    // The fake node and the link run on their own threads.
+    cx.executor().allow_parking();
+    cx.update(parvi_app::prepare);
+    let path = settings.clone();
+    let (shell, cx) = cx.add_window_view(move |window, cx| {
+        parvi_app::start(PAGES, Some(node), Some(path), window, cx)
+    });
+
+    until(cx, "the link to open", |cx| {
+        shell.read_with(cx, |s, cx| {
+            s.hub().read(cx).fleet.here().state == LinkState::Open
+        })
+    });
+    assert_eq!(status(&shell, cx), "Connected to rig (test), Parvi 0.0.1");
+
+    // The tab bar: both toy pages, not the one whose area is off.
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("tab-toy-a").is_some());
+    assert!(cx.debug_bounds("tab-toy-b").is_some());
+    assert!(cx.debug_bounds("tab-toy-c").is_none(), "its area is off");
+    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy-a"));
+
+    // Shown, Alpha turned its channel on, heard its frame and asked over HTTP.
+    let a = alpha();
+    until(cx, "the toy frame and the HTTP answer", |cx| {
+        a.read_with(cx, |a, _| !a.heard.is_empty() && a.answer.is_some())
+    });
+    a.read_with(cx, |a, _| {
+        assert_eq!(a.heard, ["toy-node:ping"]);
+        assert_eq!(a.answer.as_deref(), Some(r#"200 {"word":"pong"}"#));
+    });
+    assert!(heard.lock().expect("heard").contains(&vec![TOY, 1]));
+
+    // Its chord, by Alt and by the leader.
+    cx.simulate_keystrokes("alt-t");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("ctrl-shift-space t");
+    cx.run_until_parked();
+    assert_eq!(a.read_with(cx, |a, _| a.chord), 2);
+
+    // Its menu row.
+    click(cx, "toy-menu");
+    click(cx, "menu-row-0");
+    assert_eq!(a.read_with(cx, |a, _| a.row), 1);
+
+    // Its layer, on the one stack: Escape closes it and runs its dismiss.
+    click(cx, "toy-layer");
+    assert!(shell.read_with(cx, |s, cx| !s.hub().read(cx).stack.is_empty()));
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(a.read_with(cx, |a, _| a.dismissed));
+    assert!(shell.read_with(cx, |s, cx| s.hub().read(cx).stack.is_empty()));
+
+    // Beta, by its tab; Alpha's channel goes off as it hides.
+    click(cx, "tab-toy-b");
+    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy-b"));
+    until(cx, "the channel to go off", |_| {
+        heard.lock().expect("heard").contains(&vec![TOY, 0])
+    });
+
+    // Beta reaches Alpha only by asking; what nobody answers says so.
+    click(cx, "toy-ask-none");
+    let b = BETA.with(|b| b.borrow().clone()).expect("Beta was made");
+    assert_eq!(
+        b.read_with(cx, |b, _| b.refused.clone()).as_deref(),
+        Some("unanswered")
+    );
+    assert_eq!(status(&shell, cx), "Nothing here can send to a session.");
+    click(cx, "toy-ask");
+    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy-a"));
+    assert_eq!(
+        a.read_with(cx, |a, _| a.revealed.clone()).as_deref(),
+        Some("42")
+    );
+
+    let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
+}
+
+#[gpui::test]
+fn with_no_pages_the_shell_connects_to_its_node(cx: &mut TestAppContext) {
+    let node = fake_node(Arc::new(Mutex::new(vec![])));
+    let settings = settings_path("no-pages");
+    // The fake node and the link run on their own threads.
+    cx.executor().allow_parking();
+    cx.update(parvi_app::prepare);
+    let path = settings.clone();
+    let (shell, cx) = cx.add_window_view(move |window, cx| {
+        parvi_app::start(&[], Some(node), Some(path), window, cx)
+    });
+    until(cx, "the link to open", |cx| {
+        shell.read_with(cx, |s, cx| {
+            s.hub().read(cx).fleet.here().state == LinkState::Open
+        })
+    });
+    assert_eq!(status(&shell, cx), "Connected to rig (test), Parvi 0.0.1");
+    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), None);
+    let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
+}

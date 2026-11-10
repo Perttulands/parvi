@@ -9,6 +9,8 @@ members = [
   "areas/terminals/contract",
   "areas/terminals/node",
   "bin/parvi",
+  "kit/app-kit",
+  "bin/parvi-app",
 ]
 
 [workspace.package]
@@ -23,3 +25,10 @@ vt100 = { path = "vendor/vt100" }
 # Frame kinds are slices of ranges (`parvi_core::frame::Kinds`): an area
 # owning one range writes `&[0x60..=0x61]`, which this lint misreads.
 single_range_in_vec_init = "allow"
+
+# The desktop app unwinds, so a page that fails to draw is caught by its
+# boundary and the rest of the window carries on:
+# `cargo build --profile app -p parvi-app`.
+[profile.app]
+inherits = "release"
+panic = "unwind"

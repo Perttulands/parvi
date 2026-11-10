@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- parvi.svg (concept c6) redrawn by hand on the 16 px grid:
+       one-pixel violet edge, a two-pixel neck stem, a hooked beak and an eye pixel. -->
+  <rect width="16" height="16" rx="3.19" fill="#18171e"/>
+  <path fill="#a68cff" d="M4 2h8v1h-8zM3 3h2v1h-2zM11 3h3v1h-3zM2 4h2v1h-2zM13 4h2v1h-2zM2 5h1v1h-1zM14 5h1v1h-1zM2 6h2v1h-2zM10 6h3v1h-3zM14 6h1v1h-1zM2 7h1v1h-1zM10 7h1v1h-1zM12 7h3v1h-3zM2 8h2v1h-2zM9 8h2v1h-2zM3 9h1v1h-1zM8 9h2v1h-2zM3 10h1v1h-1zM7 10h2v1h-2zM3 11h1v1h-1zM6 11h2v1h-2zM3 12h1v1h-1zM6 12h1v1h-1zM3 13h1v1h-1zM6 13h1v1h-1zM3 14h4v1h-4z"/>
+  <path fill="#000" d="M5 3h6v1h-6zM4 4h4v1h-4zM9 4h4v1h-4zM3 5h11v1h-11zM4 6h6v1h-6zM13 6h1v1h-1zM3 7h7v1h-7zM4 8h5v1h-5zM4 9h4v1h-4zM4 10h3v1h-3zM4 11h2v1h-2zM4 12h2v1h-2zM4 13h2v1h-2z"/>
+  <path fill="#f4f3f8" d="M8 4h1v1h-1z"/>
+</svg>
