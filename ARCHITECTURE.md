@@ -55,7 +55,11 @@ is the node's own.
 - **Commands.** A command is a `noun_verb` name, a description, an input
   schema and a call answering JSON or the error shape. `node-kit` serves it as
   an MCP tool on `/mcp` and as the CLI verb `parvi noun verb`. A `node`
-  argument names where it runs; a node reaches only itself for now.
+  argument names where it runs.
+- **One node at a time.** A request names its node with `?node=` on any route
+  and on `/ws`, a command call with its `node` argument. Relaying to other
+  nodes is not built: one naming another node is refused as `unknown_node`
+  (HTTP 421), never run here.
 - **Config.** `config.toml` in the node's folder has a `[node]` section and one
   section per area, read by that area. `enabled = false` leaves an area unbuilt
   and listed as off in `/api/health`; a section no area reads refuses to start.

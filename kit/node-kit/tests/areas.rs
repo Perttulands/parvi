@@ -383,6 +383,70 @@ async fn foreign_origins_and_rebinding_hosts_are_refused() {
     node.stop().await.unwrap();
 }
 
+/// A request naming another node with `?node=` is refused with the error
+/// shape, on an area's route, on `/ws` and on `/mcp`, and never runs here;
+/// one naming this node runs as one naming none.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_request_for_another_node_is_refused_not_run_here() {
+    let node = start(&[("lights", lights)], "").await.unwrap();
+    let here = node.address.to_string();
+    let own = node.node.id.to_string();
+    for (path, upgrade, served) in [
+        ("/api/lights", "", 200),
+        ("/ws", UPGRADE, 101),
+        ("/mcp", "", 405),
+    ] {
+        let mine = format!("{path}?node={own}");
+        assert_eq!(
+            status(node.address, &mine, upgrade, &here, None).await,
+            served
+        );
+        let theirs = format!("{path}?node=elsewhere");
+        let (code, body) = response(node.address, &theirs, upgrade).await;
+        assert_eq!(code, 421, "{theirs}");
+        let refused: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(refused["error"]["code"], "unknown_node", "{theirs}");
+        assert!(
+            refused["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("elsewhere")
+        );
+    }
+    node.stop().await.unwrap();
+}
+
+/// The status and body a request for `path` gets.
+async fn response(addr: std::net::SocketAddr, path: &str, upgrade: &str) -> (u16, String) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let request = format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\n{upgrade}\r\n");
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut text = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let read = stream.read(&mut chunk).await.unwrap();
+        text.extend_from_slice(&chunk[..read]);
+        let whole = String::from_utf8_lossy(&text).into_owned();
+        if let Some((head, body)) = whole.split_once("\r\n\r\n") {
+            let length: usize = head
+                .lines()
+                .find_map(|l| {
+                    l.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")
+                        .map(str::to_owned)
+                })
+                .and_then(|n| n.trim().parse().ok())
+                .unwrap_or(0);
+            if body.len() >= length || read == 0 {
+                let code = head.split(' ').nth(1).and_then(|s| s.parse().ok()).unwrap();
+                return (code, body.to_owned());
+            }
+        }
+        assert!(read > 0, "the node closed before answering: {whole}");
+    }
+}
+
 /// The status a request for `path` gets with these headers.
 async fn status(
     addr: std::net::SocketAddr,

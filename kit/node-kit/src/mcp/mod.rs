@@ -65,10 +65,7 @@ impl Mcp {
         match named {
             None | Some(Value::Null) => Ok(()),
             Some(Value::String(wanted)) if wanted == self.node.as_str() => Ok(()),
-            Some(Value::String(wanted)) => Err(Error::new(
-                "unknown_node",
-                format!("node {wanted} is not this node, and this node reaches no other"),
-            )),
+            Some(Value::String(wanted)) => Err(crate::serve::elsewhere(&wanted)),
             Some(_) => Err(Error::new("invalid_argument", "node is a string")),
         }
     }

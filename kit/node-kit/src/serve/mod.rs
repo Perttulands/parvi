@@ -1,8 +1,10 @@
-//! Serving a node: its areas, built from the config, behind the trust check,
-//! with the node's own `/api/health`, `/api/version`, `/ws` and `/mcp`.
+//! Serving a node: its areas, built from the config, behind the trust check
+//! and the refusal of requests for other nodes, with the node's own
+//! `/api/health`, `/api/version`, `/ws` and `/mcp`.
 //! Areas are checked before anything is served: two that share a name, a
 //! frame kind or a command refuse to start, naming both.
 
+mod addressed;
 mod authority;
 mod hello;
 mod socket;
@@ -27,6 +29,7 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
+pub(crate) use addressed::elsewhere;
 pub use hello::hello;
 pub use trust::Trust;
 
@@ -139,7 +142,12 @@ pub async fn start(options: Options, areas: &[(&'static str, Build)]) -> Result<
     for area in &shared.areas {
         app = app.merge(area.routes());
     }
-    let app = app.layer(middleware::from_fn_with_state(trust, trust::guard));
+    let app = app
+        .layer(middleware::from_fn_with_state(
+            node.id.clone(),
+            addressed::guard,
+        ))
+        .layer(middleware::from_fn_with_state(trust, trust::guard));
     let recorded = address::record(&dir, address)?;
     eprintln!(
         "parvi: node {} ({}, {}) serving http://{address}",
