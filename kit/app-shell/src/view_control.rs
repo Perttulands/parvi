@@ -10,7 +10,6 @@ use parvi_app_kit::Ask;
 use parvi_app_kit::link::client::LinkState;
 use parvi_app_kit::link::socket::LinkId;
 use parvi_core::NodeId;
-use parvi_core::frame::Kinds;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use std::time::{Duration, Instant};
@@ -21,8 +20,6 @@ const VIEW: u8 = 0xb0;
 const VIEW_DONE: u8 = 0xb1;
 /// A view command, down.
 pub const VIEW_DO: u8 = 0xb8;
-/// The kinds the shell takes from the node.
-pub const KINDS: Kinds = &[VIEW_DO..=VIEW_DO];
 
 /// The serving node hears of changes at most this often.
 const EVERY: Duration = Duration::from_millis(250);

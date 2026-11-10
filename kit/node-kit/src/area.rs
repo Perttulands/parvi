@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use axum::Router;
 use parvi_core::Error;
-use parvi_core::frame::Kinds;
 use serde_json::Value;
 
 use crate::{Provided, Setup};
@@ -16,8 +15,8 @@ use crate::{Provided, Setup};
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Builds an area from the node's setup, once, when the node starts. The
-/// binary holds a list of these, by name; an area whose config section says
-/// `enabled = false` is not built.
+/// binary lists it in the area's [`crate::Listing`]; an area whose config
+/// section says `enabled = false` is not built.
 pub type Build = fn(&Setup) -> anyhow::Result<Built>;
 
 /// What a [`Build`] answers. Areas are built in two steps, so their order in
@@ -46,16 +45,9 @@ impl Built {
     }
 }
 
+/// A built area. What it is called and the frame kinds it owns are in its
+/// [`crate::Listing`].
 pub trait Area: Send + Sync + 'static {
-    /// Its config section, its name in the hello's `off`, and in errors.
-    fn name(&self) -> &'static str;
-
-    /// The frame kinds it owns, both ways. A client's frame of one of these
-    /// goes to its channel.
-    fn kinds(&self) -> Kinds {
-        &[]
-    }
-
     fn routes(&self) -> Router {
         Router::new()
     }
@@ -64,7 +56,8 @@ pub trait Area: Send + Sync + 'static {
         Vec::new()
     }
 
-    /// Its side of one client's socket; `None` for an area with no frames.
+    /// Its side of one client's socket, for frames of its listed kinds;
+    /// `None` for an area with no frames.
     fn channel(&self, _client: Client) -> Option<Box<dyn Channel>> {
         None
     }
@@ -126,14 +119,5 @@ impl Command {
             schema: Arc::new(schema),
             call: Arc::new(move |args| Box::pin(call(args))),
         }
-    }
-
-    /// Whether the name reads as `noun_verb`.
-    pub fn well_named(&self) -> bool {
-        let mut parts = self.name.split('_');
-        matches!(
-            (parts.next(), parts.next(), parts.next()),
-            (Some(noun), Some(verb), None) if !noun.is_empty() && !verb.is_empty()
-        )
     }
 }

@@ -39,7 +39,7 @@ impl Node {
             tmux.socket_path(),
             launch
         );
-        let node = TestNode::start(&[(parvi_terminals::NAME, parvi_terminals::build)], &config)
+        let node = TestNode::start(&[parvi_terminals::LISTING], &config)
             .await
             .unwrap();
         let sessions = node.sessions();

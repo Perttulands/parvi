@@ -2,7 +2,9 @@
 //! and the refusal of requests for other nodes, with the node's own
 //! `/api/health`, `/api/version`, `/ws` and `/mcp`.
 //! Areas are checked before anything is served: two that share a name, a
-//! frame kind or a command refuse to start, naming both.
+//! frame kind or a command refuse to start, naming both
+//! ([`crate::listing::check`]), as does one whose commands are not those it
+//! lists.
 
 mod addressed;
 mod authority;
@@ -23,7 +25,6 @@ use axum::http::StatusCode;
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use parvi_core::frame::{self, HELLO};
 use parvi_core::{Error, PROTOCOL};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -37,7 +38,7 @@ use crate::config::Config;
 use crate::events::{self, Log};
 use crate::identity::{Identity, Ports};
 use crate::mcp::Mcp;
-use crate::{Area, Build, Built, Command, Provided, Setup, address};
+use crate::{Area, Built, Command, Listing, Provided, Setup, address, listing};
 
 /// How a node is started.
 pub struct Options {
@@ -52,7 +53,8 @@ pub struct Options {
 struct Shared {
     node: Identity,
     off: Vec<&'static str>,
-    areas: Vec<Arc<dyn Area>>,
+    /// Each built area, with how it is listed.
+    areas: Vec<(Listing, Arc<dyn Area>)>,
 }
 
 /// A node serving until stopped.
@@ -70,13 +72,14 @@ pub struct Running {
 
 /// Builds the areas `config` leaves on, in `areas`' order, checks them and
 /// serves them.
-pub async fn start(options: Options, areas: &[(&'static str, Build)]) -> Result<Running> {
+pub async fn start(options: Options, areas: &[Listing]) -> Result<Running> {
     let Options {
         dir,
         config,
         listen,
     } = options;
-    let names: Vec<&str> = areas.iter().map(|(name, _)| *name).collect();
+    listing::check(areas)?;
+    let names: Vec<&str> = areas.iter().map(|area| area.name).collect();
     config.known(&names)?;
     let section = config.node()?;
     let node = Identity::load(&dir, section.device.clone())?;
@@ -107,35 +110,29 @@ pub async fn start(options: Options, areas: &[(&'static str, Build)]) -> Result<
     // what others provide finish: the list's order does not matter.
     let mut started = Vec::new();
     let mut off = Vec::new();
-    for &(name, build) in areas {
-        if !setup.config.enabled(name)? {
-            off.push(name);
+    for &listed in areas {
+        if !setup.config.enabled(listed.name)? {
+            off.push(listed.name);
             continue;
         }
+        let name = listed.name;
         started.push((
-            name,
-            build(&setup).with_context(|| format!("starting {name}"))?,
+            listed,
+            (listed.build)(&setup).with_context(|| format!("starting {name}"))?,
         ));
     }
     setup.provided.seal();
-    let mut built: Vec<Arc<dyn Area>> = Vec::new();
-    for (name, area) in started {
+    let mut built = Vec::new();
+    for (listed, area) in started {
         let area = match area {
             Built::Now(area) => area,
             Built::Then(finish) => {
-                finish(&setup.provided).with_context(|| format!("starting {name}"))?
+                finish(&setup.provided).with_context(|| format!("starting {}", listed.name))?
             }
         };
-        if area.name() != name {
-            return Err(Error::new(
-                "area_conflict",
-                format!("the area listed as {name} calls itself {}", area.name()),
-            )
-            .into());
-        }
-        built.push(area);
+        built.push((listed, area));
     }
-    let commands = check(&built)?;
+    let commands = commands(&built)?;
     let here = format!("{} · {}", node.device, node.environment.name());
     events.record(
         events::NODE,
@@ -154,7 +151,7 @@ pub async fn start(options: Options, areas: &[(&'static str, Build)]) -> Result<
         .route("/api/version", get(version))
         .with_state(shared.clone())
         .merge(Mcp::new(node.id.clone(), commands).routes());
-    for area in &shared.areas {
+    for (_, area) in &shared.areas {
         app = app.merge(area.routes());
     }
     let app = app
@@ -207,7 +204,7 @@ impl Running {
         if let Ok(served) = served {
             served.context("serving")?.context("serving")?;
         }
-        for area in &self.shared.areas {
+        for (_, area) in &self.shared.areas {
             area.stop().await;
         }
         Ok(())
@@ -219,49 +216,30 @@ impl Running {
     }
 }
 
-/// Refuses areas that share a name, a frame kind or a command, naming both,
-/// and commands not named `noun_verb`; answers with every command.
-fn check(areas: &[Arc<dyn Area>]) -> Result<Vec<Command>, Error> {
-    let conflict = |message: String| Error::new("area_conflict", message);
-    let mut commands: Vec<(&str, Command)> = Vec::new();
-    for (i, area) in areas.iter().enumerate() {
-        if frame::owns(area.kinds(), HELLO) {
-            return Err(conflict(format!(
-                "area {} owns frame kind {HELLO:#04x}, the node's hello",
-                area.name()
-            )));
+/// Every built area's commands, refusing an area whose commands are not
+/// those it lists.
+fn commands(areas: &[(Listing, Arc<dyn Area>)]) -> Result<Vec<Command>, Error> {
+    let mut all = Vec::new();
+    for (listed, area) in areas {
+        let commands = area.commands();
+        let mut have: Vec<&str> = commands.iter().map(|c| c.name).collect();
+        let mut listed_names = listed.commands.to_vec();
+        have.sort();
+        listed_names.sort();
+        if have != listed_names {
+            return Err(Error::new(
+                "commands_unlisted",
+                format!(
+                    "area {} lists the commands {} but has {}",
+                    listed.name,
+                    listed_names.join(", "),
+                    have.join(", ")
+                ),
+            ));
         }
-        for other in &areas[..i] {
-            if other.name() == area.name() {
-                return Err(conflict(format!("two areas are named {}", area.name())));
-            }
-            if frame::overlap(other.kinds(), area.kinds()) {
-                return Err(conflict(format!(
-                    "areas {} and {} own the same frame kinds",
-                    other.name(),
-                    area.name()
-                )));
-            }
-        }
-        for command in area.commands() {
-            if !command.well_named() {
-                return Err(conflict(format!(
-                    "area {}: command {} is not named noun_verb",
-                    area.name(),
-                    command.name
-                )));
-            }
-            if let Some((owner, _)) = commands.iter().find(|(_, c)| c.name == command.name) {
-                return Err(conflict(format!(
-                    "areas {owner} and {} both have the command {}",
-                    area.name(),
-                    command.name
-                )));
-            }
-            commands.push((area.name(), command));
-        }
+        all.extend(commands);
     }
-    Ok(commands.into_iter().map(|(_, command)| command).collect())
+    Ok(all)
 }
 
 /// `GET /api/health`: this node answers, saying what it is and which areas

@@ -14,8 +14,8 @@ use parvi_core::Error;
 use parvi_core::Hello;
 use parvi_core::frame::Kinds;
 use parvi_node_kit::{
-    Area, BoxFuture, Build, Built, Channel, Client, Command, Config, NodeClient, Options, Running,
-    Setup,
+    Area, BoxFuture, Build, Built, Channel, Client, Command, Config, Listing, NodeClient, Options,
+    Running, Setup,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -24,22 +24,29 @@ use tokio_tungstenite::tungstenite::Message;
 /// A lamp: `/api/lights` says how bright, `lights_switch` sets it, and a
 /// client's frame 0x60 asks for a push 0x61 of the brightness it carries.
 struct Lights {
-    name: &'static str,
-    kinds: Kinds,
     command: &'static str,
 }
 
 const LIGHTS: Kinds = &[0x60..=0x61];
 
+/// The lights as a binary lists them.
+const LIGHTS_LISTED: Listing = listed("lights", LIGHTS, &["lights_switch"], lights);
+
+const fn listed(
+    name: &'static str,
+    kinds: Kinds,
+    commands: &'static [&'static str],
+    build: Build,
+) -> Listing {
+    Listing {
+        name,
+        kinds,
+        commands,
+        build,
+    }
+}
+
 impl Area for Lights {
-    fn name(&self) -> &'static str {
-        self.name
-    }
-
-    fn kinds(&self) -> Kinds {
-        self.kinds
-    }
-
     fn routes(&self) -> Router {
         Router::new().route(
             "/api/lights",
@@ -87,13 +94,11 @@ impl Channel for Lamp {
 
 fn lights(_: &Setup) -> anyhow::Result<Built> {
     Built::now(Lights {
-        name: "lights",
-        kinds: LIGHTS,
         command: "lights_switch",
     })
 }
 
-async fn start(areas: &[(&'static str, Build)], config: &str) -> anyhow::Result<Running> {
+async fn start(areas: &[Listing], config: &str) -> anyhow::Result<Running> {
     static NEXT: AtomicU32 = AtomicU32::new(0);
     let dir = std::env::temp_dir().join(format!(
         "parvi-areas-{}-{}",
@@ -115,7 +120,7 @@ async fn start(areas: &[(&'static str, Build)], config: &str) -> anyhow::Result<
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_area_defined_in_a_test_answers_every_way() {
-    let node = start(&[("lights", lights)], "").await.unwrap();
+    let node = start(&[LIGHTS_LISTED], "").await.unwrap();
     let url = format!("http://{}/", node.address);
     let client = NodeClient::new(Some(&url)).unwrap();
 
@@ -204,7 +209,7 @@ async fn an_area_defined_in_a_test_answers_every_way() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_area_its_section_turns_off_is_not_built_and_says_so() {
-    let node = start(&[("lights", lights)], "[lights]\nenabled = false\n")
+    let node = start(&[LIGHTS_LISTED], "[lights]\nenabled = false\n")
         .await
         .unwrap();
     assert_eq!(node.off(), ["lights"]);
@@ -226,79 +231,53 @@ async fn an_area_its_section_turns_off_is_not_built_and_says_so() {
     node.stop().await.unwrap();
 }
 
-/// Starts `first` and `second` together and answers with the refusal.
-async fn refusal(first: Build, second: Build) -> String {
-    match start(&[("lights", first), ("lamps", second)], "").await {
+/// Starts the lights and `second` together and answers with the refusal.
+async fn refusal(second: Listing) -> String {
+    match start(&[LIGHTS_LISTED, second], "").await {
         Ok(_) => panic!("conflicting areas started"),
         Err(error) => format!("{error:#}"),
     }
 }
 
+/// The node checks its list before building anything (`listing::check`
+/// holds each conflict), and refuses an area whose built commands are not
+/// the ones it is listed with.
 #[tokio::test(flavor = "multi_thread")]
 async fn areas_that_would_share_a_kind_a_name_or_a_command_refuse_to_start() {
-    fn lamps_sharing_a_kind(_: &Setup) -> anyhow::Result<Built> {
-        Built::now(Lights {
-            name: "lamps",
-            kinds: &[0x61..=0x62],
-            command: "lamps_switch",
-        })
-    }
-    let error = refusal(lights, lamps_sharing_a_kind).await;
+    let error = refusal(listed("lamps", &[0x61..=0x62], &["lamps_switch"], lights)).await;
     assert!(
         error.contains("lights") && error.contains("lamps") && error.contains("frame kinds"),
         "{error}"
     );
-
-    fn lamps_sharing_a_command(_: &Setup) -> anyhow::Result<Built> {
-        Built::now(Lights {
-            name: "lamps",
-            kinds: &[0x70..=0x70],
-            command: "lights_switch",
-        })
-    }
-    let error = refusal(lights, lamps_sharing_a_command).await;
+    let error = refusal(listed("lamps", &[0x70..=0x70], &["lights_switch"], lights)).await;
     assert!(
         error.contains("lights") && error.contains("lamps") && error.contains("lights_switch"),
         "{error}"
     );
-
-    fn lamps_named_lights(_: &Setup) -> anyhow::Result<Built> {
-        Built::now(Lights {
-            name: "lights",
-            kinds: &[0x70..=0x70],
-            command: "lamps_switch",
-        })
-    }
-    // Listed as lamps, it calls itself lights.
-    let error = refusal(lights, lamps_named_lights).await;
-    assert!(
-        error.contains("lights") && error.contains("lamps"),
-        "{error}"
-    );
-    // Listed twice under one name.
-    let error = match start(&[("lights", lights), ("lights", lights)], "").await {
-        Ok(_) => panic!("two areas named lights started"),
-        Err(error) => format!("{error:#}"),
-    };
+    let error = refusal(LIGHTS_LISTED).await;
     assert!(error.contains("two areas are named lights"), "{error}");
-
-    fn hello_taker(_: &Setup) -> anyhow::Result<Built> {
-        Built::now(Lights {
-            name: "lamps",
-            kinds: &[0x00..=0x00],
-            command: "lamps_switch",
-        })
-    }
-    let error = refusal(lights, hello_taker).await;
+    let error = refusal(listed("lamps", &[0x00..=0x00], &[], lights)).await;
     assert!(
         error.contains("lamps") && error.contains("hello"),
+        "{error}"
+    );
+
+    fn lamps(_: &Setup) -> anyhow::Result<Built> {
+        Built::now(Lights {
+            command: "lamps_dim",
+        })
+    }
+    // Listed with one command, it has another.
+    let error = refusal(listed("lamps", &[0x70..=0x70], &["lamps_switch"], lamps)).await;
+    assert!(
+        error.contains("lamps") && error.contains("lamps_switch") && error.contains("lamps_dim"),
         "{error}"
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_section_no_area_reads_refuses_to_start() {
-    let error = match start(&[("lights", lights)], "[lamps]\nlevel = 3\n").await {
+    let error = match start(&[LIGHTS_LISTED], "[lamps]\nlevel = 3\n").await {
         Ok(_) => panic!("an unknown section started"),
         Err(error) => format!("{error:#}"),
     };
@@ -319,16 +298,12 @@ impl Word for Lights {
 /// Lights that offer their word to other areas.
 fn offering(_: &Setup) -> anyhow::Result<Built> {
     Ok(Built::Now(Arc::new(Lights {
-        name: "lights",
-        kinds: LIGHTS,
         command: "lights_switch",
     })))
 }
 
 fn offering_word(setup: &Setup) -> anyhow::Result<Built> {
     setup.provided.provide::<dyn Word>(Arc::new(Lights {
-        name: "lights",
-        kinds: LIGHTS,
         command: "lights_switch",
     }))?;
     offering(setup)
@@ -342,15 +317,14 @@ fn reading_word(_: &Setup) -> anyhow::Result<Built> {
     })
 }
 
+const LIGHTS_OFFERING: Listing = listed("lights", LIGHTS, &["lights_switch"], offering_word);
+const LAMPS_READING: Listing = listed("lamps", &[], &["lamps_say"], reading_word);
+
 struct Said {
     word: &'static str,
 }
 
 impl Area for Said {
-    fn name(&self) -> &'static str {
-        "lamps"
-    }
-
     fn commands(&self) -> Vec<Command> {
         let word = self.word;
         vec![Command::new(
@@ -368,8 +342,8 @@ impl Area for Said {
 #[tokio::test(flavor = "multi_thread")]
 async fn areas_read_what_others_provide_in_any_order() {
     for areas in [
-        [("lamps", reading_word as Build), ("lights", offering_word)],
-        [("lights", offering_word), ("lamps", reading_word)],
+        [LAMPS_READING, LIGHTS_OFFERING],
+        [LIGHTS_OFFERING, LAMPS_READING],
     ] {
         let node = start(&areas, "").await.unwrap();
         let said = node.provided.get::<dyn Word>().unwrap().word();
@@ -388,7 +362,7 @@ async fn areas_read_what_others_provide_in_any_order() {
         node.stop().await.unwrap();
     }
 
-    let error = match start(&[("lamps", reading_word), ("lights", offering)], "").await {
+    let error = match start(&[LAMPS_READING, LIGHTS_LISTED], "").await {
         Ok(_) => panic!("an area read what nobody provides"),
         Err(error) => format!("{error:#}"),
     };
@@ -399,7 +373,15 @@ async fn areas_read_what_others_provide_in_any_order() {
         setup.provided.get::<dyn Word>()?;
         offering(setup)
     }
-    let error = match start(&[("lights", offering_word), ("lamps", reading_early)], "").await {
+    let error = match start(
+        &[
+            LIGHTS_OFFERING,
+            listed("lamps", &[], &["lamps_switch"], reading_early),
+        ],
+        "",
+    )
+    .await
+    {
         Ok(_) => panic!("an area read a slot while areas were being built"),
         Err(error) => format!("{error:#}"),
     };
@@ -415,7 +397,7 @@ const UPGRADE: &str = "Connection: Upgrade\r\nUpgrade: websocket\r\n\
 /// tailnet names yet.
 #[tokio::test(flavor = "multi_thread")]
 async fn foreign_origins_and_rebinding_hosts_are_refused() {
-    let node = start(&[("lights", lights)], "").await.unwrap();
+    let node = start(&[LIGHTS_LISTED], "").await.unwrap();
     let here = node.address.to_string();
     let own = format!("http://{here}");
     let cases = [
@@ -461,7 +443,7 @@ async fn foreign_origins_and_rebinding_hosts_are_refused() {
 /// one naming this node runs as one naming none.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_request_for_another_node_is_refused_not_run_here() {
-    let node = start(&[("lights", lights)], "").await.unwrap();
+    let node = start(&[LIGHTS_LISTED], "").await.unwrap();
     let here = node.address.to_string();
     let own = node.node.id.to_string();
     for (path, upgrade, served) in [

@@ -12,10 +12,9 @@ use gpui::{
 use parvi_app_kit::chords::{self, Chord, KeyLike, Keyboard, Run, Verdict};
 use parvi_app_kit::host::{Cover, Layer};
 use parvi_app_kit::hub::{HubEvent, Surface};
-use parvi_app_kit::link::frames;
 use parvi_app_kit::page::Meta;
 use parvi_app_kit::{Build, Error, Host, Hub, Mounted, declared, mount as mount_page};
-use parvi_core::frame::overlap;
+use parvi_core::frame::{overlap, reserved};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -41,8 +40,8 @@ pub struct Shell {
 
 /// Makes every page, then the Settings page listing what they declare,
 /// refusing two pages of one id or two that take the same frame kinds, any
-/// that takes a kind the link or the shell owns or declares a setting
-/// twice, and two whose chords live everywhere share a key.
+/// that takes a reserved kind (`parvi_core::frame::RESERVED`) or declares a
+/// setting twice, and two whose chords live everywhere share a key.
 pub fn mount(
     builds: &[Build],
     hub: &Entity<Hub>,
@@ -68,16 +67,11 @@ pub fn mount(
 /// The rule [`mount`] keeps.
 pub fn check(pages: &[Meta]) -> Result<(), Error> {
     for (i, a) in pages.iter().enumerate() {
-        for (owner, kinds) in [
-            ("the link", frames::OWN),
-            ("the shell", view_control::KINDS),
-        ] {
-            if overlap(a.kinds, kinds) {
-                return Err(Error::new(
-                    "kinds_taken",
-                    format!("{} takes frame kinds {owner} owns", a.id),
-                ));
-            }
+        if let Some(owner) = reserved(a.kinds) {
+            return Err(Error::new(
+                "kinds_taken",
+                format!("{} takes frame kinds of {owner}", a.id),
+            ));
         }
         if let Some(key) = declared::twice(a.settings) {
             return Err(Error::new(
@@ -482,9 +476,14 @@ mod tests {
         let overlap = check(&[meta("a", &[0xc0..=0xc3]), meta("b", &[0xc3..=0xc3])]).unwrap_err();
         assert_eq!(overlap.message, "a and b take the same frame kinds");
         let link = check(&[meta("a", &[0x00..=0x01])]).unwrap_err();
-        assert_eq!(link.message, "a takes frame kinds the link owns");
-        let shell = check(&[meta("a", &[0xb8..=0xb8])]).unwrap_err();
-        assert_eq!(shell.message, "a takes frame kinds the shell owns");
+        assert_eq!(link.message, "a takes frame kinds of the node's hello");
+        let fleet = check(&[meta("a", &[0x1b..=0x1b])]).unwrap_err();
+        assert_eq!(
+            fleet.message,
+            "a takes frame kinds of the fleet's peer list"
+        );
+        let shell = check(&[meta("a", &[0xb3..=0xb3])]).unwrap_err();
+        assert_eq!(shell.message, "a takes frame kinds of view control");
         const LOUD: parvi_app_kit::Setting = parvi_app_kit::Setting::toggle("loud", "Loud", false);
         let twice = Meta {
             settings: &[LOUD, LOUD],

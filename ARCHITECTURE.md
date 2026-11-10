@@ -50,12 +50,15 @@ files a bead.
 
 ## Node areas
 
-A node area is a name and a build function in `bin/parvi`'s `AREAS`. Built from
-the node's `Setup` (its identity, folder, address, config and event log), it
-answers with an `Area`: its frame kinds, HTTP routes, commands, a channel for
-each `/ws` client, and a stop. Before serving, `node-kit` refuses areas that
-share a name, a frame kind or a command, naming both; kind `0x00`, the hello,
-is the node's own.
+A node area is a `Listing` in `bin/parvi`'s `AREAS`: its name, frame kinds,
+command names and build function, known without building it. Built from the
+node's `Setup` (its identity, folder, address, config and event log), it
+answers with an `Area`: HTTP routes, commands, a channel for each `/ws` client,
+and a stop. Before building, `node-kit` refuses listings that share a name, a
+frame kind or a command, naming both, or that take a kind `core` reserves
+(the hello, the fleet's peer list, view control); a built area whose commands
+are not the ones listed is refused too. `bin/parvi/tests/areas.rs` checks the
+real list, and `parvi kinds` prints who owns which kinds.
 
 - **Frames.** The first byte of a `/ws` frame is its kind. A client's frame
   goes to the channel of the area owning its kind; each channel pushes its own.
@@ -91,8 +94,9 @@ A page is a build function in `bin/parvi-app`'s `PAGES`, held by the shell in
 every node has that area off), its frame kinds, the channels it turns on while
 shown, the asks it answers and its chords. The shell owns the window, the tab
 bar, the dismissal stack, the leader, the status line and the node connection,
-and refuses pages that share an id or a frame kind, take a kind the link or the
-shell owns, or whose `everywhere` chords share a key, naming both.
+and refuses pages that share an id or a frame kind, take a kind `core`
+reserves, or whose `everywhere` chords share a key, naming both;
+`bin/parvi-app/tests/pages.rs` mounts the real list.
 
 - **Host and Hub.** A `Host` is a cheap handle on the `Hub`, the state the
   shell and every page share: the fleet link, settings, status line, toast and

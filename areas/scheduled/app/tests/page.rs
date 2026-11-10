@@ -11,16 +11,13 @@ use std::time::{Duration, Instant};
 use gpui::{Modifiers, TestAppContext, VisualTestContext};
 use parvi_app_kit::Host;
 use parvi_app_kit::link::client::LinkState;
-use parvi_node_kit::{Build, cli};
+use parvi_node_kit::{Listing, cli};
 use parvi_terminals_contract::{Session, SessionList};
 use parvi_testkit::node::Node;
 use parvi_testkit::tmux::{Server, eventually, session_text};
 use serde_json::json;
 
-const AREAS: &[(&str, Build)] = &[
-    (parvi_terminals::NAME, parvi_terminals::build),
-    (parvi_scheduled::NAME, parvi_scheduled::build),
-];
+const AREAS: &[Listing] = &[parvi_terminals::LISTING, parvi_scheduled::LISTING];
 
 /// A running node, on its own thread and runtime.
 struct Running {

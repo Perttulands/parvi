@@ -4,15 +4,12 @@
 #![cfg(unix)]
 
 use axum::http::Method;
-use parvi_node_kit::{Build, NodeClient, cli};
+use parvi_node_kit::{Listing, NodeClient, cli};
 use parvi_testkit::node::Node;
 use parvi_testkit::tmux::{Server, capture, eventually, session_text};
 use serde_json::{Value, json};
 
-const AREAS: &[(&str, Build)] = &[
-    (parvi_terminals::NAME, parvi_terminals::build),
-    (parvi_scheduled::NAME, parvi_scheduled::build),
-];
+const AREAS: &[Listing] = &[parvi_terminals::LISTING, parvi_scheduled::LISTING];
 
 /// A node with terminals and scheduled over a scratch tmux holding `alpha`.
 async fn start(name: &str, extra: &str) -> Option<(Node, Server)> {

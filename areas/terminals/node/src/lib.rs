@@ -35,8 +35,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use parvi_core::Error;
-use parvi_core::frame::Kinds;
-use parvi_node_kit::{Area, BoxFuture, Built, Channel, Client, Command, Failure, Setup};
+use parvi_node_kit::{Area, BoxFuture, Built, Channel, Client, Command, Failure, Listing, Setup};
 use parvi_term::backend::tmux::Socket;
 use parvi_term::{Engine, Sessions};
 use serde::Deserialize;
@@ -48,6 +47,27 @@ use launcher::Launcher;
 
 /// The area's name and config section.
 pub const NAME: &str = "terminals";
+
+/// How `bin/parvi` lists the area.
+pub const LISTING: Listing = Listing {
+    name: NAME,
+    kinds: parvi_terminals_contract::KINDS,
+    commands: &[
+        "session_list",
+        "session_read",
+        "session_send",
+        "session_launch",
+        "session_copy",
+        "session_history",
+        "session_search",
+        "session_keys",
+        "session_rename",
+        "session_kill",
+        "session_mouse",
+        "session_seen",
+    ],
+    build,
+};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -163,14 +183,6 @@ fn own_engine(_holder: Option<&str>) -> Result<Engine> {
 }
 
 impl Area for Terminals {
-    fn name(&self) -> &'static str {
-        NAME
-    }
-
-    fn kinds(&self) -> Kinds {
-        parvi_terminals_contract::KINDS
-    }
-
     fn routes(&self) -> Router {
         Router::new()
             .route("/api/terminal/windows", get(windows))

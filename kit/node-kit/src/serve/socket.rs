@@ -32,7 +32,7 @@ pub(super) async fn connection(mut socket: WebSocket, shared: Arc<Shared>) {
     let mut channels: Vec<(Kinds, Box<dyn Channel>)> = shared
         .areas
         .iter()
-        .filter_map(|area| Some((area.kinds(), area.channel(client)?)))
+        .filter_map(|(listed, area)| Some((listed.kinds, area.channel(client)?)))
         .collect();
     loop {
         let event = {

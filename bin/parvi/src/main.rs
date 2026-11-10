@@ -3,21 +3,16 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
+use parvi::AREAS;
 use parvi_node_kit::identity::Identity;
-use parvi_node_kit::{Build, Config, Options, cli, config, hook, mcp};
-
-/// The node's areas, by name, in the order they are built. Adding an area
-/// adds one line here and one in Cargo.toml.
-const AREAS: &[(&str, Build)] = &[
-    (parvi_terminals::NAME, parvi_terminals::build),
-    (parvi_scheduled::NAME, parvi_scheduled::build),
-];
+use parvi_node_kit::{Config, Options, cli, config, hook, listing, mcp};
 
 const USAGE: &str = "usage:
   parvi serve [--config file] [--listen addr:port]
   parvi mcp [--node addr:port]
   parvi <noun> <verb> [args] [--json] [--node id|url]   the node's commands, e.g. parvi session list
-  parvi hook <url> [--then command...] [payload]        (run by a program's own hook)";
+  parvi hook <url> [--then command...] [payload]        (run by a program's own hook)
+  parvi kinds                                           who owns which frame kinds";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -40,6 +35,10 @@ async fn main() -> Result<()> {
             Ok(())
         }
         "serve" => serve(&args).await,
+        "kinds" => {
+            print!("{}", listing::kinds_table(AREAS));
+            Ok(())
+        }
         "mcp" => {
             let node = match args.as_slice() {
                 [] => parvi_node_kit::address::local(),

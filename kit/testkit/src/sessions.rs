@@ -1,6 +1,6 @@
 //! A stand-in for the area that provides the node's sessions, for a test of
 //! an area that only lists sessions and delivers text to them: no tmux, no
-//! terminals. List `(sessions::NAME, sessions::build)` with the area under
+//! terminals. List [`LISTING`] with the area under
 //! test, then reach the fake through [`crate::node::Node::fake_sessions`].
 //!
 //! It runs no programs: its seats, screens and input refuse, so an area that
@@ -10,15 +10,20 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use anyhow::bail;
-use parvi_node_kit::{Area, BoxFuture, Built, Setup};
+use parvi_node_kit::{Area, BoxFuture, Built, Listing, Setup};
 use parvi_term::backend::Reply;
 use parvi_term::control::PaneId;
 use parvi_term::engine::{Activity, Delivering, PaneStream, SessionInfo};
 use parvi_term::{Renames, Screen, SessionRef, SessionSpec, Sessions, Start};
 use tokio::sync::{broadcast, watch};
 
-/// The stand-in's area name.
-pub const NAME: &str = "fake-sessions";
+/// The stand-in as a test lists it: no frame kinds, no commands.
+pub const LISTING: Listing = Listing {
+    name: "fake-sessions",
+    kinds: &[],
+    commands: &[],
+    build,
+};
 
 /// One text delivered to a session's pane.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -216,10 +221,6 @@ struct Fake {
 }
 
 impl Area for Fake {
-    fn name(&self) -> &'static str {
-        NAME
-    }
-
     fn stop(&self) -> BoxFuture<'_, ()> {
         FAKES.lock().unwrap().remove(&self.node);
         Box::pin(async {})

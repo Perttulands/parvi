@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use axum::http::Method;
 use parvi_core::Error;
-use parvi_node_kit::{Build, Config, NodeClient, Options, Running};
+use parvi_node_kit::{Config, Listing, NodeClient, Options, Running};
 use serde_json::{Value, json};
 
 use crate::fresh_dir;
@@ -23,7 +23,7 @@ impl Node {
     /// Starts a node with `areas` and the config file `config`, on a port
     /// of its own on loopback. Refused as the node refuses: an unknown
     /// section, a bad one, or areas that conflict.
-    pub async fn start(areas: &[(&'static str, Build)], config: &str) -> anyhow::Result<Node> {
+    pub async fn start(areas: &[Listing], config: &str) -> anyhow::Result<Node> {
         let dir = fresh_dir("parvi-node");
         let started = async {
             let config = Config::parse(config, dir.clone())?;

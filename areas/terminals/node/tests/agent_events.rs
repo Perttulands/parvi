@@ -70,7 +70,7 @@ async fn an_agents_report_reaches_the_client_until_it_is_seen() {
         tmux.socket_path(),
         launch
     );
-    let node = Node::start(&[(parvi_terminals::NAME, parvi_terminals::build)], &config)
+    let node = Node::start(&[parvi_terminals::LISTING], &config)
         .await
         .unwrap();
     let addr = node.address();

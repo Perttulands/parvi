@@ -15,14 +15,14 @@ use parvi_app_kit::ask::SessionTarget;
 use parvi_app_kit::link::client::LinkState;
 use parvi_app_kit::{Ask, Host, Mounted, Page, mount};
 use parvi_app_shell::Shell;
-use parvi_node_kit::Build;
+use parvi_node_kit::Listing;
 use parvi_terminals_app::Terminals;
 use parvi_terminals_app::store::sessions::Key;
 use parvi_terminals_contract::SessionList;
 use parvi_testkit::node::Node;
 use parvi_testkit::tmux::Server;
 
-const AREAS: &[(&str, Build)] = &[(parvi_terminals::NAME, parvi_terminals::build)];
+const AREAS: &[Listing] = &[parvi_terminals::LISTING];
 
 thread_local! {
     static PAGE: RefCell<Option<Entity<Terminals>>> = const { RefCell::new(None) };

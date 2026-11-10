@@ -2,15 +2,9 @@
 //! the body, numbers little-endian. Every other kind belongs to a page,
 //! which decodes its own. Pure: decoding and encoding only.
 
-use parvi_core::frame::HELLO;
+pub use parvi_core::frame::NODES;
+use parvi_core::frame::NODES_ON;
 use serde::Deserialize;
-
-/// The serving node's peer list, and each change to it.
-pub const NODES: u8 = 0x03;
-const NODES_ON: u8 = 0x1b;
-
-/// The kinds the link owns: no page may take them.
-pub const OWN: parvi_core::frame::Kinds = &[HELLO..=HELLO, NODES..=NODES, NODES_ON..=NODES_ON];
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Peer {

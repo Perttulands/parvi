@@ -23,7 +23,7 @@ async fn node(tmux: &Tmux, launch: &str) -> Node {
         tmux.socket_path(),
         file
     );
-    Node::start(&[(parvi_terminals::NAME, parvi_terminals::build)], &config)
+    Node::start(&[parvi_terminals::LISTING], &config)
         .await
         .unwrap()
 }
@@ -77,7 +77,7 @@ async fn every_connection_starts_with_the_hello() {
         "[node]\ndevice = \"test-rig\"\n[terminals]\nsocket = {:?}\n",
         dir.join("tmux")
     );
-    let node = Node::start(&[(parvi_terminals::NAME, parvi_terminals::build)], &config)
+    let node = Node::start(&[parvi_terminals::LISTING], &config)
         .await
         .unwrap();
     for _ in 0..2 {
@@ -560,7 +560,7 @@ async fn a_client_sees_and_uses_another_users_server() {
         launch,
         other.socket_path()
     );
-    let node = Node::start(&[(parvi_terminals::NAME, parvi_terminals::build)], &config)
+    let node = Node::start(&[parvi_terminals::LISTING], &config)
         .await
         .unwrap();
     let addr = node.address();

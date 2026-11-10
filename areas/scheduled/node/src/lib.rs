@@ -38,7 +38,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use axum::Router;
-use parvi_node_kit::{Area, BoxFuture, Built, Command, Setup};
+use parvi_node_kit::{Area, BoxFuture, Built, Command, Listing, Setup};
 use parvi_term::Sessions;
 use serde::Deserialize;
 use tokio::task::JoinHandle;
@@ -49,6 +49,24 @@ pub use service::{Create, Error, Invalid, Patch, Runner, Scheduled};
 
 /// The area's name and config section.
 pub const NAME: &str = "scheduled";
+
+/// How `bin/parvi` lists the area. It owns no frame kinds.
+pub const LISTING: Listing = Listing {
+    name: NAME,
+    kinds: &[],
+    commands: &[
+        "scheduled_list",
+        "scheduled_show",
+        "scheduled_create",
+        "scheduled_edit",
+        "scheduled_copy",
+        "scheduled_pause",
+        "scheduled_resume",
+        "scheduled_run",
+        "scheduled_delete",
+    ],
+    build,
+};
 
 /// How long the timer waits for the sessions to be listed before firing
 /// what fell due while the node was down.
@@ -106,10 +124,6 @@ pub fn build(setup: &Setup) -> Result<Built> {
 }
 
 impl Area for ScheduledArea {
-    fn name(&self) -> &'static str {
-        NAME
-    }
-
     fn routes(&self) -> Router {
         routes::routes(self.ctx.scheduled.clone())
     }
