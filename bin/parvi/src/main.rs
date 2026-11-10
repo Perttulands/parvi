@@ -8,7 +8,10 @@ use parvi_node_kit::{Build, Config, Options, cli, config, hook, mcp};
 
 /// The node's areas, by name, in the order they are built. Adding an area
 /// adds one line here and one in Cargo.toml.
-const AREAS: &[(&str, Build)] = &[(parvi_terminals::NAME, parvi_terminals::build)];
+const AREAS: &[(&str, Build)] = &[
+    (parvi_terminals::NAME, parvi_terminals::build),
+    (parvi_scheduled::NAME, parvi_scheduled::build),
+];
 
 const USAGE: &str = "usage:
   parvi serve [--config file] [--listen addr:port]

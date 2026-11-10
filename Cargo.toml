@@ -8,6 +8,8 @@ members = [
   "engine/holder",
   "areas/terminals/contract",
   "areas/terminals/node",
+  "areas/scheduled/contract",
+  "areas/scheduled/node",
   "bin/parvi",
   "kit/app-kit",
   "bin/parvi-app",
