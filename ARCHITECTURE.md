@@ -11,7 +11,8 @@ areas/<area>/
 kit/
     core/       ids (node + local id), the error shape, the frame envelope
     node-kit/   what a node area plugs into: events, config, registration
-    app-kit/    what an app area plugs into: tokens, widgets, node link, Host and Page
+    app-kit/    what an app area plugs into: tokens, widgets (fields, a code editor),
+                node link, Host and Page
     app-shell/  the app's shell: window chrome, tab bar, keys, view control
     testkit/    starts a node holding only the areas a test names
 bin/
