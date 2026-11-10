@@ -1,5 +1,6 @@
 //! State and rules for the Files page.
 pub mod diff;
+pub mod drafts;
 pub mod format;
 pub mod kinds;
 pub mod listing;
