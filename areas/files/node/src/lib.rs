@@ -103,3 +103,78 @@ impl Files {
         bridge::watch(self, id).map(|p| p.borrow().clone())
     }
 }
+
+mod commands;
+mod routes;
+pub use routes::{MAX_BYTES, routes};
+
+use parvi_node_kit::{Area, Built, Listing as AreaListing, Setup};
+use serde::Deserialize;
+
+pub const NAME: &str = "files";
+pub const LISTING: AreaListing = AreaListing {
+    name: NAME,
+    kinds: &[],
+    commands: &[
+        "file_list",
+        "file_read",
+        "file_write",
+        "file_mkdir",
+        "file_move",
+        "file_delete",
+        "file_find",
+        "file_search",
+        "file_copy",
+        "file_resume",
+        "file_transfer",
+    ],
+    build,
+};
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct Section {
+    roots: Option<Vec<PathBuf>>,
+    drops: Option<PathBuf>,
+}
+
+struct FilesArea {
+    files: Arc<Files>,
+    drops: Arc<drops::Drops>,
+    home: Option<PathBuf>,
+}
+
+pub fn build(setup: &Setup) -> anyhow::Result<Built> {
+    let section: Section = setup.config.section(NAME)?;
+    let roots: Vec<PathBuf> = match section.roots {
+        Some(roots) => roots.iter().map(|p| setup.config.path(p)).collect(),
+        None => setup.home.iter().cloned().collect(),
+    };
+    let files = Files::new(setup.node.id.to_string(), &roots, setup.home.as_deref())?
+        .with_events(setup.events.clone());
+    let dir = section
+        .drops
+        .map(|p| setup.config.path(&p))
+        .unwrap_or_else(|| setup.dir.join("drops"));
+    let home = setup.home.clone();
+    Built::then(move |provided| {
+        let users = provided
+            .get::<dyn parvi_term::Sessions>()
+            .map(|sessions| sessions.users())
+            .unwrap_or_default();
+        Ok(Arc::new(FilesArea {
+            files: Arc::new(files),
+            drops: Arc::new(drops::Drops::new(dir, users)),
+            home,
+        }) as Arc<dyn Area>)
+    })
+}
+
+impl Area for FilesArea {
+    fn routes(&self) -> axum::Router {
+        routes::routes(self.files.clone(), self.drops.clone())
+    }
+    fn commands(&self) -> Vec<parvi_node_kit::Command> {
+        commands::commands(self.files.clone(), self.home.clone())
+    }
+}

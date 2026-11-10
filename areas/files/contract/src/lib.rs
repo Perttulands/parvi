@@ -58,6 +58,7 @@ pub struct NodeRoots {
 /// A copy started on this node.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct TransferRequest {
+    #[serde(default)]
     pub node: String,
     pub path: String,
     pub target_node: String,
@@ -77,6 +78,7 @@ pub struct Progress {
 /// One file or folder on the addressed node.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct At {
+    #[serde(default)]
     pub node: String,
     pub path: String,
 }
@@ -84,6 +86,7 @@ pub struct At {
 /// A save may name the version it was edited from.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct SaveAt {
+    #[serde(default)]
     pub node: String,
     pub path: String,
     pub base: Option<String>,
@@ -91,6 +94,7 @@ pub struct SaveAt {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct Search {
+    #[serde(default)]
     pub node: String,
     pub path: String,
     pub q: String,
@@ -98,6 +102,7 @@ pub struct Search {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct Move {
+    #[serde(default)]
     pub node: String,
     pub path: String,
     pub to: String,
@@ -105,6 +110,7 @@ pub struct Move {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct Job {
+    #[serde(default)]
     pub node: String,
     pub id: String,
 }
