@@ -5,7 +5,7 @@
 
 use std::net::SocketAddr;
 use std::process::{Output, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parvi_testkit::process::Node;
 use parvi_testkit::tmux::{Server, capture, eventually};
@@ -40,6 +40,26 @@ async fn parvi(node: SocketAddr, args: &[&str]) -> Output {
         .unwrap()
 }
 
+/// Waits until the node lists session `name` with its panes. A node serves
+/// at once and finds its sessions just after; until a command waits for
+/// that itself (parvi-iay), a test that uses one waits here.
+async fn listed(node: SocketAddr, name: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let out = parvi(node, &["session", "list", "--json"]).await;
+        let list: Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
+        let ready = list["sessions"].as_array().is_some_and(|all| {
+            all.iter()
+                .any(|s| s["name"] == name && s["panes"].as_array().is_some_and(|p| !p.is_empty()))
+        });
+        if ready {
+            return;
+        }
+        assert!(Instant::now() < deadline, "{name} was never listed: {list}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 async fn get(node: SocketAddr, path: &str) -> Value {
     let mut stream = tokio::net::TcpStream::connect(node).await.unwrap();
     let request = format!("GET {path} HTTP/1.1\r\nHost: {node}\r\nConnection: close\r\n\r\n");
@@ -60,6 +80,7 @@ async fn serve_with_only_terminals_answers_health_and_the_session_commands() {
     let node = serve(&tmux);
     let health = get(node.address, "/api/health").await;
     assert_eq!(health["status"], "ok", "{health}");
+    listed(node.address, "alpha").await;
 
     let sent = parvi(
         node.address,
@@ -149,6 +170,7 @@ async fn parvi_mcp_relays_stdio_to_the_node() {
     };
     tmux.new_session("alpha", 100, 30);
     let node = serve(&tmux);
+    listed(node.address, "alpha").await;
     let mut child = tokio::process::Command::new(PARVI)
         .args(["mcp", "--node", &node.address.to_string()])
         .stdin(Stdio::piped())
