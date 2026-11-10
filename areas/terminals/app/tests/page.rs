@@ -1,8 +1,9 @@
 //! The Terminals page in the app against a real node (terminals over a
 //! scratch tmux, started through the testkit): a session attached to a
 //! window takes what is typed and shows its output, and a toy page hands a
-//! reference into that session through the Send ask; other pages read the
-//! sessions the page publishes and open views beside it. Linux and macOS only;
+//! reference into that session through the Send ask and starts sessions
+//! through the Launch ask; other pages read the sessions the page publishes
+//! and open views beside it. Linux and macOS only;
 //! skips without tmux unless `PARVI_REQUIRE_TMUX=1`.
 #![cfg(unix)]
 
@@ -15,6 +16,7 @@ use parvi_app_kit::ask::SessionTarget;
 use parvi_app_kit::link::client::LinkState;
 use parvi_app_kit::{Ask, Host, Mounted, Page, mount};
 use parvi_app_shell::Shell;
+use parvi_core::NodeId;
 use parvi_node_kit::Listing;
 use parvi_terminals_app::Terminals;
 use parvi_terminals_app::store::sessions::Key;
@@ -338,5 +340,56 @@ fn other_pages_read_the_sessions_and_open_views_beside_them(cx: &mut TestAppCont
     cx.update(|_, cx| toy.close_beside("terminals", cx));
     cx.run_until_parked();
     assert!(cx.debug_bounds("terminals-beside").is_none(), "closed");
+    let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
+}
+
+#[gpui::test]
+fn a_page_starts_a_session_in_a_folder_through_launch(cx: &mut TestAppContext) {
+    let Some(running) = start("terminals-page-launch") else {
+        return;
+    };
+    let (shell, cx, settings) = open_with_alpha(&running, "launch", cx);
+    let toy = shell.read_with(cx, |s, _| Host::new(s.hub()).for_page("toy", &[]));
+    let sessions = cx
+        .update(|_, cx| toy.model::<SessionList>(cx))
+        .expect("the hub");
+    let folder = settings.parent().expect("its folder").to_string_lossy();
+    // The suggested name is taken, so the session takes the next free one.
+    let ask = Ask::Launch {
+        node: NodeId(running.node.clone()),
+        folder: folder.to_string(),
+        name: "alpha".into(),
+    };
+    cx.update(|_, cx| toy.ask(ask, cx))
+        .expect("the Terminals page answers it");
+    until(cx, "alpha-2 to be listed in the folder", |cx| {
+        sessions.read_with(cx, |l, _| {
+            l.sessions.iter().any(|s| {
+                s.node == running.node
+                    && s.name == "alpha-2"
+                    && s.cwd.as_deref().is_some_and(|c| c.ends_with(&*folder))
+            })
+        })
+    });
+    // A node the app does not know: the status line says why.
+    let ask = Ask::Launch {
+        node: NodeId("nowhere".into()),
+        folder: "/".into(),
+        name: "lost".into(),
+    };
+    cx.update(|_, cx| toy.ask(ask, cx))
+        .expect("the Terminals page answers it");
+    cx.run_until_parked();
+    let said = shell.read_with(cx, |s, cx| {
+        let status = s.hub().read(cx).status.clone();
+        status.map(|s| (s.text, s.failure))
+    });
+    assert_eq!(
+        said,
+        Some((
+            "Could not start lost: its node is not in the fleet".into(),
+            true
+        ))
+    );
     let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
 }

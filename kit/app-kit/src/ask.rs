@@ -29,6 +29,14 @@ pub enum Ask {
         node: Option<NodeId>,
         part: Option<String>,
     },
+    /// Start a session on `node` in the `folder` checked out there, named
+    /// `name` or the next free name after it. The answering page launches
+    /// it with its own harness and settings and says how it went.
+    Launch {
+        node: NodeId,
+        folder: String,
+        name: String,
+    },
 }
 
 /// A terminal session, wherever it runs: its node, whose tmux server (the
@@ -45,6 +53,7 @@ pub struct SessionTarget {
 pub enum Answers {
     Send,
     OpenPath,
+    Launch,
     /// Reveals of this kind of thing.
     Reveal(&'static str),
 }
@@ -53,7 +62,9 @@ impl Ask {
     /// Whether a page that answers `a` answers this.
     pub fn answered_by(&self, a: &Answers) -> bool {
         match (self, a) {
-            (Ask::Send { .. }, Answers::Send) | (Ask::OpenPath { .. }, Answers::OpenPath) => true,
+            (Ask::Send { .. }, Answers::Send)
+            | (Ask::OpenPath { .. }, Answers::OpenPath)
+            | (Ask::Launch { .. }, Answers::Launch) => true,
             (Ask::Reveal { what, .. }, Answers::Reveal(w)) => what == w,
             _ => false,
         }
@@ -71,6 +82,7 @@ impl Ask {
             Ask::Send { .. } => "send to a session".into(),
             Ask::OpenPath { path, .. } => format!("open {path}"),
             Ask::Reveal { what, id, .. } => format!("show the {what} {id}"),
+            Ask::Launch { folder, .. } => format!("start a session in {folder}"),
         }
     }
 }
@@ -96,5 +108,14 @@ mod tests {
         assert!(run.answered_by(&Answers::Reveal("run")));
         assert!(!run.answered_by(&Answers::Reveal("item")));
         assert_eq!(run.describe(), "show the run r1");
+        let launch = Ask::Launch {
+            node: NodeId("n".into()),
+            folder: "/srv/x".into(),
+            name: "x-1".into(),
+        };
+        assert!(launch.answered_by(&Answers::Launch));
+        assert!(!launch.answered_by(&Answers::Send));
+        assert!(!send.answered_by(&Answers::Launch));
+        assert_eq!(launch.describe(), "start a session in /srv/x");
     }
 }

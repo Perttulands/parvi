@@ -119,7 +119,7 @@ reserves, or whose `everywhere` chords share a key, naming both;
   works from every page, as CHROTE's terminal chords do, and brings its page
   forward when it acts.
 - **Asks.** Pages never depend on each other. An `Ask` (send a reference, open
-  a path, reveal a thing) is plain data that goes to the page declaring it
+  a path, reveal a thing, launch a session in a folder on a node) is plain data that goes to the page declaring it
   answers it; when none does, the asker gets an `unanswered` error and the
   status line says so. View control's `open` reaches pages the same way. A
   beside ask (open a path beside) leaves the asker shown: the answering page

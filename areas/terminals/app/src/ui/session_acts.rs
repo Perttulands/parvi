@@ -6,8 +6,8 @@
 use super::launcher::notify_offered;
 use super::page::{Act, MenuItem, Terminals};
 use crate::store::selection::{Receipt, Sent};
-use crate::store::session_copy;
 use crate::store::sessions::Key;
+use crate::store::{launch, session_copy};
 use gpui::{Context, KeyDownEvent, Window};
 
 /// How a click on a rail row changes the pick: Ctrl (or Cmd) flips it,
@@ -101,6 +101,73 @@ impl Terminals {
             }
             None => self.report(
                 &format!("Could not copy {}: its device is away", k.name),
+                true,
+                None,
+            ),
+        }
+    }
+
+    /// Starts a session another page asked for (`Ask::Launch`): on `node`,
+    /// in `folder`, as `name` or the next free name in its family, with the
+    /// harness last launched (else the node's first) and its kept flags.
+    pub fn launch_asked(&mut self, node: &str, folder: &str, name: &str) {
+        let Some(c) = self.fleet.get(node) else {
+            let why = match self.where_is(node) {
+                Some(p) => format!("{} is away", p.device),
+                None => "its node is not in the fleet".into(),
+            };
+            self.report(&format!("Could not start {name}: {why}"), true, None);
+            return;
+        };
+        let Some(conf) = c.launcher.clone() else {
+            let why = "the node has not said what it can launch yet";
+            self.report(&format!("Could not start {name}: {why}"), true, None);
+            return;
+        };
+        let Some(harness) = (self.settings.last_harness.as_ref())
+            .and_then(|id| conf.harnesses.iter().find(|h| &h.id == id))
+            .or_else(|| conf.harnesses.first())
+            .cloned()
+        else {
+            let why = "the node lists no harness";
+            self.report(&format!("Could not start {name}: {why}"), true, None);
+            return;
+        };
+        if let Some(why) = launch::name_problem(name) {
+            self.report(&format!("Could not start {name}: {why}"), true, None);
+            return;
+        }
+        let taken: Vec<&str> = (c.sessions.iter())
+            .filter(|s| s.user.as_deref().unwrap_or("").is_empty())
+            .map(|s| s.name.as_str())
+            .collect();
+        let name = if taken.contains(&name) {
+            session_copy::next_name(name, &taken)
+        } else {
+            name.to_string()
+        };
+        let flags = (self.settings.flags.get(&harness.id).cloned())
+            .unwrap_or_else(|| harness.flags.clone());
+        let launch = parvi_terminals_contract::Launch {
+            harness: harness.id.clone(),
+            folder: folder.to_string(),
+            name: name.clone(),
+            flags,
+            user: String::new(),
+            notify: self.settings.notify
+                && notify_offered(&harness.command, "")
+                && conf.notify_off.is_none(),
+            size: None,
+        };
+        match self.fleet.launch_on(node, launch) {
+            Some(id) => {
+                let tab = self.settings.workspace.active;
+                self.launches
+                    .insert((node.to_string(), id), (name.clone(), None, tab));
+                self.report(&format!("Starting {name} in {folder}…"), false, None);
+            }
+            None => self.report(
+                &format!("Could not start {name}: its device is away"),
                 true,
                 None,
             ),

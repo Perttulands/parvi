@@ -1319,7 +1319,7 @@ impl Page for Terminals {
     const TITLE: &'static str = "Terminals";
     const AREA: Option<&'static str> = Some(crate::NAME);
     const KINDS: Kinds = parvi_terminals_contract::KINDS;
-    const ANSWERS: &'static [Answers] = &[Answers::Send];
+    const ANSWERS: &'static [Answers] = &[Answers::Send, Answers::Launch];
     const SETTINGS: &'static [Setting] = crate::store::settings::DECLARED;
 
     /// The Settings page changed one of ours: taken, the rest as it is.
@@ -1372,18 +1372,27 @@ impl Page for Terminals {
     }
 
     /// Send to Session with what another page hands over, aimed at the
-    /// session the ask names, else at the focused window's.
+    /// session the ask names, else at the focused window's; or a launch
+    /// another page asks for.
     fn answer(&mut self, ask: Ask, _: &'static str, window: &mut Window, cx: &mut Context<Self>) {
-        if let Ask::Send { reference, target } = ask {
-            let target = match target {
-                Some(t) => Some(Key {
-                    node: t.node.to_string(),
-                    user: t.user,
-                    name: t.name,
-                }),
-                None => self.focused_key(),
-            };
-            self.handoff(Some(reference), target, window, cx);
+        match ask {
+            Ask::Send { reference, target } => {
+                let target = match target {
+                    Some(t) => Some(Key {
+                        node: t.node.to_string(),
+                        user: t.user,
+                        name: t.name,
+                    }),
+                    None => self.focused_key(),
+                };
+                self.handoff(Some(reference), target, window, cx);
+            }
+            Ask::Launch { node, folder, name } => {
+                self.launch_asked(node.as_str(), &folder, &name);
+                self.flush(cx);
+                cx.notify();
+            }
+            _ => {}
         }
     }
 
