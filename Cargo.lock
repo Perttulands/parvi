@@ -4118,6 +4118,7 @@ dependencies = [
  "log",
  "parvi-app-kit",
  "parvi-core",
+ "parvi-scheduled-app",
  "serde",
  "serde_json",
  "tokio",
@@ -4200,6 +4201,26 @@ dependencies = [
  "serde_json",
  "tokio",
  "tower",
+]
+
+[[package]]
+name = "parvi-scheduled-app"
+version = "0.0.1"
+dependencies = [
+ "gpui-pre",
+ "jiff",
+ "parvi-app",
+ "parvi-app-kit",
+ "parvi-core",
+ "parvi-node-kit",
+ "parvi-scheduled",
+ "parvi-scheduled-contract",
+ "parvi-terminals",
+ "parvi-testkit",
+ "serde",
+ "serde_json",
+ "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
