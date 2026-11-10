@@ -34,24 +34,13 @@ pub struct GateRequest {
     pub pick: Option<Value>,
 }
 
-/// Why a gate's request cannot be served.
-#[derive(Debug)]
-pub enum GateRequestError {
-    /// No run, or the gate never asked a human.
-    NotFound(String),
-    /// The gate's latest request was answered or replaced.
-    NotPending,
-    Io(io::Error),
-}
-
-impl From<io::Error> for GateRequestError {
-    fn from(e: io::Error) -> Self {
-        if e.kind() == io::ErrorKind::NotFound {
-            Self::NotFound(e.to_string())
-        } else {
-            Self::Io(e)
-        }
-    }
+fn request_io(error: io::Error) -> crate::Error {
+    let code = if error.kind() == io::ErrorKind::NotFound {
+        "not_found"
+    } else {
+        "io"
+    };
+    crate::Error::new(code, error.to_string())
 }
 
 /// The gate's latest human request while it is pending.
@@ -60,15 +49,18 @@ pub fn pending_request(
     gate: &str,
     events: &[RunEvent],
     criterion: &str,
-) -> Result<GateRequest, GateRequestError> {
-    let status = RunProjection::from_events(events, run)?;
+) -> Result<GateRequest, crate::Error> {
+    let status = RunProjection::from_events(events, run).map_err(request_io)?;
     let request = (events.iter().rev())
         .find(|e| e.kind == "human_input_requested" && e.gate_id == gate)
-        .ok_or_else(|| GateRequestError::NotFound("human gate request not found".into()))?;
+        .ok_or_else(|| crate::Error::new("not_found", "human gate request not found"))?;
     let pending =
         (status.waiting_gates.iter()).any(|g| g.gate_id == gate && g.requested_seq == request.seq);
     if !pending {
-        return Err(GateRequestError::NotPending);
+        return Err(crate::Error::new(
+            "not_pending",
+            "the human gate request is no longer pending",
+        ));
     }
     let input = request.data.get("inputRef");
     let field = |name: &str| {
@@ -99,9 +91,13 @@ pub fn pending_request(
 
 impl Coordinator {
     /// A pending human gate's request on run `id`.
-    pub fn gate_request(&self, id: &str, gate: &str) -> Result<GateRequest, GateRequestError> {
-        let events = self.ledger(id)?.read()?;
-        let mission = self.frozen_mission(id)?;
+    pub fn gate_request(&self, id: &str, gate: &str) -> Result<GateRequest, crate::Error> {
+        let events = self
+            .ledger(id)
+            .map_err(request_io)?
+            .read()
+            .map_err(request_io)?;
+        let mission = self.frozen_mission(id).map_err(request_io)?;
         let criterion = (mission.gates.iter())
             .find(|g| g.id == gate)
             .map(|g| g.criterion.clone())

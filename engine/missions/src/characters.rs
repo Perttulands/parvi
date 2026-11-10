@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::DefinitionError;
+use crate::Error;
 use crate::links;
 
 pub const CHARACTERS_SCHEMA: i64 = 1;
@@ -42,18 +42,25 @@ struct CharactersFile {
 }
 
 /// Reads the characters in a roles directory; none when it has no file.
-pub fn read_characters(roles_dir: &Path) -> Result<Vec<Character>, DefinitionError> {
+pub fn read_characters(roles_dir: &Path) -> Result<Vec<Character>, Error> {
     let text = match links::read_definition(&roles_dir.join(CHARACTERS_FILE)) {
-        Err(DefinitionError::NotFound(_)) => return Ok(Vec::new()),
+        Err(error) if error.code == "not_found" => return Ok(Vec::new()),
         other => other?,
     };
-    let file: CharactersFile = serde_json::from_str(&text)
-        .map_err(|err| DefinitionError::InvalidSource(format!("{CHARACTERS_FILE}: {err}")))?;
+    let file: CharactersFile = serde_json::from_str(&text).map_err(|err| {
+        Error::new(
+            "invalid_definition_source",
+            format!("{CHARACTERS_FILE}: {err}"),
+        )
+    })?;
     if file.schema != CHARACTERS_SCHEMA {
-        return Err(DefinitionError::UnsupportedSchema(format!(
-            "{CHARACTERS_FILE} has schema {}, want {CHARACTERS_SCHEMA}",
-            file.schema
-        )));
+        return Err(Error::new(
+            "unsupported_schema",
+            format!(
+                "{CHARACTERS_FILE} has schema {}, want {CHARACTERS_SCHEMA}",
+                file.schema
+            ),
+        ));
     }
     Ok(file.characters)
 }
@@ -69,44 +76,40 @@ impl CharacterStore {
         Self { dir: dir.into() }
     }
 
-    pub fn list(&self) -> Result<Vec<Character>, crate::AuthoringError> {
+    pub fn list(&self) -> Result<Vec<Character>, crate::Error> {
         let locks = crate::write::locks(&self.dir, "characters");
         let _guard = locks.document.lock().unwrap_or_else(|e| e.into_inner());
-        Ok(read_characters(&self.dir)?)
+        read_characters(&self.dir)
     }
 
-    pub fn create(&self, character: Character) -> Result<Character, crate::AuthoringError> {
+    pub fn create(&self, character: Character) -> Result<Character, crate::Error> {
         self.save(character, true)
     }
 
-    pub fn put(&self, character: Character) -> Result<Character, crate::AuthoringError> {
+    pub fn put(&self, character: Character) -> Result<Character, crate::Error> {
         self.save(character, false)
     }
 
-    pub fn delete(&self, id: &str) -> Result<(), crate::AuthoringError> {
+    pub fn delete(&self, id: &str) -> Result<(), crate::Error> {
         let locks = crate::write::locks(&self.dir, "characters");
         let _guard = locks.document.lock().unwrap_or_else(|e| e.into_inner());
         let mut characters = read_characters(&self.dir)?;
         let index = characters
             .iter()
             .position(|c| c.id == id)
-            .ok_or_else(|| crate::AuthoringError::new("NOT_FOUND", format!("character {id:?}")))?;
+            .ok_or_else(|| crate::Error::new("not_found", format!("character {id:?}")))?;
         characters.remove(index);
         self.write(characters)
     }
 
-    fn save(
-        &self,
-        mut character: Character,
-        create: bool,
-    ) -> Result<Character, crate::AuthoringError> {
+    fn save(&self, mut character: Character, create: bool) -> Result<Character, crate::Error> {
         character.name = character.name.trim().to_owned();
         character.description = character.description.trim().to_owned();
         character.id = character.id.trim().to_owned();
         if character.id.is_empty() {
             character.id = character_id(&character.name);
         }
-        let invalid = |message: String| crate::AuthoringError::new("INVALID_CHARACTER", message);
+        let invalid = |message: String| crate::Error::new("invalid_character", message);
         if character.name.is_empty()
             || !valid_id(&character.id)
             || (!character.agent_id.is_empty() && !valid_id(&character.agent_id))
@@ -142,14 +145,14 @@ impl CharacterStore {
         let mut characters = read_characters(&self.dir)?;
         match (characters.iter().position(|c| c.id == character.id), create) {
             (Some(_), true) => {
-                return Err(crate::AuthoringError::new(
-                    "CHARACTER_EXISTS",
+                return Err(crate::Error::new(
+                    "character_exists",
                     format!("character {:?} exists", character.id),
                 ));
             }
             (None, false) => {
-                return Err(crate::AuthoringError::new(
-                    "NOT_FOUND",
+                return Err(crate::Error::new(
+                    "not_found",
                     format!("character {:?}", character.id),
                 ));
             }
@@ -160,15 +163,15 @@ impl CharacterStore {
         Ok(character)
     }
 
-    fn write(&self, mut characters: Vec<Character>) -> Result<(), crate::AuthoringError> {
+    fn write(&self, mut characters: Vec<Character>) -> Result<(), crate::Error> {
         characters.sort_by_cached_key(|c| (c.name.to_lowercase(), c.id.clone()));
         let mut bytes = serde_json::to_vec_pretty(&CharactersFile {
             schema: CHARACTERS_SCHEMA,
             characters,
         })
-        .map_err(|e| crate::AuthoringError::new("INVALID_CHARACTER", e.to_string()))?;
+        .map_err(|e| crate::Error::new("invalid_character", e.to_string()))?;
         bytes.push(b'\n');
-        crate::write::atomic(&self.dir.join(CHARACTERS_FILE), &bytes)?;
+        crate::write::atomic(&self.dir.join(CHARACTERS_FILE), &bytes).map_err(crate::error::io)?;
         Ok(())
     }
 }
@@ -220,7 +223,7 @@ mod tests {
         );
         std::fs::write(dir.join(CHARACTERS_FILE), r#"{"schema":2,"characters":[]}"#).unwrap();
         assert_eq!(
-            read_characters(&dir).unwrap_err().code(),
+            read_characters(&dir).unwrap_err().code,
             "unsupported_schema"
         );
         std::fs::remove_dir_all(dir).unwrap();

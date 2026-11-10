@@ -57,8 +57,9 @@ fn revision_and_etag_fence_changes_and_noop() {
                 "human:ui"
             )
             .unwrap_err()
-            .code(),
-        "CONFLICT"
+            .code
+            .as_str(),
+        "conflict"
     );
     assert_eq!(store.read_mission("work").unwrap().title, "Next");
 }
@@ -298,7 +299,7 @@ fn join_creates_a_new_input_and_refusals_do_not_edit() {
             "",
         )
         .unwrap_err();
-    assert_eq!(error.code(), "INPUT_OCCUPIED");
+    assert_eq!(error.code.as_str(), "input_occupied");
     assert_eq!(store.mission_edit("join").unwrap().etag, old);
     edit = store
         .patch(
@@ -355,7 +356,7 @@ fn notes_are_author_owned_and_noops_keep_the_etag() {
             },
         )
         .unwrap_err();
-    assert_eq!(stale.code(), "CONFLICT");
+    assert_eq!(stale.code.as_str(), "conflict");
     let wrong = store
         .patch_notes(
             "work",
@@ -367,7 +368,7 @@ fn notes_are_author_owned_and_noops_keep_the_etag() {
             },
         )
         .unwrap_err();
-    assert_eq!(wrong.code(), "NOTE_AUTHOR_MISMATCH");
+    assert_eq!(wrong.code.as_str(), "note_author_mismatch");
     let noop = store
         .patch_notes(
             "work",
@@ -406,22 +407,25 @@ fn layout_changes_are_etag_checked_and_keep_other_layers() {
         store
             .patch_layout("work", "*", LayoutPatch::Edges(vec![]))
             .unwrap_err()
-            .code(),
-        "NOT_FOUND"
+            .code
+            .as_str(),
+        "not_found"
     );
     assert_eq!(
         store
             .patch_layout("work", "stale", LayoutPatch::Nodes(vec![]))
             .unwrap_err()
-            .code(),
-        "NOT_FOUND"
+            .code
+            .as_str(),
+        "not_found"
     );
     assert_eq!(
         store
             .patch_layout("work", "stale", LayoutPatch::Edges(vec![]))
             .unwrap_err()
-            .code(),
-        "NOT_FOUND"
+            .code
+            .as_str(),
+        "not_found"
     );
     let nodes = store
         .patch_layout(
@@ -450,8 +454,9 @@ fn layout_changes_are_etag_checked_and_keep_other_layers() {
         store
             .patch_layout("work", &nodes.etag, LayoutPatch::Nodes(vec![]))
             .unwrap_err()
-            .code(),
-        "CONFLICT"
+            .code
+            .as_str(),
+        "conflict"
     );
 }
 
@@ -505,7 +510,7 @@ fn type_changes_require_an_explicit_choice_before_dropping_staffed_slots() {
             "",
         )
         .unwrap_err();
-    assert_eq!(error.code(), "SLOT_CHOICE_REQUIRED");
+    assert_eq!(error.code.as_str(), "slot_choice_required");
     edit = store
         .patch(
             "work",
@@ -569,7 +574,7 @@ fn staffing_is_validated_and_repeated_assignment_is_a_noop() {
             "",
         )
         .unwrap_err();
-    assert_eq!(bad.code(), "INVALID_SLOT_SETTINGS");
+    assert_eq!(bad.code.as_str(), "invalid_slot_settings");
 }
 
 #[test]
@@ -667,8 +672,9 @@ fn input_card_updates_validate_declarations_and_preserve_identity() {
         store
             .patch("work", pre(&edit), Patch::UpdateInputCard(invalid), "")
             .unwrap_err()
-            .code(),
-        "INVALID_MISSION_OUTPUT"
+            .code
+            .as_str(),
+        "invalid_mission_output"
     );
 }
 
@@ -909,7 +915,7 @@ fn concurrent_mission_edits_from_distinct_stores_do_not_both_win() {
     assert_eq!(
         results
             .iter()
-            .filter(|r| r.as_ref().is_err_and(|e| e.code() == "CONFLICT"))
+            .filter(|r| r.as_ref().is_err_and(|e| e.code.as_str() == "conflict"))
             .count(),
         1
     );
@@ -984,7 +990,7 @@ fn removing_code_kind_clears_check_and_relative_files_are_refused() {
             "",
         )
         .unwrap_err();
-    assert_eq!(invalid.code(), "RELATIVE_FILE_REFERENCE");
+    assert_eq!(invalid.code.as_str(), "relative_file_reference");
     edit = store
         .patch(
             "work",
@@ -1230,15 +1236,17 @@ fn placement_refuses_a_full_bounded_search_and_a_foreign_layout() {
     assert_eq!(
         free_layout_position(&mission, Some(&layout), 112, 112)
             .unwrap_err()
-            .code(),
-        "CONFLICT"
+            .code
+            .as_str(),
+        "conflict"
     );
     layout.mission_id = "other".into();
     assert_eq!(
         free_layout_position(&mission, Some(&layout), 0, 0)
             .unwrap_err()
-            .code(),
-        "CONFLICT"
+            .code
+            .as_str(),
+        "conflict"
     );
 }
 
@@ -1377,7 +1385,7 @@ fn invalid_restore_leaves_mission_and_layout_untouched() {
             "",
         )
         .unwrap_err();
-    assert_eq!(err.code(), "INVALID_NODE_RESTORE");
+    assert_eq!(err.code.as_str(), "invalid_node_restore");
     assert_eq!(store.mission_edit("work").unwrap().etag, edit.etag);
     assert!(store.read_layout("work").unwrap().is_none());
 }
@@ -1583,15 +1591,17 @@ fn notes_refuse_missing_targets_large_entries_and_old_mission_ids() {
         store
             .patch_notes("work", "*", patch("missing", "x".into()))
             .unwrap_err()
-            .code(),
-        "NOT_FOUND"
+            .code
+            .as_str(),
+        "not_found"
     );
     assert_eq!(
         store
             .patch_notes("work", "*", patch("mission", "x".repeat(64 * 1024 + 1)))
             .unwrap_err()
-            .code(),
-        "NOTE_TOO_LARGE"
+            .code
+            .as_str(),
+        "note_too_large"
     );
     let old_notes = store
         .patch_notes("work", "*", patch("mission", "Old".into()))
@@ -1603,8 +1613,9 @@ fn notes_refuse_missing_targets_large_entries_and_old_mission_ids() {
         store
             .patch_notes("work", &old_notes.etag, patch("mission", "Stale".into()))
             .unwrap_err()
-            .code(),
-        "CONFLICT"
+            .code
+            .as_str(),
+        "conflict"
     );
     let new_notes = store
         .patch_notes("work", "*", patch("mission", "New".into()))
@@ -1643,8 +1654,9 @@ fn restore_port_refusals_preserve_revision_and_etag() {
         store
             .patch("work", pre(&edit), repeated, "")
             .unwrap_err()
-            .code(),
-        "INVALID_NODE_RESTORE"
+            .code
+            .as_str(),
+        "invalid_node_restore"
     );
     let invalid = Patch::RestorePort {
         formation_id: formation.id.clone(),
@@ -1657,8 +1669,9 @@ fn restore_port_refusals_preserve_revision_and_etag() {
         store
             .patch("work", pre(&edit), invalid, "")
             .unwrap_err()
-            .code(),
-        "INVALID_PORT_DIRECTION"
+            .code
+            .as_str(),
+        "invalid_port_direction"
     );
     assert_eq!(store.mission_edit("work").unwrap().etag, edit.etag);
 }
@@ -1790,8 +1803,9 @@ fn swapping_staffing_is_one_revision_and_reversible_across_formations() {
         store
             .patch("work", pre(&edit), invalid, "")
             .unwrap_err()
-            .code(),
-        "NOT_FOUND"
+            .code
+            .as_str(),
+        "not_found"
     );
     assert_eq!(
         store.read_mission("work").unwrap().formations[0].slots[0].agent_id,

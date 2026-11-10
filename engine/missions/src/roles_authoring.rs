@@ -1,5 +1,5 @@
 //! Role mutations share the mission write lock with usage checks.
-use crate::{AuthoringError, RoleCard, RoleStore};
+use crate::{Error, RoleCard, RoleStore};
 use toml_edit::{Array, DocumentMut, value};
 
 #[derive(Clone, Debug)]
@@ -26,26 +26,26 @@ fn new_document(card: &RoleCard) -> DocumentMut {
 }
 
 impl RoleStore {
-    pub(crate) fn source(&self, id: &str) -> Result<String, AuthoringError> {
+    pub(crate) fn source(&self, id: &str) -> Result<String, Error> {
         crate::roles::check_role_id(id)
-            .map_err(|e| AuthoringError::new("INVALID_AGENT_CARD", e.to_string()))?;
+            .map_err(|e| Error::new("invalid_agent_card", e.to_string()))?;
         match crate::links::read_definition(&self.dir().join(format!("{id}.toml"))) {
             Ok(raw) => Ok(raw),
-            Err(crate::DefinitionError::NotFound(_)) => crate::roles::builtin(id)
+            Err(error) if error.code == "not_found" => crate::roles::builtin(id)
                 .map(|c| new_document(&c).to_string())
-                .ok_or_else(|| AuthoringError::new("NOT_FOUND", format!("role {id:?}"))),
-            Err(e) => Err(e.into()),
+                .ok_or_else(|| Error::new("not_found", format!("role {id:?}"))),
+            Err(e) => Err(e),
         }
     }
 
-    pub fn role_edit(&self, id: &str) -> Result<RoleEdit, AuthoringError> {
+    pub fn role_edit(&self, id: &str) -> Result<RoleEdit, Error> {
         let root = self.dir().parent().unwrap_or(self.dir());
         let locks = crate::write::locks(root, &format!("role:{id}"));
         let _reference_guard = locks.references.read().unwrap_or_else(|e| e.into_inner());
         let _guard = locks.document.lock().unwrap_or_else(|e| e.into_inner());
         self.role_edit_locked(id)
     }
-    fn role_edit_locked(&self, id: &str) -> Result<RoleEdit, AuthoringError> {
+    fn role_edit_locked(&self, id: &str) -> Result<RoleEdit, Error> {
         let raw = self.source(id)?;
         Ok(RoleEdit {
             card: self.read(id)?,
@@ -53,16 +53,16 @@ impl RoleStore {
         })
     }
 
-    pub fn create(&self, mut card: RoleCard) -> Result<RoleEdit, AuthoringError> {
+    pub fn create(&self, mut card: RoleCard) -> Result<RoleEdit, Error> {
         crate::roles::check_role_id(&card.id)
-            .map_err(|e| AuthoringError::new("INVALID_AGENT_CARD", e.to_string()))?;
+            .map_err(|e| Error::new("invalid_agent_card", e.to_string()))?;
         let root = self.dir().parent().unwrap_or(self.dir());
         let locks = crate::write::locks(root, &format!("role:{}", card.id));
         let _reference_guard = locks.references.read().unwrap_or_else(|e| e.into_inner());
         let _guard = locks.document.lock().unwrap_or_else(|e| e.into_inner());
         let path = self.dir().join(format!("{}.toml", card.id));
         if crate::roles::builtin(&card.id).is_some() || std::fs::symlink_metadata(&path).is_ok() {
-            return Err(AuthoringError::new("ALREADY_EXISTS", "role already exists"));
+            return Err(Error::new("already_exists", "role already exists"));
         }
         if card.kind.trim().is_empty() {
             card.kind = "specialist".into();
@@ -74,19 +74,14 @@ impl RoleStore {
         card.builtin = false;
         card.notes.clear();
         let raw = new_document(&card).to_string();
-        crate::write::atomic(&path, raw.as_bytes())?;
+        crate::write::atomic(&path, raw.as_bytes()).map_err(crate::error::io)?;
         Ok(RoleEdit {
             card,
             etag: crate::authoring::etag(&raw),
         })
     }
 
-    pub fn edit(
-        &self,
-        id: &str,
-        expected_etag: &str,
-        next: RoleCard,
-    ) -> Result<RoleEdit, AuthoringError> {
+    pub fn edit(&self, id: &str, expected_etag: &str, next: RoleCard) -> Result<RoleEdit, Error> {
         let root = self.dir().parent().unwrap_or(self.dir());
         let locks = crate::write::locks(root, &format!("role:{id}"));
         let _reference_guard = locks.references.read().unwrap_or_else(|e| e.into_inner());
@@ -101,12 +96,9 @@ impl RoleStore {
         next: RoleCard,
         actor: &str,
         text: &str,
-    ) -> Result<RoleEdit, AuthoringError> {
+    ) -> Result<RoleEdit, Error> {
         if text.trim().is_empty() {
-            return Err(AuthoringError::new(
-                "INVALID_AGENT_CARD",
-                "note text is empty",
-            ));
+            return Err(Error::new("invalid_agent_card", "note text is empty"));
         }
         let root = self.dir().parent().unwrap_or(self.dir());
         let locks = crate::write::locks(root, &format!("role:{id}"));
@@ -120,7 +112,7 @@ impl RoleStore {
         expected_etag: &str,
         mut next: RoleCard,
         note: Option<(&str, &str)>,
-    ) -> Result<RoleEdit, AuthoringError> {
+    ) -> Result<RoleEdit, Error> {
         let current = self.role_edit_locked(id)?;
         next.builtin = current.card.builtin;
         if next.display_name != current.card.display_name {
@@ -136,31 +128,25 @@ impl RoleStore {
             }
         }
         if expected_etag.is_empty() {
-            return Err(AuthoringError::new(
-                "PRECONDITION_REQUIRED",
-                "role ETag is required",
-            ));
+            return Err(Error::new("precondition_required", "role ETag is required"));
         }
         if expected_etag != current.etag {
-            return Err(AuthoringError::new("CONFLICT", "role changed"));
+            return Err(Error::new("conflict", "role changed"));
         }
         if next.id != id
             || next.kind.trim().is_empty()
             || !["", "active", "retired"].contains(&next.status.as_str())
             || next.notes != current.card.notes
         {
-            return Err(AuthoringError::new(
-                "INVALID_AGENT_CARD",
-                "invalid role card",
-            ));
+            return Err(Error::new("invalid_agent_card", "invalid role card"));
         }
         if next == current.card && note.is_none() {
             return Ok(current);
         }
         let raw = self.source(id)?;
-        let mut doc: DocumentMut = raw.parse().map_err(|e: toml_edit::TomlError| {
-            AuthoringError::new("INVALID_AGENT_CARD", e.to_string())
-        })?;
+        let mut doc: DocumentMut = raw
+            .parse()
+            .map_err(|e: toml_edit::TomlError| Error::new("invalid_agent_card", e.to_string()))?;
         let has_extra = doc["card"].as_table().is_some_and(|card| {
             card.iter().any(|(key, _)| {
                 !["id", "display_name", "kind", "summary", "tags", "status"].contains(&key)
@@ -172,13 +158,13 @@ impl RoleStore {
         {
             let path = self.dir().join(format!("{id}.toml"));
             if std::fs::symlink_metadata(&path).is_ok() {
-                std::fs::remove_file(path)?;
+                std::fs::remove_file(path).map_err(crate::error::io)?;
             }
             return self.role_edit_locked(id);
         }
         let table = doc["card"]
             .as_table_mut()
-            .ok_or_else(|| AuthoringError::new("INVALID_AGENT_CARD", "missing card"))?;
+            .ok_or_else(|| Error::new("invalid_agent_card", "missing card"))?;
         for (key, before, after) in [
             (
                 "display_name",
@@ -213,7 +199,8 @@ impl RoleStore {
             crate::authoring_create::append(&mut doc, "note", &entry)?;
         }
         let raw = doc.to_string();
-        crate::write::atomic(&self.dir().join(format!("{id}.toml")), raw.as_bytes())?;
+        crate::write::atomic(&self.dir().join(format!("{id}.toml")), raw.as_bytes())
+            .map_err(crate::error::io)?;
         Ok(RoleEdit {
             card: self.read(id)?,
             etag: crate::authoring::etag(&raw),
@@ -226,12 +213,9 @@ impl RoleStore {
         expected_etag: &str,
         actor: &str,
         text: &str,
-    ) -> Result<RoleEdit, AuthoringError> {
+    ) -> Result<RoleEdit, Error> {
         if text.is_empty() {
-            return Err(AuthoringError::new(
-                "INVALID_AGENT_CARD",
-                "note text is empty",
-            ));
+            return Err(Error::new("invalid_agent_card", "note text is empty"));
         }
         let root = self.dir().parent().unwrap_or(self.dir());
         let locks = crate::write::locks(root, &format!("role:{id}"));
@@ -239,18 +223,15 @@ impl RoleStore {
         let _guard = locks.document.lock().unwrap_or_else(|e| e.into_inner());
         let current = self.role_edit_locked(id)?;
         if expected_etag.is_empty() {
-            return Err(AuthoringError::new(
-                "PRECONDITION_REQUIRED",
-                "role ETag is required",
-            ));
+            return Err(Error::new("precondition_required", "role ETag is required"));
         }
         if expected_etag != current.etag {
-            return Err(AuthoringError::new("CONFLICT", "role changed"));
+            return Err(Error::new("conflict", "role changed"));
         }
         let raw = self.source(id)?;
-        let mut doc: DocumentMut = raw.parse().map_err(|e: toml_edit::TomlError| {
-            AuthoringError::new("INVALID_AGENT_CARD", e.to_string())
-        })?;
+        let mut doc: DocumentMut = raw
+            .parse()
+            .map_err(|e: toml_edit::TomlError| Error::new("invalid_agent_card", e.to_string()))?;
         let actor = actor.trim();
         let note = crate::RoleNote {
             ts: crate::authoring::now()?,
@@ -263,19 +244,20 @@ impl RoleStore {
         };
         crate::authoring_create::append(&mut doc, "note", &note)?;
         let raw = doc.to_string();
-        crate::write::atomic(&self.dir().join(format!("{id}.toml")), raw.as_bytes())?;
+        crate::write::atomic(&self.dir().join(format!("{id}.toml")), raw.as_bytes())
+            .map_err(crate::error::io)?;
         Ok(RoleEdit {
             card: self.read(id)?,
             etag: crate::authoring::etag(&raw),
         })
     }
-    pub fn retire(&self, id: &str, etag: &str) -> Result<RoleEdit, AuthoringError> {
+    pub fn retire(&self, id: &str, etag: &str) -> Result<RoleEdit, Error> {
         self.status(id, etag, "retired")
     }
-    pub fn restore(&self, id: &str, etag: &str) -> Result<RoleEdit, AuthoringError> {
+    pub fn restore(&self, id: &str, etag: &str) -> Result<RoleEdit, Error> {
         self.status(id, etag, "active")
     }
-    fn status(&self, id: &str, etag: &str, status: &str) -> Result<RoleEdit, AuthoringError> {
+    fn status(&self, id: &str, etag: &str, status: &str) -> Result<RoleEdit, Error> {
         let root = self.dir().parent().unwrap_or(self.dir());
         let locks = crate::write::locks(root, &format!("role:{id}"));
         let _reference_guard = locks.references.read().unwrap_or_else(|e| e.into_inner());
@@ -284,15 +266,15 @@ impl RoleStore {
         card.status = status.into();
         self.edit_locked(id, etag, card, None)
     }
-    pub fn delete(&self, id: &str, expected_etag: &str) -> Result<(), AuthoringError> {
+    pub fn delete(&self, id: &str, expected_etag: &str) -> Result<(), Error> {
         let root = self.dir().parent().unwrap_or(self.dir());
         let locks = crate::write::locks(root, &format!("role:{id}"));
         let _reference_guard = locks.references.write().unwrap_or_else(|e| e.into_inner());
         let _guard = locks.document.lock().unwrap_or_else(|e| e.into_inner());
         let report = self.usage_locked(id)?;
         if !report.usage.is_empty() {
-            return Err(AuthoringError::new(
-                "ROLE_IN_USE",
+            return Err(Error::new(
+                "role_in_use",
                 format!(
                     "role {id:?} staffs {} slot{}: {}; restaff them, or retire the role instead",
                     report.usage.len(),
@@ -324,29 +306,23 @@ impl RoleStore {
             ));
         }
         if !report.complete {
-            return Err(AuthoringError::new(
-                "ROLE_USAGE_INCOMPLETE",
+            return Err(Error::new(
+                "role_usage_incomplete",
                 "some missions cannot be read",
             ));
         }
         let current = self.role_edit_locked(id)?;
         if expected_etag.is_empty() {
-            return Err(AuthoringError::new(
-                "PRECONDITION_REQUIRED",
-                "role ETag is required",
-            ));
+            return Err(Error::new("precondition_required", "role ETag is required"));
         }
         if expected_etag != current.etag {
-            return Err(AuthoringError::new("CONFLICT", "role changed"));
+            return Err(Error::new("conflict", "role changed"));
         }
         let path = self.dir().join(format!("{id}.toml"));
         if std::fs::symlink_metadata(&path).is_err() && current.card.builtin {
-            return Err(AuthoringError::new(
-                "BUILTIN_ROLE",
-                "built-in role has no card",
-            ));
+            return Err(Error::new("builtin_role", "built-in role has no card"));
         }
-        std::fs::remove_file(path)?;
+        std::fs::remove_file(path).map_err(crate::error::io)?;
         Ok(())
     }
 }
@@ -382,8 +358,9 @@ mod tests {
             store
                 .edit_with_note("writer", &original.etag, changed, "agent:test", "stale")
                 .unwrap_err()
-                .code(),
-            "CONFLICT"
+                .code
+                .as_str(),
+            "conflict"
         );
         assert_eq!(store.read("writer").unwrap().notes.len(), 1);
         std::fs::remove_dir_all(dir).unwrap();

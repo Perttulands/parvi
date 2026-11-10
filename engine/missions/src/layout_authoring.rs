@@ -1,5 +1,5 @@
 //! Revision-associated canvas positions and wire lanes.
-use crate::{AuthoringError, Layout, LayoutEdge, LayoutNode, Store};
+use crate::{Error, Layout, LayoutEdge, LayoutNode, Store};
 use toml_edit::{DocumentMut, value};
 
 #[derive(Clone, Debug)]
@@ -14,18 +14,18 @@ pub struct LayoutEdit {
 }
 
 impl Store {
-    pub fn layout_edit(&self, selector: &str) -> Result<LayoutEdit, AuthoringError> {
+    pub fn layout_edit(&self, selector: &str) -> Result<LayoutEdit, Error> {
         let scope = crate::write::locks(self.root(), "scope");
         let _reference_guard = scope.references.read().unwrap_or_else(|e| e.into_inner());
         let slug = self.resolve(selector)?;
         let locks = crate::write::locks(self.root(), &format!("mission:{slug}"));
         let _document_guard = locks.document.lock().unwrap_or_else(|e| e.into_inner());
         if self.resolve(selector)? != slug {
-            return Err(AuthoringError::new("CONFLICT", "mission selector changed"));
+            return Err(Error::new("conflict", "mission selector changed"));
         }
         self.layout_edit_locked(&slug)
     }
-    fn layout_edit_locked(&self, slug: &str) -> Result<LayoutEdit, AuthoringError> {
+    fn layout_edit_locked(&self, slug: &str) -> Result<LayoutEdit, Error> {
         let mission = self.read_mission(slug)?;
         let path = self
             .root()
@@ -35,17 +35,14 @@ impl Store {
             Ok(raw) => {
                 let layout = Layout::parse(&raw)?;
                 if layout.mission_id != mission.id {
-                    return Err(AuthoringError::new(
-                        "CONFLICT",
-                        "layout belongs to another mission",
-                    ));
+                    return Err(Error::new("conflict", "layout belongs to another mission"));
                 }
                 Ok(LayoutEdit {
                     layout,
                     etag: crate::authoring::etag(&raw),
                 })
             }
-            Err(crate::DefinitionError::NotFound(_)) => Ok(LayoutEdit {
+            Err(error) if error.code == "not_found" => Ok(LayoutEdit {
                 layout: Layout {
                     schema: 1,
                     mission_id: mission.id,
@@ -54,7 +51,7 @@ impl Store {
                 },
                 etag: "*".into(),
             }),
-            Err(e) => Err(e.into()),
+            Err(e) => Err(e),
         }
     }
     pub fn patch_layout(
@@ -62,44 +59,43 @@ impl Store {
         selector: &str,
         expected_etag: &str,
         patch: LayoutPatch,
-    ) -> Result<LayoutEdit, AuthoringError> {
+    ) -> Result<LayoutEdit, Error> {
         let scope = crate::write::locks(self.root(), "scope");
         let _reference_guard = scope.references.read().unwrap_or_else(|e| e.into_inner());
         let slug = self.resolve(selector)?;
         let locks = crate::write::locks(self.root(), &format!("mission:{slug}"));
         let _document_guard = locks.document.lock().unwrap_or_else(|e| e.into_inner());
         if self.resolve(selector)? != slug {
-            return Err(AuthoringError::new("CONFLICT", "mission selector changed"));
+            return Err(Error::new("conflict", "mission selector changed"));
         }
         let mission = self.read_mission(&slug)?;
         let current = self.layout_edit_locked(&slug)?;
         if expected_etag.is_empty() {
-            return Err(AuthoringError::new(
-                "PRECONDITION_REQUIRED",
+            return Err(Error::new(
+                "precondition_required",
                 "layout ETag is required",
             ));
         }
         if current.etag == "*" && (expected_etag != "*" || matches!(patch, LayoutPatch::Edges(_))) {
-            return Err(AuthoringError::new("NOT_FOUND", "layout"));
+            return Err(Error::new("not_found", "layout"));
         }
         if current.etag != expected_etag {
-            return Err(AuthoringError::new("CONFLICT", "layout changed"));
+            return Err(Error::new("conflict", "layout changed"));
         }
         let path = self
             .root()
             .join("layout")
             .join(format!("{slug}.layout.toml"));
-        let mut doc: DocumentMut = if expected_etag == "*" {
-            let mut doc = DocumentMut::new();
-            doc["schema"] = value(1);
-            doc
-        } else {
-            crate::links::read_definition(&path)?
-                .parse()
-                .map_err(|e: toml_edit::TomlError| {
-                    AuthoringError::new("INVALID_DEFINITION", e.to_string())
-                })?
-        };
+        let mut doc: DocumentMut =
+            if expected_etag == "*" {
+                let mut doc = DocumentMut::new();
+                doc["schema"] = value(1);
+                doc
+            } else {
+                crate::links::read_definition(&path)?.parse().map_err(
+                    |e: toml_edit::TomlError| Error::new("invalid_definition", e.to_string()),
+                )?
+            };
         crate::write::table_arrays(
             &mut doc,
             match &patch {
@@ -151,7 +147,7 @@ impl Store {
         );
         let raw = doc.to_string();
         let layout = Layout::parse(&raw)?;
-        crate::write::atomic(&path, raw.as_bytes())?;
+        crate::write::atomic(&path, raw.as_bytes()).map_err(crate::error::io)?;
         Ok(LayoutEdit {
             layout,
             etag: crate::authoring::etag(&raw),

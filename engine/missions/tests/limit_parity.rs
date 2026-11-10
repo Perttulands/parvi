@@ -689,11 +689,11 @@ fn a_human_gate_quotes_its_input_and_the_attempts_keep_each_answer() {
     assert_eq!(run.settle().status, "picked", "{}", run.ledger_text());
     assert!(matches!(
         run.c.gate_request(&run.id, "gate_review"),
-        Err(parvi_missions::GateRequestError::NotPending)
+        Err(error) if error.code == "not_pending"
     ));
     assert!(matches!(
         run.c.gate_request(&run.id, "gate_nowhere"),
-        Err(parvi_missions::GateRequestError::NotFound(_))
+        Err(error) if error.code == "not_found"
     ));
     let work = &run.c.attempts(&run.id, Some("fmn_work")).unwrap().steps[0];
     let answers: Vec<_> = (work.attempts.iter())

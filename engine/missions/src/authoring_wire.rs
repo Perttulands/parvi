@@ -1,5 +1,5 @@
 //! Wiring checks and the join-on-wire operation.
-use crate::{AuthoringError, Connection, Mission, Patch, Port};
+use crate::{Connection, Error, Mission, Patch, Port};
 use toml_edit::{DocumentMut, Item};
 
 fn endpoint<'a>(mission: &Mission, endpoint: &'a str, output: bool) -> Option<&'a str> {
@@ -12,11 +12,7 @@ fn endpoint<'a>(mission: &Mission, endpoint: &'a str, output: bool) -> Option<&'
         .then(|| crate::graph::endpoint_node(endpoint))
 }
 
-pub(crate) fn apply(
-    doc: &mut DocumentMut,
-    mission: &Mission,
-    patch: Patch,
-) -> Result<(), AuthoringError> {
+pub(crate) fn apply(doc: &mut DocumentMut, mission: &Mission, patch: Patch) -> Result<(), Error> {
     match patch {
         Patch::RewireConnection {
             from,
@@ -29,7 +25,7 @@ pub(crate) fn apply(
                 .connections
                 .iter()
                 .find(|c| c.from == from && c.to == previous_to)
-                .ok_or_else(|| AuthoringError::new("NOT_FOUND", "connection"))?;
+                .ok_or_else(|| Error::new("not_found", "connection"))?;
             let mut remaining = mission.clone();
             remaining
                 .connections
@@ -58,7 +54,7 @@ pub(crate) fn apply(
                     .connections
                     .iter()
                     .find(|c| c.id == old.id)
-                    .ok_or_else(|| AuthoringError::new("NOT_FOUND", "rewired connection"))?
+                    .ok_or_else(|| Error::new("not_found", "rewired connection"))?
                     .to
                     .as_str();
                 if previous_to == actual_to
@@ -67,20 +63,20 @@ pub(crate) fn apply(
                         .iter()
                         .any(|c| c.from == previous_to || c.to == previous_to)
                 {
-                    return Err(AuthoringError::new(
-                        "INPUT_OCCUPIED",
+                    return Err(Error::new(
+                        "input_occupied",
                         "previous input remains in use",
                     ));
                 }
                 let (formation_id, port_id) = previous_to
                     .split_once(':')
-                    .ok_or_else(|| AuthoringError::new("NOT_FOUND", "previous input"))?;
+                    .ok_or_else(|| Error::new("not_found", "previous input"))?;
                 if !remaining
                     .formations
                     .iter()
                     .any(|f| f.id == formation_id && f.inputs.iter().any(|p| p.id == port_id))
                 {
-                    return Err(AuthoringError::new("NOT_FOUND", "previous input"));
+                    return Err(Error::new("not_found", "previous input"));
                 }
                 let formation = doc["formation"]
                     .as_array_of_tables_mut()
@@ -88,15 +84,15 @@ pub(crate) fn apply(
                         a.iter_mut()
                             .find(|t| t.get("id").and_then(Item::as_str) == Some(formation_id))
                     })
-                    .ok_or_else(|| AuthoringError::new("NOT_FOUND", "formation"))?;
+                    .ok_or_else(|| Error::new("not_found", "formation"))?;
                 let ports = formation
                     .get_mut("input")
-                    .ok_or_else(|| AuthoringError::new("NOT_FOUND", "previous input"))?;
+                    .ok_or_else(|| Error::new("not_found", "previous input"))?;
                 if let Some(tables) = ports.as_array_of_tables_mut() {
                     let index = tables
                         .iter()
                         .position(|t| t.get("id").and_then(Item::as_str) == Some(port_id))
-                        .ok_or_else(|| AuthoringError::new("NOT_FOUND", "previous input"))?;
+                        .ok_or_else(|| Error::new("not_found", "previous input"))?;
                     tables.remove(index);
                 } else if let Some(array) = ports.as_array_mut() {
                     let index = array
@@ -107,10 +103,10 @@ pub(crate) fn apply(
                                 .and_then(|v| v.as_str())
                                 == Some(port_id)
                         })
-                        .ok_or_else(|| AuthoringError::new("NOT_FOUND", "previous input"))?;
+                        .ok_or_else(|| Error::new("not_found", "previous input"))?;
                     array.remove(index);
                 } else {
-                    return Err(AuthoringError::new("NOT_FOUND", "previous input"));
+                    return Err(Error::new("not_found", "previous input"));
                 }
             }
         }
@@ -118,14 +114,14 @@ pub(crate) fn apply(
             let tables = doc
                 .get_mut("connection")
                 .and_then(Item::as_array_of_tables_mut)
-                .ok_or_else(|| AuthoringError::new("NOT_FOUND", "connection"))?;
+                .ok_or_else(|| Error::new("not_found", "connection"))?;
             let index = tables
                 .iter()
                 .position(|t| {
                     t.get("from").and_then(Item::as_str) == Some(&from)
                         && t.get("to").and_then(Item::as_str) == Some(&to)
                 })
-                .ok_or_else(|| AuthoringError::new("NOT_FOUND", "connection"))?;
+                .ok_or_else(|| Error::new("not_found", "connection"))?;
             tables.remove(index);
         }
         Patch::WireConnection {
@@ -135,24 +131,18 @@ pub(crate) fn apply(
             join_if_occupied,
         } => {
             let from_node = endpoint(mission, &from, true)
-                .ok_or_else(|| AuthoringError::new("NOT_FOUND", "source port"))?;
+                .ok_or_else(|| Error::new("not_found", "source port"))?;
             let to_node = endpoint(mission, &to, false)
-                .ok_or_else(|| AuthoringError::new("NOT_FOUND", "target port"))?;
+                .ok_or_else(|| Error::new("not_found", "target port"))?;
             if from_node == to_node {
-                return Err(AuthoringError::new(
-                    "SELF_WIRE",
-                    "a node cannot wire to itself",
-                ));
+                return Err(Error::new("self_wire", "a node cannot wire to itself"));
             }
             if mission
                 .connections
                 .iter()
                 .any(|c| c.from == from && c.to == to)
             {
-                return Err(AuthoringError::new(
-                    "DUPLICATE_CONNECTION",
-                    "wire already exists",
-                ));
+                return Err(Error::new("duplicate_connection", "wire already exists"));
             }
             let fail = |s: &str| crate::graph::is_gate_fail(mission, s);
             let occupied = mission.end(to_node).is_none()
@@ -162,10 +152,7 @@ pub(crate) fn apply(
                     .any(|c| c.to == to && !fail(&from) && !fail(&c.from));
             if occupied {
                 if !join_if_occupied || mission.formation(to_node).is_none() {
-                    return Err(AuthoringError::new(
-                        "INPUT_OCCUPIED",
-                        "input already has a wire",
-                    ));
+                    return Err(Error::new("input_occupied", "input already has a wire"));
                 }
                 let formation = doc["formation"]
                     .as_array_of_tables_mut()
@@ -173,33 +160,33 @@ pub(crate) fn apply(
                         a.iter_mut()
                             .find(|t| t.get("id").and_then(Item::as_str) == Some(to_node))
                     })
-                    .ok_or_else(|| AuthoringError::new("NOT_FOUND", "formation"))?;
+                    .ok_or_else(|| Error::new("not_found", "formation"))?;
                 let port = Port {
                     id: crate::authoring::id("port")?,
                     label: "Input".into(),
                     ..Port::default()
                 };
                 let table = toml_edit::ser::to_document(&port)
-                    .map_err(|e| AuthoringError::new("INVALID_PORT", e.to_string()))?
+                    .map_err(|e| Error::new("invalid_port", e.to_string()))?
                     .into_table();
                 let inputs = formation
                     .get_mut("input")
-                    .ok_or_else(|| AuthoringError::new("INVALID_PORT", "formation inputs"))?;
+                    .ok_or_else(|| Error::new("invalid_port", "formation inputs"))?;
                 if let Some(tables) = inputs.as_array_of_tables_mut() {
                     tables.push(table);
                 } else if let Some(array) = inputs.as_array_mut() {
                     array.push(table.into_inline_table());
                 } else {
-                    return Err(AuthoringError::new("INVALID_PORT", "formation inputs"));
+                    return Err(Error::new("invalid_port", "formation inputs"));
                 }
                 to = format!("{to_node}:{}", port.id);
             }
             if id.is_empty() {
                 id = crate::authoring::id("edge")?;
             } else if id == "." || id == ".." || id.contains(['/', '\\', '\0']) {
-                return Err(AuthoringError::new("NOT_FOUND", "invalid wire id"));
+                return Err(Error::new("not_found", "invalid wire id"));
             } else if mission.connections.iter().any(|c| c.id == id) {
-                return Err(AuthoringError::new("ALREADY_EXISTS", "wire id"));
+                return Err(Error::new("already_exists", "wire id"));
             }
             crate::authoring_create::append(doc, "connection", &Connection { id, from, to })?;
         }

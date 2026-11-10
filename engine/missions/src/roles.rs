@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::DefinitionError;
+use crate::Error;
 use crate::links;
 
 pub const ROLE_SCHEMA: i64 = 1;
@@ -150,12 +150,11 @@ impl RoleStore {
     }
 
     /// Reads one role: its card, else the built-in role of that id.
-    pub fn read(&self, id: &str) -> Result<RoleCard, DefinitionError> {
+    pub fn read(&self, id: &str) -> Result<RoleCard, Error> {
         check_role_id(id)?;
         let text = match links::read_definition(&self.dir.join(format!("{id}.toml"))) {
-            Err(DefinitionError::NotFound(_)) => {
-                return builtin(id)
-                    .ok_or_else(|| DefinitionError::NotFound(format!("role {id:?}")));
+            Err(error) if error.code == "not_found" => {
+                return builtin(id).ok_or_else(|| Error::new("not_found", format!("role {id:?}")));
             }
             other => other?,
         };
@@ -165,7 +164,7 @@ impl RoleStore {
     }
 
     /// Every role, built-ins included, by id, and the cards it could not read.
-    pub fn list(&self) -> Result<(Vec<RoleCard>, Vec<Unreadable>), DefinitionError> {
+    pub fn list(&self) -> Result<(Vec<RoleCard>, Vec<Unreadable>), Error> {
         let mut cards: Vec<RoleCard> = BUILTIN.iter().filter_map(|(id, ..)| builtin(id)).collect();
         let mut unreadable = Vec::new();
         for name in links::list_names(&self.dir, ".toml")? {
@@ -185,14 +184,18 @@ impl RoleStore {
     }
 }
 
-pub(crate) fn parse_card(id: &str, text: &str) -> Result<RoleCard, DefinitionError> {
-    let file: RoleFile = toml::from_str(text)
-        .map_err(|err| DefinitionError::InvalidSource(format!("role card {id:?}: {err}")))?;
+pub(crate) fn parse_card(id: &str, text: &str) -> Result<RoleCard, Error> {
+    let file: RoleFile = toml::from_str(text).map_err(|err| {
+        Error::new(
+            "invalid_definition_source",
+            format!("role card {id:?}: {err}"),
+        )
+    })?;
     if file.schema != ROLE_SCHEMA {
-        return Err(DefinitionError::UnsupportedSchema(format!(
-            "role card {id:?} has schema {}",
-            file.schema
-        )));
+        return Err(Error::new(
+            "unsupported_schema",
+            format!("role card {id:?} has schema {}", file.schema),
+        ));
     }
     let mut missing = Vec::new();
     if file.card.id.is_empty() {
@@ -202,22 +205,26 @@ pub(crate) fn parse_card(id: &str, text: &str) -> Result<RoleCard, DefinitionErr
         missing.push("card.kind");
     }
     if !missing.is_empty() {
-        return Err(DefinitionError::InvalidSource(format!(
-            "role card {id:?} is missing {}",
-            missing.join(", ")
-        )));
+        return Err(Error::new(
+            "invalid_definition_source",
+            format!("role card {id:?} is missing {}", missing.join(", ")),
+        ));
     }
     if file.card.id != id {
-        return Err(DefinitionError::InvalidSource(format!(
-            "role card file {id:?} holds card.id {:?}; they must match",
-            file.card.id
-        )));
+        return Err(Error::new(
+            "invalid_definition_source",
+            format!(
+                "role card file {id:?} holds card.id {:?}; they must match",
+                file.card.id
+            ),
+        ));
     }
     for field in ["harness", "model", "effort"] {
         if file.card.extra.contains_key(field) {
-            return Err(DefinitionError::InvalidSource(format!(
-                "role card {id:?} cannot set {field}"
-            )));
+            return Err(Error::new(
+                "invalid_definition_source",
+                format!("role card {id:?} cannot set {field}"),
+            ));
         }
     }
     Ok(RoleCard {
@@ -233,7 +240,7 @@ pub(crate) fn parse_card(id: &str, text: &str) -> Result<RoleCard, DefinitionErr
 }
 
 /// A role id is lowercase letters, digits and inner dashes.
-pub(crate) fn check_role_id(id: &str) -> Result<(), DefinitionError> {
+pub(crate) fn check_role_id(id: &str) -> Result<(), Error> {
     let valid = !id.is_empty()
         && !id.starts_with('-')
         && !id.ends_with('-')
@@ -243,9 +250,10 @@ pub(crate) fn check_role_id(id: &str) -> Result<(), DefinitionError> {
     if valid {
         Ok(())
     } else {
-        Err(DefinitionError::InvalidName(format!(
-            "role {id:?} must be lowercase letters, digits and dashes"
-        )))
+        Err(Error::new(
+            "invalid_name",
+            format!("role {id:?} must be lowercase letters, digits and dashes"),
+        ))
     }
 }
 
@@ -267,8 +275,8 @@ mod tests {
         let judge = store.read("judge").unwrap();
         assert!(judge.builtin);
         assert_eq!(judge.kind, "judge");
-        assert_eq!(store.read("critic").unwrap_err().code(), "not_found");
-        assert_eq!(store.read("Critic").unwrap_err().code(), "invalid_name");
+        assert_eq!(store.read("critic").unwrap_err().code, "not_found");
+        assert_eq!(store.read("Critic").unwrap_err().code, "invalid_name");
         assert_eq!(store.list().unwrap().0.len(), 7);
     }
 
@@ -332,17 +340,17 @@ pub struct RoleUsage {
 
 impl RoleStore {
     /// Scans every mission, retaining known uses even if one is unreadable.
-    pub fn usage(&self, id: &str) -> Result<RoleUsage, crate::AuthoringError> {
+    pub fn usage(&self, id: &str) -> Result<RoleUsage, crate::Error> {
         let root = self.dir.parent().unwrap_or(&self.dir);
         let locks = crate::write::locks(root, "role-references");
         let _guard = locks.references.write().unwrap_or_else(|e| e.into_inner());
         self.usage_locked(id)
     }
 
-    pub(crate) fn usage_locked(&self, id: &str) -> Result<RoleUsage, crate::AuthoringError> {
+    pub(crate) fn usage_locked(&self, id: &str) -> Result<RoleUsage, crate::Error> {
         check_role_id(id)?;
         let root = self.dir.parent().ok_or_else(|| {
-            crate::AuthoringError::new("INVALID_AGENT_CARD", "role directory has no mission root")
+            crate::Error::new("invalid_agent_card", "role directory has no mission root")
         })?;
         let store = crate::Store::new(root);
         let mut report = RoleUsage {

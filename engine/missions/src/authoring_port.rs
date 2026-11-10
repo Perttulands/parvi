@@ -1,24 +1,24 @@
 //! Edit formation ports and restore their wire identities on undo.
-use crate::{AuthoringError, Mission, Patch, Port};
+use crate::{Error, Mission, Patch, Port};
 use toml_edit::{DocumentMut, Item, Value, value};
-fn missing() -> AuthoringError {
-    AuthoringError::new("NOT_FOUND", "formation or port")
+fn missing() -> Error {
+    Error::new("not_found", "formation or port")
 }
-fn kind(direction: &str, raw: &str) -> Result<String, AuthoringError> {
+fn kind(direction: &str, raw: &str) -> Result<String, Error> {
     let kind = raw.trim();
     if !["", "text", "file", "folder"].contains(&kind)
         || (direction == "input" && !["", "text"].contains(&kind))
     {
-        return Err(AuthoringError::new("INVALID_PORT", "invalid port kind"));
+        return Err(Error::new("invalid_port", "invalid port kind"));
     }
     Ok(if kind == "text" { "" } else { kind }.into())
 }
-fn direction(s: &str) -> Result<&str, AuthoringError> {
+fn direction(s: &str) -> Result<&str, Error> {
     if ["input", "output"].contains(&s) {
         Ok(s)
     } else {
-        Err(AuthoringError::new(
-            "INVALID_PORT_DIRECTION",
+        Err(Error::new(
+            "invalid_port_direction",
             "direction must be input or output",
         ))
     }
@@ -29,10 +29,10 @@ fn insert(
     direction: &str,
     port: &Port,
     index: Option<usize>,
-) -> Result<(), AuthoringError> {
+) -> Result<(), Error> {
     let formation = crate::authoring_staff::formation_table(doc, formation_id)?;
     let mut table = toml_edit::ser::to_document(port)
-        .map_err(|e| AuthoringError::new("INVALID_PORT", e.to_string()))?
+        .map_err(|e| Error::new("invalid_port", e.to_string()))?
         .into_table();
     table.set_implicit(false);
     let item = formation
@@ -49,11 +49,7 @@ fn insert(
     }
     Ok(())
 }
-pub(crate) fn apply(
-    doc: &mut DocumentMut,
-    mission: &Mission,
-    patch: Patch,
-) -> Result<bool, AuthoringError> {
+pub(crate) fn apply(doc: &mut DocumentMut, mission: &Mission, patch: Patch) -> Result<bool, Error> {
     match patch {
         Patch::AddPort {
             formation_id,
@@ -97,7 +93,7 @@ pub(crate) fn apply(
                 .ok_or_else(missing)?;
             let label = label.map(|s| s.trim().to_owned());
             if label.as_ref().is_some_and(String::is_empty) {
-                return Err(AuthoringError::new("INVALID_PORT", "a port needs a label"));
+                return Err(Error::new("invalid_port", "a port needs a label"));
             }
             let next_kind = raw.map(|s| kind(dir, &s)).transpose()?;
             if label.as_ref().is_none_or(|s| s == &old.label)
@@ -189,8 +185,8 @@ pub(crate) fn apply(
                     .chain(&formation.outputs)
                     .any(|p| p.id == port.id)
             {
-                return Err(AuthoringError::new(
-                    "INVALID_NODE_RESTORE",
+                return Err(Error::new(
+                    "invalid_node_restore",
                     "invalid or duplicate port",
                 ));
             }
@@ -200,8 +196,8 @@ pub(crate) fn apply(
             let endpoint = format!("{formation_id}:{}", port.id);
             for mut connection in connections {
                 if connection.from != endpoint && connection.to != endpoint {
-                    return Err(AuthoringError::new(
-                        "INVALID_NODE_RESTORE",
+                    return Err(Error::new(
+                        "invalid_node_restore",
                         "restored wire does not touch port",
                     ));
                 }
@@ -221,8 +217,8 @@ pub(crate) fn apply(
                     },
                 )
                 .map_err(|e| {
-                    if ["NOT_FOUND", "INPUT_OCCUPIED"].contains(&e.code()) {
-                        AuthoringError::new("INVALID_NODE_RESTORE", e.to_string())
+                    if ["not_found", "input_occupied"].contains(&e.code.as_str()) {
+                        Error::new("invalid_node_restore", e.to_string())
                     } else {
                         e
                     }

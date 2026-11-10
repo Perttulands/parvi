@@ -1,5 +1,5 @@
 //! Find an unoccupied grid position without moving saved cards.
-use crate::{AuthoringError, Layout, LayoutNode, Mission, Store};
+use crate::{Error, Layout, LayoutNode, Mission, Store};
 use std::collections::HashMap;
 
 pub fn free_layout_position(
@@ -7,12 +7,9 @@ pub fn free_layout_position(
     layout: Option<&Layout>,
     desired_x: i64,
     desired_y: i64,
-) -> Result<LayoutNode, AuthoringError> {
+) -> Result<LayoutNode, Error> {
     if layout.is_some_and(|layout| layout.mission_id != mission.id) {
-        return Err(AuthoringError::new(
-            "CONFLICT",
-            "layout belongs to another mission",
-        ));
+        return Err(Error::new("conflict", "layout belongs to another mission"));
     }
     let saved: HashMap<_, _> = layout
         .into_iter()
@@ -58,8 +55,8 @@ pub fn free_layout_position(
             y = y.saturating_add(336);
         }
     }
-    Err(AuthoringError::new(
-        "CONFLICT",
+    Err(Error::new(
+        "conflict",
         "no free layout position within bounded search",
     ))
 }
@@ -69,14 +66,14 @@ impl Store {
         selector: &str,
         x: i64,
         y: i64,
-    ) -> Result<LayoutNode, AuthoringError> {
+    ) -> Result<LayoutNode, Error> {
         let scope = crate::write::locks(self.root(), "scope");
         let _reference_guard = scope.references.read().unwrap_or_else(|e| e.into_inner());
         let slug = self.resolve(selector)?;
         let locks = crate::write::locks(self.root(), &format!("mission:{slug}"));
         let _document_guard = locks.document.lock().unwrap_or_else(|e| e.into_inner());
         if self.resolve(selector)? != slug {
-            return Err(AuthoringError::new("CONFLICT", "mission selector changed"));
+            return Err(Error::new("conflict", "mission selector changed"));
         }
         free_layout_position(
             &self.read_mission(&slug)?,

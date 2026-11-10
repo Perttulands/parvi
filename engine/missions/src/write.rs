@@ -56,6 +56,21 @@ fn get<T: Default>(registry: &Registry<T>, key: PathBuf) -> Arc<T> {
     value
 }
 
+#[cfg(test)]
+mod reference_lock_tests {
+    #[test]
+    fn role_deletion_and_mission_writes_share_the_reference_lock() {
+        let root =
+            std::env::temp_dir().join(format!("parvi-reference-lock-{}", std::process::id()));
+        let mission = super::locks(&root, "mission:example");
+        let role = super::locks(&root, "role:writer");
+        let guard = mission.references.read().unwrap();
+        assert!(role.references.try_write().is_err());
+        drop(guard);
+        assert!(role.references.try_write().is_ok());
+    }
+}
+
 /// Replace a TOML value while retaining its spacing and inline comment.
 pub(crate) fn set(table: &mut dyn toml_edit::TableLike, key: &str, mut item: toml_edit::Item) {
     let decor = table

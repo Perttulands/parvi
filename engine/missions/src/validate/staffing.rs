@@ -1,7 +1,6 @@
 //! Staffing: every slot states a harness and effort a seat can start with,
 //! and any role it names exists and is not retired.
 
-use crate::error::DefinitionError;
 use crate::finding::{Code, Finding};
 use crate::harness::Harnesses;
 use crate::mission::Mission;
@@ -47,7 +46,7 @@ pub fn findings(mission: &Mission, roles: &RoleStore, harnesses: &Harnesses) -> 
                     ),
                 ),
                 Ok(_) => {}
-                Err(DefinitionError::NotFound(_)) => add(
+                Err(error) if error.code == "not_found" => add(
                     Code::UnavailablePersona,
                     format!("formation {id:?} slot {name} names unknown role {role:?}"),
                 ),

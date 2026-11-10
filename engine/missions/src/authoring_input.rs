@@ -1,5 +1,5 @@
 //! Partial Input card edits and declaration normalization.
-use crate::{AuthoringError, Mission, MissionInput, MissionOutput};
+use crate::{Error, Mission, MissionInput, MissionOutput};
 use serde::Serialize;
 use std::collections::HashSet;
 use toml_edit::{DocumentMut, Item, value};
@@ -20,7 +20,7 @@ fn normalize_name(
     kind: &mut String,
     seen: &mut HashSet<String>,
     code: &'static str,
-) -> Result<(), AuthoringError> {
+) -> Result<(), Error> {
     *name = name.trim().into();
     *kind = kind.trim().into();
     if kind.is_empty() {
@@ -30,32 +30,29 @@ fn normalize_name(
         || !["text", "file", "folder"].contains(&kind.as_str())
         || !seen.insert(name.clone())
     {
-        return Err(AuthoringError::new(
-            code,
-            "invalid or duplicate name or kind",
-        ));
+        return Err(Error::new(code, "invalid or duplicate name or kind"));
     }
     Ok(())
 }
-fn list_value<T: Serialize>(values: &[T]) -> Result<Item, AuthoringError> {
+fn list_value<T: Serialize>(values: &[T]) -> Result<Item, Error> {
     #[derive(Serialize)]
     struct Wrapper<'a, T> {
         list: &'a [T],
     }
     let mut doc = toml_edit::ser::to_document(&Wrapper { list: values })
-        .map_err(|e| AuthoringError::new("INVALID_DEFINITION", e.to_string()))?;
+        .map_err(|e| Error::new("invalid_definition", e.to_string()))?;
     Ok(doc.remove("list").unwrap())
 }
 pub(crate) fn apply(
     doc: &mut DocumentMut,
     mission: &Mission,
     update: InputCardUpdate,
-) -> Result<bool, AuthoringError> {
+) -> Result<bool, Error> {
     let old = mission
         .input_cards
         .iter()
         .find(|c| c.id == update.id)
-        .ok_or_else(|| AuthoringError::new("NOT_FOUND", "Input card"))?;
+        .ok_or_else(|| Error::new("not_found", "Input card"))?;
     let mut next = old.clone();
     if let Some(title) = update.title {
         next.title = title;
@@ -75,8 +72,8 @@ pub(crate) fn apply(
             "" | "notify" => "".into(),
             "session" => "session".into(),
             _ => {
-                return Err(AuthoringError::new(
-                    "INVALID_HUMAN_CHANNEL",
+                return Err(Error::new(
+                    "invalid_human_channel",
                     "human channel must be notify or session",
                 ));
             }
@@ -90,7 +87,7 @@ pub(crate) fn apply(
                 &mut input.name,
                 &mut input.kind,
                 &mut seen,
-                "INVALID_MISSION_INPUT",
+                "invalid_mission_input",
             )?;
         }
         next.inputs = inputs;
@@ -104,11 +101,11 @@ pub(crate) fn apply(
                 &mut output.name,
                 &mut output.kind,
                 &mut seen,
-                "INVALID_MISSION_OUTPUT",
+                "invalid_mission_output",
             )?;
             if !output.from.is_empty() && crate::graph::split_endpoint(&output.from).is_none() {
-                return Err(AuthoringError::new(
-                    "INVALID_MISSION_OUTPUT",
+                return Err(Error::new(
+                    "invalid_mission_output",
                     "from must name a node and port",
                 ));
             }
@@ -124,7 +121,7 @@ pub(crate) fn apply(
             a.iter_mut()
                 .find(|t| t.get("id").and_then(Item::as_str) == Some(update.id.as_str()))
         })
-        .ok_or_else(|| AuthoringError::new("NOT_FOUND", "Input card"))?;
+        .ok_or_else(|| Error::new("not_found", "Input card"))?;
     for (key, before, after, optional) in [
         ("title", &old.title, &next.title, false),
         ("goal", &old.goal, &next.goal, false),

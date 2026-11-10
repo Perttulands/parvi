@@ -1,9 +1,9 @@
 //! Change a formation's shape without silently discarding staffed slots.
-use crate::{AuthoringError, Mission, Patch, Slot};
+use crate::{Error, Mission, Patch, Slot};
 use std::collections::HashSet;
 use toml_edit::{DocumentMut, Item, value};
-fn invalid(message: &str) -> AuthoringError {
-    AuthoringError::new("INVALID_TYPE_CHANGE", message)
+fn invalid(message: &str) -> Error {
+    Error::new("invalid_type_change", message)
 }
 fn valid_id(id: &str) -> bool {
     id.len() <= 64
@@ -12,7 +12,7 @@ fn valid_id(id: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
-fn new_slot(label: &str, controller: bool) -> Result<Slot, AuthoringError> {
+fn new_slot(label: &str, controller: bool) -> Result<Slot, Error> {
     Ok(Slot {
         id: crate::authoring::id("slot")?,
         label: label.into(),
@@ -20,11 +20,7 @@ fn new_slot(label: &str, controller: bool) -> Result<Slot, AuthoringError> {
         ..Slot::default()
     })
 }
-pub(crate) fn apply(
-    doc: &mut DocumentMut,
-    mission: &Mission,
-    patch: Patch,
-) -> Result<bool, AuthoringError> {
+pub(crate) fn apply(doc: &mut DocumentMut, mission: &Mission, patch: Patch) -> Result<bool, Error> {
     let Patch::SetFormationType {
         id,
         kind,
@@ -35,8 +31,8 @@ pub(crate) fn apply(
         unreachable!()
     };
     if !["solo", "peer", "orchestrated"].contains(&kind.as_str()) {
-        return Err(AuthoringError::new(
-            "UNSUPPORTED_FORMATION_TYPE",
+        return Err(Error::new(
+            "unsupported_formation_type",
             "use solo, peer or orchestrated",
         ));
     }
@@ -45,7 +41,7 @@ pub(crate) fn apply(
     }
     let current = mission
         .formation(&id)
-        .ok_or_else(|| AuthoringError::new("NOT_FOUND", "formation"))?;
+        .ok_or_else(|| Error::new("not_found", "formation"))?;
     let next = if let Some(snapshot) = slots {
         let mut seen = HashSet::new();
         let controllers = snapshot.iter().filter(|s| s.controller).count();
@@ -72,8 +68,8 @@ pub(crate) fn apply(
             .any(|s| s.staffed() && !seen.contains(&s.id))
             && keep_slot_id.is_empty()
         {
-            return Err(AuthoringError::new(
-                "SLOT_CHOICE_REQUIRED",
+            return Err(Error::new(
+                "slot_choice_required",
                 "snapshot would remove a staffed slot",
             ));
         }
@@ -97,8 +93,8 @@ pub(crate) fn apply(
                 }
                 let staffed: Vec<_> = slots.iter().filter(|s| s.staffed()).collect();
                 if keep_slot_id.is_empty() && staffed.len() > 1 {
-                    return Err(AuthoringError::new(
-                        "SLOT_CHOICE_REQUIRED",
+                    return Err(Error::new(
+                        "slot_choice_required",
                         "choose the staffed slot to keep",
                     ));
                 }

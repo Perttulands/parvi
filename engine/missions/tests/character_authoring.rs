@@ -37,14 +37,14 @@ fn create_replace_delete_and_validate_character() {
     assert_eq!(saved.id, "my-builder");
     assert_eq!(saved.name, "My Builder");
     assert_eq!(
-        store.create(saved.clone()).unwrap_err().code(),
-        "CHARACTER_EXISTS"
+        store.create(saved.clone()).unwrap_err().code.as_str(),
+        "character_exists"
     );
     let old_file = std::fs::read(dir.0.join("characters.json")).unwrap();
     saved.effort = "invalid".into();
     assert_eq!(
-        store.put(saved.clone()).unwrap_err().code(),
-        "INVALID_CHARACTER"
+        store.put(saved.clone()).unwrap_err().code.as_str(),
+        "invalid_character"
     );
     assert_eq!(
         std::fs::read(dir.0.join("characters.json")).unwrap(),
@@ -55,7 +55,10 @@ fn create_replace_delete_and_validate_character() {
     assert_eq!(store.list().unwrap(), vec![saved]);
     store.delete("my-builder").unwrap();
     assert!(store.list().unwrap().is_empty());
-    assert_eq!(store.delete("my-builder").unwrap_err().code(), "NOT_FOUND");
+    assert_eq!(
+        store.delete("my-builder").unwrap_err().code.as_str(),
+        "not_found"
+    );
 }
 
 #[cfg(unix)]
@@ -163,8 +166,12 @@ controller = false
         })
         .unwrap();
     assert_eq!(
-        roles.delete("critic", &role.etag).unwrap_err().code(),
-        "ROLE_IN_USE"
+        roles
+            .delete("critic", &role.etag)
+            .unwrap_err()
+            .code
+            .as_str(),
+        "role_in_use"
     );
     let retired = roles.retire("critic", &role.etag).unwrap();
     assert_eq!(retired.card.status, "retired");
@@ -198,15 +205,20 @@ fn builtin_role_restore_and_role_notes_preserve_usage_safety() {
         roles
             .add_note("builder", &restored.etag, "human:ui", "stale")
             .unwrap_err()
-            .code(),
-        "CONFLICT"
+            .code
+            .as_str(),
+        "conflict"
     );
     let missions = dir.0.join("missions");
     std::fs::create_dir_all(&missions).unwrap();
     std::fs::write(missions.join("broken.mission.toml"), "schema = [").unwrap();
     assert_eq!(
-        roles.delete("builder", &noted.etag).unwrap_err().code(),
-        "ROLE_USAGE_INCOMPLETE"
+        roles
+            .delete("builder", &noted.etag)
+            .unwrap_err()
+            .code
+            .as_str(),
+        "role_usage_incomplete"
     );
 }
 
@@ -254,8 +266,12 @@ fn role_creation_and_edits_are_guarded_and_text_only() {
     }
     assert_eq!(created.card.display_name, "researcher");
     assert_eq!(
-        roles.create(created.card.clone()).unwrap_err().code(),
-        "ALREADY_EXISTS"
+        roles
+            .create(created.card.clone())
+            .unwrap_err()
+            .code
+            .as_str(),
+        "already_exists"
     );
     assert_eq!(std::fs::read_to_string(&path).unwrap(), raw);
     let mut next = created.card.clone();
@@ -264,8 +280,9 @@ fn role_creation_and_edits_are_guarded_and_text_only() {
         roles
             .edit("researcher", "", next.clone())
             .unwrap_err()
-            .code(),
-        "PRECONDITION_REQUIRED"
+            .code
+            .as_str(),
+        "precondition_required"
     );
     assert_eq!(std::fs::read_to_string(&path).unwrap(), raw);
     let updated = roles
@@ -277,8 +294,9 @@ fn role_creation_and_edits_are_guarded_and_text_only() {
         roles
             .edit("researcher", &created.etag, next)
             .unwrap_err()
-            .code(),
-        "CONFLICT"
+            .code
+            .as_str(),
+        "conflict"
     );
     assert_eq!(roles.role_edit("researcher").unwrap().etag, updated.etag);
     assert_eq!(
@@ -288,8 +306,9 @@ fn role_creation_and_edits_are_guarded_and_text_only() {
                 ..Default::default()
             })
             .unwrap_err()
-            .code(),
-        "INVALID_AGENT_CARD"
+            .code
+            .as_str(),
+        "invalid_agent_card"
     );
 }
 
@@ -372,22 +391,30 @@ fn role_delete_requires_fresh_etag_and_restores_builtin_override() {
         })
         .unwrap();
     assert_eq!(
-        roles.delete("writer", "").unwrap_err().code(),
-        "PRECONDITION_REQUIRED"
+        roles.delete("writer", "").unwrap_err().code.as_str(),
+        "precondition_required"
     );
     assert_eq!(
-        roles.delete("writer", "stale").unwrap_err().code(),
-        "CONFLICT"
+        roles.delete("writer", "stale").unwrap_err().code.as_str(),
+        "conflict"
     );
     roles.delete("writer", &role.etag).unwrap();
     assert_eq!(
-        roles.delete("writer", &role.etag).unwrap_err().code(),
-        "NOT_FOUND"
+        roles
+            .delete("writer", &role.etag)
+            .unwrap_err()
+            .code
+            .as_str(),
+        "not_found"
     );
     let builtin = roles.role_edit("judge").unwrap();
     assert_eq!(
-        roles.delete("judge", &builtin.etag).unwrap_err().code(),
-        "BUILTIN_ROLE"
+        roles
+            .delete("judge", &builtin.etag)
+            .unwrap_err()
+            .code
+            .as_str(),
+        "builtin_role"
     );
     let mut override_card = builtin.card.clone();
     override_card.summary = "Judges plans only".into();
@@ -417,5 +444,25 @@ fn restoring_builtin_fields_preserves_extra_card_text() {
         std::fs::read_to_string(path)
             .unwrap()
             .contains("reviewerNotes = \"keep this\"")
+    );
+}
+
+#[test]
+fn role_api_returns_core_errors_with_codes_and_messages() {
+    let dir = Scratch::new();
+    let roles = parvi_missions::Store::new(&dir.0).roles();
+    let role = roles
+        .create(parvi_missions::RoleCard {
+            id: "writer".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let error: parvi_missions::Error = roles.retire("writer", "stale").unwrap_err();
+    assert_eq!(error.code, "conflict");
+    assert!(!error.message.is_empty());
+    assert_eq!(roles.role_edit("writer").unwrap().etag, role.etag);
+    assert_eq!(
+        serde_json::to_value(error).unwrap(),
+        serde_json::json!({"code":"conflict", "message":"role changed"})
     );
 }

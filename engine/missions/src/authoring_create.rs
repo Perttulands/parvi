@@ -1,5 +1,5 @@
 //! Construct graph nodes with Archon's default shape.
-use crate::{AuthoringError, End, Formation, Gate, InputCard, Mission, Patch, Port, Slot};
+use crate::{End, Error, Formation, Gate, InputCard, Mission, Patch, Port, Slot};
 use serde::Serialize;
 use toml_edit::{ArrayOfTables, DocumentMut, Item};
 
@@ -7,17 +7,17 @@ pub(crate) fn append<T: Serialize>(
     doc: &mut DocumentMut,
     key: &str,
     node: &T,
-) -> Result<(), AuthoringError> {
+) -> Result<(), Error> {
     let table = toml_edit::ser::to_document(node)
-        .map_err(|e| AuthoringError::new("INVALID_DEFINITION", e.to_string()))?
+        .map_err(|e| Error::new("invalid_definition", e.to_string()))?
         .into_table();
     crate::write::table_arrays(doc, &[key]);
     if !doc.contains_key(key) {
         doc[key] = Item::ArrayOfTables(ArrayOfTables::new());
     }
     let array = doc[key].as_array_of_tables_mut().ok_or_else(|| {
-        AuthoringError::new(
-            "INVALID_DEFINITION",
+        Error::new(
+            "invalid_definition",
             format!("{key} is not an array of tables"),
         )
     })?;
@@ -25,7 +25,7 @@ pub(crate) fn append<T: Serialize>(
     Ok(())
 }
 
-pub(crate) fn file_refs(files: &mut Vec<String>) -> Result<(), AuthoringError> {
+pub(crate) fn file_refs(files: &mut Vec<String>) -> Result<(), Error> {
     for file in files.iter_mut() {
         *file = file.trim().into();
     }
@@ -37,8 +37,8 @@ pub(crate) fn file_refs(files: &mut Vec<String>) -> Result<(), AuthoringError> {
                 && file.as_bytes()[1] == b':'
                 && matches!(file.as_bytes()[2], b'/' | b'\\'));
         if !std::path::Path::new(file).is_absolute() && !windows_absolute {
-            return Err(AuthoringError::new(
-                "RELATIVE_FILE_REFERENCE",
+            return Err(Error::new(
+                "relative_file_reference",
                 format!("file {file:?} is relative: use an absolute path"),
             ));
         }
@@ -50,7 +50,7 @@ pub(crate) fn apply(
     doc: &mut DocumentMut,
     _mission: &Mission,
     patch: Patch,
-) -> Result<crate::LayoutNode, AuthoringError> {
+) -> Result<crate::LayoutNode, Error> {
     match patch {
         Patch::CreateInputCard {
             title,
@@ -62,8 +62,8 @@ pub(crate) fn apply(
         } => {
             file_refs(&mut files)?;
             if !["", "notify", "session"].contains(&human_channel.as_str()) {
-                return Err(AuthoringError::new(
-                    "INVALID_HUMAN_CHANNEL",
+                return Err(Error::new(
+                    "invalid_human_channel",
                     "human channel must be notify or session",
                 ));
             }
@@ -100,8 +100,8 @@ pub(crate) fn apply(
                 "peer" => &[("Peer", false), ("Peer", false)],
                 "orchestrated" => &[("Orchestrator", true), ("Agent", false), ("Agent", false)],
                 _ => {
-                    return Err(AuthoringError::new(
-                        "UNSUPPORTED_FORMATION_TYPE",
+                    return Err(Error::new(
+                        "unsupported_formation_type",
                         "use solo, peer or orchestrated",
                     ));
                 }
@@ -185,8 +185,8 @@ pub(crate) fn apply(
                 outcome = "done".into();
             }
             if !["done", "rejected"].contains(&outcome.as_str()) {
-                return Err(AuthoringError::new(
-                    "INVALID_END_OUTCOME",
+                return Err(Error::new(
+                    "invalid_end_outcome",
                     "outcome must be done or rejected",
                 ));
             }
@@ -215,7 +215,7 @@ pub(crate) fn layout(
     slug: &str,
     mission: &Mission,
     node: crate::LayoutNode,
-) -> Result<(std::path::PathBuf, String), AuthoringError> {
+) -> Result<(std::path::PathBuf, String), Error> {
     let path = store
         .root()
         .join("layout")
@@ -224,20 +224,17 @@ pub(crate) fn layout(
         Ok(raw) => {
             let previous = crate::Layout::parse(&raw)?;
             if previous.mission_id != mission.id {
-                return Err(AuthoringError::new(
-                    "CONFLICT",
-                    "layout belongs to another mission",
-                ));
+                return Err(Error::new("conflict", "layout belongs to another mission"));
             }
             raw.parse::<DocumentMut>()
-                .map_err(|e| AuthoringError::new("INVALID_DEFINITION", e.to_string()))?
+                .map_err(|e| Error::new("invalid_definition", e.to_string()))?
         }
-        Err(crate::DefinitionError::NotFound(_)) => {
+        Err(error) if error.code == "not_found" => {
             let mut doc = DocumentMut::new();
             doc["schema"] = toml_edit::value(1);
             doc
         }
-        Err(err) => return Err(err.into()),
+        Err(err) => return Err(err),
     };
     crate::write::table_arrays(&mut doc, &["node"]);
     crate::write::set(

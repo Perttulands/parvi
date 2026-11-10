@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::DefinitionError;
+use crate::Error;
 use crate::nodes::{Connection, End, Formation, Gate, InputCard, Limit};
 
 /// The only mission file schema Parvi reads.
@@ -45,14 +45,17 @@ pub struct Mission {
 
 impl Mission {
     /// Reads a mission file's text.
-    pub fn parse(text: &str) -> Result<Mission, DefinitionError> {
-        let mission: Mission =
-            toml::from_str(text).map_err(|err| DefinitionError::InvalidSource(err.to_string()))?;
+    pub fn parse(text: &str) -> Result<Mission, Error> {
+        let mission: Mission = toml::from_str(text)
+            .map_err(|err| Error::new("invalid_definition_source", err.to_string()))?;
         if mission.schema != MISSION_SCHEMA {
-            return Err(DefinitionError::UnsupportedSchema(format!(
-                "mission schema {}; Parvi reads schema {MISSION_SCHEMA}",
-                mission.schema
-            )));
+            return Err(Error::new(
+                "unsupported_schema",
+                format!(
+                    "mission schema {}; Parvi reads schema {MISSION_SCHEMA}",
+                    mission.schema
+                ),
+            ));
         }
         Ok(mission)
     }

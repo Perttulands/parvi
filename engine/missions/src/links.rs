@@ -5,36 +5,33 @@
 use std::io::ErrorKind;
 use std::path::Path;
 
-use crate::error::DefinitionError;
+use crate::Error;
 
 /// Reads a definition file through any symlink. Only a regular file is read,
 /// since a FIFO or a device would block or never end.
-pub fn read_definition(path: &Path) -> Result<String, DefinitionError> {
+pub fn read_definition(path: &Path) -> Result<String, Error> {
     let shown = path.display();
     let link = match std::fs::symlink_metadata(path) {
         Err(err) if err.kind() == ErrorKind::NotFound => {
-            return Err(DefinitionError::NotFound(shown.to_string()));
+            return Err(Error::new("not_found", shown.to_string()));
         }
-        Err(err) => return Err(DefinitionError::Io(format!("{shown}: {err}"))),
+        Err(err) => return Err(Error::new("io", format!("{shown}: {err}"))),
         Ok(metadata) => metadata,
     };
     let metadata = match std::fs::metadata(path) {
         Ok(metadata) => metadata,
         Err(err) if link.file_type().is_symlink() => return Err(broken_link(path, &err)),
-        Err(err) => return Err(DefinitionError::Io(format!("{shown}: {err}"))),
+        Err(err) => return Err(Error::new("io", format!("{shown}: {err}"))),
     };
     if !metadata.is_file() {
-        return Err(DefinitionError::Io(format!(
-            "{shown} is not a regular file"
-        )));
+        return Err(Error::new("io", format!("{shown} is not a regular file")));
     }
-    let bytes =
-        std::fs::read(path).map_err(|err| DefinitionError::Io(format!("{shown}: {err}")))?;
+    let bytes = std::fs::read(path).map_err(|err| Error::new("io", format!("{shown}: {err}")))?;
     String::from_utf8(bytes)
-        .map_err(|_| DefinitionError::InvalidSource(format!("{shown} is not UTF-8")))
+        .map_err(|_| Error::new("invalid_definition_source", format!("{shown} is not UTF-8")))
 }
 
-fn broken_link(path: &Path, err: &std::io::Error) -> DefinitionError {
+fn broken_link(path: &Path, err: &std::io::Error) -> Error {
     let target =
         std::fs::read_link(path).map_or_else(|_| "?".to_owned(), |t| t.display().to_string());
     let problem = match err.kind() {
@@ -42,24 +39,26 @@ fn broken_link(path: &Path, err: &std::io::Error) -> DefinitionError {
         ErrorKind::PermissionDenied => "Parvi's user may not reach".to_owned(),
         _ => format!("cannot be reached: {err}"),
     };
-    DefinitionError::BrokenLink(format!(
-        "{} is a symlink to {target}, which {problem}",
-        path.display()
-    ))
+    Error::new(
+        "broken_link",
+        format!(
+            "{} is a symlink to {target}, which {problem}",
+            path.display()
+        ),
+    )
 }
 
 /// The names in a directory that end with `suffix`, without it, sorted. A
 /// missing directory holds none.
-pub fn list_names(dir: &Path, suffix: &str) -> Result<Vec<String>, DefinitionError> {
+pub fn list_names(dir: &Path, suffix: &str) -> Result<Vec<String>, Error> {
     let entries = match std::fs::read_dir(dir) {
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(DefinitionError::Io(format!("{}: {err}", dir.display()))),
+        Err(err) => return Err(Error::new("io", format!("{}: {err}", dir.display()))),
         Ok(entries) => entries,
     };
     let mut names = Vec::new();
     for entry in entries {
-        let entry =
-            entry.map_err(|err| DefinitionError::Io(format!("{}: {err}", dir.display())))?;
+        let entry = entry.map_err(|err| Error::new("io", format!("{}: {err}", dir.display())))?;
         if let Some(name) = entry
             .file_name()
             .to_str()

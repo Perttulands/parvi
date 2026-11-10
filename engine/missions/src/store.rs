@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::Error;
 use crate::characters::{Character, read_characters};
-use crate::error::DefinitionError;
 use crate::layout::Layout;
 use crate::links::{list_names, read_definition};
 use crate::mission::Mission;
@@ -71,12 +71,12 @@ impl Store {
         RoleStore::new(self.root.join("roles"))
     }
 
-    pub fn characters(&self) -> Result<Vec<Character>, DefinitionError> {
+    pub fn characters(&self) -> Result<Vec<Character>, Error> {
         read_characters(self.roles().dir())
     }
 
     /// Every mission file by slug, the unreadable ones marked broken.
-    pub fn list_missions(&self) -> Result<Vec<MissionListing>, DefinitionError> {
+    pub fn list_missions(&self) -> Result<Vec<MissionListing>, Error> {
         let names = list_names(&self.root.join("missions"), MISSION_SUFFIX)?;
         Ok(names
             .into_iter()
@@ -93,18 +93,22 @@ impl Store {
                     id: String::new(),
                     title: String::new(),
                     rev: None,
-                    broken: Some(err.to_string()),
+                    broken: Some(if err.code == "broken_link" {
+                        err.message
+                    } else {
+                        format!("{}: {}", err.code, err.message)
+                    }),
                 },
             })
             .collect())
     }
 
-    pub fn read_mission(&self, slug: &str) -> Result<Mission, DefinitionError> {
+    pub fn read_mission(&self, slug: &str) -> Result<Mission, Error> {
         Mission::parse(&self.read_named("missions", slug, MISSION_SUFFIX)?)
     }
 
     /// The slug of the one mission whose slug or id is `selector`.
-    pub fn resolve(&self, selector: &str) -> Result<String, DefinitionError> {
+    pub fn resolve(&self, selector: &str) -> Result<String, Error> {
         check_slug(selector)?;
         let listings = self.list_missions()?;
         let matches: Vec<_> = (listings.iter())
@@ -114,20 +118,20 @@ impl Store {
             .collect();
         match matches.as_slice() {
             [listing] => Ok(listing.slug.clone()),
-            [] => Err(DefinitionError::NotFound(format!("mission {selector:?}"))),
-            many => Err(DefinitionError::Ambiguous(format!(
-                "mission {selector:?} matched {} missions",
-                many.len()
-            ))),
+            [] => Err(Error::new("not_found", format!("mission {selector:?}"))),
+            many => Err(Error::new(
+                "ambiguous_selector",
+                format!("mission {selector:?} matched {} missions", many.len()),
+            )),
         }
     }
 
     /// A mission's notes; empty when it has none, or when its notes belong to
     /// a mission of another id.
-    pub fn read_notes(&self, slug: &str) -> Result<Notes, DefinitionError> {
+    pub fn read_notes(&self, slug: &str) -> Result<Notes, Error> {
         let mission = self.read_mission(slug)?;
         match self.read_named("notes", slug, ".notes.toml") {
-            Err(DefinitionError::NotFound(_)) => Ok(Notes::empty(&mission.id)),
+            Err(error) if error.code == "not_found" => Ok(Notes::empty(&mission.id)),
             Err(err) => Err(err),
             Ok(text) => {
                 let notes = Notes::parse(&text)?;
@@ -141,26 +145,24 @@ impl Store {
     }
 
     /// A mission's layout, or `None` when it has not been laid out.
-    pub fn read_layout(&self, slug: &str) -> Result<Option<Layout>, DefinitionError> {
+    pub fn read_layout(&self, slug: &str) -> Result<Option<Layout>, Error> {
         match self.read_named("layout", slug, ".layout.toml") {
-            Err(DefinitionError::NotFound(_)) => Ok(None),
+            Err(error) if error.code == "not_found" => Ok(None),
             Err(err) => Err(err),
             Ok(text) => Layout::parse(&text).map(Some),
         }
     }
 
-    fn read_named(&self, dir: &str, slug: &str, suffix: &str) -> Result<String, DefinitionError> {
+    fn read_named(&self, dir: &str, slug: &str, suffix: &str) -> Result<String, Error> {
         check_slug(slug)?;
         read_definition(&self.root.join(dir).join(format!("{slug}{suffix}")))
     }
 }
 
 /// A slug names one file in its directory.
-pub(crate) fn check_slug(slug: &str) -> Result<(), DefinitionError> {
+pub(crate) fn check_slug(slug: &str) -> Result<(), Error> {
     if slug.is_empty() || slug.contains(['/', '\\']) || slug.contains("..") || slug == "." {
-        return Err(DefinitionError::InvalidName(format!(
-            "mission slug {slug:?}"
-        )));
+        return Err(Error::new("invalid_name", format!("mission slug {slug:?}")));
     }
     Ok(())
 }

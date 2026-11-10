@@ -40,8 +40,9 @@ fn create_mission_defaults_title_and_refuses_duplicate_without_clobber() {
         store
             .create_mission("poems", "Different", "")
             .unwrap_err()
-            .code(),
-        "ALREADY_EXISTS"
+            .code
+            .as_str(),
+        "already_exists"
     );
     assert_eq!(std::fs::read(path).unwrap(), before);
     assert!(store.create_mission("bad/path", "", "").is_err());
@@ -65,15 +66,17 @@ fn missing_layout_can_be_recreated_without_dirtying_the_mission() {
         store
             .patch_layout("layout", "old", LayoutPatch::Nodes(nodes.clone()))
             .unwrap_err()
-            .code(),
-        "NOT_FOUND"
+            .code
+            .as_str(),
+        "not_found"
     );
     assert_eq!(
         store
             .patch_layout("layout", "*", LayoutPatch::Edges(vec![]))
             .unwrap_err()
-            .code(),
-        "NOT_FOUND"
+            .code
+            .as_str(),
+        "not_found"
     );
     let saved = store
         .patch_layout("layout", "*", LayoutPatch::Nodes(nodes.clone()))
@@ -85,8 +88,9 @@ fn missing_layout_can_be_recreated_without_dirtying_the_mission() {
         store
             .patch_layout("layout", "*", LayoutPatch::Nodes(nodes))
             .unwrap_err()
-            .code(),
-        "CONFLICT"
+            .code
+            .as_str(),
+        "conflict"
     );
 }
 
@@ -203,8 +207,9 @@ fn notes_append_in_order_and_stale_writers_do_not_clobber() {
         store
             .patch_notes("notes", &one.etag, append("human:one", "Stale"))
             .unwrap_err()
-            .code(),
-        "CONFLICT"
+            .code
+            .as_str(),
+        "conflict"
     );
     assert_eq!(std::fs::read(path).unwrap(), before);
     assert_eq!(
@@ -379,8 +384,9 @@ fn note_threads_allow_only_the_author_to_edit_or_delete() {
         store
             .patch_notes("thread", &second.etag, unauthorized)
             .unwrap_err()
-            .code(),
-        "NOTE_AUTHOR_MISMATCH"
+            .code
+            .as_str(),
+        "note_author_mismatch"
     );
     let updated = store
         .patch_notes(

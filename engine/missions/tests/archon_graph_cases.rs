@@ -87,7 +87,11 @@ fn invalid_formation_shapes_are_refused_by_both_restore_paths() {
                 "",
             )
             .unwrap_err();
-        assert_eq!(err.code(), "INVALID_TYPE_CHANGE", "{kind}: {slots:?}");
+        assert_eq!(
+            err.code.as_str(),
+            "invalid_type_change",
+            "{kind}: {slots:?}"
+        );
         let err = store
             .patch(
                 "shape",
@@ -107,7 +111,11 @@ fn invalid_formation_shapes_are_refused_by_both_restore_paths() {
                 "",
             )
             .unwrap_err();
-        assert_eq!(err.code(), "INVALID_NODE_RESTORE", "{kind}: {slots:?}");
+        assert_eq!(
+            err.code.as_str(),
+            "invalid_node_restore",
+            "{kind}: {slots:?}"
+        );
         assert_eq!(std::fs::read(&mission_path).unwrap(), mission_before);
         assert_eq!(std::fs::read(&layout_path).unwrap(), layout_before);
     }
@@ -244,8 +252,9 @@ fn restore_each_input_and_output_port_at_its_original_index() {
                     ""
                 )
                 .unwrap_err()
-                .code(),
-            "INVALID_NODE_RESTORE"
+                .code
+                .as_str(),
+            "invalid_node_restore"
         );
     }
 }
@@ -307,37 +316,37 @@ fn formation_type_restores_exact_slot_snapshot_and_rejects_bad_choices() {
             "flow",
             "",
             None,
-            "UNSUPPORTED_FORMATION_TYPE",
+            "unsupported_formation_type",
         ),
         (
             formation.id.as_str(),
             "swarm",
             "",
             None,
-            "UNSUPPORTED_FORMATION_TYPE",
+            "unsupported_formation_type",
         ),
         (
             formation.id.as_str(),
             "peer",
             snapshot[0].id.as_str(),
             None,
-            "INVALID_TYPE_CHANGE",
+            "invalid_type_change",
         ),
         (
             formation.id.as_str(),
             "solo",
             "slot_missing",
             None,
-            "INVALID_TYPE_CHANGE",
+            "invalid_type_change",
         ),
         (
             formation.id.as_str(),
             "peer",
             "",
             Some(duplicate),
-            "INVALID_TYPE_CHANGE",
+            "invalid_type_change",
         ),
-        ("fmn_missing", "solo", "", None, "NOT_FOUND"),
+        ("fmn_missing", "solo", "", None, "not_found"),
     ] {
         assert_eq!(
             store
@@ -353,7 +362,8 @@ fn formation_type_restores_exact_slot_snapshot_and_rejects_bad_choices() {
                     ""
                 )
                 .unwrap_err()
-                .code(),
+                .code
+                .as_str(),
             code
         );
         assert_eq!(std::fs::read(&path).unwrap(), before);
@@ -509,15 +519,17 @@ fn join_keeps_gate_single_feed_and_rejects_stale_writes() {
         store
             .patch("join-gate", pre(&edit), wire(second.clone()), "")
             .unwrap_err()
-            .code(),
-        "INPUT_OCCUPIED"
+            .code
+            .as_str(),
+        "input_occupied"
     );
     assert_eq!(
         store
             .patch("join-gate", stale, wire(second), "")
             .unwrap_err()
-            .code(),
-        "CONFLICT"
+            .code
+            .as_str(),
+        "conflict"
     );
     assert_eq!(store.mission_edit("join-gate").unwrap().etag, edit.etag);
 }
@@ -732,22 +744,22 @@ fn restore_refuses_missing_foreign_and_occupied_connections_and_bad_nodes() {
         (
             RestoredNode::Formation(other.clone()),
             vec![],
-            "INVALID_NODE_RESTORE",
+            "invalid_node_restore",
         ),
         (
             RestoredNode::Formation(build.clone()),
             vec![connection(output(&build), "gate_missing:in".into())],
-            "INVALID_NODE_RESTORE",
+            "invalid_node_restore",
         ),
         (
             RestoredNode::Formation(build.clone()),
             vec![connection(output(&other), input(&target))],
-            "INVALID_NODE_RESTORE",
+            "invalid_node_restore",
         ),
         (
             RestoredNode::Formation(build.clone()),
             vec![connection(output(&build), input(&target))],
-            "INVALID_NODE_RESTORE",
+            "invalid_node_restore",
         ),
         (
             RestoredNode::Formation(Formation {
@@ -756,7 +768,7 @@ fn restore_refuses_missing_foreign_and_occupied_connections_and_bad_nodes() {
                 ..Default::default()
             }),
             vec![],
-            "UNSUPPORTED_FORMATION_TYPE",
+            "unsupported_formation_type",
         ),
         (
             RestoredNode::Gate(Gate {
@@ -764,7 +776,7 @@ fn restore_refuses_missing_foreign_and_occupied_connections_and_bad_nodes() {
                 ..Default::default()
             }),
             vec![],
-            "INVALID_GATE_KIND",
+            "invalid_gate_kind",
         ),
         (
             RestoredNode::Gate(Gate {
@@ -774,7 +786,7 @@ fn restore_refuses_missing_foreign_and_occupied_connections_and_bad_nodes() {
                 ..Default::default()
             }),
             vec![],
-            "INVALID_CODE_GATE_PROFILE",
+            "invalid_code_gate_profile",
         ),
         (
             RestoredNode::Formation(Formation {
@@ -784,7 +796,7 @@ fn restore_refuses_missing_foreign_and_occupied_connections_and_bad_nodes() {
                 ..Default::default()
             }),
             vec![],
-            "INVALID_NODE_RESTORE",
+            "invalid_node_restore",
         ),
     ];
     for (node, connections, code) in cases {
@@ -802,7 +814,7 @@ fn restore_refuses_missing_foreign_and_occupied_connections_and_bad_nodes() {
                 "",
             )
             .unwrap_err();
-        assert_eq!(error.code(), code);
+        assert_eq!(error.code.as_str(), code);
         assert_eq!(std::fs::read(&mission_path).unwrap(), mission_before);
         assert_eq!(std::fs::read(&layout_path).unwrap(), layout_before);
     }
@@ -887,8 +899,9 @@ fn judge_chain_extends_its_return_and_refuses_occupied_inputs() {
         store
             .patch("chain", pre(&edit), chain(1), "")
             .unwrap_err()
-            .code(),
-        "INPUT_OCCUPIED"
+            .code
+            .as_str(),
+        "input_occupied"
     );
     assert_eq!(store.mission_edit("chain").unwrap().etag, edit.etag);
     edit = store
@@ -1005,7 +1018,7 @@ fn refused_rewire_retains_original_and_occupied_connections() {
             "",
         )
         .unwrap_err();
-    assert_eq!(error.code(), "INPUT_OCCUPIED");
+    assert_eq!(error.code.as_str(), "input_occupied");
     let after = store.mission_edit("rewire").unwrap();
     assert_eq!(after.etag, edit.etag);
     assert_eq!(after.mission.connections, original);
@@ -1153,7 +1166,7 @@ fn peer_snapshot_cannot_silently_remove_a_staffed_seat() {
             "",
         )
         .unwrap_err();
-    assert_eq!(refused.code(), "SLOT_CHOICE_REQUIRED");
+    assert_eq!(refused.code.as_str(), "slot_choice_required");
     assert_eq!(store.mission_edit("peer").unwrap().etag, edit.etag);
     edit = store
         .patch(

@@ -1,13 +1,13 @@
 //! Formation titles, staffing and controller selection.
-use crate::{AuthoringError, Mission, Patch};
+use crate::{Error, Mission, Patch};
 use toml_edit::{DocumentMut, Item, TableLike, Value, value};
-fn not_found() -> AuthoringError {
-    AuthoringError::new("NOT_FOUND", "formation or slot")
+fn not_found() -> Error {
+    Error::new("not_found", "formation or slot")
 }
 pub(crate) fn formation_table<'a>(
     doc: &'a mut DocumentMut,
     id: &str,
-) -> Result<&'a mut toml_edit::Table, AuthoringError> {
+) -> Result<&'a mut toml_edit::Table, Error> {
     doc["formation"]
         .as_array_of_tables_mut()
         .and_then(|arr| {
@@ -16,10 +16,7 @@ pub(crate) fn formation_table<'a>(
         })
         .ok_or_else(not_found)
 }
-pub(crate) fn slot_table<'a>(
-    item: &'a mut Item,
-    id: &str,
-) -> Result<&'a mut dyn TableLike, AuthoringError> {
+pub(crate) fn slot_table<'a>(item: &'a mut Item, id: &str) -> Result<&'a mut dyn TableLike, Error> {
     match item {
         Item::ArrayOfTables(tables) => tables
             .iter_mut()
@@ -43,19 +40,15 @@ pub(crate) fn set(table: &mut dyn TableLike, key: &str, next: &str) {
     }
 }
 /// A brief's work item, if any, must be a reference in a written form.
-pub(crate) fn check_work(work: &str) -> Result<(), AuthoringError> {
+pub(crate) fn check_work(work: &str) -> Result<(), Error> {
     if work.is_empty() {
         return Ok(());
     }
     parvi_work_ref::parse(work)
         .map(|_| ())
-        .map_err(|invalid| AuthoringError::new("INVALID_BEAD_ID", invalid.to_string()))
+        .map_err(|invalid| Error::new("invalid_bead_id", invalid.to_string()))
 }
-pub(crate) fn apply(
-    doc: &mut DocumentMut,
-    mission: &Mission,
-    patch: Patch,
-) -> Result<bool, AuthoringError> {
+pub(crate) fn apply(doc: &mut DocumentMut, mission: &Mission, patch: Patch) -> Result<bool, Error> {
     match patch {
         Patch::SetBrief {
             formation_id,
@@ -68,7 +61,7 @@ pub(crate) fn apply(
                 return Ok(false);
             }
             let next = toml_edit::ser::to_document(&brief)
-                .map_err(|e| AuthoringError::new("INVALID_DEFINITION", e.to_string()))?
+                .map_err(|e| Error::new("invalid_definition", e.to_string()))?
                 .into_table();
             formation_table(doc, &formation_id)?["brief"] = Item::Table(next);
         }
@@ -96,7 +89,7 @@ pub(crate) fn apply(
             crate::write::set(table, "title", value(title));
             if let Some(brief) = brief {
                 let next = toml_edit::ser::to_document(&brief)
-                    .map_err(|e| AuthoringError::new("INVALID_DEFINITION", e.to_string()))?
+                    .map_err(|e| Error::new("invalid_definition", e.to_string()))?
                     .into_table();
                 table["brief"] = Item::Table(next);
             } else {
@@ -142,10 +135,7 @@ pub(crate) fn apply(
             let (agent_id, harness, model, effort) =
                 (agent_id.trim(), harness.trim(), model.trim(), effort.trim());
             if !agent_id.is_empty() && crate::roles::check_role_id(agent_id).is_err() {
-                return Err(AuthoringError::new(
-                    "INVALID_SLOT_SETTINGS",
-                    "invalid role id",
-                ));
+                return Err(Error::new("invalid_slot_settings", "invalid role id"));
             }
             if [agent_id, harness, model, effort]
                 .iter()
@@ -153,7 +143,7 @@ pub(crate) fn apply(
             {
                 crate::Harnesses::from_host()
                     .check("slot", harness, model, effort)
-                    .map_err(|e| AuthoringError::new("INVALID_SLOT_SETTINGS", e))?;
+                    .map_err(|e| Error::new("invalid_slot_settings", e))?;
             }
             if (
                 slot.agent_id.as_str(),
@@ -220,8 +210,8 @@ pub(crate) fn apply(
         } => {
             let formation = mission.formation(&formation_id).ok_or_else(not_found)?;
             if formation.kind != "orchestrated" {
-                return Err(AuthoringError::new(
-                    "INVALID_CONTROLLER_ROLE",
+                return Err(Error::new(
+                    "invalid_controller_role",
                     "formation is not orchestrated",
                 ));
             }

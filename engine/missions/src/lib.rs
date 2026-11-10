@@ -11,7 +11,6 @@ mod authoring;
 mod authoring_controls;
 mod authoring_create;
 mod authoring_delete;
-mod authoring_error;
 mod authoring_input;
 mod authoring_judge;
 mod authoring_port;
@@ -89,7 +88,6 @@ pub use arrange::arrange;
 pub use attempt_limits::{AttemptLimits, TokenMeter};
 pub use authoring::{Edit, MissionDeletion, Patch, Precondition};
 pub use authoring_controls::{EndUpdate, GateUpdate, LimitUpdate};
-pub use authoring_error::AuthoringError;
 pub use authoring_input::InputCardUpdate;
 pub use authoring_restore::RestoredNode;
 pub use characters::{Character, CharacterStore};
@@ -101,13 +99,12 @@ pub use coordinator::{
     AdmissionFailure, Coordinator, OnBlock, ResumeMode, ResumeRequest, RunSettings, RunStart,
     RunSummary,
 };
-pub use error::DefinitionError;
 pub use executor::{
     ExecutionEvent, ExecutionSink, Executor, FormationExecution, FormationResult, JudgeCorrection,
     LabExecutor, LeftSeat, OpenDispatch, UnavailableExecutor,
 };
 pub use finding::{Code, Finding, Report};
-pub use gate_request::{GateInput, GateRequest, GateRequestError};
+pub use gate_request::{GateInput, GateRequest};
 pub use harness::{
     Claude, Codex, HarnessAdapter, Harnesses, Keys, Launch, Pi, Pointer, Shell, SlotBinding,
     TokenUsage, TranscriptRoots, Turn, TurnState, codex_threads,
@@ -125,6 +122,7 @@ pub use nodes::{
 };
 pub use notes::{MISSION_THREAD, NoteEntry, Notes};
 pub use notes_authoring::{NotePatch, NotesEdit};
+pub use parvi_core::Error;
 pub use port_delivery::{GateEvidence, GateFeedback, GateResponse, RoutedInput, merge_port_inputs};
 pub use roles::{RoleCard, RoleNote, RoleStore, RoleUsage, RoleUse, Unreadable};
 pub use roles_authoring::RoleEdit;

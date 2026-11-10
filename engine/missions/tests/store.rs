@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use parvi_missions::{DefinitionError, Mission, Store};
+use parvi_missions::{Error, Mission, Store};
 
 const HELLO: &str = r#"schema = 1
 id = "msn_hello"
@@ -82,8 +82,8 @@ impl Drop for Scratch {
     }
 }
 
-fn code(result: Result<Mission, DefinitionError>) -> &'static str {
-    result.unwrap_err().code()
+fn code(result: Result<Mission, Error>) -> String {
+    result.unwrap_err().code
 }
 
 #[test]
@@ -158,7 +158,7 @@ fn one_unreadable_mission_never_hides_the_rest() {
         );
         assert_eq!(listings[2].broken.as_deref(), Some(words.as_str()));
         let err = store.read_mission("moved").unwrap_err();
-        assert_eq!((err.code(), err.to_string()), ("broken_link", words));
+        assert_eq!((err.code.as_str(), err.message), ("broken_link", words));
     }
 }
 
@@ -191,14 +191,11 @@ fn a_selector_is_a_slug_or_an_id() {
     let store = scratch.store();
     assert_eq!(store.resolve("hello").unwrap(), "hello");
     assert_eq!(
-        store.resolve("msn_hello").unwrap_err().code(),
+        store.resolve("msn_hello").unwrap_err().code,
         "ambiguous_selector"
     );
-    assert_eq!(store.resolve("nope").unwrap_err().code(), "not_found");
-    assert_eq!(
-        store.resolve("../hello").unwrap_err().code(),
-        "invalid_name"
-    );
+    assert_eq!(store.resolve("nope").unwrap_err().code, "not_found");
+    assert_eq!(store.resolve("../hello").unwrap_err().code, "invalid_name");
 }
 
 #[test]

@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::DefinitionError;
+use crate::Error;
 
 pub const LAYOUT_SCHEMA: i64 = 1;
 
@@ -41,14 +41,14 @@ pub struct LayoutEdge {
 }
 
 impl Layout {
-    pub fn parse(text: &str) -> Result<Layout, DefinitionError> {
-        let layout: Layout =
-            toml::from_str(text).map_err(|err| DefinitionError::InvalidSource(err.to_string()))?;
+    pub fn parse(text: &str) -> Result<Layout, Error> {
+        let layout: Layout = toml::from_str(text)
+            .map_err(|err| Error::new("invalid_definition_source", err.to_string()))?;
         if layout.schema != LAYOUT_SCHEMA {
-            return Err(DefinitionError::UnsupportedSchema(format!(
-                "layout schema {}",
-                layout.schema
-            )));
+            return Err(Error::new(
+                "unsupported_schema",
+                format!("layout schema {}", layout.schema),
+            ));
         }
         Ok(layout)
     }
@@ -68,7 +68,7 @@ mod tests {
         );
         let repeated = text.replace("x = 40", "x = 40\nx = 41");
         assert_eq!(
-            Layout::parse(&repeated).unwrap_err().code(),
+            Layout::parse(&repeated).unwrap_err().code,
             "invalid_definition_source"
         );
     }

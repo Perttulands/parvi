@@ -1,5 +1,5 @@
 //! End, Limit and gate field edits.
-use crate::{AuthoringError, Gate, LayoutNode, Limit, Mission, Patch};
+use crate::{Error, Gate, LayoutNode, Limit, Mission, Patch};
 use toml_edit::{DocumentMut, Item, value};
 #[derive(Clone, Debug, Default)]
 pub struct EndUpdate {
@@ -29,14 +29,14 @@ pub struct GateUpdate {
     pub check_value: Option<String>,
     pub files: Option<Vec<String>>,
 }
-fn missing() -> AuthoringError {
-    AuthoringError::new("NOT_FOUND", "node")
+fn missing() -> Error {
+    Error::new("not_found", "node")
 }
 fn table<'a>(
     doc: &'a mut DocumentMut,
     key: &str,
     id: &str,
-) -> Result<&'a mut toml_edit::Table, AuthoringError> {
+) -> Result<&'a mut toml_edit::Table, Error> {
     doc.get_mut(key)
         .and_then(Item::as_array_of_tables_mut)
         .and_then(|arr| {
@@ -45,7 +45,7 @@ fn table<'a>(
         })
         .ok_or_else(missing)
 }
-fn check_limit(mission: &Mission, limit: &mut Limit) -> Result<(), AuthoringError> {
+fn check_limit(mission: &Mission, limit: &mut Limit) -> Result<(), Error> {
     limit.target = limit.target.trim().into();
     limit.title = limit.title.trim().into();
     if limit.title.is_empty() {
@@ -55,13 +55,13 @@ fn check_limit(mission: &Mission, limit: &mut Limit) -> Result<(), AuthoringErro
         "" | "stop" => "".into(),
         "best" => "best".into(),
         "fail" => "fail".into(),
-        _ => return Err(AuthoringError::new("INVALID_LIMIT", "invalid whenSpent")),
+        _ => return Err(Error::new("invalid_limit", "invalid whenSpent")),
     };
     if !limit.target.is_empty()
         && !mission.has_input_card(&limit.target)
         && mission.formation(&limit.target).is_none()
     {
-        return Err(AuthoringError::new("INVALID_LIMIT", "invalid target"));
+        return Err(Error::new("invalid_limit", "invalid target"));
     }
     for knob in [
         &mut limit.rounds,
@@ -70,7 +70,7 @@ fn check_limit(mission: &Mission, limit: &mut Limit) -> Result<(), AuthoringErro
         &mut limit.tokens,
     ] {
         if knob.is_some_and(|n| n < 0) {
-            return Err(AuthoringError::new("INVALID_LIMIT", "negative limit"));
+            return Err(Error::new("invalid_limit", "negative limit"));
         }
         if *knob == Some(0) {
             *knob = None;
@@ -82,7 +82,7 @@ pub(crate) fn create_limit(
     doc: &mut DocumentMut,
     mission: &Mission,
     patch: Patch,
-) -> Result<LayoutNode, AuthoringError> {
+) -> Result<LayoutNode, Error> {
     let Patch::CreateLimit { mut limit, x, y } = patch else {
         unreachable!()
     };
@@ -91,33 +91,27 @@ pub(crate) fn create_limit(
     crate::authoring_create::append(doc, "limit", &limit)?;
     Ok(LayoutNode { id: limit.id, x, y })
 }
-pub(crate) fn check_gate(gate: &mut Gate) -> Result<(), AuthoringError> {
+pub(crate) fn check_gate(gate: &mut Gate) -> Result<(), Error> {
     let mut kinds = Vec::new();
     for kind in &gate.kinds {
         let kind = kind.trim();
         if !["code", "formation", "human"].contains(&kind) {
-            return Err(AuthoringError::new(
-                "INVALID_GATE_KIND",
-                "invalid gate kind",
-            ));
+            return Err(Error::new("invalid_gate_kind", "invalid gate kind"));
         }
         if !kinds.iter().any(|k| k == kind) {
             kinds.push(kind.to_owned());
         }
     }
     if kinds.is_empty() {
-        return Err(AuthoringError::new(
-            "INVALID_GATE_KIND",
-            "gate needs a kind",
-        ));
+        return Err(Error::new("invalid_gate_kind", "gate needs a kind"));
     }
     gate.kinds = kinds;
     crate::authoring_create::file_refs(&mut gate.files)?;
     let has_check_profile =
         !gate.check.is_empty() || !gate.check_version.is_empty() || !gate.check_value.is_empty();
     if has_check_profile && !gate.kinds.iter().any(|k| k == "code") {
-        return Err(AuthoringError::new(
-            "INVALID_CODE_GATE_PROFILE",
+        return Err(Error::new(
+            "invalid_code_gate_profile",
             "check needs code kind",
         ));
     }
@@ -127,8 +121,8 @@ pub(crate) fn check_gate(gate: &mut Gate) -> Result<(), AuthoringError> {
                 && (gate.check_version.is_empty() || c.version == gate.check_version)
         })
     {
-        return Err(AuthoringError::new(
-            "INVALID_CODE_GATE_PROFILE",
+        return Err(Error::new(
+            "invalid_code_gate_profile",
             "unknown code check",
         ));
     }
@@ -138,7 +132,7 @@ pub(crate) fn update(
     doc: &mut DocumentMut,
     mission: &Mission,
     patch: Patch,
-) -> Result<bool, AuthoringError> {
+) -> Result<bool, Error> {
     match patch {
         Patch::UpdateEnd(u) => {
             let old = mission.end(&u.id).ok_or_else(missing)?;
@@ -146,10 +140,7 @@ pub(crate) fn update(
                 "" | "done" => "done",
                 "rejected" => "rejected",
                 _ => {
-                    return Err(AuthoringError::new(
-                        "INVALID_END_OUTCOME",
-                        "invalid outcome",
-                    ));
+                    return Err(Error::new("invalid_end_outcome", "invalid outcome"));
                 }
             };
             let title = u.title.as_deref().unwrap_or(&old.title);
@@ -259,8 +250,8 @@ pub(crate) fn update(
                         && next.check_version.is_empty()
                         && next.check_value.is_empty())
                 {
-                    return Err(AuthoringError::new(
-                        "INVALID_CODE_GATE_PROFILE",
+                    return Err(Error::new(
+                        "invalid_code_gate_profile",
                         "check needs code kind",
                     ));
                 }

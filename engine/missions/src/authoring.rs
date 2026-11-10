@@ -1,5 +1,5 @@
 //! Revision-checked edits of mission definitions.
-use crate::{AuthoringError, Mission, Store};
+use crate::{Error, Mission, Store};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use toml_edit::{DocumentMut, value};
@@ -179,14 +179,14 @@ pub(crate) fn etag(raw: &str) -> String {
         .map(|byte| format!("{byte:02x}"))
         .collect()
 }
-pub(crate) fn now() -> Result<String, AuthoringError> {
+pub(crate) fn now() -> Result<String, Error> {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
-        .map_err(|e| AuthoringError::new("IO", e.to_string()))
+        .map_err(|e| Error::new("io", e.to_string()))
 }
-pub(crate) fn id(prefix: &str) -> Result<String, AuthoringError> {
+pub(crate) fn id(prefix: &str) -> Result<String, Error> {
     let mut bytes = [0; 8];
-    getrandom::fill(&mut bytes).map_err(|e| AuthoringError::new("IO", e.to_string()))?;
+    getrandom::fill(&mut bytes).map_err(|e| Error::new("io", e.to_string()))?;
     Ok(format!(
         "{prefix}_{}",
         bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
@@ -198,9 +198,9 @@ fn path(store: &Store, slug: &str) -> PathBuf {
         .join("missions")
         .join(format!("{slug}.mission.toml"))
 }
-fn parse_document(raw: &str) -> Result<DocumentMut, AuthoringError> {
+fn parse_document(raw: &str) -> Result<DocumentMut, Error> {
     raw.parse()
-        .map_err(|e: toml_edit::TomlError| AuthoringError::new("INVALID_DEFINITION", e.to_string()))
+        .map_err(|e: toml_edit::TomlError| Error::new("invalid_definition", e.to_string()))
 }
 
 fn editable_arrays(patch: &Patch) -> &'static [&'static str] {
@@ -244,38 +244,33 @@ fn editable_arrays(patch: &Patch) -> &'static [&'static str] {
         ],
     }
 }
-pub(crate) fn edit(raw: &str) -> Result<Edit, AuthoringError> {
+pub(crate) fn edit(raw: &str) -> Result<Edit, Error> {
     Ok(Edit {
         mission: Mission::parse(raw)?,
         etag: etag(raw),
     })
 }
-fn check(precondition: &Precondition, current: &Edit) -> Result<(), AuthoringError> {
+fn check(precondition: &Precondition, current: &Edit) -> Result<(), Error> {
     if precondition.rev == 0 || precondition.etag.is_empty() {
-        return Err(AuthoringError::new(
-            "PRECONDITION_REQUIRED",
+        return Err(Error::new(
+            "precondition_required",
             "revision and ETag are required",
         ));
     }
     if precondition.rev != current.mission.rev || precondition.etag != current.etag {
-        return Err(AuthoringError::new("CONFLICT", "mission changed"));
+        return Err(Error::new("conflict", "mission changed"));
     }
     Ok(())
 }
 
 impl Store {
-    pub fn mission_edit(&self, selector: &str) -> Result<Edit, AuthoringError> {
+    pub fn mission_edit(&self, selector: &str) -> Result<Edit, Error> {
         let slug = self.resolve(selector)?;
         let raw = crate::links::read_definition(&path(self, &slug))?;
         edit(&raw)
     }
 
-    pub fn create_mission(
-        &self,
-        slug: &str,
-        title: &str,
-        actor: &str,
-    ) -> Result<Edit, AuthoringError> {
+    pub fn create_mission(&self, slug: &str, title: &str, actor: &str) -> Result<Edit, Error> {
         crate::store::check_slug(slug)?;
         let locks = crate::write::locks(self.root(), &format!("mission:{slug}"));
         let _reference_guard = locks.references.read().unwrap_or_else(|e| e.into_inner());
@@ -283,13 +278,10 @@ impl Store {
         let target = path(self, slug);
         match std::fs::symlink_metadata(&target) {
             Ok(_) => {
-                return Err(AuthoringError::new(
-                    "ALREADY_EXISTS",
-                    "mission already exists",
-                ));
+                return Err(Error::new("already_exists", "mission already exists"));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(crate::error::io(error)),
         }
         let mut doc = DocumentMut::new();
         doc["schema"] = value(1);
@@ -311,7 +303,7 @@ impl Store {
         crate::write::set(doc.as_table_mut(), "updatedAt", toml_edit::value(now()?));
         let raw = doc.to_string();
         let result = edit(&raw)?;
-        crate::write::atomic(&target, raw.as_bytes())?;
+        crate::write::atomic(&target, raw.as_bytes()).map_err(crate::error::io)?;
         Ok(result)
     }
 
@@ -321,14 +313,14 @@ impl Store {
         precondition: Precondition,
         patch: Patch,
         actor: &str,
-    ) -> Result<Edit, AuthoringError> {
+    ) -> Result<Edit, Error> {
         let scope = crate::write::locks(self.root(), "scope");
         let _reference_guard = scope.references.read().unwrap_or_else(|e| e.into_inner());
         let slug = self.resolve(selector)?;
         let locks = crate::write::locks(self.root(), &format!("mission:{slug}"));
         let _document_guard = locks.document.lock().unwrap_or_else(|e| e.into_inner());
         if self.resolve(selector)? != slug {
-            return Err(AuthoringError::new("CONFLICT", "mission selector changed"));
+            return Err(Error::new("conflict", "mission selector changed"));
         }
         let target = path(self, &slug);
         let raw = crate::links::read_definition(&target)?;
@@ -457,9 +449,10 @@ impl Store {
             None
         };
         if let Some((path, layout_raw)) = layout {
-            crate::write::pair((&target, raw.as_bytes()), (&path, layout_raw.as_bytes()))?;
+            crate::write::pair((&target, raw.as_bytes()), (&path, layout_raw.as_bytes()))
+                .map_err(crate::error::io)?;
         } else {
-            crate::write::atomic(&target, raw.as_bytes())?;
+            crate::write::atomic(&target, raw.as_bytes()).map_err(crate::error::io)?;
         }
         Ok(updated)
     }
@@ -479,14 +472,14 @@ impl Store {
         &self,
         selector: &str,
         precondition: Precondition,
-    ) -> Result<MissionDeletion, AuthoringError> {
+    ) -> Result<MissionDeletion, Error> {
         let scope = crate::write::locks(self.root(), "scope");
         let _reference_guard = scope.references.read().unwrap_or_else(|e| e.into_inner());
         let slug = self.resolve(selector)?;
         let locks = crate::write::locks(self.root(), &format!("mission:{slug}"));
         let _document_guard = locks.document.lock().unwrap_or_else(|e| e.into_inner());
         if self.resolve(selector)? != slug {
-            return Err(AuthoringError::new("CONFLICT", "mission selector changed"));
+            return Err(Error::new("conflict", "mission selector changed"));
         }
         let target = path(self, &slug);
         let raw = crate::links::read_definition(&target)?;
@@ -503,17 +496,17 @@ impl Store {
             target.with_file_name(format!("{slug}.mission.toml.deleted-{archive_id}"));
         let has_layout = match std::fs::symlink_metadata(&layout) {
             Ok(_) => {
-                std::fs::rename(&layout, &archived_layout)?;
+                std::fs::rename(&layout, &archived_layout).map_err(crate::error::io)?;
                 true
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-            Err(e) => return Err(e.into()),
+            Err(e) => return Err(crate::error::io(e)),
         };
         if let Err(error) = std::fs::rename(&target, &archived_mission) {
             if has_layout {
-                std::fs::rename(&archived_layout, &layout)?;
+                std::fs::rename(&archived_layout, &layout).map_err(crate::error::io)?;
             }
-            return Err(error.into());
+            return Err(crate::error::io(error));
         }
         Ok(MissionDeletion {
             id: current.mission.id,

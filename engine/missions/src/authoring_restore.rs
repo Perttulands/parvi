@@ -1,6 +1,6 @@
 //! Restore a deleted node, its wires and its canvas position in one edit.
 use crate::{
-    AuthoringError, Connection, End, Formation, Gate, InputCard, LayoutNode, Limit, Mission, Patch,
+    Connection, End, Error, Formation, Gate, InputCard, LayoutNode, Limit, Mission, Patch,
 };
 use serde::Serialize;
 use std::collections::HashSet;
@@ -13,15 +13,15 @@ pub enum RestoredNode {
     End(End),
     Limit(Limit),
 }
-fn invalid(message: &str) -> AuthoringError {
-    AuthoringError::new("INVALID_NODE_RESTORE", message)
+fn invalid(message: &str) -> Error {
+    Error::new("invalid_node_restore", message)
 }
 fn put<T: Serialize>(
     doc: &mut DocumentMut,
     key: &str,
     node: &T,
     index: Option<usize>,
-) -> Result<(), AuthoringError> {
+) -> Result<(), Error> {
     let table = toml_edit::ser::to_document(node)
         .map_err(|e| invalid(&e.to_string()))?
         .into_table();
@@ -49,7 +49,7 @@ pub(crate) fn apply(
     index: Option<usize>,
     x: i64,
     y: i64,
-) -> Result<LayoutNode, AuthoringError> {
+) -> Result<LayoutNode, Error> {
     let id = match &node {
         RestoredNode::InputCard(n) => &n.id,
         RestoredNode::Formation(n) => &n.id,
@@ -86,8 +86,8 @@ pub(crate) fn apply(
         }
         RestoredNode::Formation(n) => {
             if !["solo", "peer", "orchestrated"].contains(&n.kind.as_str()) {
-                return Err(AuthoringError::new(
-                    "UNSUPPORTED_FORMATION_TYPE",
+                return Err(Error::new(
+                    "unsupported_formation_type",
                     "invalid formation type",
                 ));
             }
@@ -104,7 +104,7 @@ pub(crate) fn apply(
                     .iter()
                     .any(|p| !["", "text", "file", "folder"].contains(&p.kind.as_str()))
             {
-                return Err(AuthoringError::new("INVALID_PORT", "invalid port kind"));
+                return Err(Error::new("invalid_port", "invalid port kind"));
             }
             for port in n.inputs.iter_mut().chain(&mut n.outputs) {
                 if port.kind == "text" {
@@ -153,10 +153,7 @@ pub(crate) fn apply(
                 n.outcome = "done".into();
             }
             if !["done", "rejected"].contains(&n.outcome.as_str()) {
-                return Err(AuthoringError::new(
-                    "INVALID_END_OUTCOME",
-                    "invalid End outcome",
-                ));
+                return Err(Error::new("invalid_end_outcome", "invalid End outcome"));
             }
             if n.title.trim().is_empty() {
                 n.title = if n.outcome == "done" {
@@ -177,10 +174,7 @@ pub(crate) fn apply(
                 .flatten()
                 .any(|v| v <= 0)
             {
-                return Err(AuthoringError::new(
-                    "INVALID_LIMIT",
-                    "limit knobs must be positive",
-                ));
+                return Err(Error::new("invalid_limit", "limit knobs must be positive"));
             }
             put(doc, "limit", n, index)?;
         }
@@ -206,7 +200,7 @@ pub(crate) fn apply(
             },
         )
         .map_err(|e| {
-            if ["NOT_FOUND", "INPUT_OCCUPIED"].contains(&e.code()) {
+            if ["not_found", "input_occupied"].contains(&e.code.as_str()) {
                 invalid(&e.to_string())
             } else {
                 e

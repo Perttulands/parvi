@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::error::DefinitionError;
+use crate::Error;
 
 pub const NOTES_SCHEMA: i64 = 2;
 /// The target of the mission's own thread.
@@ -57,14 +57,14 @@ impl Notes {
         }
     }
 
-    pub fn parse(text: &str) -> Result<Notes, DefinitionError> {
-        let invalid = DefinitionError::InvalidSource;
+    pub fn parse(text: &str) -> Result<Notes, Error> {
+        let invalid = |message| Error::new("invalid_definition_source", message);
         let notes: Notes = toml::from_str(text).map_err(|err| invalid(err.to_string()))?;
         if notes.schema != NOTES_SCHEMA {
-            return Err(DefinitionError::UnsupportedSchema(format!(
-                "notes schema {}",
-                notes.schema
-            )));
+            return Err(Error::new(
+                "unsupported_schema",
+                format!("notes schema {}", notes.schema),
+            ));
         }
         if notes.mission_id.trim().is_empty() || notes.rev < 1 || notes.updated_at.is_empty() {
             return Err(invalid("invalid mission notes metadata".to_owned()));

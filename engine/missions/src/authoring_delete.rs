@@ -1,5 +1,5 @@
 //! Remove a node, its wires and dependent Limit cards as one edit.
-use crate::{AuthoringError, Edit, Patch, Store};
+use crate::{Edit, Error, Patch, Store};
 use std::collections::HashSet;
 use std::path::Path;
 use toml_edit::DocumentMut;
@@ -36,7 +36,7 @@ pub(crate) fn apply(
     current: Edit,
     patch: Patch,
     actor: &str,
-) -> Result<Edit, AuthoringError> {
+) -> Result<Edit, Error> {
     let (key, id, remove_limits) = match patch {
         Patch::DeleteInputCard { id } => ("inputCard", id, false),
         Patch::DeleteFormation { id } => ("formation", id, true),
@@ -47,7 +47,7 @@ pub(crate) fn apply(
     };
     let mut ids = HashSet::from([id.clone()]);
     if !remove(&mut doc, key, &ids) {
-        return Err(AuthoringError::new("NOT_FOUND", format!("node {id:?}")));
+        return Err(Error::new("not_found", format!("node {id:?}")));
     }
     if remove_limits {
         for limit in &current.mission.limits {
@@ -90,13 +90,10 @@ pub(crate) fn apply(
         Ok(raw) => {
             let old = crate::Layout::parse(&raw)?;
             if old.mission_id != updated.mission.id {
-                return Err(AuthoringError::new(
-                    "CONFLICT",
-                    "layout belongs to another mission",
-                ));
+                return Err(Error::new("conflict", "layout belongs to another mission"));
             }
             let mut doc: DocumentMut = raw.parse().map_err(|e: toml_edit::TomlError| {
-                AuthoringError::new("INVALID_DEFINITION", e.to_string())
+                Error::new("invalid_definition", e.to_string())
             })?;
             crate::write::table_arrays(&mut doc, &["node"]);
             remove(&mut doc, "node", &ids);
@@ -114,16 +111,17 @@ pub(crate) fn apply(
             crate::Layout::parse(&raw)?;
             Some(raw)
         }
-        Err(crate::DefinitionError::NotFound(_)) => None,
-        Err(error) => return Err(error.into()),
+        Err(error) if error.code == "not_found" => None,
+        Err(error) => return Err(error),
     };
     if let Some(layout_raw) = layout {
         crate::write::pair(
             (target, raw.as_bytes()),
             (&layout_path, layout_raw.as_bytes()),
-        )?;
+        )
+        .map_err(crate::error::io)?;
     } else {
-        crate::write::atomic(target, raw.as_bytes())?;
+        crate::write::atomic(target, raw.as_bytes()).map_err(crate::error::io)?;
     }
     Ok(updated)
 }

@@ -164,7 +164,7 @@ fn gate_rejects_bad_kinds_and_checks_without_mutation() {
                 kinds: Some(vec![]),
                 ..Default::default()
             },
-            "INVALID_GATE_KIND",
+            "invalid_gate_kind",
         ),
         (
             parvi_missions::GateUpdate {
@@ -172,7 +172,7 @@ fn gate_rejects_bad_kinds_and_checks_without_mutation() {
                 kinds: Some(vec!["human".into(), "robot".into()]),
                 ..Default::default()
             },
-            "INVALID_GATE_KIND",
+            "invalid_gate_kind",
         ),
         (
             parvi_missions::GateUpdate {
@@ -181,7 +181,7 @@ fn gate_rejects_bad_kinds_and_checks_without_mutation() {
                 check: Some("output_contains".into()),
                 ..Default::default()
             },
-            "INVALID_CODE_GATE_PROFILE",
+            "invalid_code_gate_profile",
         ),
         (
             parvi_missions::GateUpdate {
@@ -189,7 +189,7 @@ fn gate_rejects_bad_kinds_and_checks_without_mutation() {
                 check_version: Some("999".into()),
                 ..Default::default()
             },
-            "INVALID_CODE_GATE_PROFILE",
+            "invalid_code_gate_profile",
         ),
         (
             parvi_missions::GateUpdate {
@@ -197,14 +197,15 @@ fn gate_rejects_bad_kinds_and_checks_without_mutation() {
                 title: Some("x".into()),
                 ..Default::default()
             },
-            "NOT_FOUND",
+            "not_found",
         ),
     ] {
         assert_eq!(
             store
                 .patch("gate", pre(&edit), Patch::UpdateGate(update), "")
                 .unwrap_err()
-                .code(),
+                .code
+                .as_str(),
             code
         );
         assert_eq!(std::fs::read(&path).unwrap(), before);
@@ -286,8 +287,9 @@ fn slot_settings_round_trip_and_invalid_assignments_write_nothing() {
             store
                 .patch("seat", pre(&edit), patch, "")
                 .unwrap_err()
-                .code(),
-            "INVALID_SLOT_SETTINGS"
+                .code
+                .as_str(),
+            "invalid_slot_settings"
         );
         assert_eq!(std::fs::read(&path).unwrap(), before);
     }
@@ -423,8 +425,12 @@ fn repeated_node_type_port_and_judge_edits_keep_bytes_and_check_etags() {
         );
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
         assert_eq!(
-            store.patch("same", stale, patch, "").unwrap_err().code(),
-            "CONFLICT"
+            store
+                .patch("same", stale, patch, "")
+                .unwrap_err()
+                .code
+                .as_str(),
+            "conflict"
         );
     }
 }
@@ -476,7 +482,7 @@ fn brief_rejects_unsafe_work_references_without_writing() {
                 "",
             )
             .unwrap_err();
-        assert_eq!(error.code(), "INVALID_BEAD_ID", "{work:?}");
+        assert_eq!(error.code.as_str(), "invalid_bead_id", "{work:?}");
         assert_eq!(std::fs::read(&path).unwrap(), before);
     }
     let saved = store

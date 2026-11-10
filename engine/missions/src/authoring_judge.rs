@@ -1,15 +1,11 @@
 //! Judge chain attachment and detachment.
-use crate::{AuthoringError, Mission, Patch};
+use crate::{Error, Mission, Patch};
 use std::collections::BTreeSet;
 use toml_edit::{DocumentMut, Item, value};
-fn missing() -> AuthoringError {
-    AuthoringError::new("NOT_FOUND", "gate or judge formation")
+fn missing() -> Error {
+    Error::new("not_found", "gate or judge formation")
 }
-pub(crate) fn apply(
-    doc: &mut DocumentMut,
-    mission: &Mission,
-    patch: Patch,
-) -> Result<bool, AuthoringError> {
+pub(crate) fn apply(doc: &mut DocumentMut, mission: &Mission, patch: Patch) -> Result<bool, Error> {
     let (gate_id, chain) = match patch {
         Patch::SetGateJudge { gate_id, chain } => (gate_id, Some(chain)),
         Patch::DetachGateJudge { gate_id } => (gate_id, None),
