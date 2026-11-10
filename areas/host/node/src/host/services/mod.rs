@@ -26,7 +26,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-pub use parvi_host_contract::{Outcome, Service as Status};
+use parvi_host_contract::{Outcome, Service};
 use tokio::sync::Mutex;
 
 use catalog::Entry;
@@ -64,10 +64,10 @@ pub fn group(components: &[&str]) -> &'static str {
     }
 }
 
-async fn status(e: &Entry) -> Status {
+async fn status(e: &Entry) -> Service {
     let reads = e.components.iter().map(systemd::state);
     let components = futures_util::future::join_all(reads).await;
-    Status {
+    Service {
         id: e.id.clone(),
         name: e.name.clone(),
         description: e.description.clone(),
@@ -105,7 +105,7 @@ impl Services {
         catalog::read(&self.catalog).map_err(|e| Refused(StatusCode::SERVICE_UNAVAILABLE, e))
     }
 
-    pub async fn list(&self) -> Result<Vec<Status>, Refused> {
+    pub async fn list(&self) -> Result<Vec<Service>, Refused> {
         let entries = self.entries()?;
         Ok(futures_util::future::join_all(entries.iter().map(status)).await)
     }
@@ -123,7 +123,7 @@ impl Services {
     }
 
     /// One service as its units are now.
-    pub async fn one(&self, id: &str) -> Result<Status, Refused> {
+    pub async fn one(&self, id: &str) -> Result<Service, Refused> {
         Ok(status(&self.entry(id)?).await)
     }
 
@@ -135,7 +135,7 @@ impl Services {
         &self,
         id: &str,
         action: &str,
-    ) -> Result<(Status, Vec<String>, Outcome), Refused> {
+    ) -> Result<(Service, Vec<String>, Outcome), Refused> {
         let bad = |m: &str| Refused(StatusCode::BAD_REQUEST, m.to_string());
         let steps: &[&str] = match action {
             "start" => &["start"],
