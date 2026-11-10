@@ -25,6 +25,8 @@ pub struct Chord {
     pub direct: Option<Direct>,
     pub label: String,
     pub run: Run,
+    /// Live while any page shows, not only its own.
+    pub everywhere: bool,
 }
 
 impl Chord {
@@ -38,7 +40,14 @@ impl Chord {
             direct: None,
             label: label.into(),
             run: Rc::new(run),
+            everywhere: false,
         }
+    }
+
+    /// Live while any page shows: it brings its own page forward itself.
+    pub fn everywhere(mut self) -> Self {
+        self.everywhere = true;
+        self
     }
 
     /// Alt and `key`, Shift as `shift` says (`None` where the layout

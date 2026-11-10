@@ -16,9 +16,9 @@ use crate::link::socket::{Event, Net};
 use crate::menu::Menu;
 use crate::settings::Settings;
 use crate::theme::motion;
-use gpui::{Context, EventEmitter, Task};
+use gpui::{Context, EventEmitter, SystemNotification, Task};
 use parvi_core::{Error, NodeId};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime};
@@ -88,6 +88,8 @@ pub struct Hub {
     heard: HashSet<String>,
     /// Devices said to be away.
     away: HashSet<String>,
+    /// What a click on each desktop notification posted does, by its tag.
+    clicks: HashMap<String, Run>,
 }
 
 impl EventEmitter<HubEvent> for Hub {}
@@ -126,6 +128,7 @@ impl Hub {
             answers: vec![],
             heard: HashSet::new(),
             away: HashSet::new(),
+            clicks: HashMap::new(),
         }
     }
 
@@ -145,6 +148,17 @@ impl Hub {
     pub fn redial(&mut self, cx: &mut Context<Self>) {
         self.fleet.redial();
         cx.notify();
+    }
+
+    /// Posts a desktop notification, keeping what a click on it does.
+    pub fn notify(&mut self, n: SystemNotification, click: Run, cx: &mut Context<Self>) {
+        self.clicks.insert(n.tag.to_string(), click);
+        cx.show_system_notification(n);
+    }
+
+    /// What a click on the notification tagged `tag` does, once.
+    pub fn clicked(&mut self, tag: &str) -> Option<Run> {
+        self.clicks.remove(tag)
     }
 
     /// A status action that dials again.

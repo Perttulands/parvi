@@ -56,6 +56,7 @@ pub fn start(
             }
         })
         .detach();
+    follow_clicks(&hub, window, cx);
     let pages = shell::mount(builds, &hub, window, cx)
         .unwrap_or_else(|e| panic!("Parvi refuses to start: {e}"));
     let shell = Shell::new(hub.clone(), pages, window, cx);
@@ -67,6 +68,22 @@ pub fn start(
     });
     window.focus(&shell.focus, cx);
     shell
+}
+
+/// A click on a desktop notification brings this window forward and runs
+/// what its page asked.
+fn follow_clicks(hub: &gpui::Entity<Hub>, window: &Window, cx: &mut App) {
+    let hub = hub.downgrade();
+    let handle = window.window_handle();
+    cx.on_system_notification_response(move |response, cx| {
+        let Ok(Some(run)) = hub.update(cx, |h, _| h.clicked(&response.tag)) else {
+            return;
+        };
+        let _ = handle.update(cx, |_, window, cx| {
+            window.activate_window();
+            run(window, cx);
+        });
+    });
 }
 
 /// `PARVI_APP_BOUNDS=x,y,w,h` places the window exactly (tests on an

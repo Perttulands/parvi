@@ -29,7 +29,7 @@ fn spaced(s: &str) -> String {
 }
 
 impl Shell {
-    fn render_tab_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_tab_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
         let off = self.hub.read(cx).areas_off();
         let mut bar = div()
@@ -45,6 +45,10 @@ impl Shell {
                 continue;
             }
             let active = self.shown == Some(i);
+            if let Some(tabs) = page.tabs(active, window, cx) {
+                bar = bar.child(tabs);
+                continue;
+            }
             bar = bar.child(
                 div()
                     .id(("tab", i))
@@ -426,7 +430,7 @@ impl Render for Shell {
             .font_family(theme::FAMILY)
             .text_size(px(size::TEXT))
             .capture_key_down(cx.listener(Self::capture_key))
-            .child(self.render_tab_bar(cx))
+            .child(self.render_tab_bar(window, cx))
             .child(
                 div()
                     .id("page")

@@ -232,8 +232,8 @@ impl Shell {
         window.focus(&to, cx);
     }
 
-    /// The chords live now: the shell's, then the shown page's, which win
-    /// a key both take.
+    /// The chords live now: the shell's, those of pages not shown that are
+    /// live everywhere, then the shown page's, which win a key both take.
     pub fn chords(&self, cx: &mut Context<Self>) -> Vec<Chord> {
         let shell = cx.entity().downgrade();
         let hub = self.hub.downgrade();
@@ -250,6 +250,11 @@ impl Shell {
                 });
             }),
         ];
+        for (i, page) in self.pages.iter().enumerate() {
+            if self.shown != Some(i) {
+                all.extend(page.chords(cx).into_iter().filter(|c| c.everywhere));
+            }
+        }
         if let Some(i) = self.shown {
             all.extend(self.pages[i].chords(cx));
         }

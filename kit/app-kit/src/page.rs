@@ -49,13 +49,26 @@ pub trait Page: Render + Sized + 'static {
     ) {
     }
 
+    /// Its own tabs on the tab bar, in its place there, when one tab is not
+    /// enough; `shown` says whether the page is the one shown. A click on
+    /// them shows the page through its Host.
+    fn tabs(
+        &mut self,
+        _shown: bool,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        None
+    }
+
     /// The page came forward (`true`) or went behind another.
     fn shown(&mut self, _shown: bool, _window: &mut Window, _cx: &mut Context<Self>) {}
 
     /// An ask of a kind it answers.
     fn answer(&mut self, _ask: Ask, _window: &mut Window, _cx: &mut Context<Self>) {}
 
-    /// Its chords, live while it shows.
+    /// Its chords, live while it shows; those marked
+    /// [`Chord::everywhere`] are live while any page shows.
     fn chords(&self, _cx: &App) -> Vec<Chord> {
         vec![]
     }
@@ -130,6 +143,9 @@ impl Mounted {
     pub fn link(&self, node: &NodeId, state: Option<LinkState>, window: &mut Window, cx: &mut App) {
         self.slot.link(node, state, window, cx)
     }
+    pub fn tabs(&self, shown: bool, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
+        self.slot.tabs(shown, window, cx)
+    }
     pub fn shown(&self, shown: bool, window: &mut Window, cx: &mut App) {
         self.slot.shown(shown, window, cx)
     }
@@ -153,6 +169,7 @@ trait Slot {
     fn draw(&self, window: &mut Window, cx: &mut App) -> AnyElement;
     fn frame(&self, node: &NodeId, kind: u8, body: &[u8], window: &mut Window, cx: &mut App);
     fn link(&self, node: &NodeId, state: Option<LinkState>, window: &mut Window, cx: &mut App);
+    fn tabs(&self, shown: bool, window: &mut Window, cx: &mut App) -> Option<AnyElement>;
     fn shown(&self, shown: bool, window: &mut Window, cx: &mut App);
     fn answer(&self, ask: Ask, window: &mut Window, cx: &mut App);
     fn chords(&self, cx: &App) -> Vec<Chord>;
@@ -172,6 +189,9 @@ impl<P: Page> Slot for Entity<P> {
     }
     fn link(&self, node: &NodeId, state: Option<LinkState>, window: &mut Window, cx: &mut App) {
         self.update(cx, |p, cx| p.link(node, state, window, cx))
+    }
+    fn tabs(&self, shown: bool, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
+        self.update(cx, |p, cx| p.tabs(shown, window, cx))
     }
     fn shown(&self, shown: bool, window: &mut Window, cx: &mut App) {
         self.update(cx, |p, cx| p.shown(shown, window, cx))

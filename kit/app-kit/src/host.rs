@@ -11,7 +11,9 @@ use crate::link::http;
 use crate::link::socket::Tap;
 use crate::menu::{Menu, MenuRow};
 use crate::settings::Place;
-use gpui::{AnyView, App, Context, Entity, FocusHandle, Pixels, Point, Task, WeakEntity};
+use gpui::{
+    AnyView, App, Context, Entity, FocusHandle, Pixels, Point, SystemNotification, Task, WeakEntity,
+};
 use parvi_core::{Error, NodeId};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -308,11 +310,17 @@ impl Host {
 
     /// Opens a menu at `at`.
     pub fn menu(&self, rows: Vec<MenuRow>, at: Point<Pixels>, cx: &mut App) {
-        let menu = Menu {
-            rows,
-            at,
-            armed: None,
-        };
+        self.open_menu(rows, at, None, cx);
+    }
+
+    /// Opens a menu at `at` with its danger row `armed` already: a key
+    /// that asked for the danger opens it one confirmation away.
+    pub fn menu_armed(&self, rows: Vec<MenuRow>, at: Point<Pixels>, armed: usize, cx: &mut App) {
+        self.open_menu(rows, at, Some(armed), cx);
+    }
+
+    fn open_menu(&self, rows: Vec<MenuRow>, at: Point<Pixels>, armed: Option<usize>, cx: &mut App) {
+        let menu = Menu { rows, at, armed };
         self.update(cx, |h, cx| h.open(Surface::Menu(menu), cx));
     }
 
@@ -360,6 +368,22 @@ impl Host {
     pub fn ask(&self, ask: Ask, cx: &mut App) -> Result<(), Error> {
         self.update(cx, |h, cx| h.ask(ask, cx))
             .unwrap_or_else(|| Err(Error::new("closed", "The app is closing.")))
+    }
+
+    /// Dials every link again now, instead of waiting out its backoff.
+    pub fn redial(&self, cx: &mut App) {
+        self.update(cx, |h, cx| h.redial(cx));
+    }
+
+    /// Posts a desktop notification; a click on it runs `click` in the
+    /// window it came from. A later one with the same tag replaces it.
+    pub fn notify(
+        &self,
+        notification: SystemNotification,
+        click: impl Fn(&mut gpui::Window, &mut App) + 'static,
+        cx: &mut App,
+    ) {
+        self.update(cx, |h, cx| h.notify(notification, Rc::new(click), cx));
     }
 
     /// Shows this page.
