@@ -128,7 +128,7 @@ async fn health_and_version_identify_the_serving_node() {
         health["environment"].as_str(),
         Some("linux" | "wsl")
     ));
-    assert_eq!(health["protocol"], parvi_node_kit::serve::PROTOCOL);
+    assert_eq!(health["protocol"], parvi_core::PROTOCOL);
     assert_eq!(health["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(version["version"], health["version"]);
     assert!(

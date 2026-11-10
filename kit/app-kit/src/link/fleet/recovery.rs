@@ -7,10 +7,12 @@
 
 use super::Fleet;
 use crate::link::client::{LinkState, Notice};
-use crate::link::frames::{HELLO, NODES, PROTOCOL};
+use crate::link::frames::NODES;
 use crate::link::socket::{Event, Net};
 use crate::settings::Place;
 use futures_util::{SinkExt, StreamExt};
+use parvi_core::PROTOCOL;
+use parvi_core::frame::HELLO;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;

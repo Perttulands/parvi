@@ -6,7 +6,7 @@
 use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
-use parvi_node_kit::serve::Hello;
+use parvi_core::Hello;
 use parvi_terminals_contract::{self as protocol, Up};
 use parvi_testkit::node::Node;
 use parvi_testkit::tmux::Server as Tmux;
@@ -88,7 +88,7 @@ async fn every_connection_starts_with_the_hello() {
         assert_eq!(hello.node, node.id());
         assert_eq!(hello.device, "test-rig");
         assert_eq!(hello.version, env!("CARGO_PKG_VERSION"));
-        assert_eq!(hello.protocol, parvi_node_kit::serve::PROTOCOL);
+        assert_eq!(hello.protocol, parvi_core::PROTOCOL);
         assert_eq!(next_frame(&mut ws).await[0], protocol::SESSIONS);
     }
     node.stop().await;

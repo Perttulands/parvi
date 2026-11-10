@@ -1,15 +1,10 @@
-//! The hello: the first frame on every `/ws` connection, saying which node
-//! answered and which protocol it speaks. There is no cross-version
-//! compatibility, so a client that speaks another protocol stops here.
-
-use serde::Deserialize;
+//! The hello this node sends first on every `/ws` connection
+//! ([`parvi_core::Hello`] reads it).
 
 use crate::identity::Identity;
+use parvi_core::PROTOCOL;
 use parvi_core::frame::HELLO;
 use parvi_core::json::push_string as push_json_string;
-
-/// The protocol version. Bump it with any change to the `/ws` frames.
-pub const PROTOCOL: u32 = 16;
 
 /// `0x00` and JSON: `{"node":…,"device":…,"environment":"wsl","version":"0.0.1","protocol":16}`.
 pub fn hello(node: &Identity, off: &[&str]) -> Vec<u8> {
@@ -32,33 +27,11 @@ pub fn hello(node: &Identity, off: &[&str]) -> Vec<u8> {
     frame
 }
 
-/// A hello as another node sent it.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct Hello {
-    pub node: String,
-    pub device: String,
-    pub environment: String,
-    pub version: String,
-    pub protocol: u32,
-    /// The areas it has turned off.
-    #[serde(default)]
-    pub off: Vec<String>,
-}
-
-impl Hello {
-    /// Reads a hello frame, or `None` when the frame is not one.
-    pub fn decode(frame: &[u8]) -> Option<Hello> {
-        let (&HELLO, json) = frame.split_first()? else {
-            return None;
-        };
-        serde_json::from_slice(json).ok()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::identity::Environment;
+    use parvi_core::Hello;
 
     #[test]
     fn reads_back_the_hello_it_sends() {

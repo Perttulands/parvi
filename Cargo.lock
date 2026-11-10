@@ -4098,6 +4098,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "jiff",
+ "parvi-core",
  "parvi-node-kit",
  "parvi-scheduled",
  "parvi-terminals",

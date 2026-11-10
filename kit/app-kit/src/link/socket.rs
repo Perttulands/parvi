@@ -2,8 +2,8 @@
 //! dial again with backoff when it drops.
 //! It knows nothing about stores or views: it hands frames to its caller.
 
-use super::frames::{self, Hello, PROTOCOL};
 use futures_util::{SinkExt, StreamExt};
+use parvi_core::{Hello, PROTOCOL};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Notify, mpsc};
@@ -205,7 +205,7 @@ async fn session(
                     Some(Ok(_)) => continue,
                 };
                 if !open {
-                    match frames::hello(&bytes) {
+                    match Hello::decode(&bytes) {
                         Some(hello) if hello.protocol == PROTOCOL => {
                             open = true;
                             if events.send(Event::Opened(id, hello)).await.is_err() {

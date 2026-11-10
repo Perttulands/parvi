@@ -21,13 +21,13 @@ use axum::http::StatusCode;
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use parvi_core::Error;
 use parvi_core::frame::{self, HELLO};
+use parvi_core::{Error, PROTOCOL};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
-pub use hello::{Hello, PROTOCOL, hello};
+pub use hello::hello;
 pub use trust::Trust;
 
 use crate::config::Config;
