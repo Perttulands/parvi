@@ -1,0 +1,18 @@
+[package]
+name = "parvi-files-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+parvi-app-kit = { path = "../../../kit/app-kit" }
+parvi-files-contract = { path = "../contract" }
+serde = { version = "1", features = ["derive"] }
+time = { version = "0.3", features = ["local-offset"] }
+gpui = { package = "gpui-pre", version = "=0.3.11" }
+gltf = { version = "1.4", default-features = false, features = ["utils", "names"] }
+image = { version = "0.25", default-features = false }
