@@ -175,6 +175,16 @@ impl Server {
 }
 
 impl Server {
+    /// Ends the server as `kill-server` does, returning only once its
+    /// process has exited: `kill-server` answers before the server is gone,
+    /// so a command sent right after it can reach the exiting server. The
+    /// next command that needs a server starts a new one on the same socket.
+    pub fn kill(&self) {
+        if let Err(error) = self.stop() {
+            panic!("tmux server in {}: {error}", self.dir.display());
+        }
+    }
+
     /// Stops this test's server, if one runs, and waits until its process has
     /// exited. The socket is in this test's private directory, so whatever
     /// answers there is this test's; it is stopped by its process id.

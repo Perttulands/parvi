@@ -72,7 +72,7 @@ async fn finds_no_session_when_no_server_runs() {
     assert_eq!(engine.find_session("owned").await.unwrap(), None);
     // tmux leaves its socket file behind when the server exits.
     server.new_session("bootstrap", 80, 24);
-    server.run(&["kill-server"]);
+    server.kill();
     assert_eq!(engine.find_session("owned").await.unwrap(), None);
     engine.stop().await;
 }
@@ -104,7 +104,7 @@ async fn refuses_to_kill_a_replacement_server() {
     };
     let engine = Engine::start(server.socket());
     let old = engine.create_session(spec("old")).await.unwrap();
-    server.run(&["kill-server"]);
+    server.kill();
     server.new_session("replacement", 80, 24);
     assert_eq!(
         old.session_id,
