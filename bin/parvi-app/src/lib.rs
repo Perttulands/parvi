@@ -1,89 +1,20 @@
-//! Parvi's native app: the shell around the pages the app registers. The
-//! pages come from `main.rs`'s `PAGES`; the shell knows them only through
-//! `parvi_app_kit::Page`.
+//! Parvi's native app: the shell (`parvi-app-shell`) in a window, holding
+//! the pages listed here. Each area's page is listed here, and nowhere else.
 
-pub mod app_log;
-mod chrome;
-mod keys;
-pub mod shell;
-pub mod view_control;
+mod app_log;
 
-pub use shell::Shell;
-
-use gpui::{
-    App, AppContext, Bounds, Context, Window, WindowBounds, WindowOptions, point, px, size,
-};
-use parvi_app_kit::link::socket::Net;
-use parvi_app_kit::theme::Theme;
-use parvi_app_kit::widgets::field;
-use parvi_app_kit::{Build, Hub};
+use gpui::{App, AppContext, Bounds, WindowBounds, WindowOptions, point, px, size};
+use parvi_app_kit::Build;
+use parvi_app_shell::start;
 use std::borrow::Cow;
-use std::path::PathBuf;
 
-pub fn fonts() -> Vec<Cow<'static, [u8]>> {
+pub const PAGES: &[Build] = &[parvi_terminals_app::build, parvi_scheduled_app::build];
+
+fn fonts() -> Vec<Cow<'static, [u8]>> {
     vec![
         Cow::Borrowed(include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf").as_slice()),
         Cow::Borrowed(include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf").as_slice()),
     ]
-}
-
-/// What every window of the app needs before it opens.
-pub fn prepare(cx: &mut App) {
-    cx.set_global(Theme::violet());
-    field::bind_keys(cx);
-}
-
-/// The shell in `window`, its pages made from `builds` and its link
-/// dialling `node` (or the settings' node). Settings are kept at
-/// `settings` (none: not kept). Refuses to start, naming them, when two
-/// pages clash.
-pub fn start(
-    builds: &[Build],
-    node: Option<String>,
-    settings: Option<PathBuf>,
-    window: &mut Window,
-    cx: &mut Context<Shell>,
-) -> Shell {
-    let (tx, rx) = async_channel::unbounded();
-    let hub = cx.new(|_| Hub::new(Net::start(), tx, settings));
-    let weak = hub.downgrade();
-    window
-        .spawn(cx, async move |cx| {
-            while let Ok(ev) = rx.recv().await {
-                if weak.update(cx, |h, cx| h.handle(ev, cx)).is_err() {
-                    break;
-                }
-            }
-        })
-        .detach();
-    follow_clicks(&hub, window, cx);
-    let pages = shell::mount(builds, &hub, window, cx)
-        .unwrap_or_else(|e| panic!("Parvi refuses to start: {e}"));
-    let shell = Shell::new(hub.clone(), pages, window, cx);
-    hub.update(cx, |h, cx| {
-        if let Some(n) = node {
-            h.settings.node = n;
-        }
-        h.connect(cx);
-    });
-    window.focus(&shell.focus, cx);
-    shell
-}
-
-/// A click on a desktop notification brings this window forward and runs
-/// what its page asked.
-fn follow_clicks(hub: &gpui::Entity<Hub>, window: &Window, cx: &mut App) {
-    let hub = hub.downgrade();
-    let handle = window.window_handle();
-    cx.on_system_notification_response(move |response, cx| {
-        let Ok(Some(run)) = hub.update(cx, |h, _| h.clicked(&response.tag)) else {
-            return;
-        };
-        let _ = handle.update(cx, |_, window, cx| {
-            window.activate_window();
-            run(window, cx);
-        });
-    });
 }
 
 /// `PARVI_APP_BOUNDS=x,y,w,h` places the window exactly (tests on an
@@ -99,7 +30,7 @@ fn bounds(cx: &App) -> Bounds<gpui::Pixels> {
 }
 
 /// The app: `parvi-app [--node http://host:port]`.
-pub fn run(builds: &'static [Build]) {
+pub fn run() {
     let node = {
         let args: Vec<String> = std::env::args().collect();
         args.iter()
@@ -111,7 +42,7 @@ pub fn run(builds: &'static [Build]) {
         if let Err(e) = cx.text_system().add_fonts(fonts()) {
             panic!("the bundled fonts did not load: {e}");
         }
-        prepare(cx);
+        parvi_app_shell::prepare(cx);
         // Desktop notifications need the app named before they are posted.
         cx.set_app_identity("io.parvi.app", "Parvi");
         let opened = cx.open_window(
@@ -126,7 +57,7 @@ pub fn run(builds: &'static [Build]) {
             },
             |window, cx| {
                 let shell =
-                    cx.new(|cx| start(builds, node, parvi_app_kit::settings::path(), window, cx));
+                    cx.new(|cx| start(PAGES, node, parvi_app_kit::settings::path(), window, cx));
                 let hub = shell.read(cx).hub().downgrade();
                 window
                     .spawn(cx, async move |cx| {

@@ -38,9 +38,13 @@ fn package_name(dir: &Path) -> String {
 /// The workspace paths a crate's normal and build dependencies point at,
 /// relative to the root (`areas/terminals/contract`).
 fn uses(dir: &Path) -> Vec<String> {
+    uses_in(dir, &["dependencies", "build-dependencies"])
+}
+
+fn uses_in(dir: &Path, tables: &[&str]) -> Vec<String> {
     let manifest = manifest(dir);
     let root = fs::canonicalize(root()).unwrap();
-    ["dependencies", "build-dependencies"]
+    tables
         .iter()
         .filter_map(|table| manifest.get(*table).and_then(|deps| deps.as_table()))
         .flat_map(|deps| deps.values())
@@ -121,6 +125,22 @@ fn dependencies_point_one_way() {
                     allowed,
                     "areas/{area}/{side} uses {used}: an area reaches another \
                      only by its contract or a provided interface"
+                );
+            }
+        }
+    }
+}
+
+/// An area's tests drive the shell crate, not a binary, so they build no
+/// other area's pages.
+#[test]
+fn an_areas_tests_build_no_binary() {
+    for (area, dir) in crates_of_areas() {
+        for (side, crate_dir) in crates(&dir) {
+            for used in uses_in(&crate_dir, &["dev-dependencies"]) {
+                assert!(
+                    !used.starts_with("bin/"),
+                    "areas/{area}/{side}'s tests use {used}"
                 );
             }
         }

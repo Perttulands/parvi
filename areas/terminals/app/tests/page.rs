@@ -10,10 +10,10 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext, Window, div, prelude::*, px};
-use parvi_app::Shell;
 use parvi_app_kit::ask::SessionTarget;
 use parvi_app_kit::link::client::LinkState;
 use parvi_app_kit::{Ask, Host, Mounted, Page, mount};
+use parvi_app_shell::Shell;
 use parvi_node_kit::Build;
 use parvi_terminals_app::Terminals;
 use parvi_terminals_app::store::sessions::Key;
@@ -199,10 +199,10 @@ fn open_with_alpha<'a>(
     std::fs::create_dir_all(settings.parent().expect("its folder")).expect("a folder");
     // The node and the link run on their own threads.
     cx.executor().allow_parking();
-    cx.update(parvi_app::prepare);
+    cx.update(parvi_app_shell::prepare);
     let (url, path) = (running.url.clone(), settings.clone());
     let (shell, cx) = cx.add_window_view(move |window, cx| {
-        parvi_app::start(&[terminals, toy], Some(url), Some(path), window, cx)
+        parvi_app_shell::start(&[terminals, toy], Some(url), Some(path), window, cx)
     });
     until(cx, "the link to open", |cx| {
         shell.read_with(cx, |s, cx| {

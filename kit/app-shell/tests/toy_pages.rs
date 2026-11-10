@@ -8,12 +8,12 @@ use gpui::{
     Entity, Modifiers, TestAppContext, VisualTestContext, WeakEntity, Window, div, point,
     prelude::*, px,
 };
-use parvi_app::Shell;
 use parvi_app_kit::chords::Chord;
 use parvi_app_kit::host::{Layer, Request};
 use parvi_app_kit::link::client::LinkState;
 use parvi_app_kit::menu::MenuRow;
 use parvi_app_kit::{Answers, Ask, Build, Host, Mounted, Page, mount};
+use parvi_app_shell::Shell;
 use parvi_core::NodeId;
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
@@ -379,10 +379,10 @@ fn two_toy_pages_plug_in_through_their_host(cx: &mut TestAppContext) {
     let settings = settings_path("toy-pages");
     // The fake node and the link run on their own threads.
     cx.executor().allow_parking();
-    cx.update(parvi_app::prepare);
+    cx.update(parvi_app_shell::prepare);
     let path = settings.clone();
     let (shell, cx) = cx.add_window_view(move |window, cx| {
-        parvi_app::start(PAGES, Some(node), Some(path), window, cx)
+        parvi_app_shell::start(PAGES, Some(node), Some(path), window, cx)
     });
 
     until(cx, "the link to open", |cx| {
@@ -461,10 +461,10 @@ fn with_no_pages_the_shell_connects_to_its_node(cx: &mut TestAppContext) {
     let settings = settings_path("no-pages");
     // The fake node and the link run on their own threads.
     cx.executor().allow_parking();
-    cx.update(parvi_app::prepare);
+    cx.update(parvi_app_shell::prepare);
     let path = settings.clone();
     let (shell, cx) = cx.add_window_view(move |window, cx| {
-        parvi_app::start(&[], Some(node), Some(path), window, cx)
+        parvi_app_shell::start(&[], Some(node), Some(path), window, cx)
     });
     until(cx, "the link to open", |cx| {
         shell.read_with(cx, |s, cx| {

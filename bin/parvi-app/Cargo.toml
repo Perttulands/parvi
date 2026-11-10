@@ -3,7 +3,7 @@ name = "parvi-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Parvi's native app: the shell that holds the pages areas register."
+description = "Parvi's native app: the shell in a window, holding the pages areas register."
 publish = false
 
 [lints]
@@ -18,15 +18,14 @@ path = "src/main.rs"
 
 [dependencies]
 parvi-app-kit = { path = "../../kit/app-kit" }
-parvi-core = { path = "../../kit/core" }
-parvi-terminals-app = { path = "../../areas/terminals/app" }
-parvi-scheduled-app = { path = "../../areas/scheduled/app" }
+parvi-app-shell = { path = "../../kit/app-shell" }
 gpui = { package = "gpui-pre", version = "=0.3.11" }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11" }
 async-channel = "2"
 log = "0.4"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# The pages, one line each, as in PAGES.
+parvi-terminals-app = { path = "../../areas/terminals/app" }
+parvi-scheduled-app = { path = "../../areas/scheduled/app" }
 
 # Linux builds are for testing on an invisible X display; the product is Windows.
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -35,9 +34,3 @@ gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", features =
 [build-dependencies]
 # gpui builds the same version for its own Windows resource.
 embed-resource = "3"
-
-[dev-dependencies]
-gpui = { package = "gpui-pre", version = "=0.3.11", features = ["test-support"] }
-tokio = { version = "1", features = ["rt", "net", "macros", "time", "io-util"] }
-tokio-tungstenite = "0.29"
-futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }

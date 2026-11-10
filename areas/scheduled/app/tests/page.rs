@@ -135,10 +135,10 @@ fn the_page_lists_a_task_made_through_the_cli(cx: &mut TestAppContext) {
     std::fs::create_dir_all(settings.parent().expect("its folder")).expect("a folder");
     // The node and the link run on their own threads.
     cx.executor().allow_parking();
-    cx.update(parvi_app::prepare);
+    cx.update(parvi_app_shell::prepare);
     let (url, path) = (running.url.clone(), settings.clone());
     let (shell, cx) = cx.add_window_view(move |window, cx| {
-        parvi_app::start(
+        parvi_app_shell::start(
             &[parvi_scheduled_app::build],
             Some(url),
             Some(path),

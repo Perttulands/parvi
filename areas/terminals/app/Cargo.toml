@@ -27,7 +27,7 @@ windows-sys = { version = "0.61", features = ["Win32_Media_Audio"] }
 
 [dev-dependencies]
 gpui = { package = "gpui-pre", version = "=0.3.11", features = ["test-support"] }
-parvi-app = { path = "../../../bin/parvi-app" }
+parvi-app-shell = { path = "../../../kit/app-shell" }
 parvi-terminals = { path = "../node" }
 parvi-testkit = { path = "../../../kit/testkit" }
 parvi-node-kit = { path = "../../../kit/node-kit" }

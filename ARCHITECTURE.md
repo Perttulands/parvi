@@ -12,10 +12,11 @@ kit/
     core/       ids (node + local id), the error shape, the frame envelope
     node-kit/   what a node area plugs into: events, config, registration
     app-kit/    what an app area plugs into: tokens, widgets, node link, Host and Page
+    app-shell/  the app's shell: window chrome, tab bar, keys, view control
     testkit/    starts a node holding only the areas a test names
 bin/
     parvi/      the node and CLI: a list of areas
-    parvi-app/  the native app: the shell and its list of pages
+    parvi-app/  the native app: the shell in a window, and its list of pages
 engine/         terminal engine, session holder, mission engine
 ```
 
@@ -80,13 +81,14 @@ is the node's own.
 
 ## App pages
 
-A page is a build function in `bin/parvi-app`'s `PAGES`. Built from a `Host`,
-it answers with one entity implementing `app-kit`'s `Page`: an id, a title, the
-node area it needs (its tab hides while every node has that area off), its
-frame kinds, the channels it turns on while shown, the asks it answers and its
-chords. The shell owns the window, the tab bar, the dismissal stack, the leader,
-the status line and the node connection, and refuses pages that share an id or
-a frame kind, or take a kind the link or the shell owns, naming both.
+A page is a build function in `bin/parvi-app`'s `PAGES`, held by the shell in
+`kit/app-shell`. Built from a `Host`, it answers with one entity implementing
+`app-kit`'s `Page`: an id, a title, the node area it needs (its tab hides while
+every node has that area off), its frame kinds, the channels it turns on while
+shown, the asks it answers and its chords. The shell owns the window, the tab
+bar, the dismissal stack, the leader, the status line and the node connection,
+and refuses pages that share an id or a frame kind, or take a kind the link or
+the shell owns, naming both.
 
 - **Host and Hub.** A `Host` is a cheap handle on the `Hub`, the state the
   shell and every page share: the fleet link, settings, status line, toast and
@@ -110,8 +112,8 @@ a frame kind, or take a kind the link or the shell owns, naming both.
   a path, reveal a thing) is plain data that goes to the page declaring it
   answers it; when none does, the asker gets an `unanswered` error and the
   status line says so. View control's `open` reaches pages the same way.
-- **Tests.** `parvi-app` is a library and a binary, so a test drives the shell
-  with pages it defines against a fake node.
+- **Tests.** An app area's test drives `parvi-app-shell` with its own page, or
+  pages it defines, against a testkit or fake node, building no other area.
 
 ## Why this shape
 
