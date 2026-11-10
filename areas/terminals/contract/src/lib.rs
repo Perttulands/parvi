@@ -6,6 +6,9 @@
 use parvi_core::Error;
 use parvi_core::frame::Kinds;
 
+mod down;
+pub use down::{AgentEvent, Down, EventKind, Harness, Launcher, Pane, Seat, Session, decode_down};
+
 /// Every frame kind the area owns, both ways. 0x1b (the fleet's nodes) and
 /// 0x04, 0x1c, 0x1d and 0x2a (settings) keep their numbers for those areas.
 pub const KINDS: Kinds = &[0x01..=0x02, 0x10..=0x1a, 0x1e..=0x29, 0x2b..=0x2b];
@@ -589,6 +592,69 @@ mod tests {
         ] {
             assert_eq!(decode_up(&encode_up(&up)).unwrap(), up);
         }
+    }
+
+    /// The app's encoders, carried as bytes: what a client puts on the wire.
+    #[test]
+    fn encodes_send_launch_and_rename() {
+        let send = |id, enter, ready| {
+            encode_up(&Up::Send {
+                pane: 3,
+                id,
+                enter,
+                ready,
+                text: "go".into(),
+            })
+        };
+        let f = send(11, true, false);
+        assert_eq!(f[0], SEND);
+        assert_eq!(&f[1..5], &3u32.to_le_bytes());
+        assert_eq!(&f[5..9], &11u32.to_le_bytes());
+        assert_eq!(f[9], 1);
+        assert_eq!(&f[10..], b"go");
+        assert_eq!(send(12, false, true)[9], 2);
+        let launch =
+            |harness: &str, folder: &str, name: &str, flags: &str, user: &str, notify, size| {
+                encode_up(&Up::Launch {
+                    id: 2,
+                    launch: Launch {
+                        harness: harness.into(),
+                        folder: folder.into(),
+                        name: name.into(),
+                        flags: flags.into(),
+                        user: user.into(),
+                        notify,
+                        size,
+                    },
+                })
+            };
+        assert_eq!(
+            &launch("claude", "~", "c", "", "", true, None)[5..],
+            b"claude\0~\0c\0\0\x001"
+        );
+        assert_eq!(
+            &launch("shell", "/", "s", "-x", "bob", false, None)[5..],
+            b"shell\0/\0s\0-x\0bob"
+        );
+        assert_eq!(
+            &launch("shell", "/", "s", "", "", false, Some((97, 31)))[5..],
+            b"shell\0/\0s\0\0\0\x0097x31"
+        );
+        let r = encode_up(&Up::Rename {
+            id: 4,
+            session: "$3@bob".into(),
+            name: "omega".into(),
+        });
+        assert_eq!((r[0], &r[1..5]), (RENAME, &4u32.to_le_bytes()[..]));
+        assert_eq!(&r[5..], b"$3@bob\0omega");
+        assert_eq!(
+            encode_up(&Up::Mouse { id: 5, on: true }),
+            [MOUSE, 5, 0, 0, 0, 1]
+        );
+        assert_eq!(
+            encode_up(&Up::Mouse { id: 6, on: false }),
+            [MOUSE, 6, 0, 0, 0, 0]
+        );
     }
 
     #[test]

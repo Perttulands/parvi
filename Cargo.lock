@@ -4274,6 +4274,8 @@ name = "parvi-terminals-contract"
 version = "0.0.1"
 dependencies = [
  "parvi-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
