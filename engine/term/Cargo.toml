@@ -6,6 +6,9 @@ license = "MIT"
 description = "Parvi's terminal engine and session backends."
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }

@@ -18,3 +18,8 @@ license = "MIT"
 
 [patch.crates-io]
 vt100 = { path = "vendor/vt100" }
+
+[workspace.lints.clippy]
+# Frame kinds are slices of ranges (`parvi_core::frame::Kinds`): an area
+# owning one range writes `&[0x60..=0x61]`, which this lint misreads.
+single_range_in_vec_init = "allow"
