@@ -34,12 +34,14 @@ missions.
    frame kinds, channels, the asks it answers and its chords.
    The binaries hold only the list of areas. Adding to an area touches that
    area's directory and nothing else; adding an area adds one line to each list
-   and one dependency line to that binary's `Cargo.toml`.
+   and one dependency line to that binary's `Cargo.toml`; the workspace finds
+   crates by where they sit, and CI by their names (`parvi-<area>-app`).
 3. **Dependencies point one way.** `contract` depends on `core`. `node` depends
    on its `contract` and `node-kit`; `app` on its `contract` and `app-kit`. An
-   area that needs another uses that area's `contract`, or a narrow interface
-   the other area's `node` crate exports. Cargo rejects cycles. Node crates never
-   depend on the GUI toolkit, and app crates never depend on the web server.
+   area that needs another uses that area's `contract` or an interface it
+   provides, never its `node` or `app` crate (tests may). `kit/` and `engine/`
+   use no area. Node crates never depend on the GUI toolkit, and app crates
+   never depend on the web server. `bin/parvi/tests/layout.rs` holds this.
 
 ## Node areas
 
