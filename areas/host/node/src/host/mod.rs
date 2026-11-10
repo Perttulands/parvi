@@ -42,19 +42,8 @@ use facts::Facts;
 pub use history::History;
 
 pub use channel::{HOST, HOST_EVENT, HOST_READING, HOST_STATE, decode_on, encode_on, owns};
-pub use gpu::locate as nvidia_smi;
 pub use reading::{Point, Probe, Reading};
 pub use ring::Ring;
-
-/// Each GPU's memory as the `nvidia-smi` at `path` reports it now, in
-/// bytes used and total; empty if it fails or does not answer in time.
-pub async fn gpu_memory(nvidia_smi: &std::path::Path) -> Vec<Option<(u64, u64)>> {
-    gpu::query(nvidia_smi)
-        .await
-        .into_iter()
-        .map(|gpu| gpu.memory.map(|memory| (memory.used, memory.total)))
-        .collect()
-}
 
 /// How often the sampler reads the host.
 pub const EVERY: Duration = Duration::from_secs(5);

@@ -24,6 +24,9 @@ async fn services_and_commands_use_the_same_catalog_and_coded_errors() {
         .unwrap_err();
     let missing = missing.downcast_ref::<parvi_node_kit::NodeError>().unwrap();
     assert_eq!(missing.code, contract::UNAVAILABLE);
+    let missing = node.call("service_list", json!({})).await.unwrap_err();
+    assert_eq!(missing.code, contract::UNAVAILABLE);
+    assert!(missing.message.contains("No service catalog"));
 
     // A loopback fixture answers probes; no real service manager is touched.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -119,12 +122,21 @@ async fn services_and_commands_use_the_same_catalog_and_coded_errors() {
     for tool in tools {
         assert_eq!(tool["inputSchema"]["properties"]["node"]["type"], "string");
     }
+    let listed = node.call("service_list", json!({})).await.unwrap();
+    assert_eq!(listed["services"][0]["state"], "running");
     let answer = node
         .call("service_show", json!({"id":"fixture"}))
         .await
         .unwrap();
     assert_eq!(answer["node"], node.id());
     assert_eq!(answer["service"]["state"], "running");
+    assert_eq!(
+        node.call("service_start", json!({"id":"fixture"}))
+            .await
+            .unwrap_err()
+            .code,
+        contract::BAD_REQUEST
+    );
     assert_eq!(
         node.call("service_restart", json!({"id":"fixture"}))
             .await
@@ -155,7 +167,9 @@ async fn services_and_commands_use_the_same_catalog_and_coded_errors() {
     );
     let host = node.call("host_show", json!({})).await.unwrap();
     assert_eq!(host["node"], node.id());
-    assert!(host["facts"].is_object());
+    assert!(host["facts"]["threads"].as_u64().is_some_and(|n| n > 0));
+    #[cfg(target_os = "linux")]
+    assert!(host["latest"]["memory"].is_object());
 
     let args = ["show", "fixture", "--node", &node.url(), "--json"].map(String::from);
     let mut output = Vec::new();

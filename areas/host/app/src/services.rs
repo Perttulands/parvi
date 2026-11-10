@@ -254,6 +254,12 @@ impl Render for ServicesPage {
                             == Some(&(node_id.clone(), service_id.clone()));
                         let (pick_node, pick_id) = (node_id.clone(), service_id.clone());
                         let selector = format!("svc-row-{id}-{}", service.id);
+                        let status_selector =
+                            format!("svc-state-{id}-{}-{}", service.id, n.shown(service));
+                        let failure_selector = n
+                            .failures
+                            .get(&service.id)
+                            .map(|_| format!("svc-failure-{id}-{}", service.id));
                         let mut row = div()
                             .debug_selector(move || selector)
                             .id(gpui::SharedString::from(format!(
@@ -284,16 +290,25 @@ impl Render for ServicesPage {
                                     .items_center()
                                     .gap(px(tokens::SMALL_GAP))
                                     .child(glyph(&t, &service.state))
-                                    .child(n.shown(service).to_string()),
+                                    .child(
+                                        div()
+                                            .debug_selector(move || status_selector)
+                                            .child(n.shown(service).to_string()),
+                                    ),
                             )
                             .child(
-                                div().flex_1().child(
-                                    n.failures
-                                        .get(&service.id)
-                                        .or_else(|| n.unsettled.get(&service.id))
-                                        .cloned()
-                                        .unwrap_or_else(|| service.description.clone()),
-                                ),
+                                div()
+                                    .flex_1()
+                                    .when_some(failure_selector, |d, selector| {
+                                        d.debug_selector(move || selector)
+                                    })
+                                    .child(
+                                        n.failures
+                                            .get(&service.id)
+                                            .or_else(|| n.unsettled.get(&service.id))
+                                            .cloned()
+                                            .unwrap_or_else(|| service.description.clone()),
+                                    ),
                             );
                         if service.controllable && !n.changing.contains_key(&service.id) {
                             if let Some(change) = services_store::primary(&service.state) {

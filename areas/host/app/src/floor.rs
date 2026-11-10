@@ -123,6 +123,8 @@ impl ReadingsPage {
             _ => row.now,
         };
         let tone = if row.warn { t.error } else { t.text };
+        let value = host::percent(reading);
+        let selector = format!("reading-{}-{value}", row.id);
         let label = div()
             .w(px(board::METRIC_LABEL))
             .flex_none()
@@ -137,10 +139,11 @@ impl ReadingsPage {
                     .child(kit::label(t, row.label))
                     .child(
                         div()
+                            .debug_selector(move || selector)
                             .text_size(px(board::READING))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(if hover.is_some() { t.accent } else { tone })
-                            .child(host::percent(reading)),
+                            .child(value),
                     ),
             )
             .child(wrapping(t, &row.value, t.text2))
