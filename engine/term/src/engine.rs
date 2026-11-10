@@ -117,6 +117,8 @@ struct Shared {
 struct State {
     sessions: BTreeMap<String, Session>,
     panes: HashMap<PaneId, Pane>,
+    /// The supervisor has listed the server's sessions once.
+    listed: bool,
 }
 
 struct Session {
@@ -519,6 +521,18 @@ impl Engine {
         pane.synced.then(|| pane.screen.screen().contents())
     }
 
+    /// Returns once the server's sessions have been listed and each listed
+    /// session's panes are known (or it has ended): what [`Engine::sessions`]
+    /// says right after [`Engine::start`] is not yet what the server holds.
+    pub async fn ready(&self) {
+        let mut changed = self.shared.generation.subscribe();
+        while !self.shared.state.lock().unwrap().ready() {
+            if changed.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+
     /// A receiver that changes whenever sessions or panes come or go.
     pub fn watch(&self) -> watch::Receiver<u64> {
         self.shared.generation.subscribe()
@@ -743,6 +757,17 @@ impl Pane {
     }
 }
 
+impl State {
+    /// See [`Engine::ready`].
+    fn ready(&self) -> bool {
+        self.listed
+            && self.sessions.values().all(|session| {
+                !session.panes.is_empty()
+                    && session.panes.iter().all(|id| self.panes.contains_key(id))
+            })
+    }
+}
+
 impl Shared {
     fn bump(&self) {
         self.generation.send_modify(|generation| *generation += 1);
@@ -779,6 +804,10 @@ async fn supervise(shared: Arc<Shared>, mut stopped: oneshot::Receiver<()>) {
                 }
             }
             Err(error) => eprintln!("parvi: listing sessions: {error:#}"),
+        }
+        let first = !std::mem::replace(&mut shared.state.lock().unwrap().listed, true);
+        if first {
+            shared.bump();
         }
 
         // Wait for something to change. With no sessions there is no client to

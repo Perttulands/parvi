@@ -1036,3 +1036,36 @@ async fn a_failed_stream_reports_what_tmux_said() {
     let error = (&mut stream.completion).await.unwrap().unwrap_err();
     assert!(error.to_string().contains("can't find pane"), "{error:#}");
 }
+
+/// Right after start the engine has not listed anything; once ready, every
+/// session the server held is there with its panes (parvi-iay).
+#[tokio::test(flavor = "multi_thread")]
+async fn ready_lists_every_session_with_its_panes() {
+    let Some(server) = Server::start() else {
+        return;
+    };
+    server.new_session("alpha", 80, 24);
+    server.new_session("beta", 80, 24);
+    let engine = Engine::start(server.socket());
+    engine.ready().await;
+    let mut listed: Vec<_> = engine
+        .sessions()
+        .into_iter()
+        .map(|s| (s.name, s.panes.len()))
+        .collect();
+    listed.sort();
+    assert_eq!(listed, [("alpha".to_string(), 1), ("beta".to_string(), 1)]);
+    engine.stop().await;
+}
+
+/// With no server running, the engine is ready with no sessions.
+#[tokio::test(flavor = "multi_thread")]
+async fn ready_with_no_server_lists_nothing() {
+    let Some(server) = Server::start() else {
+        return;
+    };
+    let engine = Engine::start(server.socket());
+    engine.ready().await;
+    assert!(engine.sessions().is_empty());
+    engine.stop().await;
+}

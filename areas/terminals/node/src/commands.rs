@@ -28,7 +28,8 @@ pub(crate) struct Ctx {
 }
 
 /// One command: its schema from `ctx` as the tools are listed, and its
-/// call with `ctx`, whose failure is a [`COMMAND_FAILED`] error.
+/// call with `ctx` once the sessions are listed, whose failure is a
+/// [`COMMAND_FAILED`] error.
 macro_rules! command {
     ($ctx:expr, $name:expr, $description:expr, |$s:ident| $schema:expr, $call:path) => {{
         let (schema_ctx, call_ctx) = ($ctx.clone(), $ctx.clone());
@@ -41,7 +42,10 @@ macro_rules! command {
             },
             move |args: Value| {
                 let ctx = call_ctx.clone();
-                async move { $call(&ctx, &args).await.map_err(failed) }
+                async move {
+                    ctx.hub.ready().await.map_err(failed)?;
+                    $call(&ctx, &args).await.map_err(failed)
+                }
             },
         )
     }};

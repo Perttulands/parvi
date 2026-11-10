@@ -218,6 +218,20 @@ impl Hub {
         (pane <= PANE_MASK).then(|| (self.index(server) << PANE_BITS) | pane)
     }
 
+    /// Returns once every server's sessions are listed with their panes
+    /// ([`Engine::ready`]), so a command right after the node starts sees
+    /// the sessions that were already there.
+    pub async fn ready(&self) -> Result<()> {
+        let all = async {
+            for server in &self.servers {
+                server.engine.ready().await;
+            }
+        };
+        tokio::time::timeout(LISTED_WITHIN, all)
+            .await
+            .context("the sessions were not listed in time")
+    }
+
     /// Every server's sessions, with hub ids.
     pub fn sessions(&self) -> Vec<SessionInfo> {
         let mut all = Vec::new();
