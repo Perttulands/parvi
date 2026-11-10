@@ -1,0 +1,160 @@
+{
+  "best": {
+    "errors": [
+      ["invalid_limit", "lim_twice"]
+    ],
+    "warnings": []
+  },
+  "cards": {
+    "errors": [
+      ["invalid_human_channel", "inp_one"],
+      ["several_input_cards", ""]
+    ],
+    "warnings": [
+      ["missing_file", "fmn_a"],
+      ["missing_file", "gate_h"],
+      ["missing_file", "inp_one"],
+      ["mission_not_runnable", "inp_two"],
+      ["relative_file", "fmn_a"],
+      ["relative_file", "inp_one"]
+    ]
+  },
+  "delivery": {
+    "errors": [],
+    "warnings": []
+  },
+  "empty": {
+    "errors": [
+      ["mission_count", ""]
+    ],
+    "warnings": []
+  },
+  "formations": {
+    "errors": [
+      ["duplicate_slot_id", "fmn_orch"],
+      ["duplicate_slot_id", "fmn_solo"],
+      ["duplicate_slot_id", "fmn_staff"],
+      ["formation_without_slots", "fmn_empty"],
+      ["invalid_formation_shape", "fmn_peer"],
+      ["invalid_formation_shape", "fmn_solo"],
+      ["invalid_formation_type", "fmn_type"],
+      ["invalid_slot_id", "fmn_staff"],
+      ["invalid_slot_settings", "fmn_peer"],
+      ["invalid_slot_settings", "fmn_staff"],
+      ["invalid_slot_settings", "fmn_staff"],
+      ["invalid_slot_settings", "fmn_staff"],
+      ["invalid_slot_settings", "fmn_staff"],
+      ["invalid_slot_settings", "fmn_staff"],
+      ["invalid_slot_settings", "fmn_staff"],
+      ["orchestrated_controller", "fmn_alone"],
+      ["orchestrated_controller", "fmn_orch"],
+      ["retired_persona", "fmn_staff"],
+      ["unavailable_persona", "fmn_staff"],
+      ["unavailable_persona", "fmn_staff"],
+      ["unstaffed_slot", "fmn_staff"]
+    ],
+    "warnings": [
+      ["mission_not_runnable", "inp"],
+      ["unreachable_node", "fmn_alone"],
+      ["unreachable_node", "fmn_empty"],
+      ["unreachable_node", "fmn_orch"],
+      ["unreachable_node", "fmn_peer"],
+      ["unreachable_node", "fmn_solo"],
+      ["unreachable_node", "fmn_staff"],
+      ["unreachable_node", "fmn_type"]
+    ]
+  },
+  "inputs": {
+    "errors": [
+      ["invalid_mission_input", "inp"],
+      ["invalid_mission_input", "inp"],
+      ["invalid_mission_input", "inp"],
+      ["invalid_mission_output", "inp"],
+      ["invalid_mission_output", "inp"],
+      ["invalid_mission_output", "inp"],
+      ["invalid_mission_output", "inp"],
+      ["invalid_port_kind", "fmn_a"],
+      ["invalid_port_kind", "fmn_a"],
+      ["mission_output_kind_mismatch", "inp"],
+      ["mission_output_kind_mismatch", "inp"],
+      ["unbound_mission_output", "inp"],
+      ["unbound_mission_output", "inp"],
+      ["unknown_input_reference", "fmn_a"],
+      ["unknown_input_reference", "fmn_a"],
+      ["unknown_input_reference", "fmn_b"],
+      ["unknown_input_reference", "fmn_b"]
+    ],
+    "warnings": [
+      ["unreachable_node", "fmn_b"]
+    ]
+  },
+  "limits": {
+    "errors": [
+      ["duplicate_node_id", "fmn_a"],
+      ["duplicate_node_id", "gate_human"],
+      ["invalid_end", "end_blank"],
+      ["invalid_end", "end_maybe"],
+      ["invalid_limit", "lim_best_nogate"],
+      ["invalid_limit", "lim_best_nogate"],
+      ["invalid_limit", "lim_gate"],
+      ["invalid_limit", "lim_nothing"],
+      ["invalid_limit", "lim_second"],
+      ["invalid_limit", "lim_second"],
+      ["invalid_limit", "lim_second"],
+      ["invalid_limit", "lim_second"],
+      ["invalid_limit", "lim_warn_late"],
+      ["invalid_limit", "lim_warn_late"],
+      ["invalid_limit", "lim_warn_notime"],
+      ["invalid_limit", "lim_warn_notime"],
+      ["invalid_limit", "lim_warn_zero"]
+    ],
+    "warnings": [
+      ["empty_limit", "lim_nothing"],
+      ["empty_limit", "lim_warn_notime"],
+      ["unreachable_node", "end_blank"],
+      ["unreachable_node", "end_maybe"],
+      ["unreachable_node", "end_spaces"]
+    ]
+  },
+  "operations-proof": {
+    "errors": [],
+    "warnings": []
+  },
+  "wiring": {
+    "errors": [
+      ["dangling_connection", "edge_bad_endpoint"],
+      ["dangling_connection", "edge_bad_endpoint"],
+      ["dangling_connection", "edge_from_nowhere"],
+      ["dangling_connection", "edge_from_nowhere"],
+      ["dangling_connection", "edge_wrong_way"],
+      ["dangling_connection", "edge_wrong_way"],
+      ["duplicate_input_producer", "edge_second_feed"],
+      ["gate_not_routable", "gate_check"],
+      ["gate_not_routable", "gate_mixed"],
+      ["gate_not_routable", "gate_nokind"],
+      ["gate_not_routable", "gate_novalue"],
+      ["gate_not_routable", "gate_unknown"],
+      ["gate_not_routable", "gate_versiononly"],
+      ["route_leads_nowhere", "fmn_a"],
+      ["route_leads_nowhere", "fmn_island"],
+      ["route_leads_nowhere", "gate_check"],
+      ["route_leads_nowhere", "gate_check"],
+      ["route_leads_nowhere", "gate_nokind"],
+      ["route_leads_nowhere", "gate_nokind"],
+      ["route_leads_nowhere", "gate_novalue"],
+      ["route_leads_nowhere", "gate_unknown"],
+      ["route_leads_nowhere", "gate_unknown"],
+      ["route_leads_nowhere", "gate_versiononly"],
+      ["route_leads_nowhere", "gate_versiononly"]
+    ],
+    "warnings": [
+      ["unreachable_node", "end_lost"],
+      ["unreachable_node", "fmn_island"],
+      ["unreachable_node", "gate_check"],
+      ["unreachable_node", "gate_nokind"],
+      ["unreachable_node", "gate_novalue"],
+      ["unreachable_node", "gate_unknown"],
+      ["unreachable_node", "gate_versiononly"]
+    ]
+  }
+}

@@ -1,0 +1,4 @@
+{"models": [
+  {"slug": "gpt-6-astra", "visibility": "list", "priority": 1, "supported_reasoning_levels": [{"effort": "low"}, {"effort": "medium"}, {"effort": "high"}, {"effort": "xhigh"}, {"effort": "max"}, {"effort": "ultra"}]},
+  {"slug": "gpt-small", "visibility": "list", "priority": 2, "supported_reasoning_levels": [{"effort": "low"}, {"effort": "medium"}]}
+]}

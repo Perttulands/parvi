@@ -1,0 +1,15 @@
+# Parity fixture: a mission with no Input card.
+schema = 1
+id = "msn_empty"
+slug = "empty"
+title = "Empty"
+rev = 1
+
+[[formation]]
+id = "fmn_a"
+type = "solo"
+title = "Orphan"
+[[formation.slot]]
+id = "a"
+harness = "claude-code"
+effort = "low"

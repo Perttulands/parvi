@@ -1,0 +1,8 @@
+{"type":"session_meta","payload":{"id":"codex-fixture-thread","cwd":"/work","source":"cli","thread_source":"user"}}
+{"type":"event_msg","payload":{"type":"task_started","turn_id":"fixture-turn-10"}}
+{"type":"turn_context","payload":{"turn_id":"fixture-turn-10","cwd":"/work","model":"gpt-6-astra","effort":"low"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Read the file /work/briefs/midturn.md and execute it exactly; it is your whole brief."}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["user.text"]}}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I’ll read the brief and follow it exactly."}],"phase":"commentary","internal_chat_message_metadata_passthrough":{"content_item_kinds":["unknown"]}}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Operator question: what is two plus two?"}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["user.text"]}}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Two plus two is four.\n<<<PARVI-DONE run-id=run_fixture status=ok artifact=none>>>"}],"phase":"final_answer","internal_chat_message_metadata_passthrough":{"content_item_kinds":["unknown"]}}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"fixture-turn-10"}}

@@ -1,0 +1,61 @@
+schema = 2
+missionId = "brd_delivery"
+rev = 1
+updatedAt = "2026-09-09T00:00:00Z"
+updatedBy = "agent:archon"
+
+[[entry]]
+id = "nte_delivery_mission"
+target = "mission"
+author = "agent:archon"
+createdAt = "2026-09-09T00:00:00Z"
+text = "Delivery template: Plan -> Beads -> Beads review -> Execution -> Final review. The review gate sends failed drafts back to Beads with actionable feedback. A run supplies the change as its input, the target repository as its cwd and the owning Bead; every step reads the change as {change}. The plan and report live in the run artifact directory. Before starting, inspect the staffing and briefs. The execution controller steers only its three bound workers. The final report is the endpoint; review it before accepting the mission."
+
+[[entry]]
+id = "nte_delivery_beads"
+target = "fmn_beads"
+author = "agent:archon"
+createdAt = "2026-09-09T00:00:00Z"
+text = "Claude drafts Beads in the target repository store and revises the same graph on gate feedback. Give the slot a role or change its brief scope; preserve parent links and verifiable goals."
+
+[[entry]]
+id = "nte_delivery_beads_reviewer"
+target = "fmn_beads_reviewer"
+author = "agent:archon"
+createdAt = "2026-09-09T00:00:00Z"
+text = "Read-only Claude judge uses review-beads and bd lint. Change its role or review brief, preserving the structured archon-verdict contract and judge connections."
+
+[[entry]]
+id = "nte_delivery_execution"
+target = "fmn_execution"
+author = "agent:archon"
+createdAt = "2026-09-09T00:00:00Z"
+text = "Claude leads three Codex workers through the approved Beads using only their bound tmux sessions. Change the controller or worker roles and brief scopes. Keep exactly one controller."
+
+[[entry]]
+id = "nte_delivery_final_review"
+target = "fmn_final_review"
+author = "agent:archon"
+createdAt = "2026-09-09T00:00:00Z"
+text = "Astra independently reviews the diff, closures and plan, then writes the final report. Change the reviewer role or review brief. No gate follows; inspect this report before accepting delivery."
+
+[[entry]]
+id = "nte_delivery_plan"
+target = "fmn_plan"
+author = "agent:archon"
+createdAt = "2026-09-09T00:00:00Z"
+text = "Claude writes the plan in the run artifact directory. Change the planner role or brief to match the target work; preserve the plan path in its output."
+
+[[entry]]
+id = "nte_delivery_beads_review"
+target = "gate_beads_review"
+author = "agent:archon"
+createdAt = "2026-09-09T00:00:00Z"
+text = "The judge checks the graph. Fail returns its reason and evidence to Beads; pass sends the approved graph to Execution. Change the criterion or judge role. If a bound is needed, add an optional Limit card to the Beads step or the Input card. A Beads-step rounds card counts drafting attempts; an Input-card rounds card counts every step run, judges included."
+
+[[entry]]
+id = "nte_delivery_delivery"
+target = "mis_delivery"
+author = "agent:archon"
+createdAt = "2026-09-09T00:00:00Z"
+text = "Run this template with the change to deliver, the target repository as cwd and the owning Bead. The workflow ends with a report, not another gate. Runs have no limits unless the mission has a Limit card. A Beads-step rounds card counts drafting attempts; an Input-card rounds card counts every step run, judges included. Leave room for pushback when choosing either."

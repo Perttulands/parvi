@@ -1,0 +1,475 @@
+{
+  "source": "build-to-target revision 87 topology from 2026-10-20 audit; host paths and task briefs removed",
+  "board": {
+    "schema": 1,
+    "id": "msn_01M4RTE1WJ1Z7PZJEHKGK7FA89",
+    "slug": "build-to-target",
+    "title": "Build to a target",
+    "rev": 87,
+    "inputCards": [
+      {
+        "id": "inp_01M4RTE1WZ3QCQTFJXWGJ9GZTQ",
+        "title": "Subject and target",
+        "goal": "Improve a subject against a target."
+      }
+    ],
+    "formations": [
+      {
+        "id": "fmn_01M4RTE1YYXSV1QRX2KDQTCZAC",
+        "type": "solo",
+        "title": "Gap analysis",
+        "inputs": [
+          {
+            "id": "port_01M4RTE1YYYYMVPDD7MPZQ8M6Z",
+            "label": "Input"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "port_01M4RTE1YYQ81AS8ZCG8PYZX5Q",
+            "label": "Output"
+          }
+        ],
+        "slots": [
+          {
+            "id": "slot_01M4RTE1YY1MDAG8N58JHGFE72",
+            "label": "Agent",
+            "harness": "openai-codex",
+            "model": "gpt-6-luna",
+            "effort": "medium",
+            "controller": false
+          }
+        ],
+        "brief": {
+          "goal": "Gap analysis"
+        }
+      },
+      {
+        "id": "fmn_01M4RTE214TRV96XVXN0JXWDBQ",
+        "type": "solo",
+        "title": "Attempt",
+        "inputs": [
+          {
+            "id": "port_01M4RTE21463RRK4AQ1JKQZ1AM",
+            "label": "Input"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "port_01M4RTE214DGT2X9N2Q4CC1NSQ",
+            "label": "Output"
+          }
+        ],
+        "slots": [
+          {
+            "id": "slot_01M4RTE2147H23617KEQRZSSWK",
+            "label": "Agent",
+            "harness": "openai-codex",
+            "model": "gpt-6-luna",
+            "effort": "medium",
+            "controller": false
+          }
+        ],
+        "brief": {
+          "goal": "Attempt"
+        }
+      },
+      {
+        "id": "fmn_01M4RTE24D36BW2BAMFJCDRW50",
+        "type": "solo",
+        "title": "Rubric judge",
+        "inputs": [
+          {
+            "id": "port_01M4RTE24DT9SYP8SPAJ4WCVED",
+            "label": "Input"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "port_01M4RTE24DQE3TH6RYYEBNYKVA",
+            "label": "Output"
+          }
+        ],
+        "slots": [
+          {
+            "id": "slot_01M4RTE24DDYPDN8KFVXH0F4XM",
+            "label": "Agent",
+            "harness": "openai-codex",
+            "model": "gpt-6-luna",
+            "effort": "medium",
+            "controller": false
+          }
+        ],
+        "brief": {
+          "goal": "Rubric judge"
+        }
+      },
+      {
+        "id": "fmn_01M4RTE28KMT304BAVTJW60S2H",
+        "type": "solo",
+        "title": "Hand to the lead",
+        "inputs": [
+          {
+            "id": "port_01M4RTE28K18589VVZ79HRBSTY",
+            "label": "Input"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "port_01M4RTE28KX55H8KZ7JXMCACDS",
+            "label": "Output"
+          }
+        ],
+        "slots": [
+          {
+            "id": "slot_01M4RTE28KNWDKJ92VGD00S05E",
+            "label": "Agent",
+            "harness": "openai-codex",
+            "model": "gpt-6-luna",
+            "effort": "low",
+            "controller": false
+          }
+        ],
+        "brief": {
+          "goal": "Hand to the lead"
+        }
+      },
+      {
+        "id": "fmn_01M54RDKKQSDVSZ6CDWHBYJHMY",
+        "type": "solo",
+        "title": "Prepare blind packet",
+        "inputs": [
+          {
+            "id": "port_01M54RDKKQJ9F0NWA6CPC6FSAM",
+            "label": "Input"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "port_01M54RDKKQPD39A4CMHS0886TT",
+            "label": "Output"
+          }
+        ],
+        "slots": [
+          {
+            "id": "slot_01M54RDKKQNRMZEH5AFPHW9HRW",
+            "label": "Agent",
+            "harness": "openai-codex",
+            "model": "gpt-6-luna",
+            "effort": "low",
+            "controller": false
+          }
+        ],
+        "brief": {
+          "goal": "Prepare blind packet"
+        }
+      },
+      {
+        "id": "fmn_01M54RDKQ9E594727KBBDQCRN3",
+        "type": "solo",
+        "title": "Resolve comparison and stopping",
+        "inputs": [
+          {
+            "id": "port_01M54RDKQ9A79FNBWSXZMGSXT4",
+            "label": "Input"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "port_01M54RDKQ91S4MHKQZC16QBBPN",
+            "label": "Output"
+          }
+        ],
+        "slots": [
+          {
+            "id": "slot_01M54RDKQ9RT19YNTEBPDS1AJH",
+            "label": "Agent",
+            "harness": "openai-codex",
+            "model": "gpt-6-luna",
+            "effort": "low",
+            "controller": false
+          }
+        ],
+        "brief": {
+          "goal": "Resolve comparison and stopping"
+        }
+      }
+    ],
+    "gates": [
+      {
+        "id": "gate_01M4RTE26BDZDT72A8VC5G64QW",
+        "title": "Stop the loop?",
+        "kinds": [
+          "code"
+        ],
+        "criterion": "Stop the loop?"
+      },
+      {
+        "id": "gate_01M54RDM12Z440G54252MHQZQB",
+        "title": "Best reaches the target?",
+        "kinds": [
+          "code"
+        ],
+        "criterion": "Best reaches the target?"
+      },
+      {
+        "id": "gate_01M54SCCVBCKR93Y2XX1TR9VXR",
+        "title": "No target-shortfall marker",
+        "kinds": [
+          "code"
+        ],
+        "criterion": "No target-shortfall marker"
+      },
+      {
+        "id": "gate_01M54SCCXJGAXWTQF9T1GQZRQG",
+        "title": "No provisional-direction marker",
+        "kinds": [
+          "code"
+        ],
+        "criterion": "No provisional-direction marker"
+      }
+    ],
+    "ends": [
+      {
+        "id": "end_01M4RTE2AP0FHJKATJRYNJ82X0",
+        "title": "Done",
+        "outcome": "done"
+      },
+      {
+        "id": "end_01M54RDM1VWY6YTFA7A01NZY01",
+        "title": "Target shortfall or provisional direction",
+        "outcome": "rejected"
+      }
+    ],
+    "limits": [
+      {
+        "id": "lim_01M4RTE239XPED59YESQ9299NJ",
+        "title": "Safety net",
+        "target": "fmn_01M4RTE214TRV96XVXN0JXWDBQ",
+        "rounds": 12
+      }
+    ],
+    "connections": [
+      {
+        "id": "edge_01M4RTE20QFQ53TGRH4XF7PJXS",
+        "from": "inp_01M4RTE1WZ3QCQTFJXWGJ9GZTQ:out",
+        "to": "fmn_01M4RTE1YYXSV1QRX2KDQTCZAC:port_01M4RTE1YYYYMVPDD7MPZQ8M6Z"
+      },
+      {
+        "id": "edge_01M4RTE22XH6D9AG2Y1R5Z47EK",
+        "from": "fmn_01M4RTE1YYXSV1QRX2KDQTCZAC:port_01M4RTE1YYQ81AS8ZCG8PYZX5Q",
+        "to": "fmn_01M4RTE214TRV96XVXN0JXWDBQ:port_01M4RTE21463RRK4AQ1JKQZ1AM"
+      },
+      {
+        "id": "edge_01M4RTE2866WME93X3MWJZFN8G",
+        "from": "gate_01M4RTE26BDZDT72A8VC5G64QW:fail",
+        "to": "fmn_01M4RTE214TRV96XVXN0JXWDBQ:port_01M4RTE21463RRK4AQ1JKQZ1AM"
+      },
+      {
+        "id": "edge_01M4RTE2A9TR8JAGMP0STVY9YF",
+        "from": "gate_01M4RTE26BDZDT72A8VC5G64QW:pass",
+        "to": "fmn_01M4RTE28KMT304BAVTJW60S2H:port_01M4RTE28K18589VVZ79HRBSTY"
+      },
+      {
+        "id": "edge_01M54RDKVWA5NS79EB9A9BS47F",
+        "from": "fmn_01M4RTE214TRV96XVXN0JXWDBQ:port_01M4RTE214DGT2X9N2Q4CC1NSQ",
+        "to": "fmn_01M54RDKKQSDVSZ6CDWHBYJHMY:port_01M54RDKKQJ9F0NWA6CPC6FSAM"
+      },
+      {
+        "id": "edge_01M54RDKWNZTM72R7NK3YRAMS5",
+        "from": "fmn_01M54RDKKQSDVSZ6CDWHBYJHMY:port_01M54RDKKQPD39A4CMHS0886TT",
+        "to": "fmn_01M4RTE24D36BW2BAMFJCDRW50:port_01M4RTE24DT9SYP8SPAJ4WCVED"
+      },
+      {
+        "id": "edge_01M54RDKXESHZDRPVGPJQN4936",
+        "from": "fmn_01M4RTE24D36BW2BAMFJCDRW50:port_01M4RTE24DQE3TH6RYYEBNYKVA",
+        "to": "fmn_01M54RDKQ9E594727KBBDQCRN3:port_01M54RDKQ9A79FNBWSXZMGSXT4"
+      },
+      {
+        "id": "edge_01M54RDKY8NS6F09QXYG8VH33W",
+        "from": "fmn_01M54RDKQ9E594727KBBDQCRN3:port_01M54RDKQ91S4MHKQZC16QBBPN",
+        "to": "gate_01M4RTE26BDZDT72A8VC5G64QW:in"
+      },
+      {
+        "id": "edge_01M54RDM3357APGFKBYZMBKZJA",
+        "from": "fmn_01M4RTE28KMT304BAVTJW60S2H:port_01M4RTE28KX55H8KZ7JXMCACDS",
+        "to": "gate_01M54RDM12Z440G54252MHQZQB:in"
+      },
+      {
+        "id": "edge_01M54RDM402P7BHB8JQ4CMY6BB",
+        "from": "gate_01M54RDM12Z440G54252MHQZQB:fail",
+        "to": "end_01M54RDM1VWY6YTFA7A01NZY01:in"
+      },
+      {
+        "id": "edge_01M54SCCYRWZAHV47SDXAJY6PX",
+        "from": "gate_01M54RDM12Z440G54252MHQZQB:pass",
+        "to": "gate_01M54SCCVBCKR93Y2XX1TR9VXR:in"
+      },
+      {
+        "id": "edge_01M54SCCZ5DV7ZAV6DADEBQ2A6",
+        "from": "gate_01M54SCCVBCKR93Y2XX1TR9VXR:pass",
+        "to": "gate_01M54SCCXJGAXWTQF9T1GQZRQG:in"
+      },
+      {
+        "id": "edge_01M54SCCZKGAKG56K14KXS91MB",
+        "from": "gate_01M54SCCXJGAXWTQF9T1GQZRQG:pass",
+        "to": "end_01M4RTE2AP0FHJKATJRYNJ82X0:in"
+      },
+      {
+        "id": "edge_01M54SCD1CH7K80QNE2669QBD8",
+        "from": "gate_01M54SCCVBCKR93Y2XX1TR9VXR:fail",
+        "to": "end_01M54RDM1VWY6YTFA7A01NZY01:in"
+      },
+      {
+        "id": "edge_01M54SCD1SVE76MNV1Y9NQRP5X",
+        "from": "gate_01M54SCCXJGAXWTQF9T1GQZRQG:fail",
+        "to": "end_01M54RDM1VWY6YTFA7A01NZY01:in"
+      }
+    ],
+    "etag": ""
+  },
+  "previousPositions": [
+    {
+      "id": "inp_01M4RTE1WZ3QCQTFJXWGJ9GZTQ",
+      "x": 112,
+      "y": 112
+    },
+    {
+      "id": "fmn_01M4RTE1YYXSV1QRX2KDQTCZAC",
+      "x": 476,
+      "y": 112
+    },
+    {
+      "id": "fmn_01M4RTE214TRV96XVXN0JXWDBQ",
+      "x": 896,
+      "y": 112
+    },
+    {
+      "id": "lim_01M4RTE239XPED59YESQ9299NJ",
+      "x": 896,
+      "y": 672
+    },
+    {
+      "id": "fmn_01M4RTE24D36BW2BAMFJCDRW50",
+      "x": 1736,
+      "y": 112
+    },
+    {
+      "id": "gate_01M4RTE26BDZDT72A8VC5G64QW",
+      "x": 2576,
+      "y": 112
+    },
+    {
+      "id": "fmn_01M4RTE28KMT304BAVTJW60S2H",
+      "x": 2996,
+      "y": 112
+    },
+    {
+      "id": "end_01M4RTE2AP0FHJKATJRYNJ82X0",
+      "x": 4676,
+      "y": 112
+    },
+    {
+      "id": "fmn_01M54RDKKQSDVSZ6CDWHBYJHMY",
+      "x": 1316,
+      "y": 112
+    },
+    {
+      "id": "fmn_01M54RDKQ9E594727KBBDQCRN3",
+      "x": 2156,
+      "y": 112
+    },
+    {
+      "id": "gate_01M54RDM12Z440G54252MHQZQB",
+      "x": 3416,
+      "y": 112
+    },
+    {
+      "id": "end_01M54RDM1VWY6YTFA7A01NZY01",
+      "x": 4676,
+      "y": 420
+    },
+    {
+      "id": "gate_01M54SCCVBCKR93Y2XX1TR9VXR",
+      "x": 3836,
+      "y": 112
+    },
+    {
+      "id": "gate_01M54SCCXJGAXWTQF9T1GQZRQG",
+      "x": 4256,
+      "y": 112
+    }
+  ],
+  "positions": [
+    {
+      "id": "inp_01M4RTE1WZ3QCQTFJXWGJ9GZTQ",
+      "x": 112,
+      "y": 112
+    },
+    {
+      "id": "fmn_01M4RTE1YYXSV1QRX2KDQTCZAC",
+      "x": 476,
+      "y": 112
+    },
+    {
+      "id": "fmn_01M4RTE214TRV96XVXN0JXWDBQ",
+      "x": 896,
+      "y": 112
+    },
+    {
+      "id": "lim_01M4RTE239XPED59YESQ9299NJ",
+      "x": 896,
+      "y": 672
+    },
+    {
+      "id": "fmn_01M54RDKKQSDVSZ6CDWHBYJHMY",
+      "x": 1316,
+      "y": 112
+    },
+    {
+      "id": "fmn_01M4RTE24D36BW2BAMFJCDRW50",
+      "x": 112,
+      "y": 980
+    },
+    {
+      "id": "fmn_01M54RDKQ9E594727KBBDQCRN3",
+      "x": 532,
+      "y": 980
+    },
+    {
+      "id": "gate_01M4RTE26BDZDT72A8VC5G64QW",
+      "x": 952,
+      "y": 980
+    },
+    {
+      "id": "fmn_01M4RTE28KMT304BAVTJW60S2H",
+      "x": 1372,
+      "y": 980
+    },
+    {
+      "id": "gate_01M54RDM12Z440G54252MHQZQB",
+      "x": 112,
+      "y": 1540
+    },
+    {
+      "id": "gate_01M54SCCVBCKR93Y2XX1TR9VXR",
+      "x": 532,
+      "y": 1540
+    },
+    {
+      "id": "gate_01M54SCCXJGAXWTQF9T1GQZRQG",
+      "x": 952,
+      "y": 1540
+    },
+    {
+      "id": "end_01M4RTE2AP0FHJKATJRYNJ82X0",
+      "x": 1372,
+      "y": 1540
+    },
+    {
+      "id": "end_01M54RDM1VWY6YTFA7A01NZY01",
+      "x": 1372,
+      "y": 1848
+    }
+  ]
+}

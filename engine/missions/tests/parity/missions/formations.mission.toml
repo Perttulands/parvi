@@ -1,0 +1,139 @@
+# Parity fixture: formation shapes, slot ids and staffing.
+schema = 1
+id = "msn_formations"
+slug = "formations"
+title = "Formations"
+rev = 1
+
+[[inputCard]]
+id = "inp"
+title = "Start"
+
+[[formation]]
+id = "fmn_type"
+type = "swarm"
+title = "Swarm"
+[[formation.slot]]
+id = "swarm"
+harness = "claude-code"
+effort = "low"
+
+[[formation]]
+id = "fmn_solo"
+type = "solo"
+title = "Solo pair"
+[[formation.slot]]
+id = "dup"
+label = "One"
+harness = "claude-code"
+effort = "low"
+[[formation.slot]]
+id = "dup"
+label = "Two"
+harness = "claude-code"
+effort = "low"
+
+[[formation]]
+id = "fmn_peer"
+type = "peer"
+title = "Peers"
+[[formation.slot]]
+id = "peer_1"
+harness = "claude-code"
+effort = "low"
+controller = true
+[[formation.slot]]
+id = "peer_2"
+harness = "openai-codex"
+model = "gpt-small"
+effort = "ultra"
+
+[[formation]]
+id = "fmn_orch"
+type = "orchestrated"
+title = "No controller"
+[[formation.slot]]
+id = "worker_1"
+harness = "openai-codex"
+model = "gpt-6-astra"
+effort = "ultra"
+[[formation.slot]]
+id = "worker_2"
+harness = "openai-codex"
+model = "gpt-unknown"
+effort = "ultra"
+
+[[formation]]
+id = "fmn_alone"
+type = "orchestrated"
+title = "Controller alone"
+[[formation.slot]]
+id = "lead"
+harness = "claude-code"
+effort = "low"
+controller = true
+
+[[formation]]
+id = "fmn_empty"
+type = "solo"
+title = "Empty"
+
+[[formation]]
+id = "fmn_staff"
+type = "peer"
+title = "Staffing"
+[[formation.slot]]
+id = "open"
+label = "Open"
+[[formation.slot]]
+id = "no_harness"
+effort = "low"
+[[formation.slot]]
+id = "hermes"
+harness = "hermes"
+effort = "low"
+[[formation.slot]]
+id = "spaced"
+harness = "pi"
+model = "anthropic/claude opus"
+effort = "low"
+[[formation.slot]]
+id = "no_effort"
+harness = "claude-code"
+model = "opus"
+[[formation.slot]]
+id = "too_much"
+harness = "claude-code"
+effort = "ultra"
+[[formation.slot]]
+id = "retired"
+agentId = "critic"
+harness = "claude-code"
+effort = "xhigh"
+[[formation.slot]]
+id = "unknown"
+agentId = "oracle"
+harness = "claude-code"
+effort = "xhigh"
+[[formation.slot]]
+id = "bad_role"
+agentId = "Critic"
+harness = "claude-code"
+effort = "xhigh"
+[[formation.slot]]
+id = "builtin"
+agentId = "builder"
+harness = "claude-code"
+effort = "medium"
+[[formation.slot]]
+id = "_hidden"
+label = "Hidden"
+harness = "claude-code"
+effort = "low"
+[[formation.slot]]
+id = "worker_1"
+harness = "claude-code"
+effort = "low"
+[[formation.slot]]
+id = "harness_only"
+harness = "pi"

@@ -1,0 +1,96 @@
+# Parity fixture: mission inputs, outputs and port kinds.
+schema = 1
+id = "msn_inputs"
+slug = "inputs"
+title = "Inputs"
+rev = 1
+
+[[inputCard]]
+id = "inp"
+title = "Start"
+inputs = [
+  { name = "change", kind = "text", required = true },
+  { name = "Target", kind = "folder" },
+  { name = "repo", kind = "url" },
+  { name = "change" },
+  { name = "spec", kind = "file" },
+]
+outputs = [
+  { name = "report", kind = "file", from = "fmn_a:out" },
+  { name = "Summary", from = "fmn_a:out" },
+  { name = "site", kind = "website", from = "fmn_a:out" },
+  { name = "report", from = "fmn_a:out" },
+  { name = "loose", from = "fmn_a" },
+  { name = "draft" },
+  { name = "ghost", from = "fmn_a:nothing" },
+  { name = "notes", from = "fmn_a:files" },
+  { name = "files", kind = "folder", from = "fmn_a:files" },
+]
+
+[[formation]]
+id = "fmn_a"
+type = "solo"
+title = "Analysis"
+[formation.brief]
+goal = "Change {change} in {repo} with {target} and {spec}; literal {{example}}; Bead {bead}; {missing} {missing} {Upper}"
+[[formation.input]]
+id = "in"
+kind = "file"
+[[formation.input]]
+id = "plain"
+kind = "text"
+[[formation.output]]
+id = "out"
+label = "Result"
+[[formation.output]]
+id = "files"
+label = "Files"
+kind = "folder"
+[[formation.output]]
+id = "picture"
+kind = "image"
+[[formation.slot]]
+id = "a"
+harness = "claude-code"
+effort = "low"
+
+[[formation]]
+id = "fmn_b"
+type = "solo"
+title = "Notes"
+[formation.brief]
+goal = "Uses {brief} and {other}."
+[[formation.slot]]
+id = "b"
+harness = "claude-code"
+effort = "low"
+
+[[end]]
+id = "end_done"
+title = "Done"
+outcome = "done"
+
+[[connection]]
+id = "e1"
+from = "inp:out"
+to = "fmn_a:in"
+
+[[connection]]
+id = "e2"
+from = "inp:out"
+to = "fmn_a:plain"
+
+[[connection]]
+id = "e3"
+from = "fmn_a:out"
+to = "end_done:in"
+
+[[connection]]
+id = "e4"
+from = "fmn_a:files"
+to = "end_done:in"
+
+[[connection]]
+id = "e5"
+from = "fmn_a:picture"
+to = "end_done:in"

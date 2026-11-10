@@ -1,0 +1,149 @@
+# Parity fixture: wires, gates and routes.
+schema = 1
+id = "msn_wiring"
+slug = "wiring"
+title = "Wiring"
+rev = 1
+
+[[inputCard]]
+id = "inp"
+title = "Start"
+goal = "Exercise wiring findings"
+
+[[formation]]
+id = "fmn_a"
+type = "solo"
+title = "Work"
+[formation.brief]
+goal = "Work on {brief}."
+[[formation.input]]
+id = "in"
+label = "Input"
+[[formation.output]]
+id = "out"
+label = "Result"
+[[formation.output]]
+id = "extra"
+label = "Extra"
+[[formation.slot]]
+id = "a"
+harness = "claude-code"
+effort = "low"
+
+[[formation]]
+id = "fmn_b"
+type = "solo"
+title = "Second"
+[[formation.input]]
+id = "in"
+label = "Input"
+[[formation.output]]
+id = "out"
+label = "Result"
+[[formation.slot]]
+id = "b"
+harness = "claude-code"
+effort = "low"
+
+[[formation]]
+id = "fmn_island"
+type = "solo"
+[[formation.input]]
+id = "in"
+[[formation.output]]
+id = "out"
+[[formation.slot]]
+id = "island"
+harness = "pi"
+effort = "high"
+
+[[gate]]
+id = "gate_nokind"
+title = "No kind"
+
+[[gate]]
+id = "gate_mixed"
+title = "Mixed"
+kinds = ["code", "formation", "vibes", "code"]
+
+[[gate]]
+id = "gate_check"
+kinds = ["code"]
+check = "output_contains"
+
+[[gate]]
+id = "gate_unknown"
+kinds = ["code"]
+check = "output_matches"
+checkVersion = "2"
+
+[[gate]]
+id = "gate_novalue"
+kinds = ["code", "human"]
+check = "output_absent"
+checkVersion = "1"
+
+[[gate]]
+id = "gate_versiononly"
+kinds = ["code"]
+checkVersion = "1"
+
+[[end]]
+id = "end_done"
+title = "Done"
+outcome = "done"
+
+[[end]]
+id = "end_lost"
+title = "Lost"
+outcome = "rejected"
+
+[[connection]]
+id = "edge_start"
+from = "inp:out"
+to = "fmn_a:in"
+
+[[connection]]
+id = "edge_second_feed"
+from = "inp:out"
+to = "fmn_a:in"
+
+[[connection]]
+id = "edge_ab"
+from = "fmn_a:out"
+to = "gate_mixed:in"
+
+[[connection]]
+id = "edge_pass"
+from = "gate_mixed:pass"
+to = "fmn_b:in"
+
+[[connection]]
+id = "edge_pushback"
+from = "gate_mixed:fail"
+to = "fmn_a:in"
+
+[[connection]]
+id = "edge_done"
+from = "fmn_b:out"
+to = "end_done:in"
+
+[[connection]]
+id = "edge_done_again"
+from = "gate_novalue:pass"
+to = "end_done:in"
+
+[[connection]]
+id = "edge_from_nowhere"
+from = "fmn_a:missing"
+to = "fmn_b:out"
+
+[[connection]]
+id = "edge_bad_endpoint"
+from = "inp"
+to = "ghost:in"
+
+[[connection]]
+id = "edge_wrong_way"
+from = "end_done:in"
+to = "inp:out"

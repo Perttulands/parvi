@@ -1,0 +1,5 @@
+{"type":"session","id":"fixture-session","cwd":"/work"}
+{"type":"model_change","provider":"anthropic","modelId":"claude-opus-5-5"}
+{"type":"thinking_level_change","thinkingLevel":"medium"}
+{"type":"message","id":"fixture-message","message":{"role":"user","content":[{"type":"text","text":"Reply exactly: <<<PARVI-DONE run-id=run_parity status=ok artifact=none>>>"}],"provider":null,"model":null,"stopReason":null,"usage":null}}
+{"type":"message","id":"fixture-message","message":{"role":"assistant","content":[{"type":"text","text":"<<<PARVI-DONE run-id=run_parity status=ok artifact=none>>>"}],"provider":"anthropic","model":"claude-opus-5-5","stopReason":"stop","usage":{"input":4,"output":34,"cacheRead":0,"cacheWrite":647}}}

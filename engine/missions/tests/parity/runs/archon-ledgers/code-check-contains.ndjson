@@ -1,0 +1,11 @@
+{"type":"run_started"}
+{"type":"node_started","nodeId":"inp_hello"}
+{"type":"node_output","nodeId":"inp_hello","status":"done"}
+{"type":"node_started","nodeId":"fmn_work","attempt":1}
+{"type":"slot_dispatch","nodeId":"fmn_work","slotId":"slot_work","attempt":1}
+{"type":"slot_result","nodeId":"fmn_work","slotId":"slot_work","attempt":1,"status":"ok"}
+{"type":"node_output","nodeId":"fmn_work","attempt":1,"status":"done"}
+{"type":"gate_evaluating","nodeId":"gate_review","gateId":"gate_review"}
+{"type":"gate_kind_result","nodeId":"gate_review","gateId":"gate_review","verdict":"pass"}
+{"type":"gate_verdict","nodeId":"gate_review","gateId":"gate_review","attempt":1,"verdict":"pass"}
+{"type":"run_succeeded"}

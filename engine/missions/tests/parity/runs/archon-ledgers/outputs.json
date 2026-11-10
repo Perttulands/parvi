@@ -1,0 +1,67 @@
+{
+  "file-output-kept": {
+    "attempts": 3,
+    "code": null,
+    "firstCopy": "draft 1",
+    "outputs": [
+      {
+        "attempt": 3,
+        "kind": "file",
+        "name": "report",
+        "nodeId": "fmn_work",
+        "portId": "port_work_out",
+        "value": "<artifacts>/fmn_work/3/outputs/port_work_out/draft.md"
+      }
+    ],
+    "status": "succeeded"
+  },
+  "folder-over-budget": {
+    "blockedCode": "output_not_kept",
+    "code": null,
+    "dispatches": 1,
+    "outputs": [
+      {
+        "attempt": 1,
+        "kind": "folder",
+        "name": "site",
+        "nodeId": "fmn_work",
+        "portId": "port_work_out",
+        "value": "<artifacts>/fmn_work/1/outputs/port_work_out/site"
+      }
+    ],
+    "status": "succeeded"
+  },
+  "missing-required-output": {
+    "code": "missing_output",
+    "outputs": [],
+    "status": "failed"
+  },
+  "outputs-done-end": {
+    "code": null,
+    "outputs": [
+      {
+        "attempt": 1,
+        "kind": "folder",
+        "name": "site",
+        "nodeId": "fmn_work",
+        "portId": "port_work_out",
+        "value": "<artifacts>/fmn_work/1/outputs/port_work_out/site"
+      }
+    ],
+    "status": "succeeded"
+  },
+  "outputs-fixed-after-fail": {
+    "code": null,
+    "outputs": [
+      {
+        "attempt": 1,
+        "kind": "folder",
+        "name": "fixed",
+        "nodeId": "fmn_fix",
+        "portId": "port_fix_out",
+        "value": "<artifacts>/fmn_fix/1/outputs/port_fix_out/site"
+      }
+    ],
+    "status": "succeeded"
+  }
+}

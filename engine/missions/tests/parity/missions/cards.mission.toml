@@ -1,0 +1,69 @@
+# Parity fixture: several Input cards, human channels and reference files.
+schema = 1
+id = "msn_cards"
+slug = "cards"
+title = "Cards"
+rev = 1
+
+[[inputCard]]
+id = "inp_one"
+title = "One"
+files = ["/", "notes.md", "/nonexistent/parvi-64/rubric.md"]
+humanChannel = "pager"
+
+[[inputCard]]
+id = "inp_two"
+title = "Two"
+humanChannel = "session"
+
+[[formation]]
+id = "fmn_a"
+type = "solo"
+title = "Analysis"
+[formation.brief]
+goal = "Read the files."
+files = ["relative/brief.md", "/nonexistent/parvi-64/brief.md"]
+[[formation.input]]
+id = "in"
+[[formation.output]]
+id = "out"
+[[formation.slot]]
+id = "a"
+harness = "claude-code"
+effort = "low"
+
+[[gate]]
+id = "gate_h"
+title = "Sign-off"
+kinds = ["human"]
+files = ["/nonexistent/parvi-64/criteria.md"]
+
+[[end]]
+id = "end_done"
+title = "Done"
+outcome = "done"
+
+[[end]]
+id = "end_no"
+title = "Rejected"
+outcome = "rejected"
+
+[[connection]]
+id = "e1"
+from = "inp_one:out"
+to = "fmn_a:in"
+
+[[connection]]
+id = "e2"
+from = "fmn_a:out"
+to = "gate_h:in"
+
+[[connection]]
+id = "e3"
+from = "gate_h:pass"
+to = "end_done:in"
+
+[[connection]]
+id = "e4"
+from = "gate_h:fail"
+to = "end_no:in"
