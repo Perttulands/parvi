@@ -17,7 +17,7 @@ kit/
 bin/
     parvi/      the node and CLI: a list of areas
     parvi-app/  the native app: the shell in a window, and its list of pages
-engine/         terminal engine, session holder, mission engine
+engine/         terminal engine, session holder, work references, mission engine
 ```
 
 Each directory under an area, `kit/`, `bin/` and `engine/` is one crate. The
@@ -41,7 +41,9 @@ files a bead.
    area's directory and nothing else; adding an area adds one line to each list
    and one dependency line to that binary's `Cargo.toml`; the workspace finds
    crates by where they sit, and CI by their names (`parvi-<area>-app`).
-3. **Dependencies point one way.** `contract` depends on `core`. `node` depends
+3. **Dependencies point one way.** `contract` depends on `core` and on plain
+   data in `engine/` that has no dependencies (`work-ref`, a work item's
+   reference, shared by the work area and the mission engine). `node` depends
    on its `contract` and `node-kit`; `app` on its `contract` and `app-kit`. An
    area that needs another uses that area's `contract` or an interface it
    provides, never its `node` or `app` crate (tests may). `kit/` and `engine/`

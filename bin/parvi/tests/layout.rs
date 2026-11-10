@@ -97,6 +97,17 @@ fn crates_of_areas() -> Vec<(String, PathBuf)> {
     areas
 }
 
+/// An engine crate that depends on nothing, so a contract using it still
+/// does no I/O.
+fn is_plain_engine_crate(path: &str) -> bool {
+    let dir = root().join(path);
+    path.starts_with("engine/")
+        && manifest(&dir)
+            .get("dependencies")
+            .and_then(|deps| deps.as_table())
+            .is_none_or(|deps| deps.is_empty())
+}
+
 #[test]
 fn dependencies_point_one_way() {
     for parent in ["kit", "engine"] {
@@ -113,7 +124,9 @@ fn dependencies_point_one_way() {
         for (side, crate_dir) in crates(&dir) {
             for used in uses(&crate_dir) {
                 let allowed = match side.as_str() {
-                    "contract" => used == "kit/core",
+                    // Plain data shared below the areas, such as work
+                    // references, is an engine crate with no dependencies.
+                    "contract" => used == "kit/core" || is_plain_engine_crate(&used),
                     // The GUI toolkit stays out of the node, the web server
                     // out of the app.
                     "node" => used != "kit/app-kit",

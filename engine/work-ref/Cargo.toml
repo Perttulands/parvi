@@ -1,0 +1,12 @@
+[package]
+name = "parvi-work-ref"
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+description = "A work item's reference: a Bead in a store on a node, or a GitHub issue."
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
