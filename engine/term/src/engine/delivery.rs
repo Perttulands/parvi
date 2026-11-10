@@ -163,6 +163,21 @@ pub struct Delivering {
 }
 
 impl Delivering {
+    /// A delivery already over, taken or refused: what a stand-in for the
+    /// engine answers, so its callers can be tested without a pane.
+    pub fn settled(delivered: bool) -> Delivering {
+        let (done, heard) = oneshot::channel();
+        let _ = done.send(if delivered {
+            Heard::Delivered
+        } else {
+            Heard::Refused
+        });
+        Delivering {
+            heard,
+            turn: Arc::new(AtomicU8::new(STARTED)),
+        }
+    }
+
     /// Whether tmux has been asked yet.
     pub fn started(&self) -> bool {
         self.turn.load(Ordering::Acquire) == STARTED

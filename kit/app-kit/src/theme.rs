@@ -26,6 +26,25 @@ pub mod size {
     pub const MENU: f32 = 220.;
 }
 
+/// Measures the pages that list things share (a rail of rows beside a
+/// reader, a table, a device's room), carried over from the old app.
+pub mod board {
+    /// A page's padding, and the gap between its parts.
+    pub const PAD: f32 = 24.;
+    pub const GAP: f32 = 16.;
+    /// A page heading.
+    pub const HEADING: f32 = 18.;
+    /// The side list beside a detail.
+    pub const LIST_W: f32 = 380.;
+    /// A reading column's widest.
+    pub const READER_MAX: f32 = 760.;
+    /// A device's room has walls this thick.
+    pub const WALL: f32 = 2.;
+    /// A table row, and the status glyph in it.
+    pub const ROW: f32 = 34.;
+    pub const GLYPH: f32 = 8.;
+}
+
 /// How much of a thing shows when it steps back.
 pub mod fade {
     pub const HOVER: f32 = 0.9;

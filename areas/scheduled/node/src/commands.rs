@@ -8,6 +8,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use parvi_core::{Error, NodeId};
 use parvi_node_kit::Command;
+use parvi_node_kit::args::{flag, maybe_text, object, text};
 use parvi_scheduled_contract::{BAD_REQUEST, Schedule, Target};
 use serde_json::{Value, json};
 
@@ -289,37 +290,4 @@ fn schedule(args: &Value) -> Result<Option<Schedule>> {
         }),
         (None, None) => None,
     })
-}
-
-/// A required string argument.
-fn text<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
-    args.get(key)
-        .and_then(Value::as_str)
-        .with_context(|| format!("{key} is required, as a string"))
-}
-
-/// An optional string argument.
-fn maybe_text<'a>(args: &'a Value, key: &str) -> Result<Option<&'a str>> {
-    match args.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(value) => value
-            .as_str()
-            .map(Some)
-            .with_context(|| format!("{key} is a string")),
-    }
-}
-
-/// A boolean argument, `default` if absent.
-fn flag(args: &Value, key: &str, default: bool) -> Result<bool> {
-    match args.get(key) {
-        None | Some(Value::Null) => Ok(default),
-        Some(value) => value
-            .as_bool()
-            .with_context(|| format!("{key} is true or false")),
-    }
-}
-
-/// A JSON Schema object with these properties, `required` among them.
-fn object(properties: Value, required: &[&str]) -> Value {
-    json!({ "type": "object", "properties": properties, "required": required })
 }

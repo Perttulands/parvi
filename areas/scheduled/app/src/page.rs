@@ -7,6 +7,7 @@ use std::time::Duration;
 use gpui::{AppContext, Context, Entity, Window};
 use parvi_app_kit::host::Request;
 use parvi_app_kit::hub::now_ms;
+use parvi_app_kit::link::client::LinkState;
 use parvi_app_kit::widgets::field::{FieldEvent, TextField};
 use parvi_app_kit::{Host, Page};
 use parvi_core::NodeId;
@@ -71,6 +72,20 @@ impl Page for ScheduledPage {
     const ID: &'static str = crate::NAME;
     const TITLE: &'static str = "Scheduled";
     const AREA: Option<&'static str> = Some(crate::NAME);
+
+    /// A node that came into reach while the page shows is read at once;
+    /// one that came while it was behind is read when it comes forward.
+    fn link(
+        &mut self,
+        node: &NodeId,
+        state: Option<LinkState>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.shown && state == Some(LinkState::Open) {
+            self.read_node(node.as_str(), cx);
+        }
+    }
 
     fn shown(&mut self, shown: bool, _: &mut Window, cx: &mut Context<Self>) {
         self.shown = shown;
@@ -166,20 +181,15 @@ impl ScheduledPage {
     /// Reads every live node's tasks (the page opened).
     pub(crate) fn read_all(&mut self, cx: &mut Context<Self>) {
         for node in self.host.nodes(cx) {
-            self.read(node.id.as_str(), cx);
-            self.list_sessions(node.id.as_str(), cx);
+            self.read_node(node.id.as_str(), cx);
         }
         self.tick(cx);
     }
 
-    /// Reads the tasks of nodes that came into reach since.
-    pub(crate) fn read_unread(&mut self, cx: &mut Context<Self>) {
-        for node in self.host.nodes(cx) {
-            if !self.state.nodes.contains_key(node.id.as_str()) {
-                self.read(node.id.as_str(), cx);
-                self.list_sessions(node.id.as_str(), cx);
-            }
-        }
+    /// Reads a node's tasks and the sessions they may send to.
+    fn read_node(&mut self, node: &str, cx: &mut Context<Self>) {
+        self.read(node, cx);
+        self.list_sessions(node, cx);
     }
 
     /// Reads one node's tasks, once.

@@ -7,8 +7,12 @@ use parvi_core::NodeId;
 /// Something a page wants done where another page does it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Ask {
-    /// Hand a reference to a session, as Send to Session does.
-    Send { reference: String },
+    /// Hand a reference to a session, as Send to Session does: the one
+    /// `target` names, or else the one the answering page has in focus.
+    Send {
+        reference: String,
+        target: Option<SessionTarget>,
+    },
     /// Open a path on a node in the file viewer: as its own page, or
     /// `beside` the page that asked.
     OpenPath {
@@ -25,6 +29,15 @@ pub enum Ask {
         node: Option<NodeId>,
         part: Option<String>,
     },
+}
+
+/// A terminal session, wherever it runs: its node, whose tmux server (the
+/// Unix user, empty for the node's own) and its name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionTarget {
+    pub node: NodeId,
+    pub user: String,
+    pub name: String,
 }
 
 /// An ask a page answers.
@@ -64,6 +77,7 @@ mod tests {
     fn an_ask_goes_to_what_answers_its_kind() {
         let send = Ask::Send {
             reference: "x".into(),
+            target: None,
         };
         let run = Ask::Reveal {
             what: "run".into(),

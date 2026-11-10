@@ -222,6 +222,7 @@ impl Render for Beta {
                     .on_click(cx.listener(|b, _, _, cx| {
                         let ask = Ask::Send {
                             reference: "x".into(),
+                            target: None,
                         };
                         b.refused = b.host.ask(ask, cx).err().map(|e| e.code);
                         cx.notify();

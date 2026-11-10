@@ -1346,10 +1346,17 @@ impl Page for Terminals {
     }
 
     /// Send to Session with what another page hands over, aimed at the
-    /// focused window's session.
+    /// session the ask names, else at the focused window's.
     fn answer(&mut self, ask: Ask, window: &mut Window, cx: &mut Context<Self>) {
-        if let Ask::Send { reference } = ask {
-            let target = self.focused_key();
+        if let Ask::Send { reference, target } = ask {
+            let target = match target {
+                Some(t) => Some(Key {
+                    node: t.node.to_string(),
+                    user: t.user,
+                    name: t.name,
+                }),
+                None => self.focused_key(),
+            };
             self.handoff(Some(reference), target, window, cx);
         }
     }

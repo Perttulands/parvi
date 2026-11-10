@@ -11,10 +11,12 @@ use std::time::{Duration, Instant};
 
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext, Window, div, prelude::*, px};
 use parvi_app::Shell;
+use parvi_app_kit::ask::SessionTarget;
 use parvi_app_kit::link::client::LinkState;
 use parvi_app_kit::{Ask, Host, Mounted, Page, mount};
 use parvi_node_kit::Build;
 use parvi_terminals_app::Terminals;
+use parvi_terminals_app::store::sessions::Key;
 use parvi_testkit::node::Node;
 use parvi_testkit::tmux::Server;
 
@@ -49,20 +51,47 @@ impl Page for Toy {
 impl Render for Toy {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let host = self.host.clone();
-        div().size_full().child(
-            div()
-                .id("toy-send")
-                .debug_selector(|| "toy-send".into())
-                .w(px(80.))
-                .h(px(30.))
-                .child("Send")
-                .on_click(move |_, _, cx| {
-                    let ask = Ask::Send {
-                        reference: REFERENCE.into(),
-                    };
-                    host.ask(ask, cx).expect("the Terminals page answers it");
-                }),
-        )
+        div()
+            .size_full()
+            .child(
+                div()
+                    .id("toy-send")
+                    .debug_selector(|| "toy-send".into())
+                    .w(px(80.))
+                    .h(px(30.))
+                    .child("Send")
+                    .on_click({
+                        let host = host.clone();
+                        move |_, _, cx| {
+                            let ask = Ask::Send {
+                                reference: REFERENCE.into(),
+                                target: None,
+                            };
+                            host.ask(ask, cx).expect("the Terminals page answers it");
+                        }
+                    }),
+            )
+            .child(
+                div()
+                    .id("toy-send-beta")
+                    .debug_selector(|| "toy-send-beta".into())
+                    .w(px(80.))
+                    .h(px(30.))
+                    .child("Send to beta")
+                    .on_click(move |_, _, cx| {
+                        let node = host.nodes(cx).remove(0).id;
+                        let target = SessionTarget {
+                            node,
+                            user: String::new(),
+                            name: "beta".into(),
+                        };
+                        let ask = Ask::Send {
+                            reference: REFERENCE.into(),
+                            target: Some(target),
+                        };
+                        host.ask(ask, cx).expect("the Terminals page answers it");
+                    }),
+            )
     }
 }
 
@@ -100,6 +129,7 @@ fn start(label: &str) -> Option<Running> {
                 return;
             };
             tmux.new_session("alpha", 100, 30);
+            tmux.new_session("beta", 100, 30);
             let config = format!("[terminals]\nsocket = {:?}\n", tmux.socket_path());
             let node = Node::start(AREAS, &config).await.expect("a node");
             let _ = ready.send(Some((node.url(), node.id())));
@@ -237,5 +267,33 @@ fn a_page_hands_a_reference_into_a_session_through_send(cx: &mut TestAppContext)
     until(cx, "the reference's output in the session", |cx| {
         shown(cx).contains("sent-42")
     });
+    let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
+}
+
+#[gpui::test]
+fn an_ask_that_names_a_session_aims_send_at_it_not_at_the_focused_one(cx: &mut TestAppContext) {
+    let Some(running) = start("terminals-page-target") else {
+        return;
+    };
+    let (shell, cx, settings) = open_with_alpha(&running, "target", cx);
+    click(cx, "tab-toy".into());
+    until(cx, "the toy page to show", |cx| {
+        shell.read_with(cx, |s, _| s.shown_page()) == Some("toy")
+    });
+    click(cx, "toy-send-beta".into());
+    until(cx, "the Send drawer", |cx| {
+        cx.debug_bounds("send-go").is_some()
+    });
+    let page = PAGE.with(|p| p.borrow().clone()).expect("the page");
+    let aimed = page.read_with(cx, |p, _| p.send_target.clone());
+    assert_eq!(
+        aimed,
+        Some(Key {
+            node: running.node.clone(),
+            user: String::new(),
+            name: "beta".into()
+        }),
+        "alpha has the focus; the ask names beta"
+    );
     let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
 }

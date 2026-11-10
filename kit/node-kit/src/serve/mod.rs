@@ -107,7 +107,7 @@ pub async fn start(options: Options, areas: &[(&'static str, Build)]) -> Result<
             off.push(name);
             continue;
         }
-        let area = build(&setup).with_context(|| format!("starting {name}"))?;
+        let area = build(&setup).map_err(|error| unbuilt(name, error))?;
         if area.name() != name {
             return Err(Error::new(
                 "area_conflict",
@@ -274,5 +274,24 @@ impl IntoResponse for Failure {
     fn into_response(self) -> Response {
         let body = serde_json::json!({ "error": self.1 });
         (self.0, axum::Json(body)).into_response()
+    }
+}
+
+/// Why `name` could not be built. An area that reads a slot another area
+/// fills fails with `not_provided` when the filling area comes later in the
+/// list, so that error says what to change.
+fn unbuilt(name: &str, error: anyhow::Error) -> anyhow::Error {
+    let early = error
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<Error>())
+        .any(|cause| cause.code == "not_provided");
+    let error = error.context(format!("starting {name}"));
+    if early {
+        error.context(format!(
+            "{name} reads what another area provides, which must be built before it: \
+             list that area earlier, or turn it on"
+        ))
+    } else {
+        error
     }
 }

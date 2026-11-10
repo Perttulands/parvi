@@ -147,6 +147,22 @@ pub fn user_square(t: &Theme, user: &str) -> Div {
         .child(initial)
 }
 
+/// Where something runs: the device's name in the device's colour, then its
+/// environment, dim.
+pub fn device_label(t: &Theme, device: &str, environment: &str) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .child(
+            div()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(t.identity_of(device))
+                .child(device.to_string()),
+        )
+        .child(note(t, environment.to_string(), Some(t.dim)))
+}
+
 /// The mark of a session that waits for an answer: an accent dot.
 pub fn waiting_dot(t: &Theme) -> Div {
     div().flex_none().size(px(7.)).rounded_full().bg(t.accent)
@@ -224,5 +240,28 @@ impl Render for Tip {
             .text_size(px(12.))
             .text_color(t.text)
             .child(self.0.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{Context, Window};
+
+    struct Labelled;
+
+    impl Render for Labelled {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let t = Theme::violet();
+            div()
+                .child(device_label(&t, "landmass", "wsl").debug_selector(|| "device-label".into()))
+        }
+    }
+
+    #[gpui::test]
+    fn a_device_label_draws_the_device_and_its_environment(cx: &mut gpui::TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| Labelled);
+        let bounds = cx.debug_bounds("device-label").expect("the label is drawn");
+        assert!(bounds.size.width > px(0.) && bounds.size.height > px(0.));
     }
 }

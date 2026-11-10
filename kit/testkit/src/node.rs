@@ -79,6 +79,11 @@ impl Node {
             .expect("an area provides sessions")
     }
 
+    /// The stand-in sessions, when the node lists [`crate::sessions`]'s area.
+    pub fn fake_sessions(&self) -> std::sync::Arc<crate::sessions::FakeSessions> {
+        crate::sessions::of(&self.id()).expect("the node lists the fake sessions area")
+    }
+
     /// The node's config folder.
     pub fn dir(&self) -> &Path {
         &self.dir

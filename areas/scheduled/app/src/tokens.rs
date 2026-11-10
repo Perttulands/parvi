@@ -1,12 +1,6 @@
 //! The page's measures. Colours, sizes and fades come from the app kit's
-//! theme; these are the few a list-and-detail page adds.
+//! theme and its `board` measures; these are the few this page adds.
 
-/// A page's gap between its parts.
-pub const GAP: f32 = 16.;
-/// The side list of tasks.
-pub const LIST_W: f32 = 380.;
-/// A device's room has walls this thick.
-pub const WALL: f32 = 2.;
 /// A task in the list that is paused or disabled.
 pub const MUTED: f32 = 0.7;
 /// The shade of a selected card, a hover and a drop target.

@@ -97,11 +97,15 @@ pub async fn send(
 /// silence (the node may still be acting) from a refusal.
 pub const NO_ANSWER: &str = "no answer in";
 
-/// The node's `{error}` words for a failed answer, or its status.
+/// The node's `{error}` words for a failed answer, or its status. The
+/// error is the node's shape, `{"code","message"}`, or plain words.
 pub fn error_text(status: u16, body: &[u8]) -> String {
     serde_json::from_slice::<serde_json::Value>(body)
         .ok()
-        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
+        .and_then(|v| match v.get("error")? {
+            serde_json::Value::String(words) => Some(words.clone()),
+            e => e.get("message")?.as_str().map(str::to_string),
+        })
         .unwrap_or_else(|| match status {
             413 => "Too large".into(),
             0 => "Not reachable".into(),
@@ -172,5 +176,17 @@ mod tests {
         );
         let chunked = b"HTTP/1.1 404 Not Found\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n";
         assert_eq!(parse(chunked).unwrap(), (404, b"abcde".to_vec()));
+    }
+
+    #[test]
+    fn a_failed_answer_reads_as_the_nodes_message() {
+        let shaped = br#"{"error":{"code":"bad_request","message":"name is required"}}"#;
+        assert_eq!(error_text(400, shaped), "name is required");
+        assert_eq!(
+            error_text(400, br#"{"error":"plain words"}"#),
+            "plain words"
+        );
+        assert_eq!(error_text(400, b"not json"), "Failed (400)");
+        assert_eq!(error_text(413, b"{}"), "Too large");
     }
 }

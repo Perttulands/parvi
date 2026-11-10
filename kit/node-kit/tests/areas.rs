@@ -304,6 +304,35 @@ async fn a_section_no_area_reads_refuses_to_start() {
     assert!(error.contains("lamps"), "{error}");
 }
 
+/// An area that reads the sessions slot while it is built.
+fn reader(setup: &Setup) -> anyhow::Result<Arc<dyn Area>> {
+    setup.sessions.get()?;
+    lights(setup)
+}
+
+/// An area that reads a slot nothing has filled yet is refused with what to
+/// change, not just that the slot is empty.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_area_built_before_the_area_it_needs_says_so() {
+    let error = match start(&[("lights", reader)], "").await {
+        Ok(_) => panic!("an area read an empty slot"),
+        Err(error) => format!("{error:#}"),
+    };
+    assert!(error.contains("starting lights"), "{error}");
+    assert!(error.contains("must be built before it"), "{error}");
+    assert!(error.contains("no area on this node provides"), "{error}");
+    // Other failures to build carry no such advice.
+    fn broken(_: &Setup) -> anyhow::Result<Arc<dyn Area>> {
+        anyhow::bail!("out of lamps")
+    }
+    let error = match start(&[("lights", broken)], "").await {
+        Ok(_) => panic!("a broken area started"),
+        Err(error) => format!("{error:#}"),
+    };
+    assert!(error.contains("out of lamps"), "{error}");
+    assert!(!error.contains("must be built before it"), "{error}");
+}
+
 const UPGRADE: &str = "Connection: Upgrade\r\nUpgrade: websocket\r\n\
     Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n";
 

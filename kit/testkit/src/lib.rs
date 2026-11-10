@@ -1,9 +1,11 @@
 //! What tests start: a node holding only the areas a test names
-//! ([`node`]), a tmux server of the test's own ([`tmux`]), and a whole
-//! `parvi serve` process ([`process`]).
+//! ([`node`]), a tmux server of the test's own ([`tmux`]), a whole
+//! `parvi serve` process ([`process`]) and a stand-in for the sessions
+//! ([`sessions`]).
 
 pub mod node;
 pub mod process;
+pub mod sessions;
 #[cfg(unix)]
 pub mod tmux;
 

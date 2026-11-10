@@ -6,6 +6,7 @@ use gpui::{
 };
 use jiff::Timestamp;
 use parvi_app_kit::hub::now_ms;
+use parvi_app_kit::theme::board::{GAP, LIST_W, WALL};
 use parvi_app_kit::theme::{Theme, alpha, size, theme};
 use parvi_app_kit::widgets::kit::{self, Kind};
 use parvi_scheduled_contract::{Target, Task};
@@ -16,8 +17,6 @@ use crate::tokens::*;
 
 impl Render for ScheduledPage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // A node that came into reach since the page was shown.
-        self.read_unread(cx);
         let t = theme(cx).clone();
         let toolbar = div()
             .flex()
@@ -129,7 +128,7 @@ impl ScheduledPage {
                         .h(px(size::TAB_BAR))
                         .border_b_1()
                         .border_color(t.divider)
-                        .child(place(t, &node.device, &node.environment))
+                        .child(kit::device_label(t, &node.device, &node.environment))
                         .when_some(state.error.clone(), |d, e| {
                             d.child(kit::note(t, e, Some(t.error)))
                         }),
@@ -578,7 +577,7 @@ impl ScheduledPage {
                     .flex()
                     .items_start()
                     .gap(px(8.))
-                    .child(place(t, &node.device, &node.environment))
+                    .child(kit::device_label(t, &node.device, &node.environment))
                     .child(row),
             );
         }
@@ -711,21 +710,6 @@ impl ScheduledPage {
         }
         out.into_any_element()
     }
-}
-
-/// A device and its environment, in the device's colour.
-fn place(t: &Theme, device: &str, environment: &str) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .gap(px(6.))
-        .child(
-            div()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(t.identity_of(device))
-                .child(device.to_string()),
-        )
-        .child(kit::note(t, environment.to_string(), Some(t.dim)))
 }
 
 fn target_key(t: &Target) -> String {
