@@ -1,0 +1,63 @@
+# Architecture
+
+Two binaries. `parvi` is the node and the CLI. `parvi-app` is the native app; it
+talks to a node only over the node's WebSocket and HTTP interface.
+
+```
+areas/<area>/
+    contract/   the area's wire types: requests, events, errors. No I/O.
+    node/       the node side: state, routes, commands
+    app/        the app side: store and views
+kit/
+    core/       ids (node + local id), the error shape, the frame envelope
+    node-kit/   what a node area plugs into: events, config, registration
+    app-kit/    what an app area plugs into: tokens, widgets, node link, registration
+    testkit/    starts a node holding only the areas a test names
+bin/
+    parvi/      the node and CLI: a list of areas
+    parvi-app/  the native app: a list of area views
+engine/         terminal engine, session holder, mission engine
+```
+
+Each directory under an area, `kit/`, `bin/` and `engine/` is one crate. The
+areas are terminals, files, work, brain, host, scheduled, settings, agents and
+missions.
+
+## Rules the compiler holds
+
+1. **One contract per area.** Both sides of an area use the same `contract`
+   crate, so a changed field fails the build on the other side. There is no
+   second declaration and no document keeping two in step.
+2. **Areas register themselves.** A node area hands `node-kit` its routes, its
+   client actions and its commands; one command definition yields the CLI verb
+   and the MCP tool. An app area hands `app-kit` its page, actions and chords.
+   The binaries hold only the list of areas. Adding to an area touches that
+   area's directory and nothing else; adding an area adds one line to each list.
+3. **Dependencies point one way.** `contract` depends on `core`. `node` depends
+   on its `contract` and `node-kit`; `app` on its `contract` and `app-kit`. An
+   area that needs another uses that area's `contract`, or a narrow interface
+   the other area's `node` crate exports. Cargo rejects cycles. Node crates never
+   depend on the GUI toolkit, and app crates never depend on the web server.
+
+## Why this shape
+
+Work on Parvi is done by many agents at once. The shape keeps one piece of work
+inside one directory, keeps a build to the area being changed, and turns the
+boundaries from a convention into something the build refuses to break.
+
+## Errors
+
+One shape everywhere: a stable `code` and a human `message`, defined in `core`.
+Each area owns its codes in its `contract`. Routes, commands and the app all
+carry that shape; nothing returns a bare string.
+
+## Sessions survive
+
+Terminal sessions belong to the holder process, not to the node. Installing,
+upgrading or restarting Parvi never stops a session.
+
+## Tests
+
+An area's tests live in its crates and run against `testkit`, which starts a
+node with only the named areas on a port and tmux server of its own. `bin/parvi`
+holds the few tests that need the whole binary.
