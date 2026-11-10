@@ -410,9 +410,7 @@ pub fn marks(snippet: &str) -> Vec<(String, bool)> {
 }
 
 fn words(status: u16, body: &[u8]) -> String {
-    serde_json::from_slice::<parvi_core::Error>(body)
-        .map(|e| e.message)
-        .unwrap_or_else(|_| format!("Request failed ({status})"))
+    parvi_app_kit::link::http::error_text(status, body)
 }
 
 #[cfg(test)]
@@ -464,7 +462,11 @@ mod tests {
         assert_eq!(paths, vec!["a", "b"]);
         let r = b.open();
         assert!(!b.read(r - 1, 200, br#"{"path":"c","title":"C"}"#));
-        assert!(b.read(r, 404, br#"{"code":"not_found","message":"No such page"}"#));
+        assert!(b.read(
+            r,
+            404,
+            br#"{"error":{"code":"not_found","message":"No such page"}}"#
+        ));
         assert_eq!(b.page_error.as_deref(), Some("No such page"));
         assert_eq!(
             b.page.as_ref().unwrap().path,
@@ -602,7 +604,7 @@ mod tests {
             "x",
             false,
             409,
-            br#"{"code":"conflict","message":"dirty"}"#,
+            br#"{"error":{"code":"conflict","message":"dirty"}}"#,
         );
         assert_eq!(refused, Err("dirty".into()));
         assert!(b.edit.is_some(), "a refused save keeps the edit");
@@ -672,7 +674,7 @@ mod tests {
                 "x",
                 false,
                 409,
-                br#"{"code":"conflict","message":"dirty"}"#
+                br#"{"error":{"code":"conflict","message":"dirty"}}"#
             ),
             Err("dirty".into())
         );

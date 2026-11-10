@@ -194,7 +194,7 @@ async fn refuses_paths_outside_the_corpus() {
         let (status, body) = get(addr, &format!("/api/brain/page?path={path}")).await;
         assert_eq!(status, expected, "{path}: {body}");
         if expected != 200 {
-            assert!(body["message"].is_string(), "{path}: {body}");
+            assert!(body["error"]["message"].is_string(), "{path}: {body}");
         }
     }
 }
@@ -252,14 +252,19 @@ async fn says_what_is_missing() {
     let (status, body) = get(unconfigured, "/api/brain/search?q=x").await;
     assert_eq!(status, 503);
     assert!(
-        body["message"]
+        body["error"]["message"]
             .as_str()
             .unwrap()
             .contains("[brain].citadel")
     );
     let (status, body) = get(unconfigured, "/api/brain/page?path=a.md").await;
     assert_eq!(status, 503);
-    assert!(body["message"].as_str().unwrap().contains("[brain].corpus"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("[brain].corpus")
+    );
 
     // A Citadel that is not there is a bad gateway, not an empty answer.
     let gone = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -268,7 +273,12 @@ async fn says_what_is_missing() {
     let addr = serve_brain(None, Some(&url)).await;
     let (status, body) = get(addr, "/api/brain/search?q=x").await;
     assert_eq!(status, 502);
-    assert!(body["message"].as_str().unwrap().contains("Citadel"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Citadel")
+    );
 
     assert!(Brain::new(Some(Path::new("/nonexistent/parvi-80")), None).is_err());
 }
@@ -443,7 +453,12 @@ async fn an_edit_is_one_commit_signed_as_the_operator() {
     let dirty = json!({ "path": "self/pace.md", "content": "# Pace\n" });
     let (status, body) = put(addr, "/api/brain/page", dirty).await;
     assert_eq!(status, 409, "{body}");
-    assert!(body["message"].as_str().unwrap().contains("uncommitted"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("uncommitted")
+    );
     let pace = std::fs::read_to_string(corpus.0.join("self/pace.md")).unwrap();
     assert_eq!(pace, "# Pace\n\nFast now.\n");
 
@@ -489,7 +504,7 @@ async fn a_commit_git_refuses_puts_the_page_back() {
     let (status, body) = put(addr, "/api/brain/page", save).await;
     assert_eq!(status, 500, "{body}");
     assert!(
-        body["message"]
+        body["error"]["message"]
             .as_str()
             .unwrap()
             .contains("refused by the hook"),

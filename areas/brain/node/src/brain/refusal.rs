@@ -1,6 +1,5 @@
 //! Why the Brain could not answer, as an HTTP status and a sentence.
 
-use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use parvi_brain_contract::{
@@ -25,8 +24,8 @@ impl Refusal {
 impl IntoResponse for Refusal {
     fn into_response(self) -> Response {
         let code = code(self.status);
-        let body = Json(parvi_core::Error::new(code, self.message));
-        (self.status, body).into_response()
+        parvi_node_kit::Failure(self.status, parvi_core::Error::new(code, self.message))
+            .into_response()
     }
 }
 
