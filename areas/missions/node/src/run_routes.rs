@@ -1,17 +1,23 @@
 //! Run and gate routes over the local coordinator.
-use crate::routes::ApiError;
+use crate::{Missions, routes::ApiError};
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{FromRef, Path, Query, State, rejection::JsonRejection},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
 };
-use parvi_missions::{AdmissionFailure, Coordinator};
+use parvi_mission_engine::{AdmissionFailure, Coordinator};
 use parvi_missions_contract::{self as contract, HumanPick, HumanVerdict, ResumeRequest, RunStart};
 use serde_json::json;
 
-pub fn routes(coordinator: Coordinator) -> Router {
+impl FromRef<Missions> for Coordinator {
+    fn from_ref(m: &Missions) -> Self {
+        m.coordinator.clone()
+    }
+}
+
+pub fn routes(missions: Missions) -> Router {
     Router::new()
         .route("/api/runs", get(list).post(start))
         .route("/api/runs/{id}", get(read))
@@ -32,9 +38,12 @@ pub fn routes(coordinator: Coordinator) -> Router {
             "/api/runs/{id}/gates/{gate}/pick",
             axum::routing::post(pick),
         )
-        .with_state(coordinator)
+        .with_state(missions)
 }
 type ResultResponse = Result<Response, ApiError>;
+fn bad_json(e: JsonRejection) -> ApiError {
+    parvi_core::Error::new("bad_request", e.body_text()).into()
+}
 fn response<T: serde::Serialize>(result: Result<T, parvi_core::Error>) -> ResultResponse {
     Ok(Json(result?).into_response())
 }
@@ -82,8 +91,9 @@ async fn gate_request(
 async fn verdict(
     State(c): State<Coordinator>,
     Path((id, gate)): Path<(String, String)>,
-    Json(mut body): Json<HumanVerdict>,
+    body: Result<Json<HumanVerdict>, JsonRejection>,
 ) -> ResultResponse {
+    let Json(mut body) = body.map_err(bad_json)?;
     body.actor = "human:operator".into();
     c.record_verdict(&id, &gate, body)?;
     Ok((StatusCode::ACCEPTED, Json(contract::RunId { run_id: id })).into_response())
@@ -91,8 +101,9 @@ async fn verdict(
 async fn pick(
     State(c): State<Coordinator>,
     Path((id, gate)): Path<(String, String)>,
-    Json(mut body): Json<HumanPick>,
+    body: Result<Json<HumanPick>, JsonRejection>,
 ) -> ResultResponse {
+    let Json(mut body) = body.map_err(bad_json)?;
     body.actor = "human:operator".into();
     c.record_pick(&id, &gate, body)?;
     Ok((StatusCode::ACCEPTED, Json(contract::RunId { run_id: id })).into_response())
@@ -100,22 +111,25 @@ async fn pick(
 async fn resume(
     State(c): State<Coordinator>,
     Path(id): Path<String>,
-    Json(body): Json<ResumeRequest>,
+    body: Result<Json<ResumeRequest>, JsonRejection>,
 ) -> ResultResponse {
+    let Json(body) = body.map_err(bad_json)?;
     response(c.resume(&id, body))
 }
 async fn abort(
     State(c): State<Coordinator>,
     Path(id): Path<String>,
-    Json(body): Json<contract::Abort>,
+    body: Result<Json<contract::Abort>, JsonRejection>,
 ) -> ResultResponse {
+    let Json(body) = body.map_err(bad_json)?;
     response(c.abort(&id, &body.requested_by, &body.reason))
 }
 async fn land(
     State(c): State<Coordinator>,
     Path(id): Path<String>,
-    Json(body): Json<contract::Land>,
+    body: Result<Json<contract::Land>, JsonRejection>,
 ) -> ResultResponse {
+    let Json(body) = body.map_err(bad_json)?;
     Ok(Json(contract::Landed {
         landed: true,
         notes: c.land(&id, body.force)?,
@@ -123,17 +137,17 @@ async fn land(
     .into_response())
 }
 async fn start(
-    State(c): State<Coordinator>,
+    State(m): State<Missions>,
     headers: HeaderMap,
-    Json(mut req): Json<RunStart>,
+    body: Result<Json<RunStart>, JsonRejection>,
 ) -> ResultResponse {
+    let Json(mut req) = body.map_err(|e| parvi_core::Error::new("bad_request", e.body_text()))?;
     if !req.work.is_empty() {
-        return Err(parvi_core::Error::new(
-            "not_provided",
-            "work reference resolution is not yet provided",
-        )
-        .into());
+        req.work = m.resolver.resolve(&req.work).await?.to_string();
     }
+    // No other node can receive seats here; reject every explicit placement.
+    req.known_devices = Some(Vec::new());
+    let c = m.coordinator;
     if req.mission.is_empty()
         || (req.input_card_id.is_empty() == req.formation_id.is_empty())
         || req.expected_rev <= 0

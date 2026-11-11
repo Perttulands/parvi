@@ -8,7 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use parvi_missions::{Harnesses, validate};
+use parvi_mission_engine::{Harnesses, validate};
 use parvi_missions_contract::patch;
 use parvi_missions_contract::{LayoutPatch, NotePatch, Precondition};
 use serde_json::{Value, json};
@@ -69,6 +69,12 @@ impl From<parvi_core::Error> for ApiError {
             | "not_pending"
             | "character_exists" => StatusCode::CONFLICT,
             "precondition_required" => StatusCode::PRECONDITION_REQUIRED,
+            "invalid_character"
+            | "invalid_code_gate_profile"
+            | "invalid_slot_settings"
+            | "invalid_definition_source"
+            | "unsupported_schema"
+            | "self_wire" => StatusCode::UNPROCESSABLE_ENTITY,
             "io" => StatusCode::INTERNAL_SERVER_ERROR,
             _ => StatusCode::BAD_REQUEST,
         };
@@ -363,7 +369,7 @@ async fn edit_layout(
     let p = if v["arrange"].as_bool() == Some(true) {
         let e = m.store.mission_edit(&id)?;
         let l = m.store.layout_edit(&id)?;
-        LayoutPatch::Nodes(parvi_missions::arrange(&e.mission, &l.layout).nodes)
+        LayoutPatch::Nodes(parvi_mission_engine::arrange(&e.mission, &l.layout).nodes)
     } else if let Some(nodes) = v.get("nodes") {
         LayoutPatch::Nodes(serde_json::from_value(nodes.clone()).map_err(|e| bad(e.to_string()))?)
     } else if let Some(edges) = v.get("edges") {
@@ -379,11 +385,11 @@ async fn edit_layout(
     ))
 }
 
-fn character_store(m: &Missions) -> parvi_missions::CharacterStore {
-    parvi_missions::CharacterStore::new(m.store.roles().dir())
+fn character_store(m: &Missions) -> parvi_mission_engine::CharacterStore {
+    parvi_mission_engine::CharacterStore::new(m.store.roles().dir())
 }
-fn engine_character(c: parvi_missions_contract::Character) -> parvi_missions::Character {
-    parvi_missions::Character {
+fn engine_character(c: parvi_missions_contract::Character) -> parvi_mission_engine::Character {
+    parvi_mission_engine::Character {
         id: c.id,
         name: c.name,
         description: c.description,
@@ -394,7 +400,7 @@ fn engine_character(c: parvi_missions_contract::Character) -> parvi_missions::Ch
         effort: c.effort,
     }
 }
-fn wire_character(c: parvi_missions::Character) -> parvi_missions_contract::Character {
+fn wire_character(c: parvi_mission_engine::Character) -> parvi_missions_contract::Character {
     parvi_missions_contract::Character {
         id: c.id,
         name: c.name,
