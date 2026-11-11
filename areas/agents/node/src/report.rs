@@ -7,9 +7,7 @@ use super::checkout::{self, Checkout, Fetch};
 use super::skills::{self, FOLDERS, Skill};
 use super::tools::{self, Found, TOOLS};
 use super::{Home, run};
-fn push_json_string(out: &mut String, value: &str) {
-    out.push_str(&serde_json::to_string(value).expect("string serializes"));
-}
+use parvi_agents_contract as wire;
 
 pub struct Report {
     pub tools: Vec<Found>,
@@ -100,150 +98,101 @@ impl Report {
         .await;
     }
 
+    /// Converts local paths and probe results into the shared wire contract.
+    pub fn wire(&self, home: &Home) -> wire::Report {
+        wire::Report {
+            home: home.show(&home.dir),
+            folders: FOLDERS
+                .iter()
+                .map(|(id, path)| wire::Folder {
+                    id: (*id).into(),
+                    path: format!("~/{path}"),
+                })
+                .collect(),
+            tools: self
+                .tools
+                .iter()
+                .map(|found| wire::Tool {
+                    id: found.tool.id.into(),
+                    name: found.tool.name.into(),
+                    command: found.tool.command.into(),
+                    path: found.path.as_deref().map(|p| home.show(p)),
+                    version: found.version.clone(),
+                    skills: found.tool.skills.map(str::to_owned),
+                    signed_in: None,
+                    credentials_present: found.credentials_present,
+                    settings: found
+                        .settings
+                        .iter()
+                        .map(|(path, present)| wire::Setting {
+                            path: format!("~/{path}"),
+                            present: *present,
+                        })
+                        .collect(),
+                })
+                .collect(),
+            checkouts: self
+                .checkouts
+                .iter()
+                .map(|c| {
+                    let (fetch, fetch_error) = match &c.fetch {
+                        Fetch::Fetching => ("fetching", None),
+                        Fetch::Fetched => ("fetched", None),
+                        Fetch::Failed(why) => ("failed", Some(why.clone())),
+                    };
+                    wire::Checkout {
+                        name: c.name(),
+                        path: home.show(&c.path),
+                        branch: c.branch.clone(),
+                        commit: c.commit.clone(),
+                        subject: c.subject.clone(),
+                        upstream: c.upstream.clone(),
+                        setup: c.setup.map(str::to_owned),
+                        fetch: fetch.into(),
+                        fetch_error,
+                        ahead: c.ahead,
+                        behind: c.behind,
+                        dirty: c.dirty,
+                    }
+                })
+                .collect(),
+            skills: self
+                .skills
+                .iter()
+                .map(|s| wire::Skill {
+                    name: s.name.clone(),
+                    description: (!s.description.is_empty()).then(|| s.description.clone()),
+                    source: s.source.as_deref().map(|p| home.show(p)),
+                    checkout: s.checkout.as_deref().map(|p| home.show(p)),
+                    behind: s.behind,
+                    links: FOLDERS
+                        .iter()
+                        .zip(&s.links)
+                        .map(|((id, _), link)| ((*id).into(), link.word().into()))
+                        .collect(),
+                    locations: FOLDERS
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (id, _))| {
+                            (
+                                (*id).into(),
+                                wire::Location {
+                                    state: s.links[i].word().into(),
+                                    source: s.sources[i].as_deref().map(|p| home.show(p)),
+                                    checkout: s.checkouts[i].as_deref().map(|p| home.show(p)),
+                                    behind: s.behind_by_folder[i],
+                                },
+                            )
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+
     pub fn json(&self, home: &Home) -> String {
-        let mut json = String::from("{\"home\":");
-        push_json_string(&mut json, &home.show(&home.dir));
-        json.push_str(",\"folders\":[");
-        for (i, (id, relative)) in FOLDERS.iter().enumerate() {
-            comma(&mut json, i);
-            json.push_str("{\"id\":");
-            push_json_string(&mut json, id);
-            json.push_str(",\"path\":");
-            push_json_string(&mut json, &format!("~/{relative}"));
-            json.push('}');
-        }
-        json.push_str("],\"tools\":[");
-        for (i, found) in self.tools.iter().enumerate() {
-            comma(&mut json, i);
-            push_tool(&mut json, home, found);
-        }
-        json.push_str("],\"checkouts\":[");
-        for (i, checkout) in self.checkouts.iter().enumerate() {
-            comma(&mut json, i);
-            push_checkout(&mut json, home, checkout);
-        }
-        json.push_str("],\"skills\":[");
-        for (i, skill) in self.skills.iter().enumerate() {
-            comma(&mut json, i);
-            push_skill(&mut json, home, skill);
-        }
-        json.push_str("]}");
-        json
+        serde_json::to_string(&self.wire(home)).expect("report serializes")
     }
-}
-
-fn comma(json: &mut String, i: usize) {
-    if i > 0 {
-        json.push(',');
-    }
-}
-
-fn push_field(json: &mut String, name: &str, value: Option<&str>) {
-    if let Some(value) = value {
-        json.push_str(&format!(",\"{name}\":"));
-        push_json_string(json, value);
-    }
-}
-
-fn push_tool(json: &mut String, home: &Home, found: &Found) {
-    let tool = found.tool;
-    json.push_str("{\"id\":");
-    push_json_string(json, tool.id);
-    push_field(json, "name", Some(tool.name));
-    push_field(json, "command", Some(tool.command));
-    push_field(
-        json,
-        "path",
-        found.path.as_deref().map(|p| home.show(p)).as_deref(),
-    );
-    push_field(json, "version", found.version.as_deref());
-    push_field(json, "skills", tool.skills);
-    json.push_str(&format!(
-        ",\"signedIn\":null,\"credentialsPresent\":{},\"settings\":[",
-        found.credentials_present
-    ));
-    for (i, (file, present)) in found.settings.iter().enumerate() {
-        comma(json, i);
-        json.push_str("{\"path\":");
-        push_json_string(json, &format!("~/{file}"));
-        json.push_str(&format!(",\"present\":{present}}}"));
-    }
-    json.push_str("]}");
-}
-
-fn push_checkout(json: &mut String, home: &Home, checkout: &Checkout) {
-    json.push_str("{\"name\":");
-    push_json_string(json, &checkout.name());
-    push_field(json, "path", Some(&home.show(&checkout.path)));
-    push_field(json, "branch", checkout.branch.as_deref());
-    push_field(json, "commit", checkout.commit.as_deref());
-    push_field(json, "subject", checkout.subject.as_deref());
-    push_field(json, "upstream", checkout.upstream.as_deref());
-    push_field(json, "setup", checkout.setup);
-    let (fetch, error) = match &checkout.fetch {
-        Fetch::Fetching => ("fetching", None),
-        Fetch::Fetched => ("fetched", None),
-        Fetch::Failed(why) => ("failed", Some(why.as_str())),
-    };
-    push_field(json, "fetch", Some(fetch));
-    push_field(json, "fetchError", error);
-    json.push_str(&format!(
-        ",\"ahead\":{},\"behind\":{},\"dirty\":{}}}",
-        checkout.ahead, checkout.behind, checkout.dirty
-    ));
-}
-
-fn push_skill(json: &mut String, home: &Home, skill: &Skill) {
-    json.push_str("{\"name\":");
-    push_json_string(json, &skill.name);
-    push_field(
-        json,
-        "description",
-        Some(&skill.description)
-            .filter(|d| !d.is_empty())
-            .map(String::as_str),
-    );
-    push_field(
-        json,
-        "source",
-        skill.source.as_deref().map(|p| home.show(p)).as_deref(),
-    );
-    push_field(
-        json,
-        "checkout",
-        skill.checkout.as_deref().map(|p| home.show(p)).as_deref(),
-    );
-    json.push_str(&format!(",\"behind\":{},\"links\":{{", skill.behind));
-    for (i, ((id, _), link)) in FOLDERS.iter().zip(&skill.links).enumerate() {
-        comma(json, i);
-        push_json_string(json, id);
-        json.push(':');
-        push_json_string(json, link.word());
-    }
-    json.push_str("},\"locations\":{");
-    for (i, (id, _)) in FOLDERS.iter().enumerate() {
-        comma(json, i);
-        push_json_string(json, id);
-        json.push_str(":{");
-        json.push_str("\"state\":");
-        push_json_string(json, skill.links[i].word());
-        push_field(
-            json,
-            "source",
-            skill.sources[i].as_deref().map(|p| home.show(p)).as_deref(),
-        );
-        push_field(
-            json,
-            "checkout",
-            skill.checkouts[i]
-                .as_deref()
-                .map(|p| home.show(p))
-                .as_deref(),
-        );
-        json.push_str(&format!(",\"behind\":{}", skill.behind_by_folder[i]));
-        json.push('}');
-    }
-    json.push_str("}}");
 }
 
 /// Runs the futures side by side and returns their outputs in order.

@@ -215,33 +215,27 @@ async fn reports_tools_skills_and_the_checkout() {
 
     let links = |name: &str| {
         let skill = object(section(&json, "skills"), "name", name);
-        let at = skill.find("\"links\":").unwrap();
-        skill[at..]
-            .split(",\"locations\"")
-            .next()
-            .unwrap()
-            .to_owned()
-            + "}"
+        serde_json::from_str::<serde_json::Value>(skill).unwrap()["links"].clone()
     };
     assert_eq!(
         links("alpha"),
-        "\"links\":{\"claude\":\"linked\",\"agents\":\"linked\"}}"
+        serde_json::json!({"claude":"linked","agents":"linked"})
     );
     assert_eq!(
         links("beta"),
-        "\"links\":{\"claude\":\"linked\",\"agents\":\"missing\"}}"
+        serde_json::json!({"claude":"linked","agents":"missing"})
     );
     assert_eq!(
         links("gone"),
-        "\"links\":{\"claude\":\"broken\",\"agents\":\"missing\"}}"
+        serde_json::json!({"claude":"broken","agents":"missing"})
     );
     assert_eq!(
         links("mine"),
-        "\"links\":{\"claude\":\"missing\",\"agents\":\"copy\"}}"
+        serde_json::json!({"claude":"missing","agents":"copy"})
     );
     assert_eq!(
         links("delta"),
-        "\"links\":{\"claude\":\"missing\",\"agents\":\"missing\"}}"
+        serde_json::json!({"claude":"missing","agents":"missing"})
     );
     assert!(
         object(section(&json, "skills"), "name", "alpha")
