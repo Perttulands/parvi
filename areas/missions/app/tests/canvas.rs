@@ -191,10 +191,6 @@ fn canvas_ports_drag_move_zoom_and_undo(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("mission-card-fmn_work").unwrap().size.width > old_width);
     click(cx, "canvas-fit");
     cx.run_until_parked();
-    let from = cx
-        .debug_bounds("mission-port-fmn_work:port_out")
-        .unwrap()
-        .center();
     let to = cx
         .debug_bounds("mission-port-end_done:in")
         .unwrap()
@@ -227,9 +223,20 @@ fn canvas_ports_drag_move_zoom_and_undo(cx: &mut TestAppContext) {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(10));
     }
-    until(cx, "unwire acknowledged", |cx| {
+    until(cx, "unwire acknowledged and validation refreshed", |cx| {
         cx.debug_bounds("undo").is_some()
+            && cx.debug_bounds("mission-validation-complete").is_some()
     });
+    click(cx, "canvas-fit");
+    cx.run_until_parked();
+    let from = cx
+        .debug_bounds("mission-port-fmn_work:port_out")
+        .unwrap()
+        .center();
+    let to = cx
+        .debug_bounds("mission-port-end_done:in")
+        .unwrap()
+        .center();
     cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
     cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
     cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
@@ -249,8 +256,9 @@ fn canvas_ports_drag_move_zoom_and_undo(cx: &mut TestAppContext) {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(10));
     }
-    until(cx, "wire acknowledged", |cx| {
+    until(cx, "wire acknowledged and validation refreshed", |cx| {
         cx.debug_bounds("undo").is_some()
+            && cx.debug_bounds("mission-validation-complete").is_some()
     });
     let canvas = cx.debug_bounds("mission-canvas").unwrap();
     let at = point(canvas.origin.x + px(20.), canvas.origin.y + px(20.));
@@ -263,6 +271,8 @@ fn canvas_ports_drag_move_zoom_and_undo(cx: &mut TestAppContext) {
     until(cx, "menu closed with Escape", |cx| {
         cx.debug_bounds("canvas-new-gate").is_none()
     });
+    let canvas = cx.debug_bounds("mission-canvas").unwrap();
+    let at = point(canvas.origin.x + px(20.), canvas.origin.y + px(20.));
     cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
     cx.simulate_mouse_up(at, MouseButton::Right, Modifiers::none());
     until(cx, "context menu reopened", |cx| {

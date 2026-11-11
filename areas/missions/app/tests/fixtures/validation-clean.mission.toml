@@ -1,0 +1,52 @@
+schema = 1
+id = "msn_clean"
+slug = "clean"
+title = "Clean delivery"
+rev = 1
+[[inputCard]]
+id = "inp_start"
+title = "Brief"
+goal = "Describe the task"
+[[formation]]
+id = "step_work"
+type = "solo"
+title = "Work"
+[formation.brief]
+goal = "Prepare the result"
+[[formation.input]]
+id = "in"
+label = "Input"
+[[formation.output]]
+id = "out"
+label = "Result"
+[[formation.slot]]
+id = "slot_work"
+label = "Worker"
+agentId = "builder"
+harness = "openai-codex"
+effort = "medium"
+[[gate]]
+id = "gate_review"
+title = "Review"
+kinds = ["human"]
+criterion = "Is the result ready?"
+[[end]]
+id = "done"
+title = "Done"
+outcome = "done"
+[[connection]]
+id = "edge_start"
+from = "inp_start:out"
+to = "step_work:in"
+[[connection]]
+id = "edge_review"
+from = "step_work:out"
+to = "gate_review:in"
+[[connection]]
+id = "edge_pass"
+from = "gate_review:pass"
+to = "done:in"
+[[connection]]
+id = "edge_fail"
+from = "gate_review:fail"
+to = "step_work:in"
