@@ -91,6 +91,7 @@ impl Page for Alpha {
     const SETTINGS: &'static [Setting] = &[
         Setting::toggle("loud", "Loud", false),
         Setting::number("size", "Size", 1., (1., 3., 1.)),
+        Setting::text("folder", "Folder", "").note("Folder for downloads."),
     ];
 
     fn settings_changed(&mut self, _: &mut Window, cx: &mut Context<Self>) {
@@ -480,6 +481,7 @@ fn two_toy_pages_plug_in_through_their_host(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     cx.update(parvi_app_shell::prepare);
     let path = settings.clone();
+    let address = node.clone();
     let (shell, cx) = cx.add_window_view(move |window, cx| {
         parvi_app_shell::start(PAGES, Some(node), Some(path), window, cx)
     });
@@ -586,6 +588,14 @@ fn two_toy_pages_plug_in_through_their_host(cx: &mut TestAppContext) {
     // a change goes into Alpha's section, and Alpha hears it.
     click(cx, "tab-settings");
     assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("settings"));
+    let node_field = cx
+        .debug_bounds(Box::leak(
+            format!("setting-app-node:{address}").into_boxed_str(),
+        ))
+        .unwrap();
+    let folder_field = cx.debug_bounds("setting-toy-a-folder:").unwrap();
+    assert!(node_field.size.width >= gpui::px(300.));
+    assert_eq!(node_field.size.width, folder_field.size.width);
     click(cx, "setting-toy-a-loud");
     click(cx, "setting-toy-a-size-up");
     assert_eq!(
