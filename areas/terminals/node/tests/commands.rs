@@ -504,6 +504,36 @@ async fn launches_an_agent_in_any_folder() {
         node.folder.display().to_string()
     );
 
+    assert_eq!(node.tmux.window_size("fresh"), "200x50");
+    node.call("session_launch", json!({ "harness": "shell", "folder": node.folder, "name": "sized", "cols": 91, "rows": 31 })).await.unwrap();
+    assert_eq!(node.tmux.window_size("sized"), "91x31");
+    assert!(
+        node.call(
+            "session_launch",
+            json!({ "harness": "shell", "folder": node.folder, "name": "incomplete", "cols": 91 })
+        )
+        .await
+        .is_err()
+    );
+
+    for (name, dimensions, expected) in [
+        ("cli-default", vec![], "200x50"),
+        ("cli-sized", vec!["--cols", "86", "--rows", "29"], "86x29"),
+    ] {
+        let folder = node.folder.to_str().unwrap();
+        let url = node.node.url();
+        let mut args = vec!["launch", "shell", folder, name, "--node", &url];
+        args.extend(dimensions);
+        let args: Vec<String> = args.into_iter().map(str::to_owned).collect();
+        assert_eq!(
+            parvi_node_kit::cli::run("session", &args, &mut Vec::new())
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(node.tmux.window_size(name), expected);
+    }
+
     // Copy uses the source's current folder and chooses its next free family name.
     // A client connecting has every session's facts read again.
     let (_client, _) = tokio_tungstenite::connect_async(node.node.ws())

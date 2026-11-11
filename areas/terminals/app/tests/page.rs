@@ -107,6 +107,7 @@ fn toy(host: Host, window: &mut Window, cx: &mut gpui::App) -> Mounted {
 struct Running {
     url: String,
     node: String,
+    socket: std::path::PathBuf,
     stop: mpsc::Sender<()>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -136,7 +137,7 @@ fn start(label: &str) -> Option<Running> {
             tmux.new_session("beta", 100, 30);
             let config = format!("[terminals]\nsocket = {:?}\n", tmux.socket_path());
             let node = Node::start(AREAS, &config).await.expect("a node");
-            let _ = ready.send(Some((node.url(), node.id())));
+            let _ = ready.send(Some((node.url(), node.id(), tmux.socket_path())));
             while stopped.try_recv().is_err() {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
@@ -144,9 +145,10 @@ fn start(label: &str) -> Option<Running> {
         });
     });
     match wait.recv().expect("the node thread") {
-        Some((url, node)) => Some(Running {
+        Some((url, node, socket)) => Some(Running {
             url,
             node,
+            socket,
             stop,
             thread: Some(thread),
         }),
@@ -392,4 +394,189 @@ fn a_page_starts_a_session_in_a_folder_through_launch(cx: &mut TestAppContext) {
         ))
     );
     let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
+}
+
+fn tmux(running: &Running, args: &[&str]) -> String {
+    let out =
+        std::process::Command::new(std::env::var_os("PARVI_TMUX").unwrap_or_else(|| "tmux".into()))
+            .args(["-S", running.socket.to_str().unwrap()])
+            .args(args)
+            .output()
+            .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+fn scroll_to_launch(cx: &mut VisualTestContext, scroll: &str) {
+    let selector: &'static str = Box::leak(scroll.to_string().into_boxed_str());
+    let point = cx.debug_bounds(selector).unwrap().center();
+    cx.simulate_event(gpui::ScrollEvent {
+        position: point,
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-1000.))),
+        modifiers: Modifiers::none(),
+        touch_phase: gpui::TouchPhase::Moved,
+        source: gpui::ScrollSource::Pointer,
+    });
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn launches_use_each_tile_grid(cx: &mut TestAppContext) {
+    let Some(running) = start("terminals-sized-launches") else {
+        return;
+    };
+    let settings = parvi_testkit::fresh_dir("sized-settings").join("app.json");
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let url = running.url.clone();
+    let path = settings.clone();
+    let (shell, cx) = cx.add_window_view(move |window, cx| {
+        parvi_app_shell::start(&[terminals, toy], Some(url), Some(path), window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    cx.update(|_, cx| {
+        page.update(cx, |p, cx| {
+            p.settings.workspace.set_windows(0, 4);
+            cx.notify();
+        })
+    });
+    until(cx, "four tile grids", |cx| {
+        page.read_with(cx, |p, _| {
+            p.launch_grids.borrow().iter().all(Option::is_some)
+        })
+    });
+    for i in 0..4 {
+        let grid = page.read_with(cx, |p, _| p.launch_grids.borrow()[i].unwrap());
+        scroll_to_launch(cx, &format!("launcher-scroll-{i}"));
+        let button = format!("launch-{i}");
+        let selector: &'static str = Box::leak(button.clone().into_boxed_str());
+        until(cx, "launch button", |cx| {
+            cx.debug_bounds(selector).is_some()
+        });
+        click(cx, button);
+        until(cx, "session bound", |cx| {
+            page.read_with(cx, |p, _| p.settings.workspace.shown(i).is_some())
+        });
+        let name = page.read_with(cx, |p, _| {
+            p.settings.workspace.shown(i).unwrap().key.name.clone()
+        });
+        assert_eq!(
+            tmux(
+                &running,
+                &[
+                    "display-message",
+                    "-p",
+                    "-t",
+                    &name,
+                    "#{window_width}x#{window_height}"
+                ]
+            ),
+            format!("{}x{}", grid.0, grid.1)
+        );
+        until(cx, "terminal painted", |cx| {
+            page.read_with(cx, |p, _| p.geo.borrow()[i].body.is_some())
+        });
+        let font = cx.update(|window, cx| {
+            let p = page.read(cx);
+            let geo = p.geo.borrow()[i];
+            parvi_terminals_app::term::paint::fit(
+                window,
+                geo.body.unwrap().size,
+                grid.0 as usize,
+                grid.1 as usize,
+                p.settings.font_size,
+            )
+            .font_size
+        });
+        assert!(f32::from(font) >= 11.);
+    }
+    let grid = page.read_with(cx, |p, _| {
+        p.launch_grids.borrow()[p.settings.workspace.focus].unwrap()
+    });
+    let host = shell.read_with(cx, |s, _| Host::new(s.hub()).for_page("toy", &[]));
+    let folder = settings.parent().unwrap().to_string_lossy().to_string();
+    cx.update(|_, cx| {
+        host.ask(
+            Ask::Launch {
+                node: NodeId(running.node.clone()),
+                folder,
+                name: "asked-size".into(),
+            },
+            cx,
+        )
+    })
+    .unwrap();
+    until(cx, "asked session", |_cx| {
+        tmux(&running, &["list-sessions", "-F", "#{session_name}"])
+            .lines()
+            .any(|s| s == "asked-size")
+    });
+    assert_eq!(
+        tmux(
+            &running,
+            &[
+                "display-message",
+                "-p",
+                "-t",
+                "asked-size",
+                "#{window_width}x#{window_height}"
+            ]
+        ),
+        format!("{}x{}", grid.0, grid.1)
+    );
+    let before = tmux(&running, &["list-sessions", "-F", "#{session_name}"]);
+    cx.update(|_, cx| {
+        host.ask(
+            Ask::Send {
+                reference: "hello".into(),
+                target: None,
+            },
+            cx,
+        )
+    })
+    .unwrap();
+    until(cx, "new agent choice", |cx| {
+        cx.debug_bounds("target-new").is_some()
+    });
+    click(cx, "target-new".into());
+    until(cx, "send launcher", |cx| {
+        cx.debug_bounds("send-body").is_some()
+    });
+    scroll_to_launch(cx, "send-body");
+    until(cx, "send launch button", |cx| {
+        cx.debug_bounds("launch-4").is_some()
+    });
+    click(cx, "launch-4".into());
+    let mut new_name = String::new();
+    until(cx, "send session", |_cx| {
+        let now = tmux(&running, &["list-sessions", "-F", "#{session_name}"]);
+        if let Some(name) = now
+            .lines()
+            .find(|name| !before.lines().any(|old| old == *name))
+        {
+            new_name = name.to_string();
+            true
+        } else {
+            false
+        }
+    });
+    assert_eq!(
+        tmux(
+            &running,
+            &[
+                "display-message",
+                "-p",
+                "-t",
+                &new_name,
+                "#{window_width}x#{window_height}"
+            ]
+        ),
+        format!("{}x{}", grid.0, grid.1)
+    );
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }

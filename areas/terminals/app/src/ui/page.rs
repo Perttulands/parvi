@@ -220,7 +220,7 @@ pub struct Terminals {
     /// Status lines said since the page last handed them to the app.
     said: Vec<Status>,
     pub geo: Rc<RefCell<[Geo; 4]>>,
-    /// The grid each empty window's body would hold at the terminal font,
+    /// The grid each window's body would hold at the terminal font,
     /// as last painted: what a launch into it asks the node for (#161).
     pub launch_grids: Rc<RefCell<[Option<Grid>; 4]>>,
     /// The window a drag selection started in.
