@@ -97,6 +97,21 @@ impl FilesPage {
             }
         }
         let parent = side.pane.up();
+        let kept: crate::store::Kept = self.host.setting(cx).unwrap_or_default();
+        let pins = kept
+            .pins
+            .into_iter()
+            .enumerate()
+            .map(|(n, pin)| {
+                let label = pin.path.clone();
+                kit::button(&t, ("pin", i * 1000 + n), label, Kind::Quiet)
+                    .debug_selector({
+                        let id = format!("files-pin-{i}-{n}");
+                        move || id.clone()
+                    })
+                    .on_click(cx.listener(move |p, _, w, cx| p.open_pin(i, pin.clone(), w, cx)))
+            })
+            .collect::<Vec<_>>();
         div()
             .flex_1()
             .min_w_0()
@@ -126,6 +141,7 @@ impl FilesPage {
                     )
                     .child(div().overflow_hidden().child(path)),
             )
+            .children(pins)
             .child(
                 div()
                     .id(("files-search", i))
@@ -479,7 +495,26 @@ impl Render for FilesPage {
         if let Some(e) = &self.error {
             page = page.child(kit::note(&t, e.clone(), Some(t.error)));
         }
+        if let Some(notice) = &self.notice {
+            page = page.child(
+                div()
+                    .debug_selector({
+                        let id = format!("files-notice-{notice}");
+                        move || id.clone()
+                    })
+                    .child(kit::note(&t, notice.clone(), None)),
+            );
+        }
         if let Some((i, at)) = self.menu {
+            let pane = &self.sides[i].pane;
+            let selected = pane.selected_path();
+            let is_file = pane.selection().is_some_and(|e| !e.folder);
+            let kept: crate::store::Kept = self.host.setting(cx).unwrap_or_default();
+            let pinned = selected.as_ref().is_some_and(|path| {
+                kept.pins
+                    .iter()
+                    .any(|pin| pin.node == pane.node && pin.path == *path)
+            });
             let open = cx.listener(move |p, _, w, cx| {
                 p.menu = None;
                 let item = p.sides[i]
@@ -518,6 +553,91 @@ impl Render for FilesPage {
                         }),
                     ),
                 )
+                .child(
+                    kit::button(
+                        &t,
+                        "file-menu-copy-relative",
+                        "Copy relative path",
+                        Kind::Quiet,
+                    )
+                    .debug_selector(|| "file-menu-copy-relative".into())
+                    .on_click(cx.listener(move |p, _, _, cx| {
+                        p.menu = None;
+                        let pane = &p.sides[i].pane;
+                        if let Some(path) = pane.selected_path() {
+                            let relative = paths::root_of(&pane.roots, &path)
+                                .map(|root| paths::relative(&root.path, &path))
+                                .unwrap_or(&path);
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                relative.to_owned(),
+                            ));
+                        }
+                        cx.notify();
+                    })),
+                )
+                .child(
+                    kit::button(&t, "file-menu-copy-folder", "Copy folder path", Kind::Quiet)
+                        .debug_selector(|| "file-menu-copy-folder".into())
+                        .on_click(cx.listener(move |p, _, _, cx| {
+                            p.menu = None;
+                            if let Some(path) = p.sides[i].pane.selected_path() {
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                    paths::parent(&path),
+                                ));
+                            }
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    kit::button(&t, "file-menu-parent", "Open parent", Kind::Quiet)
+                        .debug_selector(|| "file-menu-parent".into())
+                        .on_click(cx.listener(move |p, _, _, cx| {
+                            p.menu = None;
+                            if let Some(path) = p.sides[i].pane.selected_path() {
+                                p.list(
+                                    i,
+                                    paths::parent(&path),
+                                    Some(paths::base_name(&path).to_owned()),
+                                    cx,
+                                );
+                            }
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    kit::button(&t, "file-menu-refresh", "Refresh", Kind::Quiet)
+                        .debug_selector(|| "file-menu-refresh".into())
+                        .on_click(cx.listener(move |p, _, _, cx| {
+                            p.menu = None;
+                            if let Some(path) = p.sides[i].pane.path.clone() {
+                                p.list(i, path, None, cx);
+                            }
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    kit::button(
+                        &t,
+                        "file-menu-pin",
+                        if pinned { "Unpin" } else { "Pin" },
+                        Kind::Quiet,
+                    )
+                    .debug_selector(|| "file-menu-pin".into())
+                    .on_click(cx.listener(move |p, _, _, cx| {
+                        p.menu = None;
+                        p.toggle_pin(i, cx);
+                    })),
+                )
+                .when(is_file, |menu| {
+                    menu.child(
+                        kit::button(&t, "file-menu-download", "Download", Kind::Quiet)
+                            .debug_selector(|| "file-menu-download".into())
+                            .on_click(cx.listener(move |p, _, _, cx| {
+                                p.menu = None;
+                                p.download(i, cx);
+                            })),
+                    )
+                })
                 .child(
                     kit::button(&t, "file-menu-send", "Send to Session", Kind::Quiet).on_click(
                         cx.listener(move |p, _, _, cx| {

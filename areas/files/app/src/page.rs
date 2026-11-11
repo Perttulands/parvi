@@ -37,6 +37,7 @@ pub struct FilesPage {
     pub drafts: HashMap<(String, String), Draft>,
     pub transfers: Vec<store::transfers::Transfer>,
     pub error: Option<String>,
+    pub notice: Option<String>,
     pub beside: bool,
     pub confirm_discard: Option<usize>,
     pub conflict: Option<usize>,
@@ -71,6 +72,11 @@ impl Page for FilesPage {
     const TITLE: &'static str = "Files";
     const AREA: Option<&'static str> = Some("files");
     const ANSWERS: &'static [Answers] = &[Answers::OpenPath, Answers::Reveal("path")];
+    const SETTINGS: &'static [parvi_app_kit::Setting] =
+        &[
+            parvi_app_kit::Setting::text("download_folder", "Download folder", "")
+                .note("Leave empty to use Downloads in your home folder."),
+        ];
     fn chords(&self, _: &App) -> Vec<parvi_app_kit::chords::Chord> {
         let me = self.me.clone();
         vec![
@@ -295,6 +301,7 @@ impl FilesPage {
                 })
                 .collect(),
             error: None,
+            notice: None,
             beside: false,
             confirm_discard: None,
             conflict: None,
@@ -1102,6 +1109,127 @@ impl FilesPage {
         self.sides[i].pane.armed = false;
         self.menu = Some((i, at));
         cx.notify();
+    }
+    pub fn toggle_pin(&mut self, i: usize, cx: &mut Context<Self>) {
+        let pane = &self.sides[i].pane;
+        let Some(path) = pane.selected_path() else {
+            return;
+        };
+        let folder = pane.selection().is_some_and(|entry| entry.folder);
+        let mut kept: store::Kept = self.host.setting(cx).unwrap_or_default();
+        if let Some(at) = kept
+            .pins
+            .iter()
+            .position(|p| p.node == pane.node && p.path == path)
+        {
+            kept.pins.remove(at);
+        } else {
+            kept.pins.insert(
+                0,
+                store::Pin {
+                    node: pane.node.clone(),
+                    path,
+                    folder,
+                },
+            );
+        }
+        if let Err(e) = self.host.set_setting(&kept, cx) {
+            self.error = Some(e.message);
+        }
+        cx.notify();
+    }
+    pub fn open_pin(
+        &mut self,
+        i: usize,
+        pin: store::Pin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let changed_node = self.sides[i].pane.node != pin.node;
+        self.sides[i].pane.choose_node(&pin.node);
+        let folder = if pin.folder {
+            pin.path.clone()
+        } else {
+            paths::parent(&pin.path)
+        };
+        let selected = (!pin.folder).then(|| paths::base_name(&pin.path).to_owned());
+        if changed_node {
+            self.sides[i].pane.path = Some(folder);
+            self.sides[i].pane.selected = selected;
+            self.roots(i, cx);
+        } else {
+            self.list(i, folder, selected, cx);
+        }
+        if !pin.folder {
+            self.open(i, pin.path, window, cx);
+        }
+    }
+    pub fn download(&mut self, i: usize, cx: &mut Context<Self>) {
+        let pane = &self.sides[i].pane;
+        let Some(path) = pane.selected_path() else {
+            return;
+        };
+        if pane.selection().is_none_or(|e| e.folder) {
+            return;
+        }
+        let kept: store::Kept = self.host.setting(cx).unwrap_or_default();
+        let folder = if kept.download_folder.trim().is_empty() {
+            std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+                .map(|p| std::path::PathBuf::from(p).join("Downloads"))
+        } else {
+            Some(std::path::PathBuf::from(kept.download_folder))
+        };
+        let Some(folder) = folder else {
+            self.error = Some(
+                "Cannot find your Downloads folder; set a download folder in Settings.".into(),
+            );
+            cx.notify();
+            return;
+        };
+        let destination = folder.join(paths::base_name(&path));
+        let node = NodeId(pane.node.clone());
+        self.notice = None;
+        self.request(
+            Request::get(node, route("file", &path)),
+            move |p, status, body, cx| {
+                if status != 200 {
+                    p.fail(status, &body);
+                    cx.notify();
+                    return;
+                }
+                cx.spawn(async move |this, cx| {
+                    let task = cx.background_executor().spawn(async move {
+                        use std::io::Write;
+                        let result = std::fs::create_dir_all(&folder).and_then(|_| {
+                            let mut file = std::fs::OpenOptions::new()
+                                .write(true)
+                                .create_new(true)
+                                .open(&destination)?;
+                            file.write_all(&body)
+                        });
+                        (destination, result)
+                    });
+                    let (destination, result) = task.await;
+                    let _ = this.update(cx, |page, cx| {
+                        match result {
+                            Ok(()) => {
+                                page.notice =
+                                    Some(format!("Downloaded to {}", destination.display()))
+                            }
+                            Err(e) => {
+                                page.error = Some(format!(
+                                    "Could not download to {}: {e}",
+                                    destination.display()
+                                ))
+                            }
+                        }
+                        cx.notify();
+                    });
+                })
+                .detach();
+            },
+            cx,
+        );
     }
     pub fn copy_to_other(&mut self, i: usize, cx: &mut Context<Self>) {
         let other = 1 - i;

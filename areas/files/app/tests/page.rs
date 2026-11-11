@@ -260,6 +260,117 @@ fn click(cx: &mut VisualTestContext, id: &'static str) {
     cx.simulate_click(point, Modifiers::none());
 }
 
+fn menu_on(cx: &mut VisualTestContext, row: &'static str) {
+    let at = cx.debug_bounds(row).expect("file row").center();
+    cx.simulate_mouse_down(at, gpui::MouseButton::Right, Modifiers::none());
+    until(cx, "file menu", |cx| {
+        cx.debug_bounds("file-menu-open").is_some()
+    });
+}
+
+#[gpui::test]
+fn file_menu_paths_pins_download_and_refresh(cx: &mut TestAppContext) {
+    let root = parvi_testkit::fresh_dir("files-menu-journey");
+    let downloads = parvi_testkit::fresh_dir("files-menu-downloads");
+    std::fs::create_dir(root.join("folder")).unwrap();
+    let bytes = b"\x00\xffdownload\n";
+    std::fs::write(root.join("folder/note.bin"), bytes).unwrap();
+    let running = start(root.clone());
+    let settings = root.join("app.json");
+    std::fs::write(
+        &settings,
+        serde_json::to_vec(&serde_json::json!({"files":{"download_folder":downloads}})).unwrap(),
+    )
+    .unwrap();
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let url = running.url.clone();
+    let saved = settings.clone();
+    let test_cx = cx;
+    let (_, cx) = test_cx.add_window_view(move |w, cx| {
+        parvi_app_shell::start(&[parvi_files_app::build], Some(url), Some(saved), w, cx)
+    });
+    until(cx, "folder", |cx| {
+        cx.debug_bounds("file-row-0-folder").is_some()
+    });
+    click(cx, "file-row-0-folder");
+    until(cx, "file", |cx| {
+        cx.debug_bounds("file-row-0-note.bin").is_some()
+    });
+    menu_on(cx, "file-row-0-note.bin");
+    click(cx, "file-menu-copy-relative");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|x| x.text()).as_deref(),
+        Some("folder/note.bin")
+    );
+    menu_on(cx, "file-row-0-note.bin");
+    click(cx, "file-menu-copy-folder");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|x| x.text()),
+        Some(root.join("folder").to_string_lossy().into_owned())
+    );
+    menu_on(cx, "file-row-0-note.bin");
+    click(cx, "file-menu-parent");
+    until(cx, "selected file", |cx| {
+        cx.debug_bounds("selected-0-note.bin").is_some()
+    });
+    menu_on(cx, "file-row-0-note.bin");
+    click(cx, "file-menu-pin");
+    until(cx, "pin shown", |cx| {
+        cx.debug_bounds("files-pin-0-0").is_some()
+    });
+    cx.executor().advance_clock(Duration::from_millis(300));
+    until(cx, "pin saved", |_| {
+        std::fs::read(&settings)
+            .ok()
+            .and_then(|v| serde_json::from_slice::<serde_json::Value>(&v).ok())
+            .is_some_and(|v| {
+                v["files"]["pins"]
+                    .as_array()
+                    .is_some_and(|pins| pins.len() == 1)
+            })
+    });
+    menu_on(cx, "file-row-0-note.bin");
+    click(cx, "file-menu-download");
+    let destination = downloads.join("note.bin");
+    let notice: &'static str =
+        Box::leak(format!("files-notice-Downloaded to {}", destination.display()).into_boxed_str());
+    until(cx, "download and destination notice", |cx| {
+        std::fs::read(&destination).ok().as_deref() == Some(bytes)
+            && cx.debug_bounds(notice).is_some()
+    });
+    std::fs::write(root.join("folder/new.txt"), "new").unwrap();
+    menu_on(cx, "file-row-0-note.bin");
+    click(cx, "file-menu-refresh");
+    until(cx, "new file after refresh", |cx| {
+        cx.debug_bounds("file-row-0-new.txt").is_some()
+    });
+    let url = running.url.clone();
+    let saved = settings.clone();
+    let (rebuilt, again) = test_cx.add_window_view(move |w, cx| {
+        parvi_app_shell::start(&[parvi_files_app::build], Some(url), Some(saved), w, cx)
+    });
+    until(again, "pin after rebuild", |cx| {
+        cx.debug_bounds("files-pin-0-0").is_some()
+            && rebuilt.read_with(cx, |s, cx| {
+                !parvi_app_kit::Host::new(s.hub()).nodes(cx).is_empty()
+            })
+    });
+    click(again, "files-pin-0-0");
+    until(again, "pinned file opened", |cx| {
+        cx.debug_bounds("file-view-note.bin").is_some()
+            && cx.debug_bounds("file-row-0-note.bin").is_some()
+    });
+    menu_on(again, "file-row-0-note.bin");
+    click(again, "file-menu-pin");
+    until(again, "unpinned", |cx| {
+        cx.debug_bounds("files-pin-0-0").is_none()
+    });
+    drop(running);
+    std::fs::remove_dir_all(root).unwrap();
+    std::fs::remove_dir_all(downloads).unwrap();
+}
+
 #[gpui::test]
 fn page_renders_node_data(cx: &mut TestAppContext) {
     let root = parvi_testkit::fresh_dir("files-page");
