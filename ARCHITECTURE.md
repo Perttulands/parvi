@@ -145,7 +145,11 @@ reserves, or whose `everywhere` chords share a key, naming both;
   label, control, default). The shell's Settings page lists the shell's own
   (node, keys) and each page's under its title, keeps a change under its key in
   the page's section of `app.json`, and tells the page
-  (`Page::settings_changed`). A key declared twice refuses to start.
+  (`Page::settings_changed`). A key declared twice refuses to start. The app
+  watches `app.json` (`Hub::watch`): an edit made outside it, as an agent
+  makes, applies at once and each page whose section changed hears
+  `settings_changed`; the app's own writes are not edits, and a file that
+  does not read is reported while the last good settings stay.
 - **Read models.** What one page knows that others show (the terminals' session
   list) is a plain type in its area's `contract`, published by that page
   (`Host::publish`) and read and observed by any page (`Host::model`), built in

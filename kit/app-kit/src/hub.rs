@@ -75,6 +75,9 @@ pub enum HubEvent {
     Layers { closed: Vec<Surface> },
     /// A setting page `page` declares was changed for it.
     SettingChanged(&'static str),
+    /// `app.json` was edited outside the app and read again: these pages'
+    /// sections changed.
+    SettingsReloaded(Vec<&'static str>),
     /// Page `page` opened or closed its dock.
     Dock(&'static str),
     /// The link to `node` changed state; `None` when the app no longer
@@ -90,6 +93,15 @@ pub struct Hub {
     pub settings: Settings,
     settings_path: Option<PathBuf>,
     save_task: Option<Task<()>>,
+    /// The file's text as the app last wrote or read it: an event that
+    /// finds it so is the app's own write.
+    known: Option<String>,
+    /// The app is writing the file: what is there until it is done is not
+    /// an edit.
+    writing: bool,
+    /// Watches the settings' folder while the hub lives.
+    watcher: Option<notify::RecommendedWatcher>,
+    watch_task: Option<Task<()>>,
     pub status: Option<Status>,
     pub toast: Option<Toast>,
     toast_task: Option<Task<()>>,
@@ -160,6 +172,10 @@ impl Hub {
             settings,
             settings_path,
             save_task: None,
+            known: None,
+            writing: false,
+            watcher: None,
+            watch_task: None,
             status: notice.map(Status::failure),
             toast: None,
             toast_task: None,
@@ -440,13 +456,19 @@ impl Hub {
             cx.background_executor()
                 .timer(Duration::from_millis(250))
                 .await;
-            let Ok(snapshot) = this.read_with(cx, |h, _| h.settings.clone()) else {
+            let Ok(text) = this.update(cx, |h, _| {
+                let text = h.settings.text();
+                h.known = Some(text.clone());
+                h.writing = true;
+                text
+            }) else {
                 return;
             };
             let saved = cx
                 .background_executor()
-                .spawn(async move { snapshot.save(&path) })
+                .spawn(async move { Settings::write(&path, &text) })
                 .await;
+            let _ = this.update(cx, |h, _| h.writing = false);
             if let Err(e) = saved {
                 let _ = this.update(cx, |h, cx| {
                     h.report(
@@ -456,6 +478,107 @@ impl Hub {
                 });
             }
         }));
+    }
+
+    /// Reads the settings again whenever their file changes on disk, as an
+    /// agent edits it. Only the file's own events wake it.
+    pub fn watch(&mut self, cx: &mut Context<Self>) {
+        use notify::Watcher;
+        let Some(path) = self.settings_path.clone() else {
+            return;
+        };
+        let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+            return;
+        };
+        let name = name.to_os_string();
+        // One pending wake is enough: the reload reads the file as it is.
+        let (tx, rx) = async_channel::bounded::<()>(1);
+        let watched = std::fs::create_dir_all(dir)
+            .map_err(notify::Error::io)
+            .and_then(|_| {
+                let mut w =
+                    notify::recommended_watcher(move |ev: notify::Result<notify::Event>| {
+                        // Reading the file is an event too: only a change wakes it.
+                        let changed = |ev: &notify::Event| {
+                            !ev.kind.is_access()
+                                && ev.paths.iter().any(|p| p.file_name() == Some(&name))
+                        };
+                        if ev.is_ok_and(|ev| changed(&ev)) {
+                            let _ = tx.try_send(());
+                        }
+                    })?;
+                w.watch(dir, notify::RecursiveMode::NonRecursive)?;
+                Ok(w)
+            });
+        match watched {
+            Ok(w) => self.watcher = Some(w),
+            Err(e) => {
+                let text = format!(
+                    "{} is not watched ({e}); edits to it apply at the next start",
+                    path.display()
+                );
+                self.report(Status::failure(text), cx);
+                return;
+            }
+        }
+        self.watch_task = Some(cx.spawn(async move |this, cx| {
+            while rx.recv().await.is_ok() {
+                if this.update(cx, |h, cx| h.reload(cx)).is_err() {
+                    break;
+                }
+            }
+        }));
+    }
+
+    /// Reads the settings file again. An edit made outside the app replaces
+    /// the settings: the node is dialled if it changed and every page whose
+    /// section changed hears it. A file that does not read is reported and
+    /// the settings stay as they were.
+    fn reload(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.settings_path.clone().filter(|_| !self.writing) else {
+            return;
+        };
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            // Gone, or between a write and its rename: nothing to read.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(e) => {
+                let text = format!("{} could not be read: {e}", path.display());
+                return self.report(Status::failure(text), cx);
+            }
+        };
+        if self.known.as_deref() == Some(text.as_str()) {
+            return;
+        }
+        let new: Settings = match serde_json::from_str(&text) {
+            Ok(new) => new,
+            Err(e) => {
+                let text = format!(
+                    "{} does not read ({e}); the settings stay as they were",
+                    path.display()
+                );
+                return self.report(Status::failure(text), cx);
+            }
+        };
+        self.known = Some(text);
+        if new == self.settings {
+            return;
+        }
+        let old = std::mem::replace(&mut self.settings, new);
+        let changed: Vec<&'static str> = self
+            .answers
+            .iter()
+            .map(|(id, _)| *id)
+            .filter(|id| old.sections.get(*id) != self.settings.sections.get(*id))
+            .collect();
+        if old.node != self.settings.node {
+            self.connect(cx);
+        }
+        cx.emit(HubEvent::SettingsReloaded(changed));
+        self.report(
+            Status::new(format!("Settings read again from {}", path.display())),
+            cx,
+        );
     }
 
     /// Opens a surface over the others.

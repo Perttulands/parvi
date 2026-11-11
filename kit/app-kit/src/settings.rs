@@ -4,6 +4,8 @@
 //! `$XDG_CONFIG_HOME/parvi/app.json`), or the file `PARVI_APP_CONFIG` names.
 //! A file that doesn't read is reported and set aside, never silently
 //! replaced; what it holds that this app does not know is kept as it reads.
+//! The running app watches the file: an edit made outside it applies at once
+//! (`Hub::watch`).
 
 use parvi_core::Error;
 use serde::de::DeserializeOwned;
@@ -156,16 +158,19 @@ impl Settings {
         }
     }
 
-    /// Writes through a temporary file, so a crash never leaves half a file.
-    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+    /// The file's text for these settings.
+    pub fn text(&self) -> String {
+        serde_json::to_string_pretty(self).expect("settings hold only JSON values")
+    }
+
+    /// Writes `text` through a temporary file, so a crash never leaves half
+    /// a file.
+    pub fn write(path: &Path, text: &str) -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
         let tmp = path.with_extension("json.tmp");
-        std::fs::write(
-            &tmp,
-            serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?,
-        )?;
+        std::fs::write(&tmp, text)?;
         std::fs::rename(tmp, path)
     }
 }
@@ -217,7 +222,7 @@ mod tests {
         assert_eq!(s, Settings::default());
         assert!(notice.unwrap().contains("app.json.broken"));
         assert!(dir.join("app.json.broken").exists());
-        Settings::default().save(&p).unwrap();
+        Settings::write(&p, &Settings::default().text()).unwrap();
         assert_eq!(Settings::load(&p).0, Settings::default());
         std::fs::remove_dir_all(&dir).unwrap();
     }

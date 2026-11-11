@@ -50,6 +50,8 @@ struct Alpha {
     dismissed: bool,
     /// Its section as last read when a setting changed.
     settings: Option<serde_json::Value>,
+    /// How many times it heard a setting change.
+    changed: usize,
 }
 
 impl Alpha {
@@ -74,6 +76,7 @@ impl Alpha {
                 row: 0,
                 dismissed: false,
                 settings: None,
+                changed: 0,
             }
         })
     }
@@ -92,6 +95,7 @@ impl Page for Alpha {
 
     fn settings_changed(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         self.settings = Some(self.host.setting(cx).expect("its section reads"));
+        self.changed += 1;
     }
 
     fn frame(&mut self, node: &NodeId, _: u8, body: &[u8], _: &mut Window, cx: &mut Context<Self>) {
@@ -666,5 +670,102 @@ fn with_no_pages_the_shell_connects_to_its_node(cx: &mut TestAppContext) {
     // Only the shell's own Settings page, from which the node is set.
     assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("settings"));
     assert!(cx.debug_bounds("tab-settings").is_some());
+    let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
+}
+
+/// Long enough for the app's settings write to come due.
+const SAVED: Duration = Duration::from_millis(300);
+
+/// The settings file as it is now.
+fn on_disk(path: &std::path::Path) -> Option<parvi_app_kit::settings::Settings> {
+    parvi_app_kit::settings::Settings::parse(&std::fs::read_to_string(path).ok()?)
+}
+
+#[gpui::test]
+fn an_agents_edit_to_app_json_reaches_the_page_and_the_apps_own_writes_do_not(
+    cx: &mut TestAppContext,
+) {
+    let node = fake_node(Arc::new(Mutex::new(vec![])));
+    let settings = settings_path("reload");
+    // The fake node, the link and the file watcher run on their own threads.
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let path = settings.clone();
+    let (shell, cx) = cx.add_window_view(move |window, cx| {
+        parvi_app_shell::start(PAGES, Some(node), Some(path), window, cx)
+    });
+    let hub = shell.read_with(cx, |s, _| s.hub().clone());
+    let in_app = |cx: &mut VisualTestContext| hub.read_with(cx, |h, _| h.settings.clone());
+    // Connected, the app keeps the fleet it saw: once its write is due, the
+    // file holds what the app does.
+    until(cx, "the link to open", |cx| {
+        hub.read_with(cx, |h, _| h.fleet.here().state == LinkState::Open)
+    });
+    cx.executor().advance_clock(SAVED);
+    until(cx, "the app's first write", |cx| {
+        on_disk(&settings) == Some(in_app(cx))
+    });
+    let a = alpha();
+    assert_eq!(a.read_with(cx, |a, _| a.changed), 0);
+
+    // An agent turns Alpha's toggle on in the file: Alpha hears it at once.
+    let mut edited = in_app(cx);
+    edited.set_value("toy-a", "loud", serde_json::json!(true));
+    let at = Instant::now();
+    std::fs::write(&settings, edited.text()).expect("the agent's edit");
+    until(cx, "Alpha to hear the edit", |cx| {
+        a.read_with(cx, |a, _| a.changed == 1)
+    });
+    assert!(at.elapsed() < Duration::from_secs(2), "{:?}", at.elapsed());
+    assert_eq!(
+        a.read_with(cx, |a, _| a.settings.clone()),
+        Some(serde_json::json!({"loud": true}))
+    );
+    assert!(status(&shell, cx).starts_with("Settings read again from "));
+
+    // Turned off on the Settings page: one write, and Alpha hears it once.
+    click(cx, "tab-settings");
+    click(cx, "setting-toy-a-loud");
+    assert_eq!(a.read_with(cx, |a, _| a.changed), 2);
+    cx.executor().advance_clock(SAVED);
+    until(cx, "the app's write", |_| {
+        on_disk(&settings).and_then(|s| s.value("toy-a", "loud").cloned())
+            == Some(serde_json::json!(false))
+    });
+    let written = std::fs::metadata(&settings)
+        .and_then(|m| m.modified())
+        .unwrap();
+    // Time for the watcher to hear the app's own write, and for a write
+    // that would follow it to come due.
+    let settle = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < settle {
+        cx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    cx.executor().advance_clock(SAVED);
+    cx.run_until_parked();
+    assert_eq!(
+        a.read_with(cx, |a, _| a.changed),
+        2,
+        "its own write is no edit"
+    );
+    let again = std::fs::metadata(&settings)
+        .and_then(|m| m.modified())
+        .unwrap();
+    assert_eq!(written, again, "written once");
+
+    // A file that does not read is reported; the last good settings stay.
+    std::fs::write(&settings, "{not json").expect("a broken edit");
+    until(cx, "the failure on the status line", |cx| {
+        status(&shell, cx).contains("does not read")
+    });
+    assert!(shell.read_with(cx, |s, cx| {
+        s.hub().read(cx).status.as_ref().unwrap().failure
+    }));
+    assert_eq!(
+        in_app(cx).value("toy-a", "loud"),
+        Some(&serde_json::json!(false))
+    );
+    assert_eq!(a.read_with(cx, |a, _| a.changed), 2);
     let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
 }
