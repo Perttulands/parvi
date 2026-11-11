@@ -1311,3 +1311,94 @@ fn work_item_in_terminal_opens_beside_and_focus_is_published(cx: &mut TestAppCon
     });
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }
+
+/// Keep the first launch's shell from becoming ready until after a later
+/// unknown-node ask has reported its failure. The node has already listed
+/// the new session, but has not answered the launch yet.
+#[gpui::test]
+fn late_launch_success_does_not_replace_a_newer_failure(cx: &mut TestAppContext) {
+    let Some(running) = start_with_harness("terminals-launch-status-order", true) else {
+        return;
+    };
+    let (shell, cx, settings) = open_with_alpha(&running, "launch-status-order", cx);
+    let gate_shell = running.fixture.join("gate-shell");
+    let tmux_program = std::env::var_os("PARVI_TMUX").unwrap_or_else(|| "tmux".into());
+    parvi_testkit::tmux::write_script(
+        &gate_shell,
+        format!(
+            "#!/bin/sh\n'{}' -S '{}' wait-for launch-status-release\nexec /bin/bash --noprofile --norc -i\n",
+            std::path::PathBuf::from(tmux_program).display(),
+            running.socket.display()
+        ),
+    );
+    tmux(
+        &running,
+        &[
+            "set-option",
+            "-g",
+            "default-shell",
+            gate_shell.to_str().unwrap(),
+        ],
+    );
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    cx.update(|_, cx| {
+        page.update(cx, |p, cx| {
+            p.settings.last_harness = Some("fake".into());
+            cx.notify();
+        })
+    });
+    let toy = shell.read_with(cx, |s, _| Host::new(s.hub()).for_page("toy", &[]));
+    let folder = settings.parent().unwrap().to_string_lossy().to_string();
+    cx.update(|_, cx| {
+        toy.ask(
+            Ask::Launch {
+                node: NodeId(running.node.clone()),
+                folder,
+                name: "alpha".into(),
+            },
+            cx,
+        )
+    })
+    .unwrap();
+    until(cx, "first launch listed but unanswered", |cx| {
+        page.read_with(cx, |p, _| {
+            !p.launches.is_empty()
+                && p.fleet
+                    .all
+                    .iter()
+                    .any(|s| s.node == running.node && s.name == "alpha-2")
+        })
+    });
+    cx.update(|_, cx| {
+        toy.ask(
+            Ask::Launch {
+                node: NodeId("nowhere".into()),
+                folder: "/".into(),
+                name: "lost".into(),
+            },
+            cx,
+        )
+    })
+    .unwrap();
+    until(cx, "newer failure reported", |cx| {
+        shell.read_with(cx, |s, cx| {
+            s.hub().read(cx).status.as_ref().is_some_and(|status| {
+                status.failure
+                    && status.text == "Could not start lost: its node is not in the fleet"
+            })
+        })
+    });
+    tmux(&running, &["wait-for", "-S", "launch-status-release"]);
+    until(cx, "first launch answered", |cx| {
+        page.read_with(cx, |p, _| p.launches.is_empty())
+    });
+    let status = shell.read_with(cx, |s, cx| s.hub().read(cx).status.clone());
+    assert_eq!(
+        status.map(|s| (s.text, s.failure)),
+        Some((
+            "Could not start lost: its node is not in the fleet".into(),
+            true
+        ))
+    );
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
