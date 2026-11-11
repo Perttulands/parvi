@@ -133,6 +133,12 @@ impl FilesPage {
         let t = theme(cx).clone();
         let side = &self.sides[i];
         let path = side.pane.path.clone().unwrap_or_default();
+        let mut separators = path.rmatch_indices(paths::separator(&path));
+        let last = separators.next().map(|(at, _)| at).unwrap_or(0);
+        let previous = separators.next().map(|(at, _)| at).unwrap_or(0);
+        let path_start = path[..previous].to_owned();
+        let path_middle = path[previous..last].to_owned();
+        let path_end = path[last..].to_owned();
         let mut list = div()
             .id(("files-list", i))
             .flex_1()
@@ -222,6 +228,7 @@ impl FilesPage {
                                 .overflow_hidden()
                                 .whitespace_nowrap()
                                 .text_ellipsis()
+                                .pr(px(ROW_INSET))
                                 .debug_selector(move || selector.clone())
                                 .child(label)
                         })
@@ -352,10 +359,39 @@ impl FilesPage {
                         div()
                             .flex_1()
                             .min_w_0()
+                            .flex()
                             .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .child(path),
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .flex_shrink_1()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .child(path_start),
+                            )
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .flex_shrink_1()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .child(path_middle),
+                            )
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .max_w_full()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .debug_selector({
+                                        let id = format!("files-path-end-{i}-{path_end}");
+                                        move || id.clone()
+                                    })
+                                    .child(path_end),
+                            ),
                     ),
             )
             .child(
@@ -564,6 +600,23 @@ impl FilesPage {
                 )
                 .debug_selector(|| "files-diff".into())
                 .on_click(cx.listener(move |p, _, _, cx| p.toggle_diff(i, cx))),
+            );
+        }
+        if o.pretty.is_some() && !o.editing {
+            bar = bar.child(
+                kit::button(
+                    &t,
+                    "files-json-format",
+                    if o.source { "Format" } else { "As written" },
+                    Kind::Quiet,
+                )
+                .debug_selector(|| "files-json-format".into())
+                .on_click(cx.listener(move |p, _, _, cx| {
+                    if let Some(opened) = p.sides[i].opened.as_mut() {
+                        opened.source = !opened.source;
+                        cx.notify();
+                    }
+                })),
             );
         }
         if matches!(o.show, Show::Text { markdown: Some(_) }) && !o.editing {
@@ -1159,6 +1212,14 @@ impl Render for FilesPage {
             );
         }
         for (i, transfer) in self.transfers.iter().enumerate() {
+            if transfer.kept.state == crate::store::transfers::State::Done
+                && transfer
+                    .kept
+                    .finished
+                    .is_none_or(|at| parvi_app_kit::hub::now_ms().saturating_sub(at) >= 5000)
+            {
+                continue;
+            }
             let text = format!(
                 "{}: {:?} · {} / {}",
                 transfer.kept.name,

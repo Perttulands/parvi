@@ -713,6 +713,10 @@ fn file_menu_paths_pins_download_and_refresh(cx: &mut TestAppContext) {
         std::fs::read(&destination).ok().as_deref() == Some(bytes)
             && cx.debug_bounds(notice).is_some()
     });
+    cx.executor().advance_clock(Duration::from_secs(6));
+    until(cx, "download notice expires", |cx| {
+        cx.debug_bounds(notice).is_none()
+    });
     std::fs::write(root.join("folder/new.txt"), "new").unwrap();
     menu_on(cx, "file-row-0-note.bin");
     click(cx, "file-menu-refresh");
@@ -1480,6 +1484,10 @@ fn conflicting_save_can_write_a_separate_copy(cx: &mut TestAppContext) {
     until(cx, "copy saved", |_| {
         std::fs::read(root.join("note (mine).txt")).ok().as_deref() == Some(b"my draft")
     });
+    until(cx, "saved copy appears in both panes", |cx| {
+        cx.debug_bounds("file-row-0-note (mine).txt").is_some()
+            && cx.debug_bounds("file-row-1-note (mine).txt").is_some()
+    });
     assert_eq!(std::fs::read(root.join("note.txt")).unwrap(), b"other edit");
     drop(running);
     std::fs::remove_dir_all(root).unwrap();
@@ -1570,6 +1578,15 @@ fn read_markdown_json_text_binary_and_permission_error(cx: &mut TestAppContext) 
     assert!(page.read_with(cx, |p, _| p.sides[0].opened.as_ref().unwrap().source));
     assert!(cx.debug_bounds("files-code-top-0-1").is_some());
     click(cx, "file-row-0-data.json");
+    until(cx, "JSON as written", |cx| {
+        cx.debug_bounds("files-json-format").is_some()
+            && cx.debug_bounds("files-code-top-0-1").is_some()
+    });
+    assert_eq!(
+        page.read_with(cx, |p, cx| p.sides[0].code.read(cx).text().to_owned()),
+        "{\"a\":1}"
+    );
+    click(cx, "files-json-format");
     until(cx, "formatted JSON", |cx| {
         cx.debug_bounds("files-json-formatted").is_some()
     });
@@ -1692,27 +1709,53 @@ fn create_rename_delete_and_diff_in_the_files_page(cx: &mut TestAppContext) {
     cx.simulate_input("renamed.txt");
     cx.simulate_keystrokes("enter");
     until(cx, "open file follows rename", |cx| {
-        root.join("renamed.txt").is_file() && cx.debug_bounds("file-view-renamed.txt").is_some()
+        root.join("renamed.txt").is_file()
+            && cx.debug_bounds("file-view-renamed.txt").is_some()
+            && cx.debug_bounds("file-row-1-renamed.txt").is_some()
+            && cx.debug_bounds("file-row-1-tracked.txt").is_none()
     });
     click(cx, "files-name-0");
     cx.simulate_keystrokes("ctrl-a");
     cx.simulate_input("new.txt");
     click(cx, "files-create-file-0");
     until(cx, "new file", |cx| {
-        root.join("new.txt").is_file() && cx.debug_bounds("file-row-0-new.txt").is_some()
+        root.join("new.txt").is_file()
+            && cx.debug_bounds("file-row-0-new.txt").is_some()
+            && cx.debug_bounds("file-row-1-new.txt").is_some()
     });
     click(cx, "files-name-0");
     cx.simulate_keystrokes("ctrl-a");
     cx.simulate_input("new-folder");
     click(cx, "files-create-folder-0");
     until(cx, "new folder", |cx| {
-        root.join("new-folder").is_dir() && cx.debug_bounds("file-row-0-new-folder").is_some()
+        root.join("new-folder").is_dir()
+            && cx.debug_bounds("file-row-0-new-folder").is_some()
+            && cx.debug_bounds("file-row-1-new-folder").is_some()
+    });
+    click(cx, "file-row-1-new.txt");
+    until(cx, "other pane opens file", |cx| {
+        page.read_with(cx, |p, _| {
+            p.sides[1]
+                .opened
+                .as_ref()
+                .is_some_and(|o| o.name == "new.txt")
+        })
     });
     click(cx, "file-row-0-new.txt");
     click(cx, "files-delete-0");
     assert!(root.join("new.txt").exists());
     click(cx, "files-delete-0");
-    until(cx, "delete confirmed", |_| !root.join("new.txt").exists());
+    until(cx, "delete confirmed in both panes and viewer", |cx| {
+        !root.join("new.txt").exists()
+            && cx.debug_bounds("file-row-0-new.txt").is_none()
+            && cx.debug_bounds("file-row-1-new.txt").is_none()
+            && cx.debug_bounds("file-view-new.txt").is_none()
+            && page.read_with(cx, |p, _| {
+                p.sides
+                    .iter()
+                    .all(|side| side.opened.as_ref().is_none_or(|o| o.name != "new.txt"))
+            })
+    });
     drop(running);
     std::fs::remove_dir_all(root).unwrap();
 }
