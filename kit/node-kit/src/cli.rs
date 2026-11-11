@@ -352,58 +352,82 @@ fn typed(key: &str, spec: &Value, raw: &str) -> Result<Value> {
     })
 }
 
-/// A readable answer: a list as one row per item, an object as `key: value`
-/// lines, text as itself. `--json` prints the value as it is.
+/// A readable answer, with nested values on indented lines. `--json`
+/// bypasses this renderer and prints the original value.
 fn render(value: &Value) -> String {
+    let mut text = String::new();
+    render_value(value, 0, &mut text);
+    text
+}
+
+/// Nulls and empty values at any depth do not need a heading of their own.
+fn has_content(value: &Value) -> bool {
     match value {
-        Value::String(s) => format!("{}\n", s.trim_end()),
-        Value::Array(items) if items.iter().all(Value::is_object) && !items.is_empty() => {
-            let mut text = String::new();
-            for item in items {
-                text.push_str(&row(item));
-                text.push('\n');
-            }
-            text
-        }
-        Value::Array(items) => items.iter().map(scalar).collect::<Vec<_>>().join("\n") + "\n",
-        Value::Object(map) => {
-            let mut text = String::new();
-            for (k, v) in map {
-                match v {
-                    Value::Array(items)
-                        if items.iter().all(Value::is_object) && !items.is_empty() =>
-                    {
-                        text.push_str(&format!("{k}:\n"));
-                        for item in items {
-                            text.push_str(&format!("  {}\n", row(item)));
-                        }
-                    }
-                    _ => text.push_str(&format!("{k}: {}\n", scalar(v))),
-                }
-            }
-            text
-        }
-        other => format!("{}\n", scalar(other)),
+        Value::Null => false,
+        Value::String(s) => !s.trim().is_empty(),
+        Value::Array(items) => items.iter().any(has_content),
+        Value::Object(fields) => fields.values().any(has_content),
+        Value::Bool(_) | Value::Number(_) => true,
     }
 }
 
-/// One object on one line: its plain fields, tab-separated as `key=value`.
-fn row(item: &Value) -> String {
-    item.as_object()
-        .map(|m| {
-            m.iter()
-                .filter(|(_, v)| !v.is_object() && !v.is_array() && !v.is_null())
-                .map(|(k, v)| format!("{k}={}", scalar(v)))
-                .collect::<Vec<_>>()
-                .join("\t")
-        })
-        .unwrap_or_default()
+fn render_value(value: &Value, indent: usize, out: &mut String) {
+    match value {
+        Value::Object(fields) => {
+            for (key, value) in fields.iter().filter(|(_, v)| has_content(v)) {
+                out.push_str(&" ".repeat(indent));
+                out.push_str(key);
+                out.push(':');
+                match value {
+                    Value::Array(_) | Value::Object(_) => {
+                        out.push('\n');
+                        render_value(value, indent + 2, out);
+                    }
+                    _ => {
+                        out.push(' ');
+                        render_scalar(value, indent + 2, out);
+                    }
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items.iter().filter(|v| has_content(v)) {
+                out.push_str(&" ".repeat(indent));
+                out.push('-');
+                match item {
+                    Value::Array(_) | Value::Object(_) => {
+                        out.push('\n');
+                        render_value(item, indent + 2, out);
+                    }
+                    _ => {
+                        out.push(' ');
+                        render_scalar(item, indent + 2, out);
+                    }
+                }
+            }
+        }
+        _ if has_content(value) => {
+            out.push_str(&" ".repeat(indent));
+            render_scalar(value, indent, out);
+        }
+        _ => {}
+    }
 }
 
-fn scalar(v: &Value) -> String {
-    match v {
+fn render_scalar(value: &Value, continuation_indent: usize, out: &mut String) {
+    let text = match value {
         Value::String(s) => s.clone(),
-        other => other.to_string(),
+        _ => value.to_string(),
+    };
+    let mut lines = text.lines();
+    if let Some(first) = lines.next() {
+        out.push_str(first);
+        out.push('\n');
+        for line in lines {
+            out.push_str(&" ".repeat(continuation_indent));
+            out.push_str(line);
+            out.push('\n');
+        }
     }
 }
 
@@ -490,10 +514,38 @@ mod tests {
     }
 
     #[test]
-    fn lists_read_as_one_row_per_item() {
-        let text = render(
-            &json!([{"id": "%1", "name": "main", "panes": [1]}, {"id": "%2", "name": "build"}]),
+    fn nested_objects_and_lists_keep_their_values_without_json_or_empty_fields() {
+        let answer = json!({
+            "node": "local", "warning": null, "empty": "", "none": [],
+            "host": {"cpu": {"percent": 0}, "gpu": {"reason": "unavailable"}},
+            "tasks": [
+                {"name": "check", "targets": [{"name": "agent", "paused": false}]},
+                {"name": "review", "schedule": {"every": 15}},
+                null, {}, []
+            ],
+            "hidden": {"nested": [null, "", {}]}
+        });
+        assert_eq!(
+            render(&answer),
+            concat!(
+                "node: local\n",
+                "host:\n  cpu:\n    percent: 0\n  gpu:\n    reason: unavailable\n",
+                "tasks:\n  -\n    name: check\n    targets:\n      -\n        name: agent\n        paused: false\n",
+                "  -\n    name: review\n    schedule:\n      every: 15\n",
+            )
         );
-        assert_eq!(text, "id=%1\tname=main\nid=%2\tname=build\n");
+    }
+
+    #[test]
+    fn renders_mixed_arrays_multiline_text_and_empty_values() {
+        assert_eq!(
+            render(&json!(["one", null, ["two", 0], {"text": "first\nsecond", "off": false}])),
+            "- one\n-\n  - two\n  - 0\n-\n  text: first\n    second\n  off: false\n"
+        );
+        assert_eq!(
+            render(&json!({"warning": null, "empty": [null, {}], "blank": "  "})),
+            ""
+        );
+        assert_eq!(render(&json!("hello")), "hello\n");
     }
 }
