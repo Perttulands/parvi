@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use parvi::AREAS;
+use parvi::{AREAS, install};
 use parvi_node_kit::identity::Identity;
 use parvi_node_kit::{Config, Options, cli, config, hook, listing, mcp};
 
@@ -12,7 +12,12 @@ const USAGE: &str = "usage:
   parvi mcp [--node addr:port]
   parvi <noun> <verb> [args] [--json] [--node id|url]   the node's commands, e.g. parvi session list
   parvi hook <url> [--then command...] [payload]        (run by a program's own hook)
-  parvi kinds                                           who owns which frame kinds";
+  parvi kinds                                           who owns which frame kinds
+  parvi install [--root dir] [--unit name] [--listen addr:port] ...
+                                                        this build as the systemd user unit
+  parvi upgrade [--from file] [--unit name] ...         replace the installed build; sessions stay
+  parvi version [--node addr:port]                      this build's version and the node's
+  parvi --version                                       this build's version";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -35,6 +40,12 @@ async fn main() -> Result<()> {
             Ok(())
         }
         "serve" => serve(&args).await,
+        "install" | "upgrade" => std::process::exit(install::run(&command, &args).await),
+        "--version" => {
+            println!("parvi {}", parvi_node_kit::VERSION);
+            Ok(())
+        }
+        "version" => version(&args).await,
         "kinds" => {
             print!("{}", listing::kinds_table(AREAS));
             Ok(())
@@ -53,6 +64,33 @@ async fn main() -> Result<()> {
             std::process::exit(code);
         }
     }
+}
+
+/// This build's version, and the version of the node that answers.
+async fn version(args: &[String]) -> Result<()> {
+    let node = match args {
+        [] => parvi_node_kit::address::local(),
+        [flag, node] if flag == "--node" => node.clone(),
+        _ => bail!("{USAGE}"),
+    };
+    println!("parvi {}", parvi_node_kit::VERSION);
+    let url = match node.contains("://") {
+        true => node.clone(),
+        false => format!("http://{node}"),
+    };
+    let client = parvi_node_kit::NodeClient::new(Some(&format!("{}/", url.trim_end_matches('/'))))?;
+    match client
+        .request(axum::http::Method::GET, "/api/health", None, None)
+        .await
+    {
+        Ok((health, _)) => println!(
+            "node {} on {node} runs {}",
+            health["node"].as_str().unwrap_or("?"),
+            health["version"].as_str().unwrap_or("?")
+        ),
+        Err(error) => println!("no node answers on {node}: {error:#}"),
+    }
+    Ok(())
 }
 
 /// Serves until Ctrl-C or SIGTERM.

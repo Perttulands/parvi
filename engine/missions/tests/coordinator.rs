@@ -1798,3 +1798,119 @@ fn resumed_after_restart(root: &std::path::Path, id: &str) -> bool {
         .iter()
         .any(|e| e.kind == "run_resumed" && e.actor == "parvi:restart")
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn wait_reports_a_human_gate_once_and_wakes_concurrent_drivers() {
+    use parvi_mission_engine::WaitUntil;
+    use std::sync::Condvar;
+    struct HeldLab(Arc<(std::sync::Mutex<bool>, Condvar)>);
+    impl Executor for HeldLab {
+        fn execute_formation(
+            &self,
+            execution: FormationExecution,
+            sink: ExecutionSink,
+        ) -> Result<FormationResult, parvi_mission_engine::Error> {
+            let (lock, signal) = &*self.0;
+            let mut released = lock.lock().unwrap();
+            while !*released {
+                released = signal.wait(released).unwrap();
+            }
+            LabExecutor.execute_formation(execution, sink)
+        }
+    }
+    let dir = Scratch::new();
+    let path = dir.0.join("missions/hello.mission.toml");
+    let mission = std::fs::read_to_string(&path).unwrap()
+        .replace("[[end]]", "[[gate]]\nid = \"gate_review\"\ntitle = \"Review\"\nkinds = [\"human\"]\n\n[[end]]")
+        .replace("to = \"end_done:in\"", "to = \"gate_review:in\"\n\n[[connection]]\nid = \"edge_pass\"\nfrom = \"gate_review:pass\"\nto = \"end_done:in\"");
+    let mission = format!(
+        "{mission}\n[[end]]\nid = \"end_rejected\"\ntitle = \"Rejected\"\noutcome = \"rejected\"\n\n[[connection]]\nid = \"edge_fail\"\nfrom = \"gate_review:fail\"\nto = \"end_rejected:in\"\n"
+    );
+    std::fs::write(path, mission).unwrap();
+    let held = Arc::new((std::sync::Mutex::new(false), Condvar::new()));
+    let c = Coordinator::open(
+        &dir.0,
+        RunSettings::default(),
+        Box::new(HeldLab(held.clone())),
+    )
+    .unwrap();
+    let id = c.start_mission(request()).unwrap();
+    let mut waiters = Vec::new();
+    for _ in 0..20 {
+        let c = c.clone();
+        let id = id.clone();
+        waiters.push(tokio::spawn(async move {
+            c.wait_run(&id, WaitUntil::NeedsYou, None, Duration::from_secs(10))
+                .await
+                .unwrap()
+        }));
+    }
+    tokio::task::yield_now().await;
+    let started = tokio::time::Instant::now();
+    *held.0.lock().unwrap() = true;
+    held.1.notify_all();
+    let mut cursor = 0;
+    for waiter in waiters {
+        let answer = tokio::time::timeout_at(started + Duration::from_secs(1), waiter)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(answer.outcome, "needs-you");
+        assert_eq!(answer.run.waiting_gates[0].gate_id, "gate_review");
+        cursor = answer.cursor;
+    }
+    let timeout = c
+        .wait_run(
+            &id,
+            WaitUntil::NeedsYou,
+            Some(cursor),
+            Duration::from_millis(30),
+        )
+        .await
+        .unwrap();
+    assert_eq!(timeout.outcome, "timeout");
+    assert_eq!(timeout.run.status, "waiting_human");
+    let seq = timeout.run.waiting_gates[0].requested_seq;
+    let c2 = c.clone();
+    let id2 = id.clone();
+    let changed = tokio::spawn(async move {
+        c2.wait_run(
+            &id2,
+            WaitUntil::AnyChange,
+            Some(cursor),
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap()
+    });
+    c.record_verdict(
+        &id,
+        "gate_review",
+        parvi_mission_model::HumanVerdict {
+            requested_seq: seq,
+            verdict: "pass".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let answer = changed.await.unwrap();
+    assert!(answer.cursor > cursor);
+    let final_answer = c
+        .wait_run(&id, WaitUntil::Final, None, Duration::from_secs(10))
+        .await
+        .unwrap();
+    assert_eq!(final_answer.outcome, "final");
+    assert_eq!(final_answer.run.status, "succeeded");
+    assert_eq!(
+        c.wait_run(
+            &id,
+            WaitUntil::Final,
+            Some(final_answer.cursor),
+            Duration::ZERO
+        )
+        .await
+        .unwrap()
+        .outcome,
+        "final"
+    );
+}

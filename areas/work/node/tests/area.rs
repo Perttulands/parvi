@@ -1,8 +1,22 @@
 //! The area exposes the old Work commands and only pushes while watched.
 use futures_util::{SinkExt, StreamExt};
+use parvi_node_kit::{Built, Listing, Setup};
 use parvi_testkit::node::Node;
 use serde_json::json;
+use std::sync::OnceLock;
 use std::time::Duration;
+static BD: OnceLock<String> = OnceLock::new();
+fn build_work(setup: &Setup) -> anyhow::Result<Built> {
+    parvi_work::build_with(
+        setup,
+        parvi_work::Bd::new(BD.get().unwrap()),
+        parvi_work::Gh::default(),
+    )
+}
+const WORK: Listing = Listing {
+    build: build_work,
+    ..parvi_work::LISTING
+};
 use tokio_tungstenite::tungstenite::Message;
 
 #[test]
@@ -48,34 +62,19 @@ async fn work_is_pushed_only_while_watched() {
     node.stop().await;
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
-async fn create_from_cli_files_a_bead_in_the_configured_store() {
+async fn cli_lists_shows_and_creates_a_work_item() {
     let dir = parvi_testkit::fresh_dir("parvi-work-create");
-    let bd = |args: &[&str]| {
-        std::process::Command::new("bd")
-            .args(args)
-            .current_dir(&dir)
-            .env_remove("BEADS_DIR")
-            .env_remove("BEADS_DB")
-            .env_remove("BD_DB")
-            .output()
-            .unwrap()
-    };
-    let init = bd(&[
-        "init",
-        "--prefix",
-        "pwc",
-        "--skip-agents",
-        "--skip-hooks",
-        "--non-interactive",
-    ]);
-    assert!(
-        init.status.success(),
-        "{}",
-        String::from_utf8_lossy(&init.stderr)
-    );
+    std::fs::create_dir(dir.join(".beads")).unwrap();
+    std::fs::write(dir.join(".beads/prefix"), "pwc").unwrap();
+    let program = dir.join("fake-bd");
+    std::fs::write(&program, include_str!("fixtures/work/fake-bd.sh")).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    BD.set(program.display().to_string()).unwrap();
     let config = format!("[work]\nprojects = [\"beads {}\"]\n", dir.display());
-    let node = Node::start(&[parvi_work::LISTING], &config).await.unwrap();
+    let node = Node::start(&[WORK], &config).await.unwrap();
     let missing: Vec<String> = [
         "create",
         "--project",
@@ -114,10 +113,19 @@ async fn create_from_cli_files_a_bead_in_the_configured_store() {
         .rsplit('#')
         .next()
         .unwrap();
-    let shown = bd(&["--json", "show", http_id]);
-    let item: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
-    assert_eq!(item[0]["title"], "Via HTTP");
-    assert_eq!(item[0]["issue_type"], "feature");
+    let http = dir.join(".beads").join(http_id);
+    assert_eq!(
+        std::fs::read_to_string(http.join("title")).unwrap(),
+        "Via HTTP"
+    );
+    assert_eq!(
+        std::fs::read_to_string(http.join("description")).unwrap(),
+        "Body"
+    );
+    assert_eq!(
+        std::fs::read_to_string(http.join("type")).unwrap(),
+        "feature"
+    );
     let args: Vec<String> = vec![
         "create".into(),
         "--node".into(),
@@ -139,16 +147,39 @@ async fn create_from_cli_files_a_bead_in_the_configured_store() {
     let printed = String::from_utf8(out).unwrap();
     let id = printed.trim().rsplit('#').next().unwrap();
     assert!(id.starts_with("pwc-"), "{printed}");
-    let shown = bd(&["--json", "show", id]);
-    assert!(
-        shown.status.success(),
-        "{}",
-        String::from_utf8_lossy(&shown.stderr)
+    let filed = dir.join(".beads").join(id);
+    assert_eq!(std::fs::read_to_string(filed.join("title")).unwrap(), "T");
+    assert_eq!(
+        std::fs::read_to_string(filed.join("description")).unwrap(),
+        "D"
     );
-    let value: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
-    assert_eq!(value[0]["title"], "T");
-    assert_eq!(value[0]["description"], "D");
-    assert_eq!(value[0]["issue_type"], "bug");
+    assert_eq!(std::fs::read_to_string(filed.join("type")).unwrap(), "bug");
+    let list = vec!["list".into(), "--node".into(), node.url()];
+    let mut out = Vec::new();
+    assert_eq!(
+        parvi_node_kit::cli::run("work", &list, &mut out)
+            .await
+            .unwrap(),
+        0
+    );
+    assert!(String::from_utf8(out).unwrap().contains(id));
+    let show = vec![
+        "show".into(),
+        "--node".into(),
+        node.url(),
+        "--ref".into(),
+        id.into(),
+    ];
+    let mut out = Vec::new();
+    assert_eq!(
+        parvi_node_kit::cli::run("work", &show, &mut out)
+            .await
+            .unwrap(),
+        0
+    );
+    let shown = String::from_utf8(out).unwrap();
+    assert!(shown.contains("T") && shown.contains(id));
+
     node.stop().await;
     std::fs::remove_dir_all(dir).unwrap();
 }

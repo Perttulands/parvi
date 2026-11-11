@@ -87,7 +87,7 @@ async fn every_connection_starts_with_the_hello() {
         let hello = Hello::decode(&hello).unwrap();
         assert_eq!(hello.node, node.id());
         assert_eq!(hello.device, "test-rig");
-        assert_eq!(hello.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(hello.version, parvi_node_kit::VERSION);
         assert_eq!(hello.protocol, parvi_core::PROTOCOL);
         assert_eq!(next_frame(&mut ws).await[0], protocol::SESSIONS);
     }

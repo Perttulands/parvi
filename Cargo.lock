@@ -4345,6 +4345,7 @@ name = "parvi"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "axum",
  "jiff",
  "parvi-agents",
  "parvi-brain",
@@ -4642,12 +4643,17 @@ dependencies = [
 name = "parvi-mission-engine"
 version = "0.0.1"
 dependencies = [
+ "anyhow",
  "getrandom 0.4.3",
  "hex",
  "libc",
  "parvi-core",
  "parvi-mission-model",
+ "parvi-missions",
+ "parvi-node-kit",
  "parvi-term",
+ "parvi-testkit",
+ "parvi-work",
  "parvi-work-ref",
  "serde",
  "serde_json",
@@ -4697,6 +4703,7 @@ name = "parvi-missions-app"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "axum",
  "gpui-pre",
  "http",
  "parvi-agents-contract",

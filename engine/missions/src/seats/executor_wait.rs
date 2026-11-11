@@ -74,6 +74,9 @@ impl SeatSide for Away {
     fn result(&self, _: &str) -> Result<Option<DispatchResult>, crate::Error> {
         Ok(None)
     }
+    fn seat_alive(&self, _: &SeatId) -> SeatFuture<'_, bool> {
+        never()
+    }
     fn end_seat(&self, _: &SeatId, _: &str) -> SeatFuture<'_, String> {
         never()
     }

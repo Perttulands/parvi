@@ -47,6 +47,16 @@ pub fn device_findings(mission: &Mission) -> Vec<Finding> {
 pub fn shape_findings(mission: &Mission) -> Vec<Finding> {
     let mut findings = Vec::new();
     for formation in &mission.formations {
+        if formation.kind == PEER {
+            findings.push(Finding::new(
+                Code::UnsupportedFormation,
+                &formation.id,
+                format!(
+                    "peer formation {:?} is not supported; use solo or orchestrated",
+                    formation.id
+                ),
+            ));
+        }
         if ![SOLO, PEER, ORCHESTRATED].contains(&formation.kind.as_str()) {
             findings.push(Finding::new(
                 Code::InvalidFormationType,

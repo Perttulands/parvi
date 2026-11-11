@@ -270,6 +270,19 @@ impl Store {
         crate::write::set(doc.as_table_mut(), "updatedAt", toml_edit::value(now()?));
         let raw = doc.to_string();
         let updated = edit(&raw)?;
+        // A legacy definition may be repaired one unsupported node at a time.
+        // Other edits cannot save a mission the runtime cannot execute.
+        let old = crate::validate::unsupported(&current.mission);
+        let unsupported = crate::validate::unsupported(&updated.mission);
+        let repairing = unsupported.len() < old.len()
+            && unsupported.iter().all(|finding| {
+                old.iter().any(|existing| {
+                    existing.code == finding.code && existing.node_id == finding.node_id
+                })
+            });
+        if !repairing && let Some(finding) = unsupported.first() {
+            return Err(Error::new(finding.code.as_str(), &finding.message));
+        }
         let layout = if let Some(node) = layout_node {
             Some(crate::authoring_create::layout(
                 self,

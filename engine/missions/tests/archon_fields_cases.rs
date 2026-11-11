@@ -397,7 +397,7 @@ fn repeated_node_type_port_and_judge_edits_keep_bytes_and_check_etags() {
         },
         Patch::SetFormationType {
             id: f.id.clone(),
-            kind: "peer".into(),
+            kind: "orchestrated".into(),
             keep_slot_id: "".into(),
             slots: None,
         },

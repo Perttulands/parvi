@@ -196,6 +196,9 @@ pub fn execute(
     control.finished.notify_all();
     drop(done);
     c.inner.controls.lock().unwrap().remove(&id);
+    if let Ok(run) = c.run(&id) {
+        c.changed(&id, run.event_count as u64);
+    }
 }
 fn success_event(end_ids: Vec<String>, resolved: crate::outputs::Resolved) -> RunEvent {
     RunEvent {

@@ -1,6 +1,10 @@
 #![cfg(unix)]
-use gpui::{Modifiers, TestAppContext, VisualTestContext};
-use parvi_app_kit::{Ask, Host, link::client::LinkState};
+use gpui::ParentElement;
+use gpui::{
+    App, Context, IntoElement, Modifiers, SystemNotificationResponse, TestAppContext,
+    VisualTestContext, Window,
+};
+use parvi_app_kit::{Ask, Host, Mounted, Page, link::client::LinkState, mount};
 use parvi_core::NodeId;
 use parvi_mission_engine::{
     ExecutionSink, Executor, FormationExecution, FormationResult, LabExecutor,
@@ -14,6 +18,48 @@ use parvi_testkit::{
 use serde_json::json;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
+
+static WATCHES: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
+struct ObservedArea(Arc<dyn parvi_node_kit::Area>);
+struct ObservedChannel(Box<dyn parvi_node_kit::Channel>);
+impl parvi_node_kit::Channel for ObservedChannel {
+    fn receive(&mut self, frame: Vec<u8>) -> parvi_node_kit::BoxFuture<'_, ()> {
+        WATCHES.lock().unwrap().push(frame.clone());
+        self.0.receive(frame)
+    }
+    fn next(&mut self) -> parvi_node_kit::BoxFuture<'_, Option<Vec<u8>>> {
+        self.0.next()
+    }
+}
+impl parvi_node_kit::Area for ObservedArea {
+    fn routes(&self) -> axum::Router {
+        self.0.routes()
+    }
+    fn commands(&self) -> Vec<parvi_node_kit::Command> {
+        self.0.commands()
+    }
+    fn channel(&self, client: parvi_node_kit::Client) -> Option<Box<dyn parvi_node_kit::Channel>> {
+        self.0
+            .channel(client)
+            .map(|channel| Box::new(ObservedChannel(channel)) as Box<dyn parvi_node_kit::Channel>)
+    }
+    fn stop(&self) -> parvi_node_kit::BoxFuture<'_, ()> {
+        self.0.stop()
+    }
+}
+struct Other;
+impl gpui::Render for Other {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        gpui::div().child("Other page")
+    }
+}
+impl Page for Other {
+    const ID: &'static str = "other";
+    const TITLE: &'static str = "Other";
+}
+fn other(host: Host, window: &mut Window, cx: &mut App) -> Mounted {
+    mount(host, window, cx, |_, _, _| Other)
+}
 
 static FAKE: Mutex<Option<Arc<FakeSessions>>> = Mutex::new(None);
 static RELEASE: Mutex<Option<mpsc::Receiver<()>>> = Mutex::new(None);
@@ -45,12 +91,18 @@ impl Executor for FakeSeatLab {
     }
 }
 fn build(setup: &Setup) -> anyhow::Result<Built> {
-    parvi_missions::build_with_executor(
+    let built = parvi_missions::build_with_executor(
         setup,
         Some(Box::new(FakeSeatLab {
             runtime: tokio::runtime::Handle::current(),
         })),
-    )
+    )?;
+    Ok(match built {
+        Built::Now(area) => Built::Now(Arc::new(ObservedArea(area))),
+        Built::Then(finish) => Built::Then(Box::new(move |provided| {
+            Ok(Arc::new(ObservedArea(finish(provided)?)))
+        })),
+    })
 }
 const MISSIONS: Listing = Listing {
     build,
@@ -143,11 +195,14 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
         .join("app.json");
     std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
     cx.executor().allow_parking();
-    cx.update(parvi_app_shell::prepare);
+    cx.update(|cx| {
+        parvi_app_shell::prepare(cx);
+        cx.set_app_identity("io.parvi.test", "Parvi test");
+    });
     let (url, path) = (running.url.clone(), settings.clone());
     let (shell, cx) = cx.add_window_view(move |window, cx| {
         parvi_app_shell::start(
-            &[parvi_missions_app::build],
+            &[parvi_missions_app::build, other],
             Some(url),
             Some(path),
             window,
@@ -298,7 +353,54 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
     until(cx, "revealed run step", |cx| {
         cx.debug_bounds("run-reveal-fmn_work").is_some()
     });
+    click(cx, "tab-other");
+    until(
+        cx,
+        "mission list channel off while run channel stays on",
+        |_| {
+            let frames = WATCHES.lock().unwrap();
+            frames
+                .iter()
+                .any(|frame| frame.as_slice() == [parvi_missions_contract::WATCH, 0])
+                && frames
+                    .iter()
+                    .any(|frame| frame.as_slice() == [parvi_missions_contract::WATCH_RUNS, 1])
+        },
+    );
+    assert!(
+        !WATCHES
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|frame| frame.as_slice() == [parvi_missions_contract::WATCH_RUNS, 0])
+    );
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    cx.deactivate_window();
+    assert!(!cx.update(|window, _| window.is_window_active()));
     release.send(()).unwrap();
+    until(cx, "hidden missions count", |cx| {
+        cx.debug_bounds("missions-count-1").is_some()
+    });
+    until(cx, "desktop notification", |cx| {
+        !cx.shown_system_notifications().is_empty()
+    });
+    assert_eq!(cx.shown_system_notifications().len(), 1);
+    let tag = cx.shown_system_notifications()[0].tag.clone();
+    cx.simulate_system_notification_response(SystemNotificationResponse {
+        tag,
+        action_id: None,
+    });
+    until(cx, "needs-you group", |cx| {
+        cx.debug_bounds("needs-you-group").is_some()
+    });
+    let group = cx.debug_bounds("needs-you-group").unwrap();
+    let row_selector = Box::leak(format!("run-row-{run_id}").into_boxed_str());
+    let row = cx.debug_bounds(row_selector).unwrap();
+    assert!(row.origin.y > group.origin.y);
+    let mission_selector = Box::leak(format!("mission-{}-gated", running.id).into_boxed_str());
+    let mission = cx.debug_bounds(mission_selector).unwrap();
+    assert!(row.origin.y < mission.origin.y);
     until(cx, "human gate", |cx| cx.debug_bounds("run-gate").is_some());
     until(cx, "gate request", |cx| {
         cx.debug_bounds("gate-request-loaded").is_some()
@@ -312,6 +414,10 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
             .is_empty()
     );
     click(cx, "gate-pass");
+    until(cx, "count cleared", |cx| {
+        cx.debug_bounds("missions-count-1").is_none()
+    });
+    assert_eq!(cx.shown_system_notifications().len(), 1);
     until(cx, "run finished", |cx| {
         cx.debug_bounds("run-step-end_done-done").is_some()
             || cx.debug_bounds("run-finished-succeeded").is_some()

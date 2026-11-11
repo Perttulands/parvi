@@ -15,11 +15,12 @@ use std::sync::{OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
 static BD: OnceLock<String> = OnceLock::new();
+static GH: OnceLock<String> = OnceLock::new();
 fn build_work(setup: &Setup) -> anyhow::Result<Built> {
     parvi_work::build_with(
         setup,
         parvi_work::Bd::new(BD.get().unwrap()),
-        parvi_work::Gh::default(),
+        parvi_work::Gh::new(GH.get().unwrap()),
     )
 }
 const WORK: Listing = Listing {
@@ -59,6 +60,7 @@ struct Running {
     url: String,
     node: String,
     store: String,
+    socket: std::path::PathBuf,
     stop: mpsc::Sender<()>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -85,21 +87,27 @@ fn start() -> Option<Running> {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
             BD.set(script.to_string_lossy().into_owned()).unwrap();
+            let gh = dir.join("fixture-gh");
+            let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../node/tests/fixtures/work");
+            std::fs::write(&gh, format!("#!/bin/sh\ncase \"$*\" in *number=51*) cat '{}';; *) cat '{}';; esac\n", base.join("item.json").display(), base.join("parvi.json").display())).unwrap();
+            std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+            GH.set(gh.to_string_lossy().into_owned()).unwrap();
             let launch = dir.join("launch.conf");
             std::fs::write(&launch, format!("folder {}\n", dir.display())).unwrap();
-            let config = format!("[terminals]\nsocket = {:?}\nlaunch = {:?}\n[work]\nprojects = [{:?}]\n", tmux.socket_path(), launch, format!("beads {}", dir.display()));
+            let config = format!("[terminals]\nsocket = {:?}\nlaunch = {:?}\n[work]\nprojects = [{:?}, {:?}]\n", tmux.socket_path(), launch, format!("beads {}", dir.display()), "github example-owner/parvi");
             let node = Node::start(AREAS, &config).await.unwrap();
-            ready.send(Some((node.url(), node.id(), dir.display().to_string()))).unwrap();
+            ready.send(Some((node.url(), node.id(), dir.display().to_string(), tmux.socket_path()))).unwrap();
             while stopped.try_recv().is_err() { tokio::time::sleep(Duration::from_millis(50)).await; }
             node.stop().await;
             std::fs::remove_dir_all(dir).unwrap();
         });
     });
     match wait.recv().unwrap() {
-        Some((url, node, store)) => Some(Running {
+        Some((url, node, store, socket)) => Some(Running {
             url,
             node,
             store,
+            socket,
             stop,
             thread: Some(thread),
         }),
@@ -143,7 +151,7 @@ fn shown(cx: &mut VisualTestContext) -> String {
         .unwrap_or_default()
 }
 #[gpui::test]
-fn opens_a_work_item_and_sends_its_reference_to_a_session(cx: &mut TestAppContext) {
+fn work_column_and_terminal_links_open_cards_and_hand_off(cx: &mut TestAppContext) {
     let Some(running) = start() else {
         return;
     };
@@ -213,6 +221,61 @@ fn opens_a_work_item_and_sends_its_reference_to_a_session(cx: &mut TestAppContex
     until(cx, "peek", |cx| cx.debug_bounds("peek-attach").is_some());
     click(cx, "peek-attach");
     until(cx, "terminal", |cx| !shown(cx).trim().is_empty());
+    // Both forms printed in the terminal resolve through the real Work page.
+    for (written, title) in [
+        ("fixture-1", "Read the fixture"),
+        ("example-owner/parvi#51", "Example work item"),
+    ] {
+        let command = format!("printf '\\033[2J\\033[H{written}\\n'");
+        let output = std::process::Command::new(
+            std::env::var("PARVI_TMUX").unwrap_or_else(|_| "tmux".into()),
+        )
+        .args(["-f", "/dev/null", "-S"])
+        .arg(&running.socket)
+        .env_remove("TMUX")
+        .args(["send-keys", "-t", "alpha", &command, "Enter"])
+        .output()
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        until(cx, "reference printed in terminal", |cx| {
+            shown(cx).lines().any(|line| line.trim() == written)
+        });
+        let point = TERMINALS
+            .with(|p| p.borrow().clone())
+            .unwrap()
+            .read_with(cx, |p, _| {
+                let text = p.window_text(0).unwrap();
+                let row = text
+                    .lines()
+                    .position(|line| line.trim() == written)
+                    .unwrap();
+                let geo = p.geo.borrow()[0];
+                let origin = geo.origin.unwrap();
+                let cell = geo.cell.unwrap();
+                gpui::point(
+                    origin.x + cell.width * 3. + gpui::px(2.),
+                    origin.y + cell.height * row as f32 + gpui::px(2.),
+                )
+            });
+        cx.simulate_click(point, Modifiers::none());
+        let selector = format!("work-card-title-{title}");
+        until(cx, "linked item card", |cx| {
+            cx.debug_bounds(Box::leak(selector.clone().into_boxed_str()))
+                .is_some()
+        });
+        assert_eq!(
+            shell.read_with(cx, |s, _| s.shown_page()),
+            Some("terminals")
+        );
+        cx.simulate_keystrokes("alt-i");
+        until(cx, "linked card closed", |cx| {
+            cx.debug_bounds("work-beside").is_none()
+        });
+    }
     // Alt+B docks Work while Terminals stays open; the dock alone watches
     // the Work channel and a row opens its card on the Work page.
     cx.simulate_keystrokes("alt-b");

@@ -28,6 +28,7 @@ pub fn routes(missions: Missions) -> Router {
         .route("/api/runs/{id}/mission", get(frozen))
         .route("/api/runs/{id}/seats", get(seats))
         .route("/api/runs/{id}/escalations", get(escalations))
+        .route("/api/runs/{id}/evidence", get(evidence))
         .route("/api/runs/{id}/evidence/attempts", get(attempts))
         .route("/api/runs/{id}/gates/{gate}/request", get(gate_request))
         .route("/api/runs/{id}/land", axum::routing::post(land))
@@ -98,6 +99,14 @@ async fn seats(State(c): State<Coordinator>, Path(id): Path<String>) -> ResultRe
 }
 async fn escalations(State(c): State<Coordinator>, Path(id): Path<String>) -> ResultResponse {
     response(c.escalations(&id))
+}
+async fn evidence(
+    State(c): State<Coordinator>,
+    Path(id): Path<String>,
+    q: Result<Query<contract::AttemptsQuery>, QueryRejection>,
+) -> ResultResponse {
+    let Query(q) = q.map_err(|e| parvi_core::Error::new("bad_request", e.body_text()))?;
+    Ok(Json(json!({"evidence": c.evidence(&id, q.step.as_deref())?})).into_response())
 }
 async fn attempts(
     State(c): State<Coordinator>,

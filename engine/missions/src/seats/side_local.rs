@@ -197,6 +197,17 @@ impl SeatSide for LocalSeats {
             .map_err(|message: String| crate::Error::new("seat_error", message))
         })
     }
+    fn seat_alive(&self, seat: &SeatId) -> SeatFuture<'_, bool> {
+        let seat = seat.clone();
+        Box::pin(async move {
+            let found = self
+                .engine()
+                .find(&seat.session_name)
+                .await
+                .map_err(|error| crate::Error::new("seat_error", error.to_string()))?;
+            Ok(found.as_ref() == Some(&seat.session))
+        })
+    }
     fn dispatch_info(&self, id: &str) -> Result<Dispatch, crate::Error> {
         self.records().dispatch(id)
     }

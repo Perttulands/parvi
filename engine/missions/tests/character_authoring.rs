@@ -327,7 +327,7 @@ fn role_usage_reports_every_slot_in_every_mission() {
                     etag: edit.etag.clone(),
                 },
                 parvi_mission_model::Patch::CreateFormation {
-                    kind: "peer".into(),
+                    kind: "orchestrated".into(),
                     title: "Pair".into(),
                     x: 0,
                     y: 0,
@@ -359,14 +359,14 @@ fn role_usage_reports_every_slot_in_every_mission() {
     }
     let report = store.roles().usage("builder").unwrap();
     assert!(report.complete);
-    assert_eq!(report.usage.len(), 4);
+    assert_eq!(report.usage.len(), 6);
     assert_eq!(
         report
             .usage
             .iter()
             .filter(|u| u.mission_slug == "one")
             .count(),
-        2
+        3
     );
     assert_eq!(
         report
@@ -374,7 +374,7 @@ fn role_usage_reports_every_slot_in_every_mission() {
             .iter()
             .filter(|u| u.mission_slug == "two")
             .count(),
-        2
+        3
     );
     assert!(report.usage.iter().all(|u| u.formation_title == "Pair"));
     assert!(store.roles().usage("judge").unwrap().usage.is_empty());

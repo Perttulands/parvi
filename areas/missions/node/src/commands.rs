@@ -25,11 +25,15 @@ pub const NAMES: &[&str] = &[
     "run_list",
     "run_status",
     "run_wait",
+    "run_evidence",
+    "run_attempts",
+    "run_gates",
     "run_seats",
     "run_logs",
     "run_abort",
     "run_resume",
     "run_land",
+    "gate_request",
     "gate_approve",
     "gate_reject",
     "gate_pick",
@@ -102,7 +106,11 @@ fn description(name: &str) -> &'static str {
         "formation_run" => "Start a mission at one formation.",
         "run_list" => "List runs, optionally by mission.",
         "run_status" => "Read a run and its current events.",
-        "run_wait" => "Wait for a run to finish or block.",
+        "run_wait" => "Wait for a run to need its driver, finish, or change.",
+        "run_evidence" => "Read a run’s problems, briefs and files.",
+        "run_attempts" => "Read a run’s step attempts, verdicts and picks.",
+        "run_gates" => "List a run’s gates and their state.",
+        "gate_request" => "Read a waiting gate’s request and routes.",
         "run_seats" => "Read the seats belonging to a run.",
         "run_logs" => "Read the public events of a run.",
         "run_abort" => "Abort a run.",
@@ -147,13 +155,15 @@ fn schema(name: &str) -> Value {
             object(json!({"mission":s}), &["mission"])
         }
         "run_list" => object(json!({"mission":s}), &[]),
-        "run_wait" => object(json!({"run":s,"seconds":i}), &["run"]),
+        "run_evidence" | "run_attempts" => object(json!({"run":s,"step":s}), &["run"]),
+        "run_wait" => object(json!({"run":s,"until":s,"since":i,"timeout":i}), &["run"]),
         "run_abort" => object(json!({"run":s,"reason":s,"actor":s}), &["run"]),
         "run_resume" => object(
             json!({"run":s,"mode":s,"take_fail":b,"grant":b,"pick_best":b,"reason":s,"actor":s}),
             &["run"],
         ),
         "run_land" => object(json!({"run":s,"force":b}), &["run"]),
+        "gate_request" => object(json!({"run":s,"gate":s}), &["run", "gate"]),
         "gate_approve" | "gate_reject" => object(
             json!({"run":s,"gate":s,"requested_seq":i,"response":s,"relayed_by":s}),
             &["run", "gate", "requested_seq"],
@@ -383,6 +393,25 @@ async fn call(m: Missions, name: &str, a: Value) -> Result<Value, Error> {
             Ok(v)
         }
         "run_wait" => wait(m, &a).await,
+        "run_evidence" => Ok(
+            json!({"evidence":m.coordinator.evidence(required(&a,"run")?, maybe_text(&a,"step").map_err(bad)?)?}),
+        ),
+        "run_attempts" => {
+            let id = required(&a, "run")?;
+            // Give both evidence commands the same unknown-run error.
+            m.coordinator.run(id).map_err(|error| {
+                if error.code == "not_found" || error.code == "invalid_input" {
+                    Error::new("unknown_run", format!("run {id:?} not found"))
+                } else {
+                    error
+                }
+            })?;
+            Ok(json!({"attempts":m.coordinator.attempts(id, maybe_text(&a,"step").map_err(bad)?)?}))
+        }
+        "run_gates" => Ok(json!({"gates":m.coordinator.gates(required(&a,"run")?)?})),
+        "gate_request" => m
+            .coordinator
+            .gate_driver_request(required(&a, "run")?, required(&a, "gate")?),
         "run_seats" => Ok(json!({"node":node,"seats":m.coordinator.seats(required(&a,"run")?)?})),
         "run_logs" => Ok(json!({"node":node,"events":m.coordinator.events(required(&a,"run")?)?})),
         "run_abort" => {
@@ -525,24 +554,90 @@ async fn start(m: Missions, name: &str, a: &Value) -> Result<Value, Error> {
     .await?;
     Ok(json!({"node":m.node,"runId":id}))
 }
+fn shell_word(value: &str) -> String {
+    if value
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"_-./".contains(&b))
+        && !value.is_empty()
+    {
+        value.to_owned()
+    } else {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+}
 async fn wait(m: Missions, a: &Value) -> Result<Value, Error> {
+    use parvi_mission_engine::WaitUntil;
     let id = required(a, "run")?;
-    let seconds = match a.get("seconds") {
-        None | Some(Value::Null) => 60,
-        Some(_) => positive(a, "seconds")?,
+    let until = match optional(a, "until", "needs-you")? {
+        "needs-you" => WaitUntil::NeedsYou,
+        "final" => WaitUntil::Final,
+        "any-change" => WaitUntil::AnyChange,
+        _ => return Err(bad("until must be needs-you, final or any-change")),
     };
-    if seconds > 600 {
-        return Err(bad("seconds must be at most 600"));
-    }
-    let mut changes = m.coordinator.subscribe();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
-    loop {
-        let run = m.coordinator.run(id)?;
-        if run.r#final || run.status == "blocked" || tokio::time::Instant::now() >= deadline {
-            let mut v = value(run)?;
-            v["node"] = json!(m.node);
-            return Ok(v);
+    let number = |key: &str| -> Result<Option<u64>, Error> {
+        match a.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(v) => v
+                .as_u64()
+                .map(Some)
+                .ok_or_else(|| bad(format!("{key} must be a non-negative integer"))),
         }
-        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
+    };
+    let since = number("since")?;
+    let timeout = number("timeout")?.unwrap_or(3600);
+    let answer = m
+        .coordinator
+        .wait_run(id, until, since, Duration::from_secs(timeout))
+        .await?;
+    let run = &answer.run;
+    let mut asks = Vec::new();
+    let run_arg = shell_word(id);
+    for gate in &run.waiting_gates {
+        let gate_arg = shell_word(&gate.gate_id);
+        let prefix = "parvi gate";
+        let commands: Vec<String> = if let Some(pick) = &gate.pick {
+            pick["candidates"].as_array().into_iter().flatten().filter_map(|candidate| {
+                candidate.as_i64().or_else(|| candidate["attempt"].as_i64()).map(|attempt| format!("{prefix} pick {run_arg} {gate_arg} --requested-seq {} --attempt {attempt}", gate.requested_seq))
+            }).collect()
+        } else {
+            ["approve", "reject"]
+                .into_iter()
+                .map(|verb| {
+                    format!(
+                        "{prefix} {verb} {run_arg} {gate_arg} --requested-seq {}",
+                        gate.requested_seq
+                    )
+                })
+                .collect()
+        };
+        asks.push(json!({"gate":gate.gate_id,"what":if gate.pick.is_some() {"Pick an attempt"} else {"Approve or reject"},"commands":commands}));
     }
+    if run.status == "blocked"
+        && let Some(event) = run
+            .events
+            .iter()
+            .rev()
+            .find(|event| event.kind == "run_blocked")
+    {
+        let mut commands = Vec::new();
+        if run.resume_allowed {
+            let extra = if run.resume_policy == "grant" || run.resume_policy == "grant_or_pick" {
+                " --grant"
+            } else {
+                ""
+            };
+            commands.push(format!("parvi run resume {run_arg}{extra}"));
+            if run.resume_policy == "grant_or_pick" {
+                commands.push(format!("parvi run resume {run_arg} --pick-best"));
+            }
+        }
+        asks.push(json!({"step":event.node_id,"what":run.block_code,"commands":commands}));
+    }
+    let next: Vec<_> = asks
+        .iter()
+        .flat_map(|ask| ask["commands"].as_array().into_iter().flatten().cloned())
+        .collect();
+    Ok(
+        json!({"outcome":answer.outcome,"status":run.status,"cursor":answer.cursor,"asks":asks,"next":next}),
+    )
 }
