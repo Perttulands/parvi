@@ -7,6 +7,7 @@ mod navigator;
 mod notes;
 mod run;
 mod staffing;
+mod validation;
 use crate::store::{Store, canvas as board, flow, undo};
 use gpui::{
     AppContext, Context, Div, Entity, FocusHandle, FontWeight, IntoElement, KeyDownEvent,
@@ -15,7 +16,7 @@ use gpui::{
 use parvi_app_kit::{
     Host, Page,
     host::Request,
-    theme::{board::LIST_W, size, theme},
+    theme::{size, theme},
     widgets::{
         field::{FieldEvent, TextField},
         kit::{self, Kind},
@@ -32,11 +33,11 @@ const TAB_PAD: f32 = 20.;
 const TAB_GAP: f32 = 6.;
 const EDGE: f32 = 2.;
 const EDITOR_W: f32 = 360.;
-const LINK_FIELD_W: f32 = 180.;
 pub struct MissionsPage {
     host: Host,
     focus: FocusHandle,
     state: Store,
+    validation: crate::store::validation::Validation,
     navigator: navigator::Navigator,
     manage: manage::Manage,
     canvas: canvas::View,
@@ -55,8 +56,6 @@ pub struct MissionsPage {
     check: Entity<TextField>,
     check_version: Entity<TextField>,
     check_value: Entity<TextField>,
-    source: Entity<TextField>,
-    target: Entity<TextField>,
     history: undo::History,
     writing: bool,
     roles: Option<parvi_agents_contract::roles::Roles>,
@@ -137,6 +136,7 @@ impl MissionsPage {
             host,
             focus: cx.focus_handle(),
             state: Store::default(),
+            validation: Default::default(),
             navigator: navigator::Navigator::new(cx),
             manage: manage::Manage::default(),
             canvas: canvas::View::default(),
@@ -155,8 +155,6 @@ impl MissionsPage {
             check: cx.new(|cx| TextField::new(cx, "Check profile")),
             check_version: cx.new(|cx| TextField::new(cx, "Profile version")),
             check_value: cx.new(|cx| TextField::new(cx, "Check value")),
-            source: cx.new(|cx| TextField::new(cx, "From node:port")),
-            target: cx.new(|cx| TextField::new(cx, "To node:port")),
             history: undo::History::default(),
             writing: false,
             roles: None,
@@ -464,6 +462,7 @@ impl MissionsPage {
         self.state.selected = Some((node.clone(), slug.clone()));
         self.state.mission = None;
         self.state.mission_etag = None;
+        self.validation.clear();
         self.state.layout_etag = None;
         self.editor = None;
         self.history = undo::History::default();
@@ -1213,15 +1212,6 @@ impl MissionsPage {
         .detach();
         cx.notify();
     }
-    fn link(&mut self, cx: &mut Context<Self>) {
-        let from = self.source.read(cx).text.clone();
-        let to = self.target.read(cx).text.clone();
-        self.write_board(
-            json!({"wireConnection":{"from":from, "to":to}}),
-            WriteMode::Edit,
-            cx,
-        );
-    }
     fn delete_card(&mut self, cx: &mut Context<Self>) {
         let Some(ed) = &mut self.editor else {
             return;
@@ -1352,6 +1342,15 @@ impl Page for MissionsPage {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if state != Some(parvi_app_kit::link::client::LinkState::Open)
+            && self
+                .state
+                .selected
+                .as_ref()
+                .is_some_and(|(selected, _)| selected == node.as_str())
+        {
+            self.validation.clear();
+        }
         if state.is_none() {
             self.state.nodes.remove(node.as_str());
             self.seen_run_snapshots.remove(node.as_str());
@@ -1397,9 +1396,11 @@ impl Page for MissionsPage {
 impl Render for MissionsPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.setup_start_keys(window, cx);
+        self.sync_validation(cx);
         let t = theme(cx).clone();
         let mut list = self.render_navigator(&t, cx);
         if self.state.selected.is_some()
+            && (!self.mission_canvas_mode || self.note.read(cx).text != self.note_base)
             && self.editor.is_none()
             && self.note_paper.open.is_none()
             && let Some(notes) = &self.notes
@@ -1530,7 +1531,8 @@ impl Render for MissionsPage {
             .child(
                 div()
                     .id("missions-list")
-                    .w(px(LIST_W))
+                    .debug_selector(|| "missions-rail".into())
+                    .w(px(size::LABEL_COL))
                     .flex_none()
                     .overflow_y_scroll()
                     .child(kit::button(&t, "new-mission", "+ Mission", Kind::Quiet).debug_selector(|| "new-mission".into()).on_click(cx.listener(|p, _, window, cx| p.open_mission_create(window, cx))))
@@ -1545,7 +1547,8 @@ impl Render for MissionsPage {
                     .child(div().flex().gap(px(PAD))
                         .child(kit::button(&t, "mission-mode-flow", "Flow", if !self.mission_canvas_mode { Kind::Plain } else { Kind::Quiet }).debug_selector(|| "mission-mode-flow".into()).on_click(cx.listener(|p, _, _, cx| { p.mission_canvas_mode = false; cx.notify(); })))
                         .child(kit::button(&t, "mission-mode-canvas", "Canvas", if self.mission_canvas_mode { Kind::Plain } else { Kind::Quiet }).debug_selector(|| "mission-mode-canvas".into()).on_click(cx.listener(|p, _, _, cx| { p.mission_canvas_mode = true; cx.notify(); })))
-                        .child(kit::button(&t, "prepare-run", "Run", Kind::Primary).debug_selector(|| "prepare-run".into()).on_click(cx.listener(|p, _, _, cx| p.prepare_run(cx))))
+                        .child(div().debug_selector({ let complete = self.validation_complete(); move || if complete { "mission-validation-complete".into() } else { "mission-validation-pending".into() } }).child(div().debug_selector({ let ready = self.mission_run_ready(); move || if ready { "mission-run-ready".into() } else { "mission-run-quiet".into() } }).child(kit::button(&t, "prepare-run", "Run", if self.mission_run_ready() { Kind::Primary } else { Kind::Quiet }).debug_selector(|| "prepare-run".into()).on_click(cx.listener(|p, _, _, cx| p.prepare_run(cx))))))
+                        .when(self.validation_failed(), |d| d.child(kit::button(&t, "retry-validation", "Retry validation", Kind::Quiet).debug_selector(|| "retry-validation".into()).on_click(cx.listener(|p, _, _, cx| { p.validation.clear(); p.sync_validation(cx); cx.notify(); }))))
                         .child(kit::button(&t, "new-input", "+ Input", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createInputCard":{"title":"Input","goal":"","x":200,"y":200}}), WriteMode::Edit, cx))))
                         .child(kit::button(&t, "new-step", "+ Step", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createFormation":{"type":"solo","title":"New step","x":200,"y":200}}), WriteMode::Edit, cx))))
                         .child(kit::button(&t, "new-gate", "+ Gate", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createGate":{"title":"New gate","kinds":["human"],"x":200,"y":200}}), WriteMode::Edit, cx))))
@@ -1553,7 +1556,6 @@ impl Render for MissionsPage {
                         .child(kit::button(&t, "arrange", "Arrange", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.arrange(cx))))
                         .child(kit::button(&t, "undo", "Undo", Kind::Quiet).debug_selector({ let busy = self.writing; move || if busy { "undo-busy".into() } else { "undo".into() } }).on_click(cx.listener(|p, _, _, cx| p.undo(false, cx))))
                         .child(kit::button(&t, "redo", "Redo", Kind::Quiet).debug_selector({ let busy = self.writing; move || if busy { "redo-busy".into() } else { "redo".into() } }).on_click(cx.listener(|p, _, _, cx| p.undo(true, cx)))))
-                    .child(div().flex().gap(px(PAD)).child(div().w(px(LINK_FIELD_W)).child(self.source.clone())).child(div().w(px(LINK_FIELD_W)).child(self.target.clone())).child(kit::button(&t, "link", "Connect", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.link(cx)))))
                     .when_some(self.state.error.clone(), |d, e| d.child(div().text_color(t.error).child(e)))
                     .child(div().id("missions-board-scroll").flex_1().overflow_scroll().child(content)),
             )
@@ -1640,7 +1642,7 @@ impl Render for MissionsPage {
                                     .child("Slots");
                                 for slot in &f.slots {
                                     let id = slot.id.clone(); let selected = id.clone(); let selector = format!("slot-{id}");
-                                    d = d.child(kit::button(&t, gpui::SharedString::from(format!("slot-{id}")), slot.name(), Kind::Quiet).debug_selector(move || selector.clone()).on_click(cx.listener(move |p, _, _, cx| p.select_slot(&selected, cx))));
+                                    d = d.child(kit::button(&t, gpui::SharedString::from(format!("slot-{id}")), crate::store::words::slot_label(slot), Kind::Quiet).debug_selector(move || selector.clone()).on_click(cx.listener(move |p, _, _, cx| p.select_slot(&selected, cx))));
                                 }
                             }
                             d

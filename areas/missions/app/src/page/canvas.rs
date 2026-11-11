@@ -398,6 +398,7 @@ impl MissionsPage {
             .child(face);
         let rendered = if card.kind == board::Kind::Input && !running {
             let card_id = card.id.clone();
+            let runnable = self.mission_input_runnable(&card_id);
             rendered.child(
                 div()
                     .id(SharedString::from(format!("canvas-play-{card_id}")))
@@ -410,8 +411,8 @@ impl MissionsPage {
                     .right(px(PAD * z))
                     .size(px(RING_SIZE * z))
                     .rounded(px(size::RADIUS * z))
-                    .bg(t.accent)
-                    .text_color(t.on_accent())
+                    .bg(if runnable { t.accent } else { t.raised })
+                    .text_color(if runnable { t.on_accent() } else { t.dim })
                     .flex()
                     .items_center()
                     .justify_center()
@@ -1215,6 +1216,12 @@ fn chip(z: f32, text: &str, colour: Hsla) -> Div {
 
 fn slot_row(t: &parvi_app_kit::theme::Theme, slot: &parvi_missions_contract::Slot, z: f32) -> Div {
     let mark = harness_mark(&slot.harness, t.text, t.text2, z);
+    let selector = format!(
+        "canvas-seat-{}-{}-{}",
+        crate::store::words::slot_label(slot),
+        crate::store::words::role_name(&slot.agent_id),
+        crate::store::words::harness_name(&slot.harness)
+    );
     let ring = div()
         .size(px(RING_SIZE * z))
         .flex_none()
@@ -1237,6 +1244,7 @@ fn slot_row(t: &parvi_app_kit::theme::Theme, slot: &parvi_missions_contract::Slo
     };
     div()
         .h(px(board::SLOT_H * z))
+        .debug_selector(move || selector.clone())
         .flex_none()
         .flex()
         .items_center()
@@ -1254,7 +1262,7 @@ fn slot_row(t: &parvi_app_kit::theme::Theme, slot: &parvi_missions_contract::Slo
                         .text_size(px(size::SMALL * z))
                         .text_color(t.dim)
                         .truncate()
-                        .child(slot.name().to_uppercase()),
+                        .child(crate::store::words::slot_label(slot).to_uppercase()),
                 )
                 .child(
                     div()
