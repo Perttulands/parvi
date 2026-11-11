@@ -1,0 +1,25 @@
+[package]
+name = "parvi-missions-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1"
+axum = { version = "0.8", default-features = false, features = ["json"] }
+parvi-core = { path = "../../../kit/core" }
+parvi-node-kit = { path = "../../../kit/node-kit" }
+parvi-term = { path = "../../../engine/term" }
+parvi-missions = { path = "../../../engine/missions" }
+parvi-missions-contract = { path = "../contract" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+parvi-testkit = { path = "../../../kit/testkit" }
+tower = { version = "0.5", features = ["util"] }

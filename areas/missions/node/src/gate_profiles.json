@@ -1,0 +1,42 @@
+{
+  "profiles": [
+    {
+      "profileId": "output_absent",
+      "profileVersion": "1",
+      "displayName": "Output excludes value",
+      "parameterName": "value",
+      "parameterLabel": "Forbidden text",
+      "executionClass": "in_process",
+      "effectPolicy": "none",
+      "deterministic": true,
+      "certifiedTotal": true,
+      "maxInputBytes": 262144,
+      "maxResultBytes": 8192,
+      "maxOperations": 524288,
+      "resultEncoding": "decision-result-jcs-v1",
+      "profileSha256": "0f294444a27bde659b49dc9fcc39c89444da9fc5da3c1ab058ee4a95eb2af530",
+      "evaluatorBundleSha256": "8ab0aef4a44ca33e2d1200c8c2a7fb82c8ade4cdc780e41775732efb6becbf69",
+      "policySha256": "0919eaf230027f10e2c75bef1d04bf81924310d272b6abff8319efc890a3359c",
+      "determinismPolicySha256": "2adbf0611f766c47658fca6c02305b8a56926e492c3734754a03616adde711d5"
+    },
+    {
+      "profileId": "output_contains",
+      "profileVersion": "1",
+      "displayName": "Output contains value",
+      "parameterName": "value",
+      "parameterLabel": "Required text",
+      "executionClass": "in_process",
+      "effectPolicy": "none",
+      "deterministic": true,
+      "certifiedTotal": true,
+      "maxInputBytes": 262144,
+      "maxResultBytes": 8192,
+      "maxOperations": 524288,
+      "resultEncoding": "decision-result-jcs-v1",
+      "profileSha256": "1d73e0d78d608937b9ec85ae3fed4c84eed125a5505cb4e0e3d2101864e710b5",
+      "evaluatorBundleSha256": "d41146ea519371f0c2fc76ad849ecd382553c681a881198f55f527580be6c830",
+      "policySha256": "0919eaf230027f10e2c75bef1d04bf81924310d272b6abff8319efc890a3359c",
+      "determinismPolicySha256": "2adbf0611f766c47658fca6c02305b8a56926e492c3734754a03616adde711d5"
+    }
+  ]
+}
