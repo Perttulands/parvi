@@ -25,11 +25,13 @@ pub const NAMES: &[&str] = &[
     "run_list",
     "run_status",
     "run_wait",
+    "run_gates",
     "run_seats",
     "run_logs",
     "run_abort",
     "run_resume",
     "run_land",
+    "gate_request",
     "gate_approve",
     "gate_reject",
     "gate_pick",
@@ -103,6 +105,8 @@ fn description(name: &str) -> &'static str {
         "run_list" => "List runs, optionally by mission.",
         "run_status" => "Read a run and its current events.",
         "run_wait" => "Wait for a run to need its driver, finish, or change.",
+        "run_gates" => "List a run’s gates and their state.",
+        "gate_request" => "Read a waiting gate’s request and routes.",
         "run_seats" => "Read the seats belonging to a run.",
         "run_logs" => "Read the public events of a run.",
         "run_abort" => "Abort a run.",
@@ -154,6 +158,7 @@ fn schema(name: &str) -> Value {
             &["run"],
         ),
         "run_land" => object(json!({"run":s,"force":b}), &["run"]),
+        "gate_request" => object(json!({"run":s,"gate":s}), &["run", "gate"]),
         "gate_approve" | "gate_reject" => object(
             json!({"run":s,"gate":s,"requested_seq":i,"response":s,"relayed_by":s}),
             &["run", "gate", "requested_seq"],
@@ -383,6 +388,10 @@ async fn call(m: Missions, name: &str, a: Value) -> Result<Value, Error> {
             Ok(v)
         }
         "run_wait" => wait(m, &a).await,
+        "run_gates" => Ok(json!({"gates":m.coordinator.gates(required(&a,"run")?)?})),
+        "gate_request" => m
+            .coordinator
+            .gate_driver_request(required(&a, "run")?, required(&a, "gate")?),
         "run_seats" => Ok(json!({"node":node,"seats":m.coordinator.seats(required(&a,"run")?)?})),
         "run_logs" => Ok(json!({"node":node,"events":m.coordinator.events(required(&a,"run")?)?})),
         "run_abort" => {
