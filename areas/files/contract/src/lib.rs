@@ -55,6 +55,24 @@ pub struct NodeRoots {
     pub roots: Vec<Root>,
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct Projects {
+    pub groups: Vec<ProjectGroup>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ProjectGroup {
+    pub parent: String,
+    pub projects: Vec<Project>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct Project {
+    pub name: String,
+    pub path: String,
+    pub documents: Vec<String>,
+}
+
 /// A copy started on this node.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct TransferRequest {

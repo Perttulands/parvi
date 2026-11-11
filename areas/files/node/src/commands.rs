@@ -1,5 +1,6 @@
 //! The same definitions provide the CLI verbs and MCP tools.
 use crate::{Files, FilesError};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use parvi_core::Error;
 use parvi_node_kit::{
     Command,
@@ -36,6 +37,30 @@ pub fn commands(files: Arc<Files>, home: Option<PathBuf>) -> Vec<Command> {
             "Read a text file and its version.",
             &["path"],
             &["path"],
+        ),
+        (
+            "file_diff",
+            "Show a file's diff against HEAD.",
+            &["path"],
+            &["path"],
+        ),
+        (
+            "file_projects",
+            "List repositories beneath configured roots.",
+            &[],
+            &[],
+        ),
+        (
+            "file_download",
+            "Read a file as base64 bytes.",
+            &["path"],
+            &["path"],
+        ),
+        (
+            "file_upload",
+            "Create a file from base64 bytes; --replace overwrites it.",
+            &["path", "data", "replace"],
+            &["path", "data"],
         ),
         (
             "file_write",
@@ -101,7 +126,7 @@ pub fn commands(files: Arc<Files>, home: Option<PathBuf>) -> Vec<Command> {
                     for key in &props {
                         fields.insert(
                             (*key).into(),
-                            if *key == "new" {
+                            if *key == "new" || *key == "replace" {
                                 json!({"type":"boolean", "default":false})
                             } else {
                                 json!({"type":"string"})
@@ -181,6 +206,9 @@ fn work(name: &str, files: &Files, home: Option<&Path>, args: &Value) -> Result<
     if name == "file_list" && maybe_text(args, "path").map_err(bad)?.is_none() {
         return Ok(json!({"node":node,"roots":files.roots()}));
     }
+    if name == "file_projects" {
+        return serde_json::to_value(crate::disk::projects(&files.roots)?).map_err(bad);
+    }
     let at = path(args, "path", home)?;
     match name {
         "file_list" => {
@@ -200,6 +228,27 @@ fn work(name: &str, files: &Files, home: Option<&Path>, args: &Value) -> Result<
             Ok(
                 json!({"node":node,"path":at,"size":bytes.len(),"version":version,"truncated":shown.len()<bytes.len(),"text":content}),
             )
+        }
+        "file_diff" => serde_json::to_value(files.diff(&at)?).map_err(bad),
+        "file_download" => {
+            let (bytes, version) = files.read(&at, crate::routes::MAX_BYTES)?;
+            Ok(
+                json!({"node":node,"path":at,"size":bytes.len(),"version":version,"data":STANDARD.encode(bytes)}),
+            )
+        }
+        "file_upload" => {
+            let bytes = STANDARD
+                .decode(text(args, "data").map_err(bad)?)
+                .map_err(bad)?;
+            if bytes.len() > crate::routes::MAX_BYTES as usize {
+                return Err(FilesError::TooLarge.into());
+            }
+            if flag(args, "replace", false).map_err(bad)? {
+                files.save(&at, &bytes, None)?;
+            } else {
+                files.create(&at, &bytes)?;
+            }
+            Ok(json!({"node":node,"path":at,"size":bytes.len(),"version":crate::version(&bytes)}))
         }
         "file_write" => {
             let data = text(args, "text").map_err(bad)?.as_bytes();

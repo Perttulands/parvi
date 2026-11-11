@@ -118,6 +118,10 @@ pub const LISTING: AreaListing = AreaListing {
     commands: &[
         "file_list",
         "file_read",
+        "file_diff",
+        "file_projects",
+        "file_download",
+        "file_upload",
         "file_write",
         "file_mkdir",
         "file_move",

@@ -229,6 +229,10 @@ async fn exact_commands_are_exposed_to_mcp_and_cli_and_operate_on_files() {
     let mut expected = vec![
         "file_list",
         "file_read",
+        "file_diff",
+        "file_projects",
+        "file_download",
+        "file_upload",
         "file_write",
         "file_mkdir",
         "file_move",
@@ -280,6 +284,240 @@ async fn exact_commands_are_exposed_to_mcp_and_cli_and_operate_on_files() {
         .await
         .unwrap_err();
     assert_eq!(err.code, "unknown_node");
+    node.stop().await;
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn file_diff_command_matches_the_route_and_prints_unified_lines() {
+    let root = parvi_testkit::fresh_dir("files-diff-command");
+    let repo = root.join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .current_dir(&repo)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(&["init", "-q"]);
+    let file = repo.join("note.txt");
+    std::fs::write(&file, "before\n").unwrap();
+    git(&["add", "note.txt"]);
+    git(&[
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-qm",
+        "initial",
+    ]);
+    std::fs::write(&file, "after\n").unwrap();
+    let plain = root.join("plain.txt");
+    std::fs::write(&plain, "outside a repository").unwrap();
+    let config = format!(
+        "[files]\nroots = [{}]\n",
+        serde_json::to_string(root.to_str().unwrap()).unwrap()
+    );
+    let node = Node::start(&[parvi_files::LISTING], &config).await.unwrap();
+    let (status, body) = request(&node, "GET", &at("diff", &file), Body::empty(), false).await;
+    assert_eq!(status, StatusCode::OK);
+    let route: Value = serde_json::from_slice(&body).unwrap();
+    let mut out = Vec::new();
+    let args = vec![
+        "diff".into(),
+        file.to_string_lossy().into_owned(),
+        "--node".into(),
+        node.url(),
+    ];
+    assert_eq!(cli::run("file", &args, &mut out).await.unwrap(), 0);
+    let human = String::from_utf8(out).unwrap();
+    assert!(human.lines().any(|line| line == "-before"), "{human}");
+    assert!(human.lines().any(|line| line == "+after"), "{human}");
+    let mut args_json = args.clone();
+    args_json.push("--json".into());
+    let mut out = Vec::new();
+    assert_eq!(cli::run("file", &args_json, &mut out).await.unwrap(), 0);
+    assert_eq!(serde_json::from_slice::<Value>(&out).unwrap(), route);
+    assert_eq!(
+        node.call("file_diff", json!({"path": file})).await.unwrap(),
+        route
+    );
+
+    let (status, body) = request(&node, "GET", &at("diff", &plain), Body::empty(), false).await;
+    assert_eq!(status, StatusCode::OK);
+    let no_repo: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(no_repo["repository"], "");
+    assert_eq!(no_repo["diff"], "");
+    assert_eq!(
+        node.call("file_diff", json!({"path": plain}))
+            .await
+            .unwrap(),
+        no_repo
+    );
+    let missing = root.join("missing");
+    let (status, body) = request(&node, "GET", &at("diff", &missing), Body::empty(), false).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let error: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        node.call("file_diff", json!({"path": missing}))
+            .await
+            .unwrap_err()
+            .code,
+        error["error"]["code"].as_str().unwrap()
+    );
+    node.stop().await;
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn files_cli_browses_finds_edits_and_deletes() {
+    async fn run(node: &Node, args: &[&str]) -> Value {
+        let mut args: Vec<String> = args.iter().map(|s| (*s).into()).collect();
+        args.extend(["--json".into(), "--node".into(), node.url()]);
+        let mut out = Vec::new();
+        assert_eq!(
+            cli::run("file", &args, &mut out).await.unwrap(),
+            0,
+            "{args:?}"
+        );
+        serde_json::from_slice(&out).unwrap()
+    }
+    let root = parvi_testkit::fresh_dir("files-cli-journey");
+    let config = format!(
+        "[files]\nroots = [{}]\n",
+        serde_json::to_string(root.to_str().unwrap()).unwrap()
+    );
+    let node = Node::start(&[parvi_files::LISTING], &config).await.unwrap();
+    let folder = root.join("folder");
+    let file = folder.join("note.txt");
+    let renamed = folder.join("renamed.txt");
+    let root_text = root.to_str().unwrap();
+    let folder_text = folder.to_str().unwrap();
+    let file_text = file.to_str().unwrap();
+    let renamed_text = renamed.to_str().unwrap();
+    run(&node, &["mkdir", folder_text]).await;
+    run(&node, &["write", file_text, "hello needle"]).await;
+    assert_eq!(
+        run(&node, &["read", file_text]).await["text"],
+        "hello needle"
+    );
+    assert_eq!(
+        run(&node, &["list", "--path", folder_text]).await["entries"][0]["name"],
+        "note.txt"
+    );
+    assert_eq!(
+        run(&node, &["find", root_text, "note"]).await["matches"][0]["name"],
+        "note.txt"
+    );
+    assert_eq!(
+        run(&node, &["search", root_text, "needle"]).await["matches"][0]["line"],
+        1
+    );
+    let destination = root.join("copy-destination");
+    run(&node, &["mkdir", destination.to_str().unwrap()]).await;
+    let copied = run(&node, &["copy", file_text, destination.to_str().unwrap()]).await;
+    assert_eq!(copied["transfer"]["state"], "done");
+    assert_eq!(
+        std::fs::read(destination.join("note.txt")).unwrap(),
+        b"hello needle"
+    );
+    run(&node, &["move", file_text, renamed_text]).await;
+    assert!(renamed.exists());
+    run(&node, &["delete", renamed_text]).await;
+    assert!(!renamed.exists());
+    node.stop().await;
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn files_cli_lists_projects_and_round_trips_binary() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let root = parvi_testkit::fresh_dir("files-cli-binary");
+    let project = root.join("repo");
+    std::fs::create_dir_all(project.join(".git")).unwrap();
+    std::fs::write(project.join("README.md"), "readme").unwrap();
+    let config = format!(
+        "[files]\nroots = [{}]\n",
+        serde_json::to_string(root.to_str().unwrap()).unwrap()
+    );
+    let node = Node::start(&[parvi_files::LISTING], &config).await.unwrap();
+    let mut out = Vec::new();
+    assert_eq!(
+        cli::run(
+            "file",
+            &[
+                "projects".into(),
+                "--json".into(),
+                "--node".into(),
+                node.url()
+            ],
+            &mut out
+        )
+        .await
+        .unwrap(),
+        0
+    );
+    let projects: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(projects["groups"][0]["projects"][0]["name"], "repo");
+    let dest = project.join("data.bin");
+    let bytes = [0, 0xff, 0x80, 42];
+    let data = STANDARD.encode(bytes);
+    let args = vec![
+        "upload".into(),
+        dest.to_string_lossy().into_owned(),
+        data.clone(),
+        "--node".into(),
+        node.url(),
+    ];
+    out.clear();
+    assert_eq!(cli::run("file", &args, &mut out).await.unwrap(), 0);
+    assert_eq!(std::fs::read(&dest).unwrap(), bytes);
+    assert_eq!(
+        node.call("file_upload", json!({"path":dest,"data":data}))
+            .await
+            .unwrap_err()
+            .code,
+        "already_exists"
+    );
+    out.clear();
+    assert_eq!(
+        cli::run(
+            "file",
+            &[
+                "download".into(),
+                dest.to_string_lossy().into_owned(),
+                "--json".into(),
+                "--node".into(),
+                node.url()
+            ],
+            &mut out
+        )
+        .await
+        .unwrap(),
+        0
+    );
+    let downloaded: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(
+        STANDARD
+            .decode(downloaded["data"].as_str().unwrap())
+            .unwrap(),
+        bytes
+    );
+    let outside = root.parent().unwrap().join("outside-parvi-file");
+    assert_eq!(
+        node.call("file_upload", json!({"path":outside,"data":data}))
+            .await
+            .unwrap_err()
+            .code,
+        "outside_roots"
+    );
     node.stop().await;
     std::fs::remove_dir_all(root).unwrap();
 }

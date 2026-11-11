@@ -3,7 +3,7 @@ use crate::{
     open::{self, Draft, Opened, Show},
     store::{self, pane::Pane, paths},
 };
-use gpui::{App, AppContext, Context, Entity, FocusHandle, KeyDownEvent, Window};
+use gpui::{App, AppContext, Context, Entity, FocusHandle, KeyDownEvent, WeakEntity, Window};
 use parvi_app_kit::{
     Answers, Ask, Host, Page,
     host::Request,
@@ -16,11 +16,25 @@ use parvi_app_kit::{
 };
 use parvi_core::NodeId;
 use parvi_files_contract::{Listing, Matches, NodeRoots};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::path::PathBuf;
+
+struct Upload {
+    source: PathBuf,
+    node: NodeId,
+    folder: String,
+    side: usize,
+}
+struct UploadConflict {
+    upload: Upload,
+    name: String,
+    bytes: Vec<u8>,
+}
 
 pub struct Side {
     pub pane: Pane,
     pub code: Entity<Code>,
+    pub pretty_code: Entity<Code>,
     pub search: Entity<TextField>,
     pub search_content: bool,
     pub pending_line: Option<usize>,
@@ -37,6 +51,7 @@ pub struct FilesPage {
     pub drafts: HashMap<(String, String), Draft>,
     pub transfers: Vec<store::transfers::Transfer>,
     pub error: Option<String>,
+    pub notice: Option<String>,
     pub beside: bool,
     pub confirm_discard: Option<usize>,
     pub conflict: Option<usize>,
@@ -47,6 +62,16 @@ pub struct FilesPage {
     beside_view: Option<Entity<FilesPage>>,
     restored: bool,
     beside_from: &'static str,
+    me: WeakEntity<FilesPage>,
+    dock_view: Option<Entity<FilesPage>>,
+    pub(crate) dock: bool,
+    dock_previous_focus: Option<FocusHandle>,
+    pub(crate) landing: bool,
+    pub(crate) projects: BTreeMap<String, parvi_files_contract::Projects>,
+    pub(crate) sessions: Option<Entity<parvi_terminals_contract::SessionList>>,
+    uploads: VecDeque<Upload>,
+    uploading: bool,
+    upload_conflict: Option<UploadConflict>,
 }
 fn enc(s: &str) -> String {
     s.bytes()
@@ -62,11 +87,34 @@ fn enc(s: &str) -> String {
 fn route(kind: &str, path: &str) -> String {
     format!("/api/files/{kind}?path={}", enc(path))
 }
+fn upload_copy_name(name: &str, ordinal: usize) -> String {
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() => {
+            format!("{stem} ({ordinal}).{ext}")
+        }
+        _ => format!("{name} ({ordinal})"),
+    }
+}
 impl Page for FilesPage {
     const ID: &'static str = "files";
     const TITLE: &'static str = "Files";
     const AREA: Option<&'static str> = Some("files");
     const ANSWERS: &'static [Answers] = &[Answers::OpenPath, Answers::Reveal("path")];
+    const SETTINGS: &'static [parvi_app_kit::Setting] =
+        &[
+            parvi_app_kit::Setting::text("download_folder", "Download folder", "")
+                .note("Leave empty to use Downloads in your home folder."),
+        ];
+    fn chords(&self, _: &App) -> Vec<parvi_app_kit::chords::Chord> {
+        let me = self.me.clone();
+        vec![
+            parvi_app_kit::chords::Chord::new("o", "Files panel", move |window, cx| {
+                let _ = me.update(cx, |page, cx| page.toggle_dock(window, cx));
+            })
+            .alt("o", Some(false))
+            .everywhere(),
+        ]
+    }
     fn focus(&self, _: &App) -> Option<FocusHandle> {
         Some(self.focus.clone())
     }
@@ -84,6 +132,7 @@ impl Page for FilesPage {
         cx: &mut Context<Self>,
     ) {
         if state != Some(LinkState::Open) {
+            self.projects.remove(node.as_str());
             for side in &mut self.sides {
                 if side.pane.node == node.as_str() {
                     side.pane.away = true;
@@ -93,6 +142,19 @@ impl Page for FilesPage {
             cx.notify();
         }
         if state == Some(LinkState::Open) {
+            if let Some(view) = &self.dock_view {
+                view.update(cx, |page, cx| {
+                    page.start(cx);
+                    if let Some(path) = page.sides[0]
+                        .opened
+                        .as_ref()
+                        .filter(|o| o.node == node.as_str() && matches!(o.show, Show::Failed(_)))
+                        .map(|o| o.path.clone())
+                    {
+                        page.open(0, path, window, cx);
+                    }
+                });
+            }
             if self.shown {
                 self.start(cx)
             }
@@ -125,6 +187,7 @@ impl Page for FilesPage {
                 if beside {
                     self.open_beside(from, node, path, window, cx);
                 } else {
+                    self.landing = false;
                     let i = self.active;
                     self.sides[i].pane.node = node.to_string();
                     self.list(
@@ -137,6 +200,7 @@ impl Page for FilesPage {
                 }
             }
             Ask::Reveal { what, id, node, .. } if what == "path" => {
+                self.landing = false;
                 if let Some(n) = node {
                     self.sides[self.active].pane.node = n.to_string();
                 }
@@ -154,9 +218,17 @@ impl Page for FilesPage {
 }
 impl FilesPage {
     pub fn new(host: Host, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::create(host, window, cx, true)
+    }
+    fn create(host: Host, window: &mut Window, cx: &mut Context<Self>, guard: bool) -> Self {
         let kept: store::Kept = host.setting(cx).unwrap_or_default();
+        let sessions = host.model::<parvi_terminals_contract::SessionList>(cx);
+        if let Some(sessions) = &sessions {
+            cx.observe(sessions, |_, _, cx| cx.notify()).detach();
+        }
         let sides = std::array::from_fn(|i| {
             let code = cx.new(Code::new);
+            let pretty_code = cx.new(Code::new);
             let search = cx.new(|cx| TextField::new(cx, "Find files"));
             let name = cx.new(|cx| TextField::new(cx, "New name"));
             cx.subscribe_in(
@@ -176,16 +248,21 @@ impl FilesPage {
                     FieldEvent::Changed => {
                         let query = field.read(cx).text.clone();
                         page.sides[i].pane.filter = query.clone();
-                        page.sides[i]
+                        let revision = page.sides[i]
                             .pane
                             .set_find(&query, page.sides[i].search_content);
+                        let node = page.sides[i].pane.node.clone();
+                        let folder = page.sides[i].pane.path.clone();
                         if !query.trim().is_empty() {
                             cx.spawn(async move |this, cx| {
                                 cx.background_executor()
                                     .timer(std::time::Duration::from_millis(250))
                                     .await;
                                 let _ = this.update(cx, |page, cx| {
-                                    if page.sides[i].search.read(cx).text == query {
+                                    if page.sides[i].pane.find_revision == revision
+                                        && page.sides[i].pane.node == node
+                                        && page.sides[i].pane.path == folder
+                                    {
                                         page.find(i, query, cx);
                                     }
                                 });
@@ -216,6 +293,7 @@ impl FilesPage {
             Side {
                 pane: Pane::from_kept(&kept.panes[i]),
                 code,
+                pretty_code,
                 search,
                 search_content: false,
                 pending_line: None,
@@ -224,20 +302,27 @@ impl FilesPage {
                 opened: None,
             }
         });
-        host.guard_close(
-            &cx.entity(),
-            |page: &FilesPage, _| {
-                let mut names: Vec<_> = page
-                    .drafts
-                    .keys()
-                    .map(|(_, path)| paths::base_name(path).to_owned())
-                    .collect();
-                names.sort();
-                names.dedup();
-                (!names.is_empty()).then(|| names.join(", "))
-            },
-            cx,
-        );
+        if guard {
+            host.guard_close(
+                &cx.entity(),
+                |page: &FilesPage, cx| {
+                    let mut names: Vec<_> = page
+                        .drafts
+                        .keys()
+                        .chain(
+                            page.dock_view
+                                .iter()
+                                .flat_map(|dock| dock.read(cx).drafts.keys()),
+                        )
+                        .map(|(_, path)| paths::base_name(path).to_owned())
+                        .collect();
+                    names.sort();
+                    names.dedup();
+                    (!names.is_empty()).then(|| names.join(", "))
+                },
+                cx,
+            );
+        }
         Self {
             focus: cx.focus_handle().tab_stop(true),
             host,
@@ -258,6 +343,7 @@ impl FilesPage {
                 })
                 .collect(),
             error: None,
+            notice: None,
             beside: false,
             confirm_discard: None,
             conflict: None,
@@ -268,7 +354,51 @@ impl FilesPage {
             beside_view: None,
             restored: false,
             beside_from: "",
+            me: cx.weak_entity(),
+            dock_view: None,
+            dock: false,
+            dock_previous_focus: None,
+            landing: kept.panes[0].path.is_none(),
+            projects: BTreeMap::new(),
+            sessions,
+            uploads: VecDeque::new(),
+            uploading: false,
+            upload_conflict: None,
         }
+    }
+    fn toggle_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.host.docked(cx) {
+            let focused = self
+                .dock_view
+                .as_ref()
+                .is_some_and(|view| view.read(cx).focus.contains_focused(window, cx));
+            self.host.close_dock(cx);
+            if let Some(focus) = self.dock_previous_focus.take().filter(|_| focused) {
+                window.focus(&focus, cx);
+            }
+            return;
+        }
+        self.dock_previous_focus = window.focused(cx);
+        let view = match &self.dock_view {
+            Some(view) => view.clone(),
+            None => {
+                let host = self.host.clone();
+                let kept: store::Kept = host.setting(cx).unwrap_or_default();
+                let view = cx.new(|cx| FilesPage::create(host, window, cx, false));
+                view.update(cx, |page, cx| {
+                    page.dock = true;
+                    page.landing = false;
+                    page.sides[0].pane = Pane::from_kept(&kept.dock);
+                    page.start(cx);
+                    if let Some(path) = kept.dock_file {
+                        page.open(0, path, window, cx);
+                    }
+                });
+                self.dock_view = Some(view.clone());
+                view
+            }
+        };
+        self.host.show_dock(view.into(), cx);
     }
     fn open_beside(
         &mut self,
@@ -367,12 +497,81 @@ impl FilesPage {
             }
             self.roots(i, cx);
         }
+        if self.landing && !self.beside && !self.dock {
+            self.refresh_projects(cx);
+        }
+    }
+    pub(crate) fn show_projects(&mut self, cx: &mut Context<Self>) {
+        self.landing = true;
+        self.refresh_projects(cx);
+        cx.notify();
+    }
+    fn refresh_projects(&mut self, cx: &mut Context<Self>) {
+        for node in self.host.nodes(cx) {
+            let id = node.id.clone();
+            self.request(
+                Request::get(node.id, "/api/files/projects"),
+                move |page, status, body, cx| {
+                    if status == 200 {
+                        match serde_json::from_slice(&body) {
+                            Ok(projects) => {
+                                page.projects.insert(id.to_string(), projects);
+                            }
+                            Err(error) => page.error = Some(error.to_string()),
+                        }
+                    } else {
+                        page.fail(status, &body);
+                    }
+                    cx.notify();
+                },
+                cx,
+            );
+        }
+    }
+    pub(crate) fn browse_project(
+        &mut self,
+        node: String,
+        folder: String,
+        document: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.landing = false;
+        self.active = 0;
+        self.sides[0]
+            .search
+            .update(cx, |field, cx| field.set("", false, cx));
+        let changed = self.sides[0].pane.node != node;
+        self.sides[0].pane.choose_node(&node);
+        if self.sides[0].pane.path.as_deref() != Some(folder.as_str()) {
+            self.sides[0].pane.entries.clear();
+            self.sides[0].pane.find = None;
+            self.sides[0].pane.filter.clear();
+        }
+        self.sides[0].pane.path = Some(folder.clone());
+        self.sides[0].pane.selected = document.clone();
+        self.sides[0].opened = None;
+        if changed {
+            self.roots(0, cx);
+        } else {
+            self.list(0, folder.clone(), document.clone(), cx);
+        }
+        if self.sides[1].pane.path.is_none() {
+            self.roots(1, cx);
+        }
+        if let Some(name) = document {
+            self.open(0, paths::join(&folder, &name), window, cx);
+        }
+        cx.notify();
     }
     fn roots(&mut self, i: usize, cx: &mut Context<Self>) {
         let node = self.sides[i].pane.node.clone();
         self.request(
-            Request::get(NodeId(node), "/api/files/roots"),
+            Request::get(NodeId(node.clone()), "/api/files/roots"),
             move |p, s, b, cx| {
+                if p.sides[i].pane.node != node {
+                    return;
+                }
                 if s != 200 {
                     p.fail(s, &b);
                     p.sides[i].pane.away = true;
@@ -383,7 +582,9 @@ impl FilesPage {
                 match serde_json::from_slice::<NodeRoots>(&b) {
                     Ok(r) => {
                         p.sides[i].pane.roots = r.roots;
-                        if let Some(path) = p.sides[i].pane.start_path(i) {
+                        if (!p.landing || p.beside || p.dock)
+                            && let Some(path) = p.sides[i].pane.start_path(i)
+                        {
                             p.list(i, path, None, cx)
                         }
                     }
@@ -399,9 +600,9 @@ impl FilesPage {
         self.sides[i].pane.asked += 1;
         let id = self.sides[i].pane.asked;
         self.request(
-            Request::get(NodeId(node), route("folder", &path)),
+            Request::get(NodeId(node.clone()), route("folder", &path)),
             move |p, s, b, cx| {
-                if p.sides[i].pane.asked != id {
+                if p.sides[i].pane.node != node || p.sides[i].pane.asked != id {
                     return;
                 }
                 if s != 200 {
@@ -437,7 +638,7 @@ impl FilesPage {
             return;
         };
         let content = self.sides[i].search_content;
-        self.sides[i].pane.set_find(&q, content);
+        let revision = self.sides[i].pane.set_find(&q, content);
         if q.trim().is_empty() {
             cx.notify();
             return;
@@ -449,14 +650,18 @@ impl FilesPage {
             enc(&q)
         );
         self.request(
-            Request::get(NodeId(node), uri),
+            Request::get(NodeId(node.clone()), uri),
             move |p, s, b, cx| {
                 let found = if s == 200 {
                     serde_json::from_slice::<Matches>(&b).map_err(|e| e.to_string())
                 } else {
                     Err(String::from_utf8_lossy(&b).into_owned())
                 };
-                p.sides[i].pane.found(&q, content, found);
+                if p.sides[i].pane.node == node
+                    && p.sides[i].pane.path.as_deref() == Some(path.as_str())
+                {
+                    p.sides[i].pane.found(revision, found);
+                }
                 cx.notify()
             },
             cx,
@@ -483,7 +688,7 @@ impl FilesPage {
         self.sides[i]
             .code
             .update(cx, |code, cx| code.edit(false, window, cx));
-        if !self.beside {
+        if !self.beside && !self.dock {
             Code::focus(&self.sides[i].code, window, cx);
         }
         self.active = i;
@@ -504,6 +709,9 @@ impl FilesPage {
             diff_open: false,
             diff: None,
         });
+        if self.dock {
+            self.keep(cx);
+        }
         if matches!(
             crate::store::kinds::kind(&name),
             crate::store::kinds::Kind::Audio
@@ -600,6 +808,10 @@ impl FilesPage {
                 let base = open::version(&b);
                 let draft = p.drafts.get(&(node, path)).cloned();
                 let code = p.sides[i].code.clone();
+                p.sides[i].pretty_code.update(cx, |code, cx| {
+                    code.set_lang(syntax::lang(&name), cx);
+                    code.set(pretty.as_deref().unwrap_or(&text), cx);
+                });
                 let line = p.sides[i].pending_line.take();
                 code.update(cx, |code, cx| {
                     code.set_lang(syntax::lang(&name), cx);
@@ -609,6 +821,9 @@ impl FilesPage {
                     }
                 });
                 let o = p.sides[i].opened.as_mut().unwrap();
+                if line.is_some() {
+                    o.source = true;
+                }
                 o.show = show;
                 o.saved = text;
                 o.base = draft.map_or(base, |d| d.base);
@@ -792,6 +1007,10 @@ impl FilesPage {
                     o.pretty = open::pretty(&o.name, &sent);
                     o.base = open::version(sent.as_bytes());
                     let new_key = o.key();
+                    let pretty = o.pretty.clone();
+                    p.sides[i].pretty_code.update(cx, |code, cx| {
+                        code.set(pretty.as_deref().unwrap_or(&sent), cx)
+                    });
                     p.drafts.remove(&old_key);
                     if let Some(d) = open::acknowledged(&now, &sent) {
                         p.drafts.insert(new_key, d);
@@ -1013,6 +1232,178 @@ impl FilesPage {
             cx,
         );
     }
+    pub(crate) fn pick_uploads(&mut self, i: usize, folder: String, cx: &mut Context<Self>) {
+        let node = NodeId(self.sides[i].pane.node.clone());
+        let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Upload files".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let result = picked.await;
+            let _ = this.update(cx, |page, cx| match result {
+                Ok(Ok(Some(paths))) => page.queue_uploads(i, node, folder, &paths, cx),
+                Ok(Ok(None)) | Err(_) => {}
+                Ok(Err(e)) => {
+                    page.error = Some(format!("The file picker failed: {e}"));
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+    pub(crate) fn upload_paths(
+        &mut self,
+        i: usize,
+        folder: String,
+        paths: &[PathBuf],
+        cx: &mut Context<Self>,
+    ) {
+        let node = NodeId(self.sides[i].pane.node.clone());
+        self.queue_uploads(i, node, folder, paths, cx);
+    }
+    fn queue_uploads(
+        &mut self,
+        i: usize,
+        node: NodeId,
+        folder: String,
+        paths: &[PathBuf],
+        cx: &mut Context<Self>,
+    ) {
+        if !self.uploading {
+            self.error = None;
+        }
+        self.uploads
+            .extend(paths.iter().cloned().map(|source| Upload {
+                source,
+                node: node.clone(),
+                folder: folder.clone(),
+                side: i,
+            }));
+        self.next_upload(cx);
+    }
+    fn next_upload(&mut self, cx: &mut Context<Self>) {
+        if self.uploading {
+            return;
+        }
+        let Some(upload) = self.uploads.pop_front() else {
+            return;
+        };
+        self.uploading = true;
+        cx.spawn(async move |this, cx| {
+            let source = upload.source.clone();
+            let task = cx.background_executor().spawn(async move {
+                let name = source
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .ok_or_else(|| "The file name is not valid UTF-8.".to_owned())?
+                    .to_owned();
+                let metadata = std::fs::metadata(&source)
+                    .map_err(|e| format!("Cannot read {}: {e}", source.display()))?;
+                if !metadata.is_file() {
+                    return Err(format!("{} is not a file.", source.display()));
+                }
+                if metadata.len() > 64 * 1024 * 1024 {
+                    return Err(format!("{} is larger than 64 MiB.", source.display()));
+                }
+                let bytes = std::fs::read(&source)
+                    .map_err(|e| format!("Cannot read {}: {e}", source.display()))?;
+                Ok((name, bytes))
+            });
+            let result = task.await;
+            let _ = this.update(cx, |page, cx| match result {
+                Ok((name, bytes)) => page.write_upload(upload, name, bytes, false, 0, cx),
+                Err(error) => {
+                    page.error = Some(error);
+                    page.uploading = false;
+                    page.next_upload(cx);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+    fn write_upload(
+        &mut self,
+        upload: Upload,
+        name: String,
+        bytes: Vec<u8>,
+        replace: bool,
+        ordinal: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let target_name = if ordinal == 0 {
+            name.clone()
+        } else {
+            upload_copy_name(&name, ordinal)
+        };
+        let path = paths::join(&upload.folder, &target_name);
+        let mut request = Request::new(
+            if replace { "PUT" } else { "POST" },
+            upload.node.clone(),
+            route("file", &path),
+        );
+        request.body = Some(("application/octet-stream".into(), bytes.clone()));
+        self.request(
+            request,
+            move |page, status, body, cx| {
+                if (200..300).contains(&status) {
+                    if page.sides[upload.side].pane.node == upload.node.as_str()
+                        && page.sides[upload.side].pane.path.as_deref()
+                            == Some(upload.folder.as_str())
+                    {
+                        page.list(upload.side, upload.folder.clone(), Some(target_name), cx);
+                    }
+                    page.uploading = false;
+                    page.next_upload(cx);
+                } else if status == 409
+                    && serde_json::from_slice::<serde_json::Value>(&body)
+                        .ok()
+                        .is_some_and(|v| v["error"]["code"] == parvi_files_contract::ALREADY_EXISTS)
+                {
+                    if ordinal > 0 {
+                        page.write_upload(upload, name, bytes, false, ordinal + 1, cx);
+                    } else {
+                        page.upload_conflict = Some(UploadConflict {
+                            upload,
+                            name,
+                            bytes,
+                        });
+                    }
+                } else {
+                    page.fail(status, &body);
+                    page.uploading = false;
+                    page.next_upload(cx);
+                }
+                cx.notify();
+            },
+            cx,
+        );
+    }
+    pub(crate) fn upload_conflict_name(&self) -> Option<&str> {
+        self.upload_conflict.as_ref().map(|c| c.name.as_str())
+    }
+    pub(crate) fn resolve_upload(&mut self, replace: Option<bool>, cx: &mut Context<Self>) {
+        let Some(conflict) = self.upload_conflict.take() else {
+            return;
+        };
+        match replace {
+            Some(replace) => self.write_upload(
+                conflict.upload,
+                conflict.name,
+                conflict.bytes,
+                replace,
+                if replace { 0 } else { 2 },
+                cx,
+            ),
+            None => {
+                self.uploading = false;
+                self.next_upload(cx);
+            }
+        }
+        cx.notify();
+    }
     pub fn context_menu(
         &mut self,
         i: usize,
@@ -1025,6 +1416,130 @@ impl FilesPage {
         self.sides[i].pane.armed = false;
         self.menu = Some((i, at));
         cx.notify();
+    }
+    pub fn toggle_pin(&mut self, i: usize, cx: &mut Context<Self>) {
+        let pane = &self.sides[i].pane;
+        let Some(path) = pane.selected_path() else {
+            return;
+        };
+        let folder = pane.selection().is_some_and(|entry| entry.folder);
+        let mut kept: store::Kept = self.host.setting(cx).unwrap_or_default();
+        if let Some(at) = kept
+            .pins
+            .iter()
+            .position(|p| p.node == pane.node && p.path == path)
+        {
+            kept.pins.remove(at);
+        } else {
+            kept.pins.insert(
+                0,
+                store::Pin {
+                    node: pane.node.clone(),
+                    path,
+                    folder,
+                },
+            );
+        }
+        if let Err(e) = self.host.set_setting(&kept, cx) {
+            self.error = Some(e.message);
+        }
+        cx.notify();
+    }
+    pub fn open_pin(
+        &mut self,
+        i: usize,
+        pin: store::Pin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let changed_node = self.sides[i].pane.node != pin.node;
+        self.sides[i].pane.choose_node(&pin.node);
+        let folder = if pin.folder {
+            pin.path.clone()
+        } else {
+            paths::parent(&pin.path)
+        };
+        let selected = (!pin.folder).then(|| paths::base_name(&pin.path).to_owned());
+        if changed_node {
+            self.sides[i].pane.path = Some(folder);
+            self.sides[i].pane.selected = selected;
+            self.roots(i, cx);
+        } else {
+            self.list(i, folder, selected, cx);
+        }
+        if !pin.folder {
+            self.open(i, pin.path, window, cx);
+        }
+    }
+    pub fn download(&mut self, i: usize, cx: &mut Context<Self>) {
+        let pane = &self.sides[i].pane;
+        let Some(path) = pane.selected_path() else {
+            return;
+        };
+        if pane.selection().is_none_or(|e| e.folder) {
+            return;
+        }
+        let node = NodeId(pane.node.clone());
+        self.download_path(node, path, cx);
+    }
+    pub(crate) fn download_path(&mut self, node: NodeId, path: String, cx: &mut Context<Self>) {
+        let kept: store::Kept = self.host.setting(cx).unwrap_or_default();
+        let folder = if kept.download_folder.trim().is_empty() {
+            std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+                .map(|p| std::path::PathBuf::from(p).join("Downloads"))
+        } else {
+            Some(std::path::PathBuf::from(kept.download_folder))
+        };
+        let Some(folder) = folder else {
+            self.error = Some(
+                "Cannot find your Downloads folder; set a download folder in Settings.".into(),
+            );
+            cx.notify();
+            return;
+        };
+        let destination = folder.join(paths::base_name(&path));
+        self.notice = None;
+        self.request(
+            Request::get(node, route("file", &path)),
+            move |p, status, body, cx| {
+                if status != 200 {
+                    p.fail(status, &body);
+                    cx.notify();
+                    return;
+                }
+                cx.spawn(async move |this, cx| {
+                    let task = cx.background_executor().spawn(async move {
+                        use std::io::Write;
+                        let result = std::fs::create_dir_all(&folder).and_then(|_| {
+                            let mut file = std::fs::OpenOptions::new()
+                                .write(true)
+                                .create_new(true)
+                                .open(&destination)?;
+                            file.write_all(&body)
+                        });
+                        (destination, result)
+                    });
+                    let (destination, result) = task.await;
+                    let _ = this.update(cx, |page, cx| {
+                        match result {
+                            Ok(()) => {
+                                page.notice =
+                                    Some(format!("Downloaded to {}", destination.display()))
+                            }
+                            Err(e) => {
+                                page.error = Some(format!(
+                                    "Could not download to {}: {e}",
+                                    destination.display()
+                                ))
+                            }
+                        }
+                        cx.notify();
+                    });
+                })
+                .detach();
+            },
+            cx,
+        );
     }
     pub fn copy_to_other(&mut self, i: usize, cx: &mut Context<Self>) {
         let other = 1 - i;
@@ -1246,8 +1761,13 @@ impl FilesPage {
     }
     fn keep(&self, cx: &mut Context<Self>) {
         let mut k: store::Kept = self.host.setting(cx).unwrap_or_default();
-        k.panes = std::array::from_fn(|i| self.sides[i].pane.kept());
-        k.transfers = self.transfers.iter().map(|t| t.kept.clone()).collect();
+        if self.dock {
+            k.dock = self.sides[0].pane.kept();
+            k.dock_file = self.sides[0].opened.as_ref().map(|o| o.path.clone());
+        } else {
+            k.panes = std::array::from_fn(|i| self.sides[i].pane.kept());
+            k.transfers = self.transfers.iter().map(|t| t.kept.clone()).collect();
+        }
         let _ = self.host.set_setting(&k, cx);
     }
 }
