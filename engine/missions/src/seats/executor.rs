@@ -45,35 +45,26 @@ impl SeatExecutor {
         original: Option<&str>,
         sink: &ExecutionSink,
     ) -> Result<(String, String, SeatId), String> {
+        self.turn_prepared(request, slot, phase, prompt, original, sink, None)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn turn_prepared(
+        &self,
+        request: &FormationExecution,
+        slot: &Slot,
+        phase: &str,
+        prompt: String,
+        original: Option<&str>,
+        sink: &ExecutionSink,
+        prepared: Option<(SeatId, String)>,
+    ) -> Result<(String, String, SeatId), String> {
         let id = dispatch_id(request, slot, phase);
-        let dispatch = Dispatch {
-            id: id.clone(),
-            run_id: request.run_id.clone(),
-            node_id: request.formation.id.clone(),
-            slot_id: slot.id.clone(),
-            harness: slot.harness.clone(),
-            model: slot.model.clone(),
-            effort: slot.effort.clone(),
-            cwd: request.cwd.clone(),
-            brief: prompt.clone(),
-            reuse_dispatch: original.map(str::to_owned),
-            place: request.formation.device.clone(),
-            turn: request.turn.clone(),
-        };
         let (seat, result) = self.runtime.block_on(async {
-            self.reach(request, &slot.id, sink, self.seats.dispatch(dispatch)).await?;
-            let mut events = self.seats.events(&id, 0).map_err(|error| error.message)?;
-            let mut created = None;
-            let (seat, path) = loop {
-                let event = events.recv().await.ok_or("seat event stream ended")?.map_err(|error| error.message)?;
-                if event.kind == "seat_created" { created = Some(event); continue; }
-                if event.kind == "seat_prepared" {
-                    let seat: SeatId = serde_json::from_value(event.data.get("seat").cloned().ok_or("seat identity missing")?).map_err(|e| e.to_string())?;
-                    let path = event.data.get("briefPath").and_then(Value::as_str).ok_or("brief path missing")?.to_owned();
-                    break (seat, path);
-                }
+            let (seat, path) = match prepared {
+                Some(prepared) => prepared,
+                None => self.prepare(request, slot, phase, &prompt, original, sink).await?,
             };
-            if let Some(event) = created { report_event(sink, &slot.id, event)?; }
+            let mut events = self.seats.events(&id, 0).map_err(|error| error.message)?;
             let data = dispatch_data(&id, &request.formation.id, slot, &seat, &path, &prompt, phase, true);
             if let Err(error) = sink.emit(ExecutionEvent { kind: "slot_dispatch".into(), slot_id: slot.id.clone(), data }).map_err(|e| format!("seat_ledger_unavailable: {e}")) {
                 if request.stopping.load(Ordering::Acquire) { self.detach(original.unwrap_or(&id), &seat, &slot.id, sink).await?; }
@@ -147,6 +138,79 @@ impl SeatExecutor {
             Err(error) => Err(self.failed(original.unwrap_or(&id), &seat, &slot.id, sink, error)),
         }
     }
+    /// Bind a seat and persist its brief before the controller can address it.
+    async fn prepare(
+        &self,
+        request: &FormationExecution,
+        slot: &Slot,
+        phase: &str,
+        prompt: &str,
+        original: Option<&str>,
+        sink: &ExecutionSink,
+    ) -> Result<(SeatId, String), String> {
+        let id = dispatch_id(request, slot, phase);
+        let dispatch = Dispatch {
+            id: id.clone(),
+            run_id: request.run_id.clone(),
+            node_id: request.formation.id.clone(),
+            slot_id: slot.id.clone(),
+            harness: slot.harness.clone(),
+            model: slot.model.clone(),
+            effort: slot.effort.clone(),
+            cwd: request.cwd.clone(),
+            brief: prompt.into(),
+            reuse_dispatch: original.map(str::to_owned),
+            place: request.formation.device.clone(),
+            turn: request.turn.clone(),
+        };
+        self.reach(request, &slot.id, sink, self.seats.dispatch(dispatch))
+            .await?;
+        let mut events = self.seats.events(&id, 0).map_err(|error| error.message)?;
+        let mut created = None;
+        loop {
+            let event = events
+                .recv()
+                .await
+                .ok_or("seat event stream ended")?
+                .map_err(|error| error.message)?;
+            if event.kind == "seat_created" {
+                created = Some(event);
+                continue;
+            }
+            if event.kind == "seat_failed" {
+                return Err(event
+                    .data
+                    .get("detail")
+                    .and_then(Value::as_str)
+                    .unwrap_or("seat preparation failed")
+                    .into());
+            }
+            if event.kind == "seat_prepared" {
+                let seat: SeatId = serde_json::from_value(
+                    event
+                        .data
+                        .get("seat")
+                        .cloned()
+                        .ok_or("seat identity missing")?,
+                )
+                .map_err(|e| e.to_string())?;
+                let path = event
+                    .data
+                    .get("briefPath")
+                    .and_then(Value::as_str)
+                    .ok_or("brief path missing")?
+                    .to_owned();
+                if let Some(event) = created
+                    && let Err(error) = report_event(sink, &slot.id, event)
+                {
+                    let _ = self.seats.end_seat(&seat, "run_final").await;
+                    return Err(error);
+                }
+                return Ok((seat, path));
+            }
+        }
+    }
+
     /// Waits for a call to the step's place. While its node does not answer
     /// the step says so, as a placed seat's own stream does
     /// (`waiting_for_device`), and a stopped run stops waiting.
@@ -447,6 +511,145 @@ impl SeatExecutor {
         sink.emit(event)
             .map_err(|e| format!("seat_ledger_unavailable: {e}"))
     }
+    /// Bind the team before starting the controller. Workers remain idle until
+    /// the controller sends their task; their seed briefs are already durable.
+    fn orchestrate(
+        &self,
+        request: &FormationExecution,
+        controller: &Slot,
+        sink: &ExecutionSink,
+    ) -> Result<FormationResult, String> {
+        let mut workers: Vec<(Slot, String, SeatId, String)> = Vec::new();
+        let setup = (|| -> Result<(SeatId, String, String), String> {
+            for slot in request
+                .formation
+                .slots
+                .iter()
+                .filter(|slot| !slot.controller)
+            {
+                let prompt = brief::render_worker(request, slot);
+                let (seat, path) = self
+                    .runtime
+                    .block_on(self.prepare(request, slot, "worker", &prompt, None, sink))?;
+                workers.push((
+                    slot.clone(),
+                    dispatch_id(request, slot, "worker"),
+                    seat,
+                    path,
+                ));
+            }
+            let mut prompt = brief::render(request, controller);
+            prompt.push_str("\nYou are the controller. Direct only these worker sessions. Each worker has a prepared brief with the same run context and attempt directory. Send the first task with the command shown, then coordinate and inspect the workers before finishing.\n");
+            for (slot, _, seat, path) in &workers {
+                let text = format!(
+                    "Read your prepared brief at {path}, then work on the task I give you: <task>"
+                );
+                use std::fmt::Write;
+                let _ = writeln!(
+                    prompt,
+                    "- {} (slot {}): parvi session send {} --text {}",
+                    seat.session_name,
+                    slot.id,
+                    shell_word(&seat.session_name),
+                    shell_word(&text)
+                );
+            }
+            let prepared = self
+                .runtime
+                .block_on(self.prepare(request, controller, "initial", &prompt, None, sink))?;
+            Ok((prepared.0, prepared.1, prompt))
+        })();
+        let (controller_seat, controller_path, prompt) = match setup {
+            Ok(value) => value,
+            Err(error) => {
+                self.close_workers(request, &workers, sink);
+                return Err(error);
+            }
+        };
+        let identity = |slot: &Slot, seat: &SeatId| json!({"slotId":slot.id,"label":slot.label,"agentId":slot.agent_id,"harness":slot.harness,"sessionRef":format!("terminal:{}", seat.session_name)});
+        let data = json!({"mode":"agentic-leader","cwd":request.cwd,"controllerSlot":controller.id,"controller":identity(controller, &controller_seat),"workers":workers.iter().map(|(slot, _, seat, _)| identity(slot, seat)).collect::<Vec<_>>()});
+        let team = sink.emit(ExecutionEvent {
+            kind: "orchestration_team".into(),
+            slot_id: controller.id.clone(),
+            data: data.as_object().cloned().unwrap_or_default(),
+        });
+        if let Err(error) = team {
+            let _ = self.cleanup(
+                &dispatch_id(request, controller, "initial"),
+                &controller_seat,
+                &controller.id,
+                sink,
+            );
+            self.close_workers(request, &workers, sink);
+            return Err(format!("seat_ledger_unavailable: {error}"));
+        }
+        for (slot, _, seat, _) in &workers {
+            let data = json!({"mode":"agentic-leader","observer":"parvi-seat","phase":"bind","outcome":"bound","anomaly":false,"slotId":slot.id,"controllerSlot":controller.id,"sessionRef":format!("terminal:{}", seat.session_name)});
+            if let Err(error) = sink.emit(ExecutionEvent {
+                kind: "worker_observation".into(),
+                slot_id: slot.id.clone(),
+                data: data.as_object().cloned().unwrap_or_default(),
+            }) {
+                let _ = self.cleanup(
+                    &dispatch_id(request, controller, "initial"),
+                    &controller_seat,
+                    &controller.id,
+                    sink,
+                );
+                self.close_workers(request, &workers, sink);
+                return Err(format!("seat_ledger_unavailable: {error}"));
+            }
+        }
+        let result = self.turn_prepared(
+            request,
+            controller,
+            "initial",
+            prompt,
+            None,
+            sink,
+            Some((controller_seat.clone(), controller_path)),
+        );
+        self.close_workers(request, &workers, sink);
+        match result {
+            Ok((id, _, seat)) => {
+                self.cleanup(&id, &seat, &controller.id, sink)?;
+                // The next slice owns accepting the controller's final output.
+                Err("orchestrated completion is not yet supported".into())
+            }
+            Err(error) => {
+                if !request.stopping.load(Ordering::Acquire)
+                    && self.seats.away(&request.formation.device).is_none()
+                {
+                    let _ = self
+                        .runtime
+                        .block_on(self.seats.end_seat(&controller_seat, "run_final"));
+                }
+                Err(error)
+            }
+        }
+    }
+    fn close_workers(
+        &self,
+        request: &FormationExecution,
+        workers: &[(Slot, String, SeatId, String)],
+        sink: &ExecutionSink,
+    ) {
+        for (slot, id, seat, _) in workers {
+            let result = if request.stopping.load(Ordering::Acquire) {
+                self.runtime.block_on(self.detach(id, seat, &slot.id, sink))
+            } else if request.canceled.load(Ordering::Acquire) {
+                self.runtime
+                    .block_on(self.seats.end_seat(seat, "run_final"))
+                    .map(|_| ())
+                    .map_err(|e| e.message)
+            } else {
+                self.cleanup(id, seat, &slot.id, sink)
+            };
+            if let Err(error) = result {
+                eprintln!("parvi: worker {} cleanup: {error}", slot.id);
+            }
+        }
+    }
     fn failed(
         &self,
         id: &str,
@@ -576,10 +779,31 @@ impl Executor for SeatExecutor {
         sink: ExecutionSink,
     ) -> Result<FormationResult, crate::Error> {
         (|| -> Result<FormationResult, String> {
-            if request.formation.kind != "solo" || request.formation.slots.len() != 1 {
-                return Err("seat executor currently supports solo formations".into());
-            }
-            let slot = request.formation.slots[0].clone();
+            let slot = match request.formation.kind.as_str() {
+                "solo" if request.formation.slots.len() == 1 => request.formation.slots[0].clone(),
+                "orchestrated"
+                    if request.formation.slots.len() >= 2
+                        && request
+                            .formation
+                            .slots
+                            .iter()
+                            .filter(|slot| slot.controller)
+                            .count()
+                            == 1 =>
+                {
+                    request
+                        .formation
+                        .slots
+                        .iter()
+                        .find(|slot| slot.controller)
+                        .unwrap()
+                        .clone()
+                }
+                _ => return Err(
+                    "seat executor requires a solo slot or an orchestrated controller and workers"
+                        .into(),
+                ),
+            };
             let mut request = request;
             if let Some(turn) = &request.turn {
                 let place = &request.formation.device;
@@ -597,6 +821,9 @@ impl Executor for SeatExecutor {
                 })
                 .map_err(|e| format!("seat_ledger_unavailable: {e}"))?;
                 request.cwd = cwd;
+            }
+            if request.formation.kind == "orchestrated" {
+                return self.orchestrate(&request, &slot, &sink);
             }
             let prompt = brief::render(&request, &slot);
             let (original, mut text, seat) =
@@ -689,6 +916,18 @@ impl Executor for SeatExecutor {
             Err(error) => Err(error),
         }
      })().map_err(|message: String| crate::Error::new("executor_error", message))
+    }
+}
+/// Quote one shell argument for the controller's exact CLI examples.
+fn shell_word(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_-./".contains(&b))
+    {
+        value.into()
+    } else {
+        format!("'{}'", value.replace('\'', "'\\''"))
     }
 }
 /// A seat state the coordinator observes about the step's place.
