@@ -40,6 +40,23 @@ pub struct NodeSection {
     pub ports: BTreeMap<String, u16>,
 }
 
+impl NodeSection {
+    /// Where the node listens unless told otherwise: `listen`, or else
+    /// `environment`'s port (from `ports`) on loopback.
+    pub fn address(&self, environment: crate::identity::Environment) -> Result<String, Error> {
+        if let Some(listen) = &self.listen {
+            return Ok(listen.clone());
+        }
+        let mut ports = crate::identity::Ports::default();
+        for (environment, port) in &self.ports {
+            ports
+                .set(&format!("{environment}={port}"))
+                .map_err(|e| refused(format!("node.ports: {e:#}")))?;
+        }
+        Ok(format!("127.0.0.1:{}", ports.of(environment)))
+    }
+}
+
 fn refused(message: String) -> Error {
     Error::new("bad_config", message)
 }

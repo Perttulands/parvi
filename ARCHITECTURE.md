@@ -16,7 +16,7 @@ kit/
     app-shell/  the app's shell: window chrome, tab bar, keys, view control
     testkit/    starts a node holding only the areas a test names
 bin/
-    parvi/      the node and CLI: a list of areas
+    parvi/      the node and CLI: a list of areas, install and upgrade
     parvi-app/  the native app: the shell in a window, and its list of pages
 engine/         terminal engine, session holder, work references, mission model and engine
 ```
@@ -188,6 +188,32 @@ carry that shape; nothing returns a bare string.
 
 Terminal sessions belong to the holder process, not to the node. Installing,
 upgrading or restarting Parvi never stops a session.
+
+## Install and upgrade
+
+`parvi install` and `parvi upgrade` are the binary's own verbs, not an area's
+commands: they put the binary itself in place and restart the node, so no
+node can own them. They have no MCP tool, because a node upgrading itself
+would be stopped by its own restart before it could answer. On Linux and WSL
+the node is a systemd user unit (`parvi` unless `--unit` names another) that
+runs `<root>/bin/parvi serve --listen <addr>`, with `KillMode=process` so a
+restart signals only the node and a tmux server it started lives on.
+
+- **Install** copies the build (and `--app`) to `<root>/bin` (`~/.local` by
+  default), writes the unit, enables and starts it, and waits for
+  `/api/health` to answer as the build's version. Run again with nothing
+  changed, it changes nothing. A running unit with another build is
+  refused: that is an upgrade.
+- **Upgrade** reads the binary and address from the unit's `ExecStart`,
+  keeps the installed build as `parvi.previous`, puts the new one in its
+  place and restarts the unit. If the new node is not healthy in time, it
+  puts the previous build back, restarts it and fails with `upgrade_failed`.
+  A unit without `KillMode=process` is refused before anything changes.
+- **Version.** A build's version is the package version and its commit
+  (`0.0.1+8cdb58b`), in `parvi --version`, `parvi version` and the health.
+
+`bin/parvi/tests/install.rs` runs both against a stand-in `systemctl` on
+`PATH`, with a node, a tmux server and a session of the test's own.
 
 ## Tests
 

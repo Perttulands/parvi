@@ -63,7 +63,7 @@ fn initialize(params: &Value) -> Value {
     json!({
         "protocolVersion": version,
         "capabilities": { "tools": { "listChanged": false } },
-        "serverInfo": { "name": "parvi", "version": env!("CARGO_PKG_VERSION") },
+        "serverInfo": { "name": "parvi", "version": crate::VERSION },
         "instructions": "Parvi: the operator's node. Each tool is one of its commands, \
             also run as `parvi <noun> <verb>`.",
     })
