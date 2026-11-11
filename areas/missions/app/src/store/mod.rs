@@ -1,8 +1,13 @@
 //! Channel state and the selected mission, independent of the page's views.
+pub mod attempts;
 pub mod canvas;
 pub mod flow;
+pub mod gate;
+pub mod placement;
+pub mod run_state;
 pub mod staffing;
 pub mod undo;
+pub mod words;
 
 use parvi_missions_contract::{
     Layout, Mission, MissionListing, MissionSnapshot, RUNS_SNAPSHOT, RunProjection, SNAPSHOT,
