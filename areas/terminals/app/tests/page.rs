@@ -474,11 +474,14 @@ fn launches_use_each_tile_grid(cx: &mut TestAppContext) {
         scroll_to_launch(cx, &format!("launcher-scroll-{i}"));
         let button = format!("launch-{i}");
         let selector: &'static str = Box::leak(button.clone().into_boxed_str());
-        until(cx, "launch button", |cx| {
-            cx.debug_bounds(selector).is_some()
+        let viewport: &'static str = Box::leak(format!("launcher-scroll-{i}").into_boxed_str());
+        until(cx, &format!("visible launch button in tile {i}"), |cx| {
+            cx.debug_bounds(selector)
+                .zip(cx.debug_bounds(viewport))
+                .is_some_and(|(button, viewport)| viewport.contains(&button.center()))
         });
         click(cx, button);
-        until(cx, "session bound", |cx| {
+        until(cx, &format!("session bound in tile {i}"), |cx| {
             page.read_with(cx, |p, _| p.settings.workspace.shown(i).is_some())
         });
         let name = page.read_with(cx, |p, _| {
@@ -567,8 +570,10 @@ fn launches_use_each_tile_grid(cx: &mut TestAppContext) {
         cx.debug_bounds("send-body").is_some()
     });
     scroll_to_launch(cx, "send-body");
-    until(cx, "send launch button", |cx| {
-        cx.debug_bounds("launch-4").is_some()
+    until(cx, "visible send launch button", |cx| {
+        cx.debug_bounds("launch-4")
+            .zip(cx.debug_bounds("send-body"))
+            .is_some_and(|(button, viewport)| viewport.contains(&button.center()))
     });
     click(cx, "launch-4".into());
     let mut new_name = String::new();
