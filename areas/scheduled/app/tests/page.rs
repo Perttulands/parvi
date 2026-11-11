@@ -213,7 +213,9 @@ fn the_page_lists_a_task_made_through_the_cli(cx: &mut TestAppContext) {
     });
     let prompt = cx.debug_bounds("scheduled-prompt").unwrap().center();
     cx.simulate_click(prompt, Modifiers::none());
-    cx.simulate_input("Keep going");
+    cx.simulate_input("echo journey-42");
+    let every = cx.debug_bounds("mode-Every").unwrap().center();
+    cx.simulate_click(every, Modifiers::none());
     let save = cx.debug_bounds("form-save").unwrap().center();
     cx.simulate_click(save, Modifiers::none());
     until(cx, "the created task notice", |cx| {
@@ -230,7 +232,7 @@ fn the_page_lists_a_task_made_through_the_cli(cx: &mut TestAppContext) {
                 .as_array()
                 .unwrap()
                 .iter()
-                .find(|task| task["name"] == "Keep going")
+                .find(|task| task["name"] == "echo journey-42")
                 .expect("created task");
             let id = task["id"].as_str().unwrap();
             let args = ["show", id, "--node", &url, "--json"].map(String::from);
@@ -242,10 +244,84 @@ fn the_page_lists_a_task_made_through_the_cli(cx: &mut TestAppContext) {
     .join()
     .unwrap();
     let created = &saved["task"];
-    assert_eq!(created["prompt"], "Keep going");
+    assert_eq!(created["prompt"], "echo journey-42");
+    assert_eq!(created["schedule"]["type"], "interval");
     let targets = created["targets"].as_array().unwrap();
     assert_eq!(targets.len(), 2);
     assert!(targets.iter().any(|t| t["sessionName"] == "alpha"));
     assert!(targets.iter().any(|t| t["sessionName"] == "beta"));
+    let click = |cx: &mut VisualTestContext, id: &'static str| {
+        let at = cx.debug_bounds(id).expect(id).center();
+        cx.simulate_click(at, Modifiers::none());
+    };
+    click(cx, "task-run");
+    until(cx, "run delivery shown", |cx| {
+        cx.debug_bounds("scheduled-banner-Sent to 2 sessions.")
+            .is_some()
+    });
+    click(cx, "task-pause-false");
+    until(cx, "paused", |cx| {
+        cx.debug_bounds("task-pause-true").is_some()
+    });
+    click(cx, "task-pause-true");
+    until(cx, "resumed", |cx| {
+        cx.debug_bounds("task-pause-false").is_some()
+    });
+    click(cx, "task-edit");
+    until(cx, "edit form", |cx| {
+        cx.debug_bounds("scheduled-prompt").is_some()
+    });
+    click(cx, "scheduled-prompt");
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("echo edited-42");
+    click(cx, "form-save");
+    until(cx, "updated task", |cx| {
+        cx.debug_bounds("scheduled-banner-Task updated.").is_some()
+    });
+    click(cx, "task-duplicate");
+    until(cx, "duplicate form", |cx| {
+        cx.debug_bounds("mode-Cron").is_some()
+    });
+    click(cx, "mode-Cron");
+    until(cx, "cron field", |cx| {
+        cx.debug_bounds("scheduled-cron").is_some()
+    });
+    click(cx, "scheduled-cron");
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("0 9 * * 1");
+    click(cx, "form-save");
+    until(cx, "cron task created", |cx| {
+        cx.debug_bounds("scheduled-banner-Task created.").is_some()
+    });
+    let url = running.url.clone();
+    let cron = std::thread::spawn(move || {
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let args = ["list", "--node", &url, "--json"].map(String::from);
+                let mut output = Vec::new();
+                assert_eq!(cli::run("scheduled", &args, &mut output).await.unwrap(), 0);
+                let listed: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                listed["tasks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|t| t["name"] == "echo journey-42 copy")
+                    .cloned()
+                    .expect("copied cron task")
+            })
+    })
+    .join()
+    .unwrap();
+    assert_eq!(cron["schedule"]["type"], "cron");
+    assert_eq!(cron["schedule"]["expression"], "0 9 * * 1");
+    click(cx, "task-delete-false");
+    until(cx, "delete confirmation", |cx| {
+        cx.debug_bounds("task-delete-true").is_some()
+    });
+    click(cx, "task-delete-true");
+    until(cx, "task deleted", |cx| {
+        cx.debug_bounds("scheduled-banner-Task deleted.").is_some()
+    });
     let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
 }

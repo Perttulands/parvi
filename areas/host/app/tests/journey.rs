@@ -16,7 +16,7 @@ use axum::{
 use gpui::{Modifiers, TestAppContext, VisualTestContext};
 use parvi_app_kit::link::client::LinkState;
 use parvi_host_contract::{
-    self as wire, Facts, Point, Reading, ReadingFrame, Service, ServiceList, State,
+    self as wire, Facts, Gpu, Point, Reading, ReadingFrame, Service, ServiceList, State, Usage,
 };
 use parvi_node_kit::{Area, BoxFuture, Built, Channel, Client, Listing, Setup};
 use parvi_testkit::node::Node;
@@ -117,12 +117,18 @@ fn sample(cpu: f32) -> ReadingFrame {
         reading: Reading {
             at,
             cpu: Some(cpu),
+            memory: Some(Usage { used: 2, total: 4 }),
+            swap: Some(Usage { used: 1, total: 4 }),
+            swap_activity_bps: Some(2_000_000.),
             gpu_reason: Some("nvidia-smi failed".into()),
             ..Reading::default()
         },
         point: Point {
             at,
             cpu: Some(cpu),
+            memory: Some(50.),
+            swap: Some(25.),
+            gpu: Some(35.),
             ..Point::default()
         },
     }
@@ -274,6 +280,14 @@ fn service_restart_refusal_and_host_subscription_journey(cx: &mut TestAppContext
     until(cx, "host channel on", |_| {
         running.control.on.load(Ordering::SeqCst)
     });
+    for metric in ["cpu", "memory", "swap", "gpu"] {
+        let row = selector(format!("metric-{}-{metric}", running.node));
+        until(cx, metric, |cx| cx.debug_bounds(row).is_some());
+    }
+    let warning = selector(format!("warning-{}-swap", running.node));
+    until(cx, "swap churn warning", |cx| {
+        cx.debug_bounds(warning).is_some()
+    });
     let initial = selector(format!("reading-{}-cpu-10%", running.node));
     until(cx, "the initial reading", |cx| {
         cx.debug_bounds(initial).is_some()
@@ -282,6 +296,13 @@ fn service_restart_refusal_and_host_subscription_journey(cx: &mut TestAppContext
     until(cx, "GPU failure reason", |cx| {
         cx.debug_bounds(gpu_reason).is_some()
     });
+    let mut gpu_sample = sample(31.0);
+    gpu_sample.reading.gpu_reason = None;
+    gpu_sample.reading.gpus.push(Gpu {
+        name: "GPU fixture".into(),
+        util: Some(35.),
+        ..Gpu::default()
+    });
     running
         .control
         .sender
@@ -289,12 +310,14 @@ fn service_restart_refusal_and_host_subscription_journey(cx: &mut TestAppContext
         .unwrap()
         .as_ref()
         .unwrap()
-        .send(frame(wire::HOST_READING, &sample(31.0)))
+        .send(frame(wire::HOST_READING, &gpu_sample))
         .unwrap();
     let reading = selector(format!("reading-{}-cpu-31%", running.node));
     until(cx, "the pushed reading", |cx| {
         cx.debug_bounds(reading).is_some()
     });
+    let gpu = selector(format!("reading-{}-gpu-35%", running.node));
+    until(cx, "GPU reading", |cx| cx.debug_bounds(gpu).is_some());
     assert_eq!(running.control.forwards.load(Ordering::SeqCst), 1);
     click(cx, "tab-services");
     until(cx, "host channel closes", |_| {

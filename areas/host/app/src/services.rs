@@ -313,6 +313,7 @@ impl Render for ServicesPage {
                         if service.controllable && !n.changing.contains_key(&service.id) {
                             if let Some(change) = services_store::primary(&service.state) {
                                 let (node, row_id) = (node_id.clone(), service_id.clone());
+                                let selector = format!("svc-{}-{id}-{}", change.verb(), service.id);
                                 row = row.child(
                                     kit::button(
                                         &t,
@@ -328,6 +329,7 @@ impl Render for ServicesPage {
                                         },
                                         kit::Kind::Plain,
                                     )
+                                    .debug_selector(move || selector)
                                     .on_click(cx.listener(
                                         move |s, _, _, cx| s.act(&node, &row_id, change, cx),
                                     )),
