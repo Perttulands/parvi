@@ -19,6 +19,8 @@ pub struct Kept {
     pub transfers: Vec<transfers::Kept>,
     pub sidecar_open: bool,
     pub sidecar: pane::Kept,
+    pub dock: pane::Kept,
+    pub dock_file: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zoom: zoom::Level,
 }

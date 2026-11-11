@@ -1,10 +1,112 @@
 //! The Files page draws a node's real listing.
-use gpui::{Modifiers, TestAppContext, VisualTestContext};
+use gpui::{Modifiers, ParentElement, TestAppContext, VisualTestContext};
 use parvi_testkit::node::Node;
 use std::{
     sync::mpsc,
     time::{Duration, Instant},
 };
+
+thread_local! {
+    static SENT: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+struct Toy;
+impl parvi_app_kit::Page for Toy {
+    const ID: &'static str = "toy";
+    const TITLE: &'static str = "Toy";
+    const ANSWERS: &'static [parvi_app_kit::Answers] = &[parvi_app_kit::Answers::Send];
+    fn answer(
+        &mut self,
+        ask: parvi_app_kit::Ask,
+        _: &'static str,
+        _: &mut gpui::Window,
+        _: &mut gpui::Context<Self>,
+    ) {
+        if let parvi_app_kit::Ask::Send { reference, .. } = ask {
+            SENT.with(|sent| *sent.borrow_mut() = Some(reference));
+        }
+    }
+}
+impl gpui::Render for Toy {
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        _: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        gpui::div().child("Toy page")
+    }
+}
+fn toy(
+    host: parvi_app_kit::Host,
+    window: &mut gpui::Window,
+    cx: &mut gpui::App,
+) -> parvi_app_kit::Mounted {
+    parvi_app_kit::mount(host, window, cx, |_, _, _| Toy)
+}
+
+#[gpui::test]
+fn files_dock_browses_sends_and_remembers_beside_a_page(cx: &mut TestAppContext) {
+    let root = parvi_testkit::fresh_dir("files-dock");
+    std::fs::create_dir(root.join("folder")).unwrap();
+    let file = root.join("folder/note.txt");
+    std::fs::write(&file, "hello").unwrap();
+    let running = start(root.clone());
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let url = running.url.clone();
+    let settings = root.join("settings.json");
+    let (shell, cx) = cx.add_window_view(move |w, cx| {
+        parvi_app_shell::start(
+            &[toy, parvi_files_app::build],
+            Some(url),
+            Some(settings),
+            w,
+            cx,
+        )
+    });
+    until(cx, "node connected", |cx| {
+        shell.read_with(cx, |s, cx| {
+            !parvi_app_kit::Host::new(s.hub()).nodes(cx).is_empty()
+        })
+    });
+    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy"));
+    assert!(shell.update(cx, |s, cx| {
+        parvi_app_kit::chords::rows(&s.chords(cx))
+            .iter()
+            .any(|row| row.label == "Files panel")
+    }));
+    cx.simulate_keystrokes("alt-o");
+    until(cx, "dock folder", |cx| {
+        cx.debug_bounds("file-row-0-folder").is_some()
+    });
+    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy"));
+    click(cx, "file-row-0-folder");
+    until(cx, "dock file", |cx| {
+        cx.debug_bounds("file-row-0-note.txt").is_some()
+    });
+    click(cx, "file-row-0-note.txt");
+    until(cx, "dock viewer", |cx| {
+        cx.debug_bounds("files-send").is_some()
+    });
+    SENT.with(|sent| *sent.borrow_mut() = None);
+    click(cx, "files-send");
+    until(cx, "sent reference", |_| {
+        SENT.with(|sent| sent.borrow().is_some())
+    });
+    assert_eq!(
+        SENT.with(|sent| sent.borrow().clone()),
+        Some(format!("path {}", file.display()))
+    );
+    cx.simulate_keystrokes("alt-o");
+    assert!(cx.debug_bounds("dock-files").is_none());
+    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy"));
+    cx.simulate_keystrokes("alt-o");
+    until(cx, "remembered file", |cx| {
+        cx.debug_bounds("file-row-0-note.txt").is_some() && cx.debug_bounds("files-send").is_some()
+    });
+    drop(running);
+    std::fs::remove_dir_all(root).unwrap();
+}
 
 struct Running {
     url: String,

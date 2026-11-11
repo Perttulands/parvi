@@ -3,7 +3,7 @@ use crate::{
     open::{self, Draft, Opened, Show},
     store::{self, pane::Pane, paths},
 };
-use gpui::{App, AppContext, Context, Entity, FocusHandle, KeyDownEvent, Window};
+use gpui::{App, AppContext, Context, Entity, FocusHandle, KeyDownEvent, WeakEntity, Window};
 use parvi_app_kit::{
     Answers, Ask, Host, Page,
     host::Request,
@@ -47,6 +47,10 @@ pub struct FilesPage {
     beside_view: Option<Entity<FilesPage>>,
     restored: bool,
     beside_from: &'static str,
+    me: WeakEntity<FilesPage>,
+    dock_view: Option<Entity<FilesPage>>,
+    pub(crate) dock: bool,
+    dock_previous_focus: Option<FocusHandle>,
 }
 fn enc(s: &str) -> String {
     s.bytes()
@@ -67,6 +71,16 @@ impl Page for FilesPage {
     const TITLE: &'static str = "Files";
     const AREA: Option<&'static str> = Some("files");
     const ANSWERS: &'static [Answers] = &[Answers::OpenPath, Answers::Reveal("path")];
+    fn chords(&self, _: &App) -> Vec<parvi_app_kit::chords::Chord> {
+        let me = self.me.clone();
+        vec![
+            parvi_app_kit::chords::Chord::new("o", "Files panel", move |window, cx| {
+                let _ = me.update(cx, |page, cx| page.toggle_dock(window, cx));
+            })
+            .alt("o", Some(false))
+            .everywhere(),
+        ]
+    }
     fn focus(&self, _: &App) -> Option<FocusHandle> {
         Some(self.focus.clone())
     }
@@ -93,6 +107,19 @@ impl Page for FilesPage {
             cx.notify();
         }
         if state == Some(LinkState::Open) {
+            if let Some(view) = &self.dock_view {
+                view.update(cx, |page, cx| {
+                    page.start(cx);
+                    if let Some(path) = page.sides[0]
+                        .opened
+                        .as_ref()
+                        .filter(|o| o.node == node.as_str() && matches!(o.show, Show::Failed(_)))
+                        .map(|o| o.path.clone())
+                    {
+                        page.open(0, path, window, cx);
+                    }
+                });
+            }
             if self.shown {
                 self.start(cx)
             }
@@ -154,6 +181,9 @@ impl Page for FilesPage {
 }
 impl FilesPage {
     pub fn new(host: Host, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::create(host, window, cx, true)
+    }
+    fn create(host: Host, window: &mut Window, cx: &mut Context<Self>, guard: bool) -> Self {
         let kept: store::Kept = host.setting(cx).unwrap_or_default();
         let sides = std::array::from_fn(|i| {
             let code = cx.new(Code::new);
@@ -224,20 +254,27 @@ impl FilesPage {
                 opened: None,
             }
         });
-        host.guard_close(
-            &cx.entity(),
-            |page: &FilesPage, _| {
-                let mut names: Vec<_> = page
-                    .drafts
-                    .keys()
-                    .map(|(_, path)| paths::base_name(path).to_owned())
-                    .collect();
-                names.sort();
-                names.dedup();
-                (!names.is_empty()).then(|| names.join(", "))
-            },
-            cx,
-        );
+        if guard {
+            host.guard_close(
+                &cx.entity(),
+                |page: &FilesPage, cx| {
+                    let mut names: Vec<_> = page
+                        .drafts
+                        .keys()
+                        .chain(
+                            page.dock_view
+                                .iter()
+                                .flat_map(|dock| dock.read(cx).drafts.keys()),
+                        )
+                        .map(|(_, path)| paths::base_name(path).to_owned())
+                        .collect();
+                    names.sort();
+                    names.dedup();
+                    (!names.is_empty()).then(|| names.join(", "))
+                },
+                cx,
+            );
+        }
         Self {
             focus: cx.focus_handle().tab_stop(true),
             host,
@@ -268,7 +305,44 @@ impl FilesPage {
             beside_view: None,
             restored: false,
             beside_from: "",
+            me: cx.weak_entity(),
+            dock_view: None,
+            dock: false,
+            dock_previous_focus: None,
         }
+    }
+    fn toggle_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.host.docked(cx) {
+            let focused = self
+                .dock_view
+                .as_ref()
+                .is_some_and(|view| view.read(cx).focus.contains_focused(window, cx));
+            self.host.close_dock(cx);
+            if let Some(focus) = self.dock_previous_focus.take().filter(|_| focused) {
+                window.focus(&focus, cx);
+            }
+            return;
+        }
+        self.dock_previous_focus = window.focused(cx);
+        let view = match &self.dock_view {
+            Some(view) => view.clone(),
+            None => {
+                let host = self.host.clone();
+                let kept: store::Kept = host.setting(cx).unwrap_or_default();
+                let view = cx.new(|cx| FilesPage::create(host, window, cx, false));
+                view.update(cx, |page, cx| {
+                    page.dock = true;
+                    page.sides[0].pane = Pane::from_kept(&kept.dock);
+                    page.start(cx);
+                    if let Some(path) = kept.dock_file {
+                        page.open(0, path, window, cx);
+                    }
+                });
+                self.dock_view = Some(view.clone());
+                view
+            }
+        };
+        self.host.show_dock(view.into(), cx);
     }
     fn open_beside(
         &mut self,
@@ -483,7 +557,7 @@ impl FilesPage {
         self.sides[i]
             .code
             .update(cx, |code, cx| code.edit(false, window, cx));
-        if !self.beside {
+        if !self.beside && !self.dock {
             Code::focus(&self.sides[i].code, window, cx);
         }
         self.active = i;
@@ -504,6 +578,9 @@ impl FilesPage {
             diff_open: false,
             diff: None,
         });
+        if self.dock {
+            self.keep(cx);
+        }
         if matches!(
             crate::store::kinds::kind(&name),
             crate::store::kinds::Kind::Audio
@@ -1246,8 +1323,13 @@ impl FilesPage {
     }
     fn keep(&self, cx: &mut Context<Self>) {
         let mut k: store::Kept = self.host.setting(cx).unwrap_or_default();
-        k.panes = std::array::from_fn(|i| self.sides[i].pane.kept());
-        k.transfers = self.transfers.iter().map(|t| t.kept.clone()).collect();
+        if self.dock {
+            k.dock = self.sides[0].pane.kept();
+            k.dock_file = self.sides[0].opened.as_ref().map(|o| o.path.clone());
+        } else {
+            k.panes = std::array::from_fn(|i| self.sides[i].pane.kept());
+            k.transfers = self.transfers.iter().map(|t| t.kept.clone()).collect();
+        }
         let _ = self.host.set_setting(&k, cx);
     }
 }

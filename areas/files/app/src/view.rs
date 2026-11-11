@@ -246,6 +246,11 @@ impl FilesPage {
             .gap(px(GAP))
             .h(px(size::TAB_BAR))
             .child(
+                kit::button(&t, "files-send", "Send", Kind::Quiet)
+                    .debug_selector(|| "files-send".into())
+                    .on_click(cx.listener(move |p, _, _, cx| p.send(i, cx))),
+            )
+            .child(
                 div()
                     .id(("opened-name", i))
                     .debug_selector({
@@ -308,11 +313,6 @@ impl FilesPage {
                     .on_click(cx.listener(|p, _, _, cx| p.close_beside(cx))),
             );
         }
-        bar = bar.child(
-            kit::button(&t, "files-send", "Send to Session", Kind::Quiet)
-                .debug_selector(|| "files-send".into())
-                .on_click(cx.listener(move |p, _, _, cx| p.send(i, cx))),
-        );
         let body: AnyElement = if o.diff_open {
             match &o.diff {
                 None => kit::note(&t, "Reading diff…", None).into_any_element(),
@@ -694,6 +694,14 @@ impl Render for FilesPage {
         }
         if self.beside {
             return page.child(self.viewer(0, cx));
+        }
+        if self.dock {
+            return page
+                .w(px(size::MENU * 2.0))
+                .flex_none()
+                .child("Files")
+                .child(self.pane(0, cx))
+                .child(self.viewer(0, cx));
         }
         page.child(div().child("FILES")).child(
             div()
