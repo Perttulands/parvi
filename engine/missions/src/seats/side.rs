@@ -18,6 +18,8 @@ pub trait SeatSide: Send + Sync + 'static {
     fn result(&self, id: &str) -> Result<Option<DispatchResult>, crate::Error>;
     fn end_seat(&self, seat: &SeatId, cause: &str) -> SeatFuture<'_, String>;
     fn seats(&self, run_id: &str) -> Result<Vec<AgentSeat>, crate::Error>;
+    /// Whether an owned seat still exists. An unavailable node is an error, not a lost seat.
+    fn seat_alive(&self, seat: &SeatId) -> SeatFuture<'_, bool>;
     /// The working directory of a turn placed on `place`, prepared there from
     /// the run branch at the turn's commit.
     fn prepare_turn(&self, place: &str, turn: &TurnWorkspace) -> SeatFuture<'_, PathBuf>;
