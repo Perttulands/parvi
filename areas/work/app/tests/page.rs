@@ -83,7 +83,13 @@ fn start() -> Option<Running> {
             let dir = parvi_testkit::fresh_dir("work-page-store");
             std::fs::create_dir_all(dir.join(".beads")).unwrap();
             let script = dir.join("fixture-bd");
-            std::fs::write(&script, "#!/bin/sh\nif [ \"$2\" = config ]; then echo '{\"value\":\"fixture\"}'; exit 0; fi\nif [ -f slow ]; then sleep 6; fi\nif [ -f fail ]; then echo 'tracker unavailable' >&2; exit 1; fi\nprintf '%s\\n' '[{\"id\":\"fixture-1\",\"title\":\"Read the fixture\",\"status\":\"open\",\"created_at\":\"2026-11-01T00:00:00Z\",\"updated_at\":\"2026-11-01T00:00:00Z\"}]'\n").unwrap();
+            std::fs::write(&script, "#!/bin/sh\nif [ \"$2\" = config ]; then echo '{\"value\":\"fixture\"}'; exit 0; fi\nif [ -f slow ]; then sleep 6; fi\nif [ -f fail ]; then echo 'tracker unavailable' >&2; exit 1; fi\ncat fixture.json\n").unwrap();
+            std::fs::write(dir.join("fixture.json"), r#"[
+              {"id":"fixture-1","title":"Read the fixture","status":"open","created_at":"2026-11-01T00:00:00Z","updated_at":"2026-11-01T00:00:00Z","parent":"fixture-0","dependencies":[{"type":"blocks","depends_on_id":"fixture-3"}]},
+              {"id":"fixture-0","title":"Parent title","status":"open","created_at":"2026-11-01T00:00:00Z","updated_at":"2026-11-01T00:00:00Z"},
+              {"id":"fixture-2","title":"Child title","status":"open","created_at":"2026-11-01T00:00:00Z","updated_at":"2026-11-01T00:00:00Z","parent":"fixture-1"},
+              {"id":"fixture-3","title":"Blocker title","status":"closed","created_at":"2026-11-01T00:00:00Z","updated_at":"2026-11-01T00:00:00Z"}
+            ]"#).unwrap();
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
             BD.set(script.to_string_lossy().into_owned()).unwrap();
@@ -194,6 +200,26 @@ fn work_column_and_terminal_links_open_cards_and_hand_off(cx: &mut TestAppContex
     assert!(cx.debug_bounds("work-beside-failed").is_none());
     std::fs::remove_file(std::path::Path::new(&running.store).join("slow")).unwrap();
     until(cx, "beside card title", |cx| {
+        cx.debug_bounds("work-card-title-Read the fixture")
+            .is_some()
+    });
+    for text in [
+        "Parent-○ fixture-0 Parent title",
+        "Children-○ fixture-2 Child title",
+        "Blocked by-✓ fixture-3 Blocker title",
+    ] {
+        assert!(
+            cx.debug_bounds(Box::leak(format!("work-family-{text}").into_boxed_str()))
+                .is_some(),
+            "missing {text}"
+        );
+    }
+    click(cx, "work-family-Parent-○ fixture-0 Parent title");
+    until(cx, "parent card", |cx| {
+        cx.debug_bounds("work-card-title-Parent title").is_some()
+    });
+    click(cx, "w-back");
+    until(cx, "back to selected item", |cx| {
         cx.debug_bounds("work-card-title-Read the fixture")
             .is_some()
     });

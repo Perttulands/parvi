@@ -59,6 +59,7 @@ impl Work {
         .h(px(g.height * s));
         let mut drawing = div()
             .relative()
+            .debug_selector(|| "work-graph-drawing".into())
             .flex_none()
             .w(px(g.width * s))
             .h(px(g.height * s))
@@ -145,6 +146,29 @@ impl Work {
                 .text_color(t.dim)
                 .child(format!("{} more not drawn", g.omitted))
         });
+        let pan = (g.width * s > wide).then(|| {
+            div().flex().gap(px(SPACE_SM)).children(
+                [(-1., "←", "work-graph-left"), (1., "→", "work-graph-right")]
+                    .into_iter()
+                    .map(|(direction, label, id)| {
+                        div()
+                            .id(id)
+                            .debug_selector(move || id.into())
+                            .cursor_pointer()
+                            .text_color(t.accent)
+                            .child(label)
+                            .on_click(cx.listener(move |work, _, _, cx| {
+                                let scroll = &work.graph_scroll;
+                                let at = scroll.offset();
+                                let x = (at.x - px(direction * wide * 0.8))
+                                    .max(-scroll.max_offset().x)
+                                    .min(px(0.));
+                                scroll.set_offset(point(x, at.y));
+                                cx.notify();
+                            }))
+                    }),
+            )
+        });
         div()
             .flex_none()
             .h(px(GRAPH_H))
@@ -172,6 +196,7 @@ impl Work {
                             .child(SharedString::from(format!("{} {}", head.id, head.title))),
                     )
                     .children(omitted)
+                    .children(pan)
                     .children(up),
             )
             .child(
@@ -180,6 +205,7 @@ impl Work {
                     .flex_1()
                     .min_h_0()
                     .overflow_scroll()
+                    .track_scroll(&self.graph_scroll)
                     .child(drawing),
             )
     }

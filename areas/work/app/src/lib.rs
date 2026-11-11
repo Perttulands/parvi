@@ -13,8 +13,8 @@ mod tokens;
 mod view;
 
 use gpui::{
-    App, AppContext, Context, Entity, FocusHandle, KeyDownEvent, UniformListScrollHandle,
-    WeakEntity, Window,
+    App, AppContext, Context, Entity, FocusHandle, KeyDownEvent, ScrollHandle,
+    UniformListScrollHandle, WeakEntity, Window,
 };
 use parvi_app_kit::ask::{Answers, Ask};
 use parvi_app_kit::hub::now_ms;
@@ -49,10 +49,11 @@ pub struct Work {
     selected_node: Option<String>,
     card: bool,
     beside_from: Option<&'static str>,
-    card_line: Option<String>,
+    card_line: Option<(String, String)>,
     trail: Vec<(Option<String>, RowKey)>,
     prose: Rc<RefCell<Selectable>>,
     scroll: UniformListScrollHandle,
+    graph_scroll: ScrollHandle,
     wanted: Option<(String, Option<String>)>,
     drag_from: Option<i32>,
     pane: Rc<Cell<f32>>,
@@ -174,6 +175,7 @@ impl Work {
             trail: Vec::new(),
             prose: Rc::default(),
             scroll: UniformListScrollHandle::new(),
+            graph_scroll: ScrollHandle::new(),
             wanted: None,
             drag_from: None,
             pane: Rc::default(),
@@ -499,7 +501,9 @@ impl Work {
             let item = &self.board.rows[row];
             let line = self
                 .card_line
-                .clone()
+                .as_ref()
+                .filter(|(reference, _)| reference == &item.reference)
+                .map(|(_, line)| line.clone())
                 .unwrap_or_else(|| item.line(&self.board));
             let node = self.node_for_project(item.project);
             let folder = self.board.projects[item.project].checkout.as_deref();

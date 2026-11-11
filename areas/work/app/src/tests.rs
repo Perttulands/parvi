@@ -99,6 +99,45 @@ fn select(work: &Entity<Work>, cx: &mut VisualTestContext, id: &str) {
 }
 
 #[gpui::test]
+fn a_wide_graph_can_be_panned_with_its_buttons(cx: &mut TestAppContext) {
+    let (work, cx) = page(cx);
+    let mut items = vec![b("chain-0").epic()];
+    for i in 1..=14 {
+        items.push(
+            b(&format!("chain-{i}"))
+                .parent("chain-0")
+                .blocked_by(&[&format!("chain-{}", i - 1)]),
+        );
+    }
+    cx.update(|_, cx| {
+        work.update(cx, |w, cx| {
+            w.snapshots.insert(
+                "node".into(),
+                Snapshot {
+                    projects: vec![store("/chain", items)],
+                },
+            );
+            w.rebuild(cx);
+        })
+    });
+    select(&work, cx, "chain-0");
+    cx.run_until_parked();
+    let before = work.read_with(cx, |w, _| w.graph_scroll.offset().x);
+    let right = cx
+        .debug_bounds("work-graph-right")
+        .expect("wide graph has a right pan button")
+        .center();
+    cx.simulate_click(right, gpui::Modifiers::none());
+    cx.run_until_parked();
+    let after = work.read_with(cx, |w, _| w.graph_scroll.offset().x);
+    assert!(after < before, "right button moves the graph");
+    let left = cx.debug_bounds("work-graph-left").unwrap().center();
+    cx.simulate_click(left, gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(work.read_with(cx, |w, _| w.graph_scroll.offset().x), before);
+}
+
+#[gpui::test]
 fn draws_every_item_of_every_project_in_one_table_and_says_what_failed(cx: &mut TestAppContext) {
     let (work, cx) = page(cx);
     // Five Beads, two issues and a pull request.

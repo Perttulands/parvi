@@ -401,7 +401,9 @@ impl Board {
         b
     }
 
-    /// Build a card from the node's on-demand item, retaining its project checkout.
+    /// Build a card from the on-demand item and the node's project list.
+    /// The on-demand item wins over a possibly older list, while the list
+    /// supplies the other rows that its family references name.
     pub fn from_item(item: parvi_work_contract::Item, projects: &[Project], now: u64) -> Board {
         let reference = item.reference.clone();
         let github = reference
@@ -437,6 +439,40 @@ impl Board {
             row.kind = "issue".into();
             board.index();
         }
+        let listed = Board::from_snapshot(
+            &Snapshot {
+                projects: projects.to_vec(),
+            },
+            now,
+            &when::local_offset,
+        );
+        let mut project_map = Vec::with_capacity(listed.projects.len());
+        for project in listed.projects {
+            if project.tracker == board.projects[0].tracker
+                && project.path == board.projects[0].path
+            {
+                project_map.push(0);
+            } else {
+                project_map.push(board.projects.len());
+                board.projects.push(project);
+            }
+        }
+        for mut row in listed.rows {
+            if row.reference != reference || row.pull.is_some() {
+                row.project = project_map[row.project];
+                board.rows.push(row);
+            }
+        }
+        board.name_shared_prefixes();
+        board.index();
+        board.links = Links::of(&board);
+        // The one-item board provisionally marked unknown blockers as
+        // unfinished. Recompute from the trackers once their rows arrive.
+        for row in &mut board.rows {
+            row.status = Status::of(&row.raw_status);
+        }
+        board.block();
+        board.days = Days::of(&board, now, &when::local_offset);
         board
     }
 
