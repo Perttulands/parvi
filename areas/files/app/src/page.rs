@@ -34,6 +34,7 @@ struct UploadConflict {
 pub struct Side {
     pub pane: Pane,
     pub code: Entity<Code>,
+    pub pretty_code: Entity<Code>,
     pub search: Entity<TextField>,
     pub search_content: bool,
     pub pending_line: Option<usize>,
@@ -227,6 +228,7 @@ impl FilesPage {
         }
         let sides = std::array::from_fn(|i| {
             let code = cx.new(Code::new);
+            let pretty_code = cx.new(Code::new);
             let search = cx.new(|cx| TextField::new(cx, "Find files"));
             let name = cx.new(|cx| TextField::new(cx, "New name"));
             cx.subscribe_in(
@@ -291,6 +293,7 @@ impl FilesPage {
             Side {
                 pane: Pane::from_kept(&kept.panes[i]),
                 code,
+                pretty_code,
                 search,
                 search_content: false,
                 pending_line: None,
@@ -805,6 +808,10 @@ impl FilesPage {
                 let base = open::version(&b);
                 let draft = p.drafts.get(&(node, path)).cloned();
                 let code = p.sides[i].code.clone();
+                p.sides[i].pretty_code.update(cx, |code, cx| {
+                    code.set_lang(syntax::lang(&name), cx);
+                    code.set(pretty.as_deref().unwrap_or(&text), cx);
+                });
                 let line = p.sides[i].pending_line.take();
                 code.update(cx, |code, cx| {
                     code.set_lang(syntax::lang(&name), cx);
@@ -1000,6 +1007,10 @@ impl FilesPage {
                     o.pretty = open::pretty(&o.name, &sent);
                     o.base = open::version(sent.as_bytes());
                     let new_key = o.key();
+                    let pretty = o.pretty.clone();
+                    p.sides[i].pretty_code.update(cx, |code, cx| {
+                        code.set(pretty.as_deref().unwrap_or(&sent), cx)
+                    });
                     p.drafts.remove(&old_key);
                     if let Some(d) = open::acknowledged(&now, &sent) {
                         p.drafts.insert(new_key, d);
@@ -1468,6 +1479,10 @@ impl FilesPage {
         if pane.selection().is_none_or(|e| e.folder) {
             return;
         }
+        let node = NodeId(pane.node.clone());
+        self.download_path(node, path, cx);
+    }
+    pub(crate) fn download_path(&mut self, node: NodeId, path: String, cx: &mut Context<Self>) {
         let kept: store::Kept = self.host.setting(cx).unwrap_or_default();
         let folder = if kept.download_folder.trim().is_empty() {
             std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
@@ -1483,7 +1498,6 @@ impl FilesPage {
             return;
         };
         let destination = folder.join(paths::base_name(&path));
-        let node = NodeId(pane.node.clone());
         self.notice = None;
         self.request(
             Request::get(node, route("file", &path)),

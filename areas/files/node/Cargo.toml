@@ -13,6 +13,7 @@ parvi-core = { path = "../../../kit/core" }
 parvi-node-kit = { path = "../../../kit/node-kit" }
 parvi-term = { path = "../../../engine/term" }
 anyhow = "1"
+base64 = "0.22"
 axum = { version = "0.8", features = ["query", "json"] }
 futures-util = "0.3"
 jiff = "0.2"

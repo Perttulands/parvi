@@ -376,21 +376,41 @@ impl FilesPage {
                     })
                     .on_click(cx.listener(move |p, _, _, cx| p.copy_to_other(i, cx))),
             )
-            .child(div().px(px(GAP)).child(side.name.clone()))
+            .child(
+                div()
+                    .px(px(GAP))
+                    .debug_selector({
+                        let id = format!("files-name-{i}");
+                        move || id.clone()
+                    })
+                    .child(side.name.clone()),
+            )
             .child(
                 div()
                     .flex()
                     .gap(px(GAP))
                     .child(
                         kit::button(&t, ("create-file", i), "New file", Kind::Quiet)
+                            .debug_selector({
+                                let id = format!("files-create-file-{i}");
+                                move || id.clone()
+                            })
                             .on_click(cx.listener(move |p, _, _, cx| p.mutate(i, "file", cx))),
                     )
                     .child(
                         kit::button(&t, ("create-folder", i), "New folder", Kind::Quiet)
+                            .debug_selector({
+                                let id = format!("files-create-folder-{i}");
+                                move || id.clone()
+                            })
                             .on_click(cx.listener(move |p, _, _, cx| p.mutate(i, "folder", cx))),
                     )
                     .child(
                         kit::button(&t, ("rename", i), "Rename", Kind::Quiet)
+                            .debug_selector({
+                                let id = format!("files-rename-{i}");
+                                move || id.clone()
+                            })
                             .on_click(cx.listener(move |p, _, _, cx| p.mutate(i, "rename", cx))),
                     )
                     .child(
@@ -404,6 +424,10 @@ impl FilesPage {
                             },
                             Kind::Quiet,
                         )
+                        .debug_selector({
+                            let id = format!("files-delete-{i}");
+                            move || id.clone()
+                        })
                         .on_click(cx.listener(move |p, _, _, cx| p.mutate(i, "delete", cx))),
                     ),
             )
@@ -461,6 +485,7 @@ impl FilesPage {
                     if o.diff_open { "View" } else { "Diff" },
                     Kind::Quiet,
                 )
+                .debug_selector(|| "files-diff".into())
                 .on_click(cx.listener(move |p, _, _, cx| p.toggle_diff(i, cx))),
             );
         }
@@ -472,6 +497,7 @@ impl FilesPage {
                     if o.source { "Rendered" } else { "Source" },
                     Kind::Quiet,
                 )
+                .debug_selector(|| "files-source".into())
                 .on_click(cx.listener(move |p, _, _, cx| {
                     if let Some(opened) = p.sides[i].opened.as_mut() {
                         opened.source = !opened.source;
@@ -529,8 +555,23 @@ impl FilesPage {
         } else {
             match &o.show {
                 Show::Reading => kit::note(&t, "Reading…", None).into_any_element(),
-                Show::Failed(s) | Show::Not(s) => {
-                    kit::note(&t, s.clone(), Some(t.error)).into_any_element()
+                Show::Failed(s) => kit::note(&t, s.clone(), Some(t.error)).into_any_element(),
+                Show::Not(s) => {
+                    let node = parvi_core::NodeId(o.node.clone());
+                    let path = o.path.clone();
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(GAP))
+                        .child(kit::note(&t, s.clone(), None))
+                        .child(
+                            kit::button(&t, "viewer-download", "Download", Kind::Quiet)
+                                .debug_selector(|| "viewer-download".into())
+                                .on_click(cx.listener(move |p, _, _, cx| {
+                                    p.download_path(node.clone(), path.clone(), cx)
+                                })),
+                        )
+                        .into_any_element()
                 }
                 Show::Picture { image, natural } => self.picture(i, image, *natural, cx),
                 Show::Model(m) => div()
@@ -620,10 +661,37 @@ impl FilesPage {
                         on_link: Some(on_link),
                         select: None,
                     };
-                    parvi_app_kit::widgets::markdown::render(&look, "file-markdown", blocks)
+                    div()
+                        .size_full()
+                        .debug_selector(|| "files-markdown-rendered".into())
+                        .child(parvi_app_kit::widgets::markdown::render(
+                            &look,
+                            "file-markdown",
+                            blocks,
+                        ))
                         .into_any_element()
                 }
-                Show::Text { .. } => side.code.clone().into_any_element(),
+                Show::Text { .. }
+                    if o.pretty.is_some()
+                        && !o.editing
+                        && !o.source
+                        && !self.drafts.contains_key(&o.key()) =>
+                {
+                    div()
+                        .size_full()
+                        .debug_selector(|| "files-json-formatted".into())
+                        .child(side.pretty_code.clone())
+                        .into_any_element()
+                }
+                Show::Text { .. } => {
+                    let selector =
+                        format!("files-code-top-{i}-{}", side.code.read(cx).top_line() + 1);
+                    div()
+                        .size_full()
+                        .debug_selector(move || selector.clone())
+                        .child(side.code.clone())
+                        .into_any_element()
+                }
             }
         };
         div()
@@ -749,15 +817,15 @@ impl Render for FilesPage {
                         })),
                 )
                 .child(
-                    kit::button(&t, "file-menu-copy-path", "Copy path", Kind::Quiet).on_click(
-                        cx.listener(move |p, _, _, cx| {
+                    kit::button(&t, "file-menu-copy-path", "Copy path", Kind::Quiet)
+                        .debug_selector(|| "file-menu-copy-path".into())
+                        .on_click(cx.listener(move |p, _, _, cx| {
                             p.menu = None;
                             if let Some(path) = p.sides[i].pane.selected_path() {
                                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(path))
                             }
                             cx.notify();
-                        }),
-                    ),
+                        })),
                 )
                 .child(
                     kit::button(
@@ -853,8 +921,9 @@ impl Render for FilesPage {
                     ),
                 )
                 .child(
-                    kit::button(&t, "file-menu-rename", "Rename", Kind::Quiet).on_click(
-                        cx.listener(move |p, _, w, cx| {
+                    kit::button(&t, "file-menu-rename", "Rename", Kind::Quiet)
+                        .debug_selector(|| "file-menu-rename".into())
+                        .on_click(cx.listener(move |p, _, w, cx| {
                             p.menu = None;
                             if let Some(name) =
                                 p.sides[i].pane.selection().map(|entry| entry.name.clone())
@@ -865,8 +934,7 @@ impl Render for FilesPage {
                             }
                             parvi_app_kit::widgets::field::focus(&p.sides[i].name, w, cx);
                             cx.notify()
-                        }),
-                    ),
+                        })),
                 )
                 .child(
                     kit::button(
