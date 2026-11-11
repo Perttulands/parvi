@@ -11,3 +11,17 @@ pub const SNAPSHOT: u8 = 0x90;
 pub const KINDS: parvi_core::frame::Kinds = &[WATCH..=WATCH];
 pub const BAD_REQUEST: &str = "bad_request";
 pub const TRACKER_ERROR: &str = "tracker_error";
+
+/// A request to file an item in a configured project.
+#[derive(Debug, serde::Deserialize)]
+pub struct Create {
+    pub project: String,
+    pub title: String,
+    pub description: String,
+    #[serde(rename = "type", default = "default_kind")]
+    pub kind: String,
+}
+
+fn default_kind() -> String {
+    "bug".into()
+}

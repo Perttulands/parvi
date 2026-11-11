@@ -1,7 +1,7 @@
 //! Work: the work seam. Each configured project names its tracker, a Beads
 //! store read with `bd` or a GitHub repository read with `gh api`, and one
 //! interface serves the Work tab, Missions and the other modules
-//! (ARCHITECTURE.md: Work; `docs/work.md`). Parvi only reads, and never
+//! (ARCHITECTURE.md: Work; `docs/work.md`). Parvi files items through their configured trackers and never
 //! handles a token.
 //!
 //! The public interface: [`Config`] says which projects; [`Work`] keeps

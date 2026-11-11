@@ -97,6 +97,36 @@ impl Gh {
         Ok(work)
     }
 
+    pub async fn create(&self, repo: &Repo, title: &str, description: &str) -> Result<String> {
+        let mut command = Command::new(&self.program);
+        command.args([
+            "issue",
+            "create",
+            "--repo",
+            &repo.name,
+            "--title",
+            title,
+            "--body",
+            description,
+        ]);
+        command.stdin(std::process::Stdio::null());
+        let output = tokio::time::timeout(TIMEOUT, tree::output(&mut command))
+            .await
+            .context("gh took too long")?
+            .with_context(|| format!("running {}", self.program))?;
+        if !output.status.success() {
+            bail!("{}", String::from_utf8_lossy(&output.stderr).trim());
+        }
+        let url = String::from_utf8_lossy(&output.stdout);
+        let number = url
+            .trim()
+            .rsplit('/')
+            .next()
+            .context("gh did not return an issue URL")?;
+        let number: u64 = number.parse().context("gh did not return an issue URL")?;
+        Ok(format!("gh:{}#{number}", repo.name))
+    }
+
     /// One issue with its family, read now.
     pub async fn item(&self, owner: &str, repo: &str, number: u64) -> Result<Item> {
         let json = self

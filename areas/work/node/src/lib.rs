@@ -20,7 +20,7 @@ use work::{Config, Work};
 pub const LISTING: Listing = Listing {
     name: "work",
     kinds: parvi_work_contract::KINDS,
-    commands: &["work_list", "work_show"],
+    commands: &["work_list", "work_show", "work_create"],
     build,
 };
 
@@ -118,7 +118,27 @@ impl Area for WorkArea {
                 }
             },
         );
-        vec![list, show]
+        let work = self.work.clone();
+        let create = Command::new(
+            "work_create",
+            "File an item in a configured project.",
+            || {
+                object(
+                    json!({"project":{"type":"string"}, "title":{"type":"string"}, "description":{"type":"string"}, "type":{"type":"string", "enum":["bug", "task", "feature"]}}),
+                    &["project", "title", "description"],
+                )
+            },
+            move |args| {
+                let work = work.clone();
+                async move {
+                    let request = serde_json::from_value(args)
+                        .map_err(|e| Error::new("bad_request", e.to_string()))?;
+                    let reference = work.create(&request).await?;
+                    Ok(json!({"reference": reference}))
+                }
+            },
+        );
+        vec![list, show, create]
     }
     fn channel(&self, _: Client) -> Option<Box<dyn Channel>> {
         Some(Box::new(Socket(work::Channel::new(self.work.clone()))))
