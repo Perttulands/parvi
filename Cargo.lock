@@ -4345,6 +4345,7 @@ dependencies = [
  "parvi-brain-app",
  "parvi-files-app",
  "parvi-host-app",
+ "parvi-missions-app",
  "parvi-scheduled-app",
  "parvi-terminals-app",
  "parvi-work-app",
@@ -4601,6 +4602,30 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.29.0",
  "tower",
+]
+
+[[package]]
+name = "parvi-missions-app"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "gpui-pre",
+ "http",
+ "parvi-agents-contract",
+ "parvi-app-kit",
+ "parvi-app-shell",
+ "parvi-core",
+ "parvi-mission-engine",
+ "parvi-missions",
+ "parvi-missions-contract",
+ "parvi-node-kit",
+ "parvi-term",
+ "parvi-testkit",
+ "parvi-work",
+ "serde_json",
+ "time",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
