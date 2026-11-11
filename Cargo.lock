@@ -4150,6 +4150,8 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "jiff",
+ "parvi-agents",
+ "parvi-brain",
  "parvi-core",
  "parvi-host",
  "parvi-node-kit",
@@ -4163,6 +4165,53 @@ dependencies = [
 ]
 
 [[package]]
+name = "parvi-agents"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "futures-util",
+ "parvi-agents-contract",
+ "parvi-core",
+ "parvi-missions",
+ "parvi-node-kit",
+ "parvi-term",
+ "parvi-terminals",
+ "parvi-testkit",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "parvi-agents-app"
+version = "0.0.1"
+dependencies = [
+ "gpui-pre",
+ "parvi-agents",
+ "parvi-agents-contract",
+ "parvi-app-kit",
+ "parvi-app-shell",
+ "parvi-core",
+ "parvi-node-kit",
+ "parvi-testkit",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "parvi-agents-contract"
+version = "0.0.1"
+dependencies = [
+ "parvi-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "parvi-app"
 version = "0.0.1"
 dependencies = [
@@ -4171,8 +4220,10 @@ dependencies = [
  "gpui-pre",
  "gpui-pre-platform",
  "log",
+ "parvi-agents-app",
  "parvi-app-kit",
  "parvi-app-shell",
+ "parvi-brain-app",
  "parvi-host-app",
  "parvi-scheduled-app",
  "parvi-terminals-app",
@@ -4210,6 +4261,50 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-tungstenite",
+]
+
+[[package]]
+name = "parvi-brain"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "parvi-brain-contract",
+ "parvi-core",
+ "parvi-node-kit",
+ "parvi-testkit",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+]
+
+[[package]]
+name = "parvi-brain-app"
+version = "0.0.1"
+dependencies = [
+ "axum",
+ "gpui-pre",
+ "jiff",
+ "parvi-app-kit",
+ "parvi-app-shell",
+ "parvi-brain",
+ "parvi-brain-contract",
+ "parvi-core",
+ "parvi-testkit",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "parvi-brain-contract"
+version = "0.0.1"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
