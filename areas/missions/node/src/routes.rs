@@ -62,7 +62,7 @@ impl IntoResponse for ApiError {
 impl From<parvi_core::Error> for ApiError {
     fn from(e: parvi_core::Error) -> Self {
         let status = match e.code.as_str() {
-            "not_found" => StatusCode::NOT_FOUND,
+            "not_found" | "unknown_run" => StatusCode::NOT_FOUND,
             "note_author_mismatch" => StatusCode::FORBIDDEN,
             "note_too_large" => StatusCode::PAYLOAD_TOO_LARGE,
             "conflict"

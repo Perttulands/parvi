@@ -24,6 +24,8 @@ const EXPECTED: &[&str] = &[
     "run_list",
     "run_status",
     "run_wait",
+    "run_evidence",
+    "run_attempts",
     "run_gates",
     "run_seats",
     "run_logs",
