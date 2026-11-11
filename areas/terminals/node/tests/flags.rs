@@ -12,7 +12,7 @@ async fn configured_help_and_timeout() {
     let calls = dir.join("calls");
     write_script(
         &fast,
-        &format!(
+        format!(
             "#!/bin/sh\n[ \"$1\" = --help ] || exit 1\necho x >> '{}'\nprintf 'Options:\\n  -v, --verbose  Verbose output\\n'\n",
             calls.display()
         ),
