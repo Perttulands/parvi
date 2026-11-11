@@ -24,4 +24,4 @@ toml = { version = "1", default-features = false, features = ["parse", "serde", 
 parvi-testkit = { path = "../../../kit/testkit" }
 vt100 = "0.16.2"
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
-tokio-tungstenite = "0.29"
+tokio-tungstenite = "0.30"

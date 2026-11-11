@@ -28,4 +28,4 @@ parvi-testkit = { path = "../../../kit/testkit" }
 parvi-terminals = { path = "../../terminals/node" }
 
 futures-util = "0.3"
-tokio-tungstenite = "0.29"
+tokio-tungstenite = "0.30"
