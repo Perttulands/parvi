@@ -8,7 +8,8 @@ missions in one Rust binary, used through a native app and the `parvi` CLI.
 
 - The operator's tmux sessions survive everything you do. Tests start their own
   tmux servers and Parvi nodes through `kit/testkit` and act only on those,
-  never on the real fleet or the real Tailscale.
+  never on the real fleet or the real Tailscale. A test needs only Rust and
+  tmux: any other program (`bd`, `gh`, a harness) is a fake the test writes.
 - Other agents run at the same time. Pick unique scratch names and ports.
 - Build and test the crates you changed, through `heavy run`. CI runs the whole
   workspace. Chase a flake by reading the code and writing a deterministic
