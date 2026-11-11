@@ -18,6 +18,12 @@ use serde_json::Value;
 const PARVI: &str = env!("CARGO_BIN_EXE_parvi");
 const UNIT: &str = "parvi-install-test";
 
+/// Held by each test for its whole run. A test here writes a program and
+/// then runs it; were another test to start a process in between, that
+/// process would briefly hold the written file open and running it would
+/// fail as "text file busy".
+static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// `systemctl --user` for one scratch folder: calls go to `calls`, a
 /// started unit's process id to `<unit>.pid`, its output to `<unit>.log`.
 const FAKE_SYSTEMCTL: &str = r#"#!/bin/sh
@@ -236,6 +242,7 @@ async fn shows(machine: &Machine, session: &str, line: &str) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_upgrade_keeps_every_session_and_the_new_node_serves_it() {
+    let _alone = ONE_AT_A_TIME.lock().await;
     let Some(tmux) = Server::start_in("parvi-upgrade") else {
         return;
     };
@@ -269,6 +276,7 @@ async fn an_upgrade_keeps_every_session_and_the_new_node_serves_it() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_build_that_fails_its_health_check_is_rolled_back() {
+    let _alone = ONE_AT_A_TIME.lock().await;
     let Some(tmux) = Server::start_in("parvi-rollback") else {
         return;
     };
@@ -310,6 +318,7 @@ async fn a_build_that_fails_its_health_check_is_rolled_back() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn install_is_idempotent_and_writes_the_expected_unit() {
+    let _alone = ONE_AT_A_TIME.lock().await;
     let Some(tmux) = Server::start_in("parvi-install") else {
         return;
     };
