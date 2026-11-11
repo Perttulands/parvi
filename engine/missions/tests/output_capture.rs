@@ -1,6 +1,7 @@
+use parvi_mission_model::{ResumeRequest, RunStart};
 use parvi_missions::{
     Coordinator, ExecutionEvent, ExecutionSink, Executor, FormationExecution, FormationResult,
-    ResumeRequest, RunSettings, RunStart,
+    RunSettings,
 };
 use serde_json::json;
 use std::{
@@ -167,7 +168,7 @@ fn failed_capture_after_reattach_remains_redispatchable() {
         match c.resume(
             &id,
             ResumeRequest {
-                mode: parvi_missions::ResumeMode::Redispatch,
+                mode: parvi_mission_model::ResumeMode::Redispatch,
                 ..Default::default()
             },
         ) {
@@ -203,7 +204,7 @@ fn start(root: &Scratch, source: PathBuf) -> (Coordinator, String, Arc<AtomicUsi
         .unwrap();
     (c, id, count)
 }
-fn wait(c: &Coordinator, id: &str, status: &str) -> parvi_missions::RunProjection {
+fn wait(c: &Coordinator, id: &str, status: &str) -> parvi_mission_model::RunProjection {
     let until = Instant::now() + Duration::from_secs(15);
     loop {
         let p = c.run(id).unwrap();
@@ -313,7 +314,7 @@ fn redispatch_runs_a_new_attempt_instead_of_keeping_the_pending_one() {
         match c.resume(
             &id,
             ResumeRequest {
-                mode: parvi_missions::ResumeMode::Redispatch,
+                mode: parvi_mission_model::ResumeMode::Redispatch,
                 ..Default::default()
             },
         ) {

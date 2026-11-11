@@ -16,7 +16,8 @@ use crate::coordinator::Control;
 use crate::limits::LimitUse;
 use crate::run_limit::LimitStop;
 use crate::run_worker::event;
-use crate::{Coordinator, Gate, Mission, RoutedInput, RunEvent, RunProjection, RunStart};
+use crate::{Coordinator, RoutedInput, RunEvent};
+use parvi_mission_model::{Gate, HumanPick, Mission, RunProjection, RunStart};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, io};
@@ -103,7 +104,8 @@ pub(crate) fn candidates(events: &[RunEvent], step: &str, gate: &str) -> Vec<Can
                 let origin = (data(event).get("inputRef"))
                     .and_then(|input| input.get("origin"))
                     .and_then(|origin| {
-                        serde_json::from_value::<crate::PublicOrigin>(origin.clone()).ok()
+                        serde_json::from_value::<parvi_mission_model::PublicOrigin>(origin.clone())
+                            .ok()
                     });
                 let Some(origin) = origin.filter(|origin| origin.node_id == step) else {
                     continue;
@@ -618,7 +620,7 @@ struct Judging<'a> {
     req: &'a RunStart,
     workspace: &'a std::path::Path,
     control: &'a Control,
-    inputs: &'a [crate::RunInput],
+    inputs: &'a [parvi_mission_model::RunInput],
 }
 
 impl Judging<'_> {
@@ -815,19 +817,6 @@ pub(crate) fn route_human(
     )
 }
 
-/// The operator's pick on a gate's pending pick.
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
-pub struct HumanPick {
-    /// The exact pending request picked on.
-    pub requested_seq: u64,
-    pub attempt: i64,
-    pub reason: String,
-    /// The slot ID of the seat that typed a pick the actor made.
-    pub relayed_by: String,
-    pub actor: String,
-}
-
 /// The pick a pending human request asks for, with the judge's pick as a
 /// recommendation where the gate has a judge.
 pub(crate) fn request_candidates(request: &RunEvent) -> Option<Vec<i64>> {
@@ -895,7 +884,7 @@ impl Coordinator {
             ..Default::default()
         };
         let appended = self.ledger(run)?.append_checked(event, |events| {
-            let projection = RunProjection::from_events(events, run).map_err(crate::error::to_io)?;
+            let projection = crate::project_run(events, run).map_err(crate::error::to_io)?;
             if projection.r#final
                 || !projection.waiting_gates.iter().any(|pending| {
                     pending.gate_id == gate && pending.requested_seq == pick.requested_seq

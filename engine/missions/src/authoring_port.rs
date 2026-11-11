@@ -1,5 +1,6 @@
 //! Edit formation ports and restore their wire identities on undo.
-use crate::{Error, Mission, Patch, Port};
+use crate::Error;
+use parvi_mission_model::{Mission, Patch, Port};
 use toml_edit::{DocumentMut, Item, Value, value};
 fn missing() -> Error {
     Error::new("not_found", "formation or port")

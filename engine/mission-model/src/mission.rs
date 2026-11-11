@@ -9,8 +9,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::Error;
 use crate::nodes::{Connection, End, Formation, Gate, InputCard, Limit};
+use parvi_core::Error;
 
 /// The only mission file schema Parvi reads.
 pub const MISSION_SCHEMA: i64 = 1;
@@ -103,4 +103,20 @@ impl Mission {
             title => title,
         }
     }
+}
+
+/// One mission file as the listing shows it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MissionListing {
+    pub slug: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rev: Option<i64>,
+    /// Why the file cannot be read, such as a symlink whose target moved;
+    /// the other fields are then empty but the slug.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub broken: Option<String>,
 }

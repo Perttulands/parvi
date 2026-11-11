@@ -5,10 +5,10 @@ use std::collections::HashSet;
 
 use super::inputs::valid_name;
 use super::possessive;
-use crate::finding::{Code, Finding};
 use crate::graph::split_endpoint;
-use crate::mission::Mission;
-use crate::nodes::{KIND_FILE, KIND_FOLDER, KIND_TEXT, MissionOutput, Port};
+use parvi_mission_model::{
+    Code, Finding, KIND_FILE, KIND_FOLDER, KIND_TEXT, Mission, MissionOutput, Port,
+};
 
 const KINDS: [&str; 3] = [KIND_TEXT, KIND_FILE, KIND_FOLDER];
 

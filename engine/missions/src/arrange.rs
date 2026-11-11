@@ -1,5 +1,5 @@
 //! Deterministic compact reading order for a mission canvas.
-use crate::{Layout, LayoutNode, Mission};
+use parvi_mission_model::{Layout, LayoutNode, Mission};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 #[derive(Clone)]

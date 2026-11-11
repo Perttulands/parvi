@@ -1,10 +1,11 @@
 //! Validation findings: stable codes located on the mission.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// The code of a finding. Codes are Archon's, so its tools and skills read
 /// Parvi's reports unchanged.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Code {
     DanglingConnection,
     DuplicateInputProducer,
@@ -97,7 +98,7 @@ impl Serialize for Code {
 
 /// One problem, located on the node it is about: a node id, a connection id,
 /// or "" for the mission itself.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Finding {
     pub code: Code,
@@ -120,7 +121,7 @@ impl Finding {
 }
 
 /// Every problem that would stop a run, and advice that would not.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Report {
     pub errors: Vec<Finding>,
     pub warnings: Vec<Finding>,

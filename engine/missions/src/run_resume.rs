@@ -1,6 +1,7 @@
 //! Resume a blocked run from its durable snapshots.
 use crate::coordinator::Control;
-use crate::{BindingsSnapshot, Coordinator, ResumeRequest, RunEvent, RunProjection, RunStart};
+use crate::{BindingsSnapshot, Coordinator, RunEvent};
+use parvi_mission_model::{ResumeRequest, RunProjection, RunStart};
 use std::{io, path::PathBuf, sync::Arc};
 
 impl Coordinator {
@@ -28,7 +29,7 @@ impl Coordinator {
         crate::gate_replay::validate(&events)?;
         crate::human_replay::validate(&events)?;
         crate::code_binding::validate_run(self, id, &events)?;
-        let projection = RunProjection::from_events(&events, id).map_err(crate::error::to_io)?;
+        let projection = crate::project_run(&events, id).map_err(crate::error::to_io)?;
         if projection.status != "blocked" || !projection.resume_allowed {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
@@ -49,7 +50,7 @@ impl Coordinator {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, refusal));
         }
         let runs = self.inner.root.join("runs");
-        let mission = crate::Mission::parse(&std::fs::read_to_string(
+        let mission = parvi_mission_model::Mission::parse(&std::fs::read_to_string(
             runs.join(format!("{id}.snapshot.toml")),
         )?)
         .map_err(|e| io::Error::other(e.to_string()))?;
@@ -101,7 +102,7 @@ impl Coordinator {
             .and_then(|p| p.get("attempt"))
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
-        let mut data = serde_json::json!({"judgeVerdict":if request.take_fail {"fail"} else {""},"blockedGateId":blocked.gate_id,"resumeMode":if request.mode == crate::ResumeMode::Redispatch {"redispatch"} else {"reattach"},"redispatchNodeId":if request.mode == crate::ResumeMode::Redispatch {redispatch_node} else {""},"redispatchAttempt":if request.mode == crate::ResumeMode::Redispatch {redispatch_attempt} else {0},"resumedBy":actor,"resumedFromSeq":blocked.seq}).as_object().unwrap().clone();
+        let mut data = serde_json::json!({"judgeVerdict":if request.take_fail {"fail"} else {""},"blockedGateId":blocked.gate_id,"resumeMode":if request.mode == parvi_mission_model::ResumeMode::Redispatch {"redispatch"} else {"reattach"},"redispatchNodeId":if request.mode == parvi_mission_model::ResumeMode::Redispatch {redispatch_node} else {""},"redispatchAttempt":if request.mode == parvi_mission_model::ResumeMode::Redispatch {redispatch_attempt} else {0},"resumedBy":actor,"resumedFromSeq":blocked.seq}).as_object().unwrap().clone();
         if let Some(grant) = grant {
             data.insert("grant".into(), grant);
         }

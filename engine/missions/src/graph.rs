@@ -2,9 +2,9 @@
 
 use std::collections::{HashSet, VecDeque};
 
-use crate::mission::Mission;
-use crate::nodes::{
+use parvi_mission_model::{
     Connection, END_IN, Formation, GATE_FAIL, GATE_IN, GATE_JUDGE, GATE_PASS, Gate, INPUT_CARD_OUT,
+    Mission,
 };
 
 /// Which way a port carries work.
@@ -188,7 +188,7 @@ pub fn selecting_gate<'a>(mission: &'a Mission, step: &str) -> Result<&'a Gate, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nodes::Port;
+    use parvi_mission_model::Port;
     use serde::Deserialize;
 
     #[derive(Deserialize)]

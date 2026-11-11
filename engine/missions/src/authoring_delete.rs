@@ -1,5 +1,6 @@
 //! Remove a node, its wires and dependent Limit cards as one edit.
-use crate::{Edit, Error, Patch, Store};
+use crate::{Error, Store};
+use parvi_mission_model::{Edit, Patch};
 use std::collections::HashSet;
 use std::path::Path;
 use toml_edit::DocumentMut;
@@ -88,7 +89,7 @@ pub(crate) fn apply(
         .join(format!("{slug}.layout.toml"));
     let layout = match crate::links::read_definition(&layout_path) {
         Ok(raw) => {
-            let old = crate::Layout::parse(&raw)?;
+            let old = parvi_mission_model::Layout::parse(&raw)?;
             if old.mission_id != updated.mission.id {
                 return Err(Error::new("conflict", "layout belongs to another mission"));
             }
@@ -108,7 +109,7 @@ pub(crate) fn apply(
                 toml_edit::value(updated.mission.updated_at.clone()),
             );
             let raw = doc.to_string();
-            crate::Layout::parse(&raw)?;
+            parvi_mission_model::Layout::parse(&raw)?;
             Some(raw)
         }
         Err(error) if error.code == "not_found" => None,

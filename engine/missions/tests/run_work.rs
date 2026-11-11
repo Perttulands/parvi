@@ -2,9 +2,10 @@
 //! in run status and the run list; `{bead}` and `{issue}` in briefs with
 //! Archon's precedence against declared inputs; and a brief's own work
 //! item beside the run's.
+use parvi_mission_model::RunStart;
 use parvi_missions::{
     Coordinator, ExecutionSink, Executor, FormationExecution, FormationResult, LabExecutor,
-    RunSettings, RunStart,
+    RunSettings,
 };
 use std::{
     collections::BTreeMap,
@@ -112,7 +113,11 @@ fn run(
     mission: &str,
     work: &str,
     inputs: &[(&str, &str)],
-) -> (FormationExecution, parvi_missions::RunProjection, String) {
+) -> (
+    FormationExecution,
+    parvi_mission_model::RunProjection,
+    String,
+) {
     let dir = Scratch::new(mission);
     let recording = Recording::default();
     let c = Coordinator::open(&dir.0, RunSettings::default(), Box::new(recording.clone())).unwrap();
@@ -258,7 +263,7 @@ fn open(dir: &Scratch, executor: FailOnce) -> Coordinator {
     }
 }
 
-fn wait_for(c: &Coordinator, id: &str, done: impl Fn(&parvi_missions::RunProjection) -> bool) {
+fn wait_for(c: &Coordinator, id: &str, done: impl Fn(&parvi_mission_model::RunProjection) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while !done(&c.run(id).unwrap()) {
         assert!(Instant::now() < deadline, "run did not get there");

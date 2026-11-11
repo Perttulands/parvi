@@ -1,5 +1,6 @@
 //! Formation titles, staffing and controller selection.
-use crate::{Error, Mission, Patch};
+use crate::Error;
+use parvi_mission_model::{Mission, Patch};
 use toml_edit::{DocumentMut, Item, TableLike, Value, value};
 fn not_found() -> Error {
     Error::new("not_found", "formation or slot")
@@ -180,7 +181,7 @@ pub(crate) fn apply(doc: &mut DocumentMut, mission: &Mission, patch: Patch) -> R
             };
             let from = find(&from_formation, &from_slot)?;
             let to = find(&to_formation, &to_slot)?;
-            let settings = |s: &crate::Slot| {
+            let settings = |s: &parvi_mission_model::Slot| {
                 [
                     s.agent_id.clone(),
                     s.harness.clone(),

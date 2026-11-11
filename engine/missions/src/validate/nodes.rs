@@ -3,9 +3,7 @@
 
 use std::collections::HashMap;
 
-use crate::finding::{Code, Finding};
-use crate::mission::Mission;
-use crate::nodes::{DONE, REJECTED};
+use parvi_mission_model::{Code, DONE, Finding, Mission, REJECTED};
 
 pub fn findings(mission: &Mission) -> Vec<Finding> {
     let mut seen: HashMap<&str, &str> = HashMap::new();

@@ -322,11 +322,11 @@ fn role_usage_reports_every_slot_in_every_mission() {
         edit = store
             .patch(
                 slug,
-                parvi_missions::Precondition {
+                parvi_mission_model::Precondition {
                     rev: edit.mission.rev,
                     etag: edit.etag.clone(),
                 },
-                parvi_missions::Patch::CreateFormation {
+                parvi_mission_model::Patch::CreateFormation {
                     kind: "peer".into(),
                     title: "Pair".into(),
                     x: 0,
@@ -340,11 +340,11 @@ fn role_usage_reports_every_slot_in_every_mission() {
             edit = store
                 .patch(
                     slug,
-                    parvi_missions::Precondition {
+                    parvi_mission_model::Precondition {
                         rev: edit.mission.rev,
                         etag: edit.etag.clone(),
                     },
-                    parvi_missions::Patch::AssignSlot {
+                    parvi_mission_model::Patch::AssignSlot {
                         formation_id: formation.id.clone(),
                         slot_id: slot.id,
                         agent_id: "builder".into(),

@@ -1,38 +1,14 @@
 //! A pending human gate's request (Archon's `gate_request.go`): what the gate
 //! asks, and the output of the step that feeds it, so the answer window can
 //! quote it. Never refs, paths, prompts or session identities.
-use crate::{Coordinator, RunEvent, RunProjection};
-use serde::Serialize;
+use crate::{Coordinator, RunEvent};
+use parvi_mission_model::{GateInput, GateRequest};
 use serde_json::Value;
 use std::io;
 
 /// How much of the input is served; the full output stays in the run's
 /// evidence (Archon's `EvidenceTextMaxBytes`).
 const INPUT_MAX: usize = 64 << 10;
-
-#[derive(Clone, Debug, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct GateInput {
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub from_node_id: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub from_port_id: String,
-    pub text: String,
-    pub truncated: bool,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct GateRequest {
-    pub gate_id: String,
-    pub requested_seq: u64,
-    /// The gate's criterion as the run froze it.
-    pub criterion: String,
-    pub input: GateInput,
-    /// A pick request's candidates and the judge's recommendation.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pick: Option<Value>,
-}
 
 fn request_io(error: io::Error) -> crate::Error {
     let code = if error.kind() == io::ErrorKind::NotFound {
@@ -50,7 +26,7 @@ pub fn pending_request(
     events: &[RunEvent],
     criterion: &str,
 ) -> Result<GateRequest, crate::Error> {
-    let status = RunProjection::from_events(events, run)?;
+    let status = crate::project_run(events, run)?;
     let request = (events.iter().rev())
         .find(|e| e.kind == "human_input_requested" && e.gate_id == gate)
         .ok_or_else(|| crate::Error::new("not_found", "human gate request not found"))?;

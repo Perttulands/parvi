@@ -7,161 +7,23 @@
 //! Trimmed from Archon until the rest of the run evidence lands (#111): an
 //! attempt's artifact directory listing; a file output carries its path,
 //! read through Files.
-use crate::{Mission, RunEvent, RunProjection};
-use serde::Serialize;
+use crate::RunEvent;
+use parvi_mission_model::{
+    AttemptOutput, AttemptPick, AttemptVerdict, EvidenceItem, EvidenceText, Mission, RunAttempts,
+    StepAttempt, StepAttempts, StepPort,
+};
 use serde_json::Value;
 use std::collections::HashMap;
 
-/// One served text's cap, and the whole answer's (Archon's
-/// `EvidenceTextMaxBytes` and `EvidenceNodeBudgetBytes`).
-const TEXT_MAX: usize = 64 << 10;
+/// The whole answer's cap (Archon's `EvidenceNodeBudgetBytes`); one
+/// served text's is `EvidenceText::of`'s.
 const BUDGET: usize = 2 << 20;
 /// How many evidence items one verdict serves.
 const ITEMS_MAX: usize = 100;
 
-#[derive(Clone, Debug, Default, Serialize, PartialEq)]
-pub struct EvidenceText {
-    pub text: String,
-    pub bytes: usize,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub truncated: bool,
-}
-
-impl EvidenceText {
-    fn of(text: &str) -> Self {
-        let mut t = Self {
-            text: text.to_owned(),
-            bytes: text.len(),
-            truncated: false,
-        };
-        t.cap(TEXT_MAX);
-        t
-    }
-    /// Cuts at a character boundary so the text stays valid UTF-8.
-    fn cap(&mut self, max: usize) {
-        if self.text.len() > max {
-            let end = self.text.floor_char_boundary(max);
-            self.text.truncate(end);
-            self.truncated = true;
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct RunAttempts {
-    pub run_id: String,
-    pub steps: Vec<StepAttempts>,
-}
-
-/// One step and its attempts, oldest first.
-#[derive(Clone, Debug, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct StepAttempts {
-    pub node_id: String,
-    pub title: String,
-    /// The gates this step judges for, when it is a judge.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub judge_of: Vec<String>,
-    pub outputs: Vec<StepPort>,
-    pub attempts: Vec<StepAttempt>,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq)]
-pub struct StepPort {
-    pub id: String,
-    pub label: String,
-    pub kind: String,
-}
-
 pub const RUNNING: &str = "running";
 pub const DONE: &str = "done";
 pub const STOPPED: &str = "stopped";
-
-#[derive(Clone, Debug, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct StepAttempt {
-    pub attempt: i64,
-    /// `running`, `done` or `stopped`.
-    pub status: String,
-    pub started_seq: u64,
-    pub started_at: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub ended_at: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stop_reason: Option<EvidenceText>,
-    #[serde(skip_serializing_if = "is_zero")]
-    pub output_seq: u64,
-    pub outputs: Vec<AttemptOutput>,
-    pub verdicts: Vec<AttemptVerdict>,
-    /// The pick that took this attempt as its step's best.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub picked: Option<AttemptPick>,
-}
-
-fn is_zero(n: &u64) -> bool {
-    *n == 0
-}
-
-/// One output port's accepted payload; `path` is a file or folder output's
-/// absolute path.
-#[derive(Clone, Debug, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct AttemptOutput {
-    pub port_id: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub label: String,
-    pub kind: String,
-    pub text: EvidenceText,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub path: String,
-}
-
-/// One gate evaluation of the attempt's output and the verdict it reached,
-/// or `pending` while it waits. `superseded` marks a human request a later
-/// evaluation replaced before anyone answered it.
-#[derive(Clone, Debug, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct AttemptVerdict {
-    pub gate_id: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub gate_title: String,
-    pub evaluation_seq: u64,
-    #[serde(skip_serializing_if = "is_zero")]
-    pub seq: u64,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub verdict: String,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub pending: bool,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub superseded: bool,
-    pub reason: EvidenceText,
-    pub evidence: Vec<EvidenceItem>,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub decided_by: String,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq)]
-pub struct EvidenceItem {
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub kind: String,
-    pub text: EvidenceText,
-}
-
-/// The pick that took an attempt: its gate, the verdict's seq, why and who,
-/// the attempts it chose from and what started it (`whenSpent` or `resume`).
-#[derive(Clone, Debug, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct AttemptPick {
-    pub gate_id: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub gate_title: String,
-    pub seq: u64,
-    pub reason: EvidenceText,
-    pub decided_by: String,
-    pub candidates: Vec<i64>,
-    pub trigger: String,
-}
 
 fn text(event: &RunEvent, name: &str) -> String {
     str_of(event.data.get(name))
@@ -505,7 +367,7 @@ pub fn project_attempts(
     only: Option<&str>,
 ) -> Result<RunAttempts, crate::Error> {
     (|| -> std::io::Result<RunAttempts> {
-        let status = RunProjection::from_events(events, run_id).map_err(crate::error::to_io)?;
+        let status = crate::project_run(events, run_id).map_err(crate::error::to_io)?;
         let mut walk = Walk {
             mission,
             steps: Vec::new(),
@@ -592,8 +454,8 @@ impl crate::Coordinator {
         &self,
         id: &str,
         only: Option<&str>,
-    ) -> Result<crate::RunAttempts, crate::Error> {
-        (|| -> std::io::Result<crate::RunAttempts> {
+    ) -> Result<parvi_mission_model::RunAttempts, crate::Error> {
+        (|| -> std::io::Result<parvi_mission_model::RunAttempts> {
             let events = self.ledger(id)?.read().map_err(crate::error::to_io)?;
             let mission = self.frozen_mission(id).map_err(crate::error::to_io)?;
             if let Some(step) = only

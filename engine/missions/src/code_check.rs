@@ -25,7 +25,7 @@ pub const CODE_CHECKS: &[CodeCheck] = &[
 pub trait GateEvaluator: Send + Sync {
     fn evaluate(
         &self,
-        gate: &crate::Gate,
+        gate: &parvi_mission_model::Gate,
         input: &crate::RoutedInput,
     ) -> Result<crate::JudgeVerdict, crate::Error>;
 }
@@ -34,7 +34,7 @@ pub struct CodeGateEvaluator;
 impl GateEvaluator for CodeGateEvaluator {
     fn evaluate(
         &self,
-        gate: &crate::Gate,
+        gate: &parvi_mission_model::Gate,
         input: &crate::RoutedInput,
     ) -> Result<crate::JudgeVerdict, crate::Error> {
         evaluate_code_check(gate, &input.text)
@@ -56,7 +56,7 @@ pub fn code_check_names() -> Vec<String> {
 
 /// Evaluate a registered profile against the exact routed text.
 pub fn evaluate_code_check(
-    gate: &crate::Gate,
+    gate: &parvi_mission_model::Gate,
     output: &str,
 ) -> Result<crate::JudgeVerdict, crate::Error> {
     let check = gate.check.trim();
@@ -97,7 +97,7 @@ pub fn evaluate_code_check(
 #[cfg(test)]
 mod tests {
     use super::evaluate_code_check;
-    use crate::Gate;
+    use parvi_mission_model::Gate;
 
     #[test]
     fn checks_the_exact_output_with_bounded_input() {

@@ -1,5 +1,6 @@
 //! Find an unoccupied grid position without moving saved cards.
-use crate::{Error, Layout, LayoutNode, Mission, Store};
+use crate::{Error, Store};
+use parvi_mission_model::{Layout, LayoutNode, Mission};
 use std::collections::HashMap;
 
 pub fn free_layout_position(

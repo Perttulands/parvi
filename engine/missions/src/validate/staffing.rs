@@ -1,10 +1,9 @@
 //! Staffing: every slot states a harness and effort a seat can start with,
 //! and any role it names exists and is not retired.
 
-use crate::finding::{Code, Finding};
 use crate::harness::Harnesses;
-use crate::mission::Mission;
 use crate::roles::{RETIRED, RoleStore};
+use parvi_mission_model::{Code, Finding, Mission};
 
 pub fn findings(mission: &Mission, roles: &RoleStore, harnesses: &Harnesses) -> Vec<Finding> {
     let mut findings = Vec::new();

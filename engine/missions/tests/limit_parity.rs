@@ -2,10 +2,10 @@
 //! `run_limit_fail_test.go` and `run_pick_test.go` (example/project#233).
 #[allow(dead_code)]
 mod run_support;
+use parvi_mission_model::{HumanPick, HumanVerdict, ResumeRequest, RunProjection, RunStart};
 use parvi_missions::{
     Coordinator, ExecutionEvent, ExecutionSink, Executor, FormationExecution, FormationResult,
-    HumanPick, HumanVerdict, LabExecutor, OpenDispatch, ResumeRequest, RunProjection, RunSettings,
-    RunStart,
+    LabExecutor, OpenDispatch, RunSettings,
 };
 use run_support::Scratch;
 use serde_json::{Value, json};

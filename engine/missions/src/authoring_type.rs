@@ -1,5 +1,6 @@
 //! Change a formation's shape without silently discarding staffed slots.
-use crate::{Error, Mission, Patch, Slot};
+use crate::Error;
+use parvi_mission_model::{Mission, Patch, Slot};
 use std::collections::HashSet;
 use toml_edit::{DocumentMut, Item, value};
 fn invalid(message: &str) -> Error {

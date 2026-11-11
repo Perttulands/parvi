@@ -57,7 +57,7 @@ pub struct RoutedInput {
     pub artifact_ref: String,
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub origin: Option<crate::PublicOrigin>,
+    pub origin: Option<parvi_mission_model::PublicOrigin>,
 }
 
 fn chain_feedback(

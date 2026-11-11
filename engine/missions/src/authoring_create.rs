@@ -1,5 +1,6 @@
 //! Construct graph nodes with Archon's default shape.
-use crate::{End, Error, Formation, Gate, InputCard, Mission, Patch, Port, Slot};
+use crate::Error;
+use parvi_mission_model::{End, Formation, Gate, InputCard, Mission, Patch, Port, Slot};
 use serde::Serialize;
 use toml_edit::{ArrayOfTables, DocumentMut, Item};
 
@@ -50,7 +51,7 @@ pub(crate) fn apply(
     doc: &mut DocumentMut,
     _mission: &Mission,
     patch: Patch,
-) -> Result<crate::LayoutNode, Error> {
+) -> Result<parvi_mission_model::LayoutNode, Error> {
     match patch {
         Patch::CreateInputCard {
             title,
@@ -84,7 +85,7 @@ pub(crate) fn apply(
                 ..InputCard::default()
             };
             append(doc, "inputCard", &node)?;
-            Ok(crate::LayoutNode { id: node.id, x, y })
+            Ok(parvi_mission_model::LayoutNode { id: node.id, x, y })
         }
         Patch::CreateFormation {
             mut kind,
@@ -139,7 +140,7 @@ pub(crate) fn apply(
                 });
             }
             append(doc, "formation", &node)?;
-            Ok(crate::LayoutNode { id: node.id, x, y })
+            Ok(parvi_mission_model::LayoutNode { id: node.id, x, y })
         }
         Patch::CreateGate {
             title,
@@ -171,7 +172,7 @@ pub(crate) fn apply(
             };
             crate::authoring_controls::check_gate(&mut node)?;
             append(doc, "gate", &node)?;
-            Ok(crate::LayoutNode { id: node.id, x, y })
+            Ok(parvi_mission_model::LayoutNode { id: node.id, x, y })
         }
         Patch::CreateEnd {
             mut title,
@@ -204,7 +205,7 @@ pub(crate) fn apply(
                 outcome,
             };
             append(doc, "end", &node)?;
-            Ok(crate::LayoutNode { id: node.id, x, y })
+            Ok(parvi_mission_model::LayoutNode { id: node.id, x, y })
         }
         _ => unreachable!(),
     }
@@ -214,7 +215,7 @@ pub(crate) fn layout(
     store: &crate::Store,
     slug: &str,
     mission: &Mission,
-    node: crate::LayoutNode,
+    node: parvi_mission_model::LayoutNode,
 ) -> Result<(std::path::PathBuf, String), Error> {
     let path = store
         .root()
@@ -222,7 +223,7 @@ pub(crate) fn layout(
         .join(format!("{slug}.layout.toml"));
     let mut doc = match crate::links::read_definition(&path) {
         Ok(raw) => {
-            let previous = crate::Layout::parse(&raw)?;
+            let previous = parvi_mission_model::Layout::parse(&raw)?;
             if previous.mission_id != mission.id {
                 return Err(Error::new("conflict", "layout belongs to another mission"));
             }
@@ -254,6 +255,6 @@ pub(crate) fn layout(
     );
     append(&mut doc, "node", &node)?;
     let raw = doc.to_string();
-    crate::Layout::parse(&raw)?;
+    parvi_mission_model::Layout::parse(&raw)?;
     Ok((path, raw))
 }

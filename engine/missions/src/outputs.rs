@@ -1,24 +1,11 @@
 //! Resolve mission results by following accepted deliveries back from done Ends.
 use crate::graph::{endpoint_node, endpoint_port, outgoing, outgoing_from_port};
-use crate::{Ledger, Mission, PublicOrigin, RoutedInput, RunEvent};
-use serde::{Deserialize, Serialize};
+use crate::{Ledger, RoutedInput, RunEvent};
+use parvi_mission_model::{Mission, PublicOrigin, RunOutput};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     io,
 };
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RunOutput {
-    pub name: String,
-    pub kind: String,
-    pub value: String,
-    pub node_id: String,
-    pub port_id: String,
-    pub attempt: i64,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub picks: Vec<serde_json::Value>,
-}
 
 #[derive(Debug)]
 pub(crate) enum MissingOutput {
@@ -310,7 +297,7 @@ fn inherited_picks(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Connection, End, Gate, InputCard, MissionOutput};
+    use parvi_mission_model::{Connection, End, Gate, InputCard, MissionOutput};
     use serde_json::json;
 
     fn event(kind: &str, node: &str, attempt: i64, data: serde_json::Value) -> RunEvent {

@@ -2,7 +2,8 @@
 use crate::coordinator::Control;
 use crate::run_gate::{GateSettlement, settle_gate};
 use crate::run_worker::{Outcome, event};
-use crate::{Coordinator, Mission, RunStart, render_run_inputs, resolve_run_inputs};
+use crate::{Coordinator, render_run_inputs, resolve_run_inputs};
+use parvi_mission_model::{Mission, RunStart};
 use serde_json::json;
 use std::{
     io,
@@ -13,7 +14,7 @@ use std::{
 pub(crate) enum Finished {
     Step(String, i64, io::Result<crate::FormationResult>),
     Judge(
-        Box<crate::Gate>,
+        Box<parvi_mission_model::Gate>,
         i64,
         Box<crate::RoutedInput>,
         io::Result<crate::JudgeVerdict>,
@@ -373,8 +374,7 @@ pub(crate) fn schedule(
                     Stop::Limit(limit) => Ok(Outcome::Limit(limit)),
                 };
             }
-            let projection =
-                crate::RunProjection::from_events(&events, id).map_err(crate::error::to_io)?;
+            let projection = crate::project_run(&events, id).map_err(crate::error::to_io)?;
             if !replay.unfinished.is_empty() {
                 return Ok(Outcome::Unfinished(replay.unfinished.into_iter().collect()));
             }

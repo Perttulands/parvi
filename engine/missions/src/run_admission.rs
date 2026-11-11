@@ -1,6 +1,7 @@
 //! Findings for the portion of a mission reached by a new run.
 use crate::graph::{endpoint_node, reachable};
-use crate::{Code, Finding, Harnesses, Mission, Report, RoleStore, input_findings, validate};
+use crate::{Harnesses, RoleStore, input_findings, validate};
+use parvi_mission_model::{Code, Finding, Mission, Report};
 use std::collections::{BTreeMap, HashSet};
 
 /// Scope is the Input card or selected formation. Input values are checked in

@@ -3,8 +3,9 @@ use super::brief;
 use crate::{
     AgentSeat, Dispatch, DispatchResult, ExecutionEvent, ExecutionSink, Executor,
     FormationExecution, FormationResult, JudgeCorrection, LeftSeat, OpenDispatch, SeatEvent,
-    SeatFuture, SeatId, SeatSide, Slot, parse_outputs, parse_verdict,
+    SeatFuture, SeatId, SeatSide, parse_outputs, parse_verdict,
 };
+use parvi_mission_model::Slot;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -727,7 +728,7 @@ fn recovered_result(
     })
 }
 fn formation_outputs(
-    formation: &crate::Formation,
+    formation: &parvi_mission_model::Formation,
     text: &str,
 ) -> Result<Map<String, Value>, String> {
     let (_, payloads) =

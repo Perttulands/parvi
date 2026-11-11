@@ -1,6 +1,7 @@
 //! Restart interrupted runs from their durable snapshots.
 use crate::coordinator::Control;
-use crate::{BindingsSnapshot, Coordinator, RunStart};
+use crate::{BindingsSnapshot, Coordinator};
+use parvi_mission_model::RunStart;
 use std::{io, path::PathBuf, sync::Arc};
 
 impl Coordinator {
@@ -37,9 +38,9 @@ impl Coordinator {
                                     && refs[0].get("dispatchId") == dispatch.data.get("dispatchId")
                             })
                     {
-                        let mission = crate::Mission::parse(&std::fs::read_to_string(
-                            runs.join(format!("{id}.snapshot.toml")),
-                        )?)
+                        let mission = parvi_mission_model::Mission::parse(
+                            &std::fs::read_to_string(runs.join(format!("{id}.snapshot.toml")))?,
+                        )
                         .map_err(|e| io::Error::other(e.to_string()))?;
                         crate::run_reattach::stage_completed(self, id, &mission, dispatch);
                     }
@@ -64,7 +65,7 @@ impl Coordinator {
                 interrupted.push(id.to_owned());
                 continue;
             }
-            let mission = crate::Mission::parse(&std::fs::read_to_string(
+            let mission = parvi_mission_model::Mission::parse(&std::fs::read_to_string(
                 runs.join(format!("{id}.snapshot.toml")),
             )?)
             .map_err(|e| io::Error::other(e.to_string()))?;
@@ -177,7 +178,7 @@ impl Coordinator {
     /// `run resume` would. When the evidence is missing, the resume blocks the
     /// run again and choices that discard work stay the operator's.
     fn resume_after_restart(&self, id: &str) {
-        let request = crate::ResumeRequest {
+        let request = parvi_mission_model::ResumeRequest {
             actor: "parvi:restart".into(),
             ..Default::default()
         };
@@ -203,9 +204,9 @@ pub(crate) fn pending_capture(events: &[crate::RunEvent]) -> Option<serde_json::
 }
 
 pub(crate) fn only_waiting(
-    mission: &crate::Mission,
+    mission: &parvi_mission_model::Mission,
     events: &[crate::RunEvent],
-    projection: &crate::RunProjection,
+    projection: &parvi_mission_model::RunProjection,
 ) -> bool {
     let replay = crate::run_replay::Replay::read(mission, events);
     let unrouted_verdict = events.iter().any(|decision| {

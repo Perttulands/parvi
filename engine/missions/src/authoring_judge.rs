@@ -1,5 +1,6 @@
 //! Judge chain attachment and detachment.
-use crate::{Error, Mission, Patch};
+use crate::Error;
+use parvi_mission_model::{Mission, Patch};
 use std::collections::BTreeSet;
 use toml_edit::{DocumentMut, Item, value};
 fn missing() -> Error {

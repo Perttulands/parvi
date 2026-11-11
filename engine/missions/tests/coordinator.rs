@@ -1,6 +1,7 @@
+use parvi_mission_model::RunStart;
 use parvi_missions::{
     Coordinator, ExecutionSink, Executor, FormationExecution, FormationResult, LabExecutor,
-    RunSettings, RunStart,
+    RunSettings,
 };
 use std::{
     collections::BTreeMap,
@@ -175,8 +176,8 @@ fn completed_dispatch_without_evidence_requires_reattach_or_redispatch() {
     loop {
         match c.resume(
             &id,
-            parvi_missions::ResumeRequest {
-                mode: parvi_missions::ResumeMode::Redispatch,
+            parvi_mission_model::ResumeRequest {
+                mode: parvi_mission_model::ResumeMode::Redispatch,
                 ..Default::default()
             },
         ) {
@@ -468,8 +469,8 @@ fn missing_evidence_blocks_until_explicit_redispatch() {
     loop {
         match c.resume(
             &id,
-            parvi_missions::ResumeRequest {
-                mode: parvi_missions::ResumeMode::Redispatch,
+            parvi_mission_model::ResumeRequest {
+                mode: parvi_mission_model::ResumeMode::Redispatch,
                 ..Default::default()
             },
         ) {
@@ -890,8 +891,8 @@ fn restart_at_each_ledger_cut_reaches_the_same_output() {
             if p.block_code == "dispatch_reattach_failed" {
                 match c.resume(
                     &id,
-                    parvi_missions::ResumeRequest {
-                        mode: parvi_missions::ResumeMode::Redispatch,
+                    parvi_mission_model::ResumeRequest {
+                        mode: parvi_mission_model::ResumeMode::Redispatch,
                         ..Default::default()
                     },
                 ) {
@@ -1198,14 +1199,16 @@ fn a_step_placed_elsewhere_needs_a_repository_and_a_well_formed_place() {
         ..Default::default()
     };
     let c = Coordinator::open(&dir.0, settings, Box::new(LabExecutor)).unwrap();
-    let refused = |code: parvi_missions::Code| {
+    let refused = |code: parvi_mission_model::Code| {
         matches!(c.start_mission(request()), Err(parvi_missions::AdmissionFailure::Findings(f))
             if f.iter().any(|x| x.code == code && x.node_id == "fmn_work"))
     };
     place("elsewhere");
-    assert!(refused(parvi_missions::Code::UnknownDevice));
+    assert!(refused(parvi_mission_model::Code::UnknownDevice));
     place("elsewhere/windows");
-    assert!(refused(parvi_missions::Code::PlacementWithoutRepository));
+    assert!(refused(
+        parvi_mission_model::Code::PlacementWithoutRepository
+    ));
     // A device missing from a fleet the node knows whole is refused; names
     // compare exactly, as placement finds the step's node.
     let with_devices = |devices: &[&str]| {
@@ -1222,15 +1225,15 @@ fn a_step_placed_elsewhere_needs_a_repository_and_a_well_formed_place() {
     };
     assert_eq!(
         with_devices(&["here", "Other"]),
-        [parvi_missions::Code::UnknownDevice]
+        [parvi_mission_model::Code::UnknownDevice]
     );
     assert_eq!(
         with_devices(&["here", "Elsewhere"]),
-        [parvi_missions::Code::UnknownDevice]
+        [parvi_mission_model::Code::UnknownDevice]
     );
     assert_eq!(
         with_devices(&["here", "elsewhere"]),
-        [parvi_missions::Code::PlacementWithoutRepository]
+        [parvi_mission_model::Code::PlacementWithoutRepository]
     );
     assert_eq!(std::fs::read_dir(dir.0.join("runs")).unwrap().count(), 0);
     // The coordinator's own environment is not a placement.
@@ -1590,7 +1593,7 @@ fn repository_runs_isolate_commit_and_land() {
     req.repository = "missing/repo".into();
     let err = c.start_mission(req.clone()).unwrap_err();
     assert!(
-        matches!(err, parvi_missions::AdmissionFailure::Findings(ref f) if f.iter().any(|x| x.code == parvi_missions::Code::NoCheckout))
+        matches!(err, parvi_missions::AdmissionFailure::Findings(ref f) if f.iter().any(|x| x.code == parvi_mission_model::Code::NoCheckout))
     );
     req.repository = "owner/repo".into();
     let a = c.start_mission(req.clone()).unwrap();

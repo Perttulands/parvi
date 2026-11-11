@@ -97,15 +97,22 @@ fn crates_of_areas() -> Vec<(String, PathBuf)> {
     areas
 }
 
-/// An engine crate that depends on nothing, so a contract using it still
-/// does no I/O.
+/// An engine crate that depends on nothing, or the mission model, which
+/// depends only on `core` and serde's data formats; either way a contract
+/// using it still does no I/O.
 fn is_plain_engine_crate(path: &str) -> bool {
+    const MISSION_MODEL_USES: [&str; 4] = ["parvi-core", "serde", "serde_json", "toml"];
     let dir = root().join(path);
-    path.starts_with("engine/")
-        && manifest(&dir)
-            .get("dependencies")
-            .and_then(|deps| deps.as_table())
-            .is_none_or(|deps| deps.is_empty())
+    let manifest = manifest(&dir);
+    let deps: Vec<&str> = manifest
+        .get("dependencies")
+        .and_then(|deps| deps.as_table())
+        .map(|deps| deps.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+    match path {
+        "engine/mission-model" => deps.iter().all(|dep| MISSION_MODEL_USES.contains(dep)),
+        _ => path.starts_with("engine/") && deps.is_empty(),
+    }
 }
 
 #[test]

@@ -1,34 +1,7 @@
 //! End, Limit and gate field edits.
-use crate::{Error, Gate, LayoutNode, Limit, Mission, Patch};
+use crate::Error;
+use parvi_mission_model::{Gate, LayoutNode, Limit, Mission, Patch};
 use toml_edit::{DocumentMut, Item, value};
-#[derive(Clone, Debug, Default)]
-pub struct EndUpdate {
-    pub id: String,
-    pub title: Option<String>,
-    pub outcome: Option<String>,
-}
-#[derive(Clone, Debug, Default)]
-pub struct LimitUpdate {
-    pub id: String,
-    pub title: Option<String>,
-    pub target: Option<String>,
-    pub rounds: Option<i64>,
-    pub seconds: Option<i64>,
-    pub warn_seconds: Option<i64>,
-    pub tokens: Option<i64>,
-    pub when_spent: Option<String>,
-}
-#[derive(Clone, Debug, Default)]
-pub struct GateUpdate {
-    pub id: String,
-    pub title: Option<String>,
-    pub kinds: Option<Vec<String>>,
-    pub criterion: Option<String>,
-    pub check: Option<String>,
-    pub check_version: Option<String>,
-    pub check_value: Option<String>,
-    pub files: Option<Vec<String>>,
-}
 fn missing() -> Error {
     Error::new("not_found", "node")
 }

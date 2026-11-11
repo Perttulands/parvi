@@ -6,10 +6,8 @@ use std::collections::{HashMap, HashSet};
 
 use super::possessive;
 use crate::code_check::{code_check, code_check_names};
-use crate::finding::{Code, Finding};
 use crate::graph::{self, Direction};
-use crate::mission::Mission;
-use crate::nodes::{GATE_FAIL, GATE_PASS, Gate};
+use parvi_mission_model::{Code, Finding, GATE_FAIL, GATE_PASS, Gate, Mission};
 
 pub fn connection_findings(mission: &Mission) -> Vec<Finding> {
     let mut findings = Vec::new();

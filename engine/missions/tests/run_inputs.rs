@@ -1,6 +1,7 @@
+use parvi_mission_model::{InputCard, Mission, MissionInput, RunInput};
 use parvi_missions::{
-    InputCard, Mission, MissionInput, RunInput, input_findings, mission_run_inputs,
-    render_run_inputs, resolve_run_inputs, substitute_run_inputs,
+    input_findings, mission_run_inputs, render_run_inputs, resolve_run_inputs,
+    substitute_run_inputs,
 };
 use std::collections::BTreeMap;
 
