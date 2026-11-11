@@ -95,9 +95,8 @@ impl Terminals {
         match self.fleet.launch_on(&k.node, launch.clone()) {
             Some(id) => {
                 let tab = self.settings.workspace.active;
-                self.launches
-                    .insert((k.node.clone(), id), (launch, None, tab));
                 self.report(&format!("Copying {} as {name}…", k.name), false, None);
+                self.track_launch(&k.node, id, launch, None, tab);
             }
             None => self.report(
                 &format!("Could not copy {}: its device is away", k.name),
@@ -162,9 +161,8 @@ impl Terminals {
         match self.fleet.launch_on(node, launch.clone()) {
             Some(id) => {
                 let tab = self.settings.workspace.active;
-                self.launches
-                    .insert((node.to_string(), id), (launch, None, tab));
                 self.report(&format!("Starting {name} in {folder}…"), false, None);
+                self.track_launch(node, id, launch, None, tab);
             }
             None => self.report(
                 &format!("Could not start {name}: its device is away"),
