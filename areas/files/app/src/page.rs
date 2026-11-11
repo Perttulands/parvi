@@ -637,6 +637,17 @@ impl FilesPage {
     }
 
     pub fn list(&mut self, i: usize, path: String, select: Option<String>, cx: &mut Context<Self>) {
+        self.list_with_menu(i, path, select, None, cx);
+    }
+
+    fn list_with_menu(
+        &mut self,
+        i: usize,
+        path: String,
+        select: Option<String>,
+        menu: Option<gpui::Point<gpui::Pixels>>,
+        cx: &mut Context<Self>,
+    ) {
         let node = self.sides[i].pane.node.clone();
         self.sides[i].pane.asked += 1;
         let id = self.sides[i].pane.asked;
@@ -661,8 +672,18 @@ impl FilesPage {
                                     && select.as_deref() == Some(paths::base_name(&o.path))
                             });
                             p.sides[i].pane.listed(l.path, l.entries, select);
-                            if moved && !opening_selected {
+                            if moved && !opening_selected && menu.is_none() {
                                 p.sides[i].opened = None;
+                            }
+                            if let Some(at) = menu {
+                                p.sides[i].pane.find = None;
+                                p.sides[i]
+                                    .search
+                                    .update(cx, |field, cx| field.set("", false, cx));
+                                if p.sides[i].pane.selection().is_some() {
+                                    p.sides[i].pane.armed = false;
+                                    p.menu = Some((i, at));
+                                }
                             }
                             p.keep(cx)
                         }
@@ -1452,12 +1473,27 @@ impl FilesPage {
         at: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
-        self.active = i;
         self.sides[i].pane.select(&name);
         self.sides[i].pane.armed = false;
         self.menu = Some((i, at));
         cx.notify();
     }
+    pub fn find_context_menu(
+        &mut self,
+        i: usize,
+        path: String,
+        at: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        self.list_with_menu(
+            i,
+            paths::parent(&path),
+            Some(paths::base_name(&path).to_owned()),
+            Some(at),
+            cx,
+        );
+    }
+
     pub fn toggle_pin(&mut self, i: usize, cx: &mut Context<Self>) {
         let pane = &self.sides[i].pane;
         let Some(path) = pane.selected_path() else {
@@ -1784,6 +1820,18 @@ impl FilesPage {
         );
         self.open(i, at, window, cx);
     }
+    pub fn send_selected(&self, i: usize, cx: &mut Context<Self>) {
+        if let Some(path) = self.sides[i].pane.selected_path() {
+            let _ = self.host.ask(
+                Ask::Send {
+                    reference: paths::reference(&path),
+                    target: None,
+                },
+                cx,
+            );
+        }
+    }
+
     pub fn send(&self, i: usize, cx: &mut Context<Self>) {
         let path = self.sides[i]
             .opened

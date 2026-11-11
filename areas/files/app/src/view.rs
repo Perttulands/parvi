@@ -20,12 +20,33 @@ impl FilesPage {
         let t = theme(cx).clone();
         let mut body = div()
             .id("files-projects-list")
+            .debug_selector(|| "files-projects-list".into())
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .gap(px(GAP));
+            .gap(px(ROW_INSET));
+        let node = self.sides[0].pane.node.clone();
+        for (index, root) in self.sides[0].pane.roots.iter().enumerate() {
+            let folder = root.path.clone();
+            let node = node.clone();
+            body = body.child(
+                kit::button(
+                    &t,
+                    ("browse-root", index),
+                    format!("Browse {}", root.name),
+                    Kind::Plain,
+                )
+                .debug_selector({
+                    let id = format!("files-browse-root-{index}");
+                    move || id.clone()
+                })
+                .on_click(cx.listener(move |p, _, w, cx| {
+                    p.browse_project(node.clone(), folder.clone(), None, w, cx)
+                })),
+            );
+        }
         for (node, result) in &self.projects {
             for group in &result.groups {
                 body = body.child(kit::label(&t, group.parent.clone()));
@@ -35,11 +56,12 @@ impl FilesPage {
                     let selector = format!("files-project-{}", project.name);
                     let mut card = div()
                         .flex()
-                        .flex_col()
-                        .gap(px(GAP))
+                        .flex_wrap()
+                        .items_center()
+                        .gap(px(ROW_INSET))
                         .border_1()
                         .border_color(t.divider)
-                        .p(px(PAD))
+                        .px(px(ROW_INSET))
                         .child(
                             kit::button(
                                 &t,
@@ -105,26 +127,6 @@ impl FilesPage {
                 }
             }
         }
-        let node = self.sides[0].pane.node.clone();
-        for (index, root) in self.sides[0].pane.roots.iter().enumerate() {
-            let folder = root.path.clone();
-            let node = node.clone();
-            body = body.child(
-                kit::button(
-                    &t,
-                    ("browse-root", index),
-                    format!("Browse {}", root.name),
-                    Kind::Quiet,
-                )
-                .debug_selector({
-                    let id = format!("files-browse-root-{index}");
-                    move || id.clone()
-                })
-                .on_click(cx.listener(move |p, _, w, cx| {
-                    p.browse_project(node.clone(), folder.clone(), None, w, cx)
-                })),
-            );
-        }
         body
     }
     fn pane(&self, i: usize, cx: &mut Context<Self>) -> Div {
@@ -170,6 +172,14 @@ impl FilesPage {
                     )
                     .debug_selector(move || selector.clone())
                     .child(div().debug_selector(move || label_selector.clone()))
+                    .on_mouse_down(MouseButton::Right, {
+                        let path = path.clone();
+                        cx.listener(move |p, e: &gpui::MouseDownEvent, window, cx| {
+                            window.focus(&p.focus, cx);
+                            p.find_context_menu(i, path.clone(), e.position, cx);
+                            cx.stop_propagation();
+                        })
+                    })
                     .on_click(
                         cx.listener(move |p, _, w, cx| p.open_at(i, path.clone(), line, w, cx)),
                     ),
@@ -299,6 +309,10 @@ impl FilesPage {
             })
             .collect::<Vec<_>>();
         div()
+            .debug_selector({
+                let id = format!("files-pane-{i}");
+                move || id.clone()
+            })
             .flex_1()
             .min_w_0()
             .min_h_0()
@@ -334,7 +348,15 @@ impl FilesPage {
                                 }
                             })),
                     )
-                    .child(div().overflow_hidden().child(path)),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(path),
+                    ),
             )
             .child(
                 kit::button(&t, ("upload", i), "Upload…", Kind::Plain)
@@ -442,7 +464,8 @@ impl FilesPage {
             .child(
                 div()
                     .flex()
-                    .gap(px(GAP))
+                    .flex_wrap()
+                    .gap(px(ROW_INSET))
                     .child(
                         kit::button(&t, ("create-file", i), "New file", Kind::Quiet)
                             .debug_selector({
@@ -582,6 +605,13 @@ impl FilesPage {
                         .flex_col();
                     if let Some(error) = &diff.error {
                         view = view.child(kit::note(&t, error.clone(), Some(t.error)));
+                    }
+                    if diff.diff.trim().is_empty() && diff.error.is_none() {
+                        view = view.child(
+                            div()
+                                .debug_selector(|| "files-diff-empty".into())
+                                .child(kit::note(&t, "No changes", None)),
+                        );
                     }
                     for row in crate::store::diff::rows(&diff.diff) {
                         let (prefix, color) = match row.kind {
@@ -765,6 +795,7 @@ impl Render for FilesPage {
         self.release_pictures(window);
         let t = theme(cx).clone();
         let mut page = div()
+            .debug_selector(|| "files-page".into())
             .size_full()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key))
@@ -970,7 +1001,7 @@ impl Render for FilesPage {
                     kit::button(&t, "file-menu-send", "Send to Session", Kind::Quiet).on_click(
                         cx.listener(move |p, _, _, cx| {
                             p.menu = None;
-                            p.send(i, cx)
+                            p.send_selected(i, cx)
                         }),
                     ),
                 )
@@ -1169,7 +1200,13 @@ impl Render for FilesPage {
                 .gap(px(GAP))
                 .child(self.pane(0, cx))
                 .child(self.pane(1, cx))
-                .child(self.viewer(self.active, cx)),
+                .child(
+                    self.viewer(self.active, cx)
+                        .debug_selector(|| "files-viewer".into())
+                        .when(self.sides[self.active].opened.is_some(), |v| {
+                            v.flex_grow(2.5)
+                        }),
+                ),
         )
     }
 }
