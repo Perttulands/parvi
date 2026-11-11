@@ -63,7 +63,7 @@ pub(crate) fn pick_or_stop(
         use_,
         cut_off,
     } = reached;
-    let events = c.ledger(id)?.read()?;
+    let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
     let when_spent = limits::card(mission, &use_.limit_id)
         .map(|card| card.when_spent.as_str())
         .unwrap_or("");
@@ -120,7 +120,7 @@ pub(crate) fn abandon_cut_off(
     node: &str,
     attempt: i64,
 ) -> io::Result<()> {
-    let events = c.ledger(id)?.read()?;
+    let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
     for dispatch in crate::run_open_dispatch::unresolved(&events) {
         if dispatch.node_id != node || dispatch.attempt != attempt {
             continue;
@@ -161,7 +161,7 @@ pub(crate) fn final_event(
             ..Default::default()
         });
     }
-    let events = c.ledger(id)?.read()?;
+    let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
     let policy = if crate::run_pick::pick_for(mission, &events, &stop.node, &stop.use_).is_some() {
         "grant_or_pick"
     } else {

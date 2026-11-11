@@ -503,54 +503,57 @@ pub fn project_attempts(
     mission: &Mission,
     events: &[RunEvent],
     only: Option<&str>,
-) -> std::io::Result<RunAttempts> {
-    let status = RunProjection::from_events(events, run_id)?;
-    let mut walk = Walk {
-        mission,
-        steps: Vec::new(),
-        index: HashMap::new(),
-        open: HashMap::new(),
-        asked: HashMap::new(),
-        picking: HashMap::new(),
-    };
-    for event in events {
-        match event.kind.as_str() {
-            "node_started" => walk.started(event),
-            "node_output" => walk.output(event),
-            "gate_evaluating" => walk.evaluating(event, status.r#final),
-            "human_input_requested" => {
-                if let Some((at, asked)) = walk.open.get_mut(&event.gate_id) {
-                    *asked = true;
-                    walk.asked.insert(event.seq, at.clone());
+) -> Result<RunAttempts, crate::Error> {
+    (|| -> std::io::Result<RunAttempts> {
+        let status = RunProjection::from_events(events, run_id).map_err(crate::error::to_io)?;
+        let mut walk = Walk {
+            mission,
+            steps: Vec::new(),
+            index: HashMap::new(),
+            open: HashMap::new(),
+            asked: HashMap::new(),
+            picking: HashMap::new(),
+        };
+        for event in events {
+            match event.kind.as_str() {
+                "node_started" => walk.started(event),
+                "node_output" => walk.output(event),
+                "gate_evaluating" => walk.evaluating(event, status.r#final),
+                "human_input_requested" => {
+                    if let Some((at, asked)) = walk.open.get_mut(&event.gate_id) {
+                        *asked = true;
+                        walk.asked.insert(event.seq, at.clone());
+                    }
+                }
+                "human_verdict_recorded" => walk.human_answer(event),
+                "pick_started" => walk.pick_started(event),
+                "gate_verdict" => walk.gate_verdict(event),
+                "run_blocked" | "run_failed" | "run_canceled" => walk.stopped(event),
+                "run_resumed" => walk.resumed(event),
+                _ => {}
+            }
+        }
+        if status.r#final {
+            let end = format!("run {}", status.status);
+            for attempt in walk.steps.iter_mut().flat_map(|s| &mut s.attempts) {
+                if attempt.status == RUNNING {
+                    attempt.status = STOPPED.into();
+                    attempt.ended_at.clone_from(&status.updated_at);
+                    attempt.stop_reason = Some(EvidenceText::of(&end));
                 }
             }
-            "human_verdict_recorded" => walk.human_answer(event),
-            "pick_started" => walk.pick_started(event),
-            "gate_verdict" => walk.gate_verdict(event),
-            "run_blocked" | "run_failed" | "run_canceled" => walk.stopped(event),
-            "run_resumed" => walk.resumed(event),
-            _ => {}
         }
-    }
-    if status.r#final {
-        let end = format!("run {}", status.status);
-        for attempt in walk.steps.iter_mut().flat_map(|s| &mut s.attempts) {
-            if attempt.status == RUNNING {
-                attempt.status = STOPPED.into();
-                attempt.ended_at.clone_from(&status.updated_at);
-                attempt.stop_reason = Some(EvidenceText::of(&end));
-            }
+        let mut steps = walk.steps;
+        if let Some(only) = only {
+            steps.retain(|s| s.node_id == only);
         }
-    }
-    let mut steps = walk.steps;
-    if let Some(only) = only {
-        steps.retain(|s| s.node_id == only);
-    }
-    spend_budget(&mut steps);
-    Ok(RunAttempts {
-        run_id: run_id.to_owned(),
-        steps,
-    })
+        spend_budget(&mut steps);
+        Ok(RunAttempts {
+            run_id: run_id.to_owned(),
+            steps,
+        })
+    })()
+    .map_err(crate::error::io)
 }
 
 /// Spends the answer's budget newest attempt first, so a long run keeps its
@@ -585,17 +588,25 @@ fn spend_budget(steps: &mut [StepAttempts]) {
 
 impl crate::Coordinator {
     /// Every attempt of every step of run `id`, or of step `only`.
-    pub fn attempts(&self, id: &str, only: Option<&str>) -> std::io::Result<crate::RunAttempts> {
-        let events = self.ledger(id)?.read()?;
-        let mission = self.frozen_mission(id)?;
-        if let Some(step) = only
-            && mission.formation(step).is_none()
-        {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("step {step:?} not found"),
-            ));
-        }
-        crate::run_attempts::project_attempts(id, &mission, &events, only)
+    pub fn attempts(
+        &self,
+        id: &str,
+        only: Option<&str>,
+    ) -> Result<crate::RunAttempts, crate::Error> {
+        (|| -> std::io::Result<crate::RunAttempts> {
+            let events = self.ledger(id)?.read().map_err(crate::error::to_io)?;
+            let mission = self.frozen_mission(id).map_err(crate::error::to_io)?;
+            if let Some(step) = only
+                && mission.formation(step).is_none()
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("step {step:?} not found"),
+                ));
+            }
+            crate::run_attempts::project_attempts(id, &mission, &events, only)
+                .map_err(crate::error::to_io)
+        })()
+        .map_err(crate::error::io)
     }
 }

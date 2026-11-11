@@ -30,7 +30,7 @@ pub fn findings(mission: &Mission, roles: &RoleStore, harnesses: &Harnesses) -> 
             {
                 add(
                     Code::InvalidSlotSettings,
-                    format!("formation {id:?} {problem}"),
+                    format!("formation {id:?} {}", problem.message),
                 );
                 continue;
             }

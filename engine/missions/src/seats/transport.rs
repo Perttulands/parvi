@@ -20,20 +20,24 @@ pub async fn stage_pointer(
     adapter: &dyn HarnessAdapter,
     pointer: &str,
     canceled: &AtomicBool,
-) -> Result<(), String> {
-    stage_guarded(
-        engine,
-        pane,
-        kind,
-        adapter,
-        pointer,
-        canceled,
-        false,
-        false,
-        || Ok(()),
-        |_, _, _| Ok(()),
-    )
+) -> Result<(), crate::Error> {
+    (async {
+        stage_guarded(
+            engine,
+            pane,
+            kind,
+            adapter,
+            pointer,
+            canceled,
+            false,
+            false,
+            || Ok(()),
+            |_, _, _| Ok(()),
+        )
+        .await
+    })
     .await
+    .map_err(|message: String| crate::Error::new("seat_error", message))
 }
 
 #[allow(clippy::too_many_arguments)]

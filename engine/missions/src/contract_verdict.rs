@@ -58,35 +58,38 @@ impl<'de> Deserialize<'de> for JudgeVerdict {
     }
 }
 
-pub fn parse_verdict(text: &str) -> Result<JudgeVerdict, String> {
-    let marker = format!("```{}", crate::contract_names::VERDICT);
-    let mut body = String::new();
-    let (mut blocks, mut inside, mut closed) = (0, false, false);
-    for line in text.lines().map(str::trim) {
-        if line.starts_with(&marker) {
-            blocks += 1;
-            if line != marker || inside || blocks != 1 {
-                return Err(format!(
-                    "expected exactly one {} block",
-                    crate::contract_names::VERDICT
-                ));
+pub fn parse_verdict(text: &str) -> Result<JudgeVerdict, crate::Error> {
+    (|| -> Result<JudgeVerdict, String> {
+        let marker = format!("```{}", crate::contract_names::VERDICT);
+        let mut body = String::new();
+        let (mut blocks, mut inside, mut closed) = (0, false, false);
+        for line in text.lines().map(str::trim) {
+            if line.starts_with(&marker) {
+                blocks += 1;
+                if line != marker || inside || blocks != 1 {
+                    return Err(format!(
+                        "expected exactly one {} block",
+                        crate::contract_names::VERDICT
+                    ));
+                }
+                inside = true;
+            } else if inside && line == "```" {
+                inside = false;
+                closed = true;
+            } else if inside {
+                body.push_str(line);
+                body.push('\n');
             }
-            inside = true;
-        } else if inside && line == "```" {
-            inside = false;
-            closed = true;
-        } else if inside {
-            body.push_str(line);
-            body.push('\n');
         }
-    }
-    if blocks != 1 || inside || !closed {
-        return Err(format!(
-            "missing or unterminated {} block",
-            crate::contract_names::VERDICT
-        ));
-    }
-    serde_json::from_str(&body).map_err(|e| e.to_string())
+        if blocks != 1 || inside || !closed {
+            return Err(format!(
+                "missing or unterminated {} block",
+                crate::contract_names::VERDICT
+            ));
+        }
+        serde_json::from_str(&body).map_err(|e| e.to_string())
+    })()
+    .map_err(|message| crate::Error::new("invalid_contract", message))
 }
 
 #[cfg(test)]

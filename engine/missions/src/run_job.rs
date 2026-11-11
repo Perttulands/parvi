@@ -56,7 +56,7 @@ pub(crate) fn execute_formation(
     // The run's Limit cards are read and the start recorded under one lock,
     // so two steps starting at once never share a card's last round.
     let starts = control.starts.lock().unwrap();
-    let events = c.ledger(id)?.read()?;
+    let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
     if let Some(spent) =
         crate::limits::spent_before(mission, &events, &node, time::OffsetDateTime::now_utc())
     {
@@ -300,7 +300,7 @@ pub(crate) fn attempt_limits(
     control: &Control,
     node: &str,
 ) -> io::Result<(crate::AttemptLimits, Option<mpsc::Sender<()>>)> {
-    let events = c.ledger(id)?.read()?;
+    let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
     let (time, warnings) =
         crate::limits::time_budget(mission, &events, node, time::OffsetDateTime::now_utc());
     let tokens = crate::limits::token_budget(mission, &events, node).map(|use_| {
@@ -370,7 +370,7 @@ pub(crate) fn cut_off(
     limits: &crate::AttemptLimits,
 ) -> io::Result<io::Error> {
     crate::run_limit::abandon_cut_off(c, id, control, node, attempt)?;
-    let events = c.ledger(id)?.read()?;
+    let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
     let now = time::OffsetDateTime::now_utc();
     let use_ = if let Some(meter) = &limits.tokens
         && (meter.pool_spent() || !limits.timed_out())

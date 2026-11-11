@@ -27,7 +27,7 @@ pub trait GateEvaluator: Send + Sync {
         &self,
         gate: &crate::Gate,
         input: &crate::RoutedInput,
-    ) -> Result<crate::JudgeVerdict, String>;
+    ) -> Result<crate::JudgeVerdict, crate::Error>;
 }
 
 pub struct CodeGateEvaluator;
@@ -36,7 +36,7 @@ impl GateEvaluator for CodeGateEvaluator {
         &self,
         gate: &crate::Gate,
         input: &crate::RoutedInput,
-    ) -> Result<crate::JudgeVerdict, String> {
+    ) -> Result<crate::JudgeVerdict, crate::Error> {
         evaluate_code_check(gate, &input.text)
     }
 }
@@ -58,16 +58,19 @@ pub fn code_check_names() -> Vec<String> {
 pub fn evaluate_code_check(
     gate: &crate::Gate,
     output: &str,
-) -> Result<crate::JudgeVerdict, String> {
+) -> Result<crate::JudgeVerdict, crate::Error> {
     let check = gate.check.trim();
     if code_check(check, &gate.check_version).is_none() || gate.check_value.trim().is_empty() {
-        return Err(format!("gate {:?} has an invalid code check", gate.id));
+        return Err(crate::Error::new(
+            "invalid_code_check",
+            format!("gate {:?} has an invalid code check", gate.id),
+        ));
     }
     if output.len() > 256 * 1024 || output.len().saturating_mul(gate.check_value.len()) > 512 * 1024
     {
-        return Err(format!(
-            "gate {:?} evaluator exhausted its input budget",
-            gate.id
+        return Err(crate::Error::new(
+            "evaluator_budget_exceeded",
+            format!("gate {:?} evaluator exhausted its input budget", gate.id),
         ));
     }
     let contains = output.contains(&gate.check_value);

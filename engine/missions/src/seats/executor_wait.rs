@@ -19,7 +19,7 @@ use tokio::sync::mpsc as stream;
 #[derive(Default)]
 struct Away {
     seated: bool,
-    streams: Mutex<Vec<stream::Sender<Result<SeatEvent, String>>>>,
+    streams: Mutex<Vec<stream::Sender<Result<SeatEvent, crate::Error>>>>,
 }
 
 fn never<'a, T: 'a>() -> SeatFuture<'a, T> {
@@ -37,7 +37,7 @@ impl SeatSide for Away {
         &self,
         _: &str,
         _: u64,
-    ) -> Result<stream::Receiver<Result<SeatEvent, String>>, String> {
+    ) -> Result<stream::Receiver<Result<SeatEvent, crate::Error>>, crate::Error> {
         let (sender, events) = stream::channel(4);
         let seat = SeatId {
             node: "n2".into(),
@@ -67,16 +67,16 @@ impl SeatSide for Away {
     fn stage(&self, _: &str, _: &str) -> SeatFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn dispatch_info(&self, _: &str) -> Result<Dispatch, String> {
-        Err("never dispatched".into())
+    fn dispatch_info(&self, _: &str) -> Result<Dispatch, crate::Error> {
+        Err(crate::Error::new("seat_error", "never dispatched"))
     }
-    fn result(&self, _: &str) -> Result<Option<DispatchResult>, String> {
+    fn result(&self, _: &str) -> Result<Option<DispatchResult>, crate::Error> {
         Ok(None)
     }
     fn end_seat(&self, _: &SeatId, _: &str) -> SeatFuture<'_, String> {
         never()
     }
-    fn seats(&self, _: &str) -> std::io::Result<Vec<AgentSeat>> {
+    fn seats(&self, _: &str) -> Result<Vec<AgentSeat>, crate::Error> {
         Ok(Vec::new())
     }
     fn prepare_turn(&self, _: &str, _: &TurnWorkspace) -> SeatFuture<'_, PathBuf> {
@@ -159,7 +159,7 @@ fn stop_at(
     let result = finished
         .recv_timeout(Duration::from_secs(10))
         .expect("the stop ends the wait");
-    (events, result)
+    (events, result.map_err(|error| error.message))
 }
 
 #[test]

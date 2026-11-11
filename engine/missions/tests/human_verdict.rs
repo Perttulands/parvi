@@ -68,7 +68,7 @@ fn verdicts_are_atomic_and_preserve_response() {
             },
         )
         .unwrap_err();
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(error.code, "invalid_input");
     drop(coordinator);
     std::fs::remove_dir_all(root).unwrap();
 }

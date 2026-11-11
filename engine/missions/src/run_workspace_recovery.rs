@@ -18,7 +18,7 @@ pub(crate) fn cleanup(
         return Ok(());
     }
     let _guard = control.workspace.lock().unwrap();
-    let events = c.ledger(id)?.read()?;
+    let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
     for start in events
         .iter()
         .filter(|e| e.kind == "workspace_started" || e.kind == "workspace_settled")
@@ -51,7 +51,7 @@ pub(crate) fn recover_pending(
         return Ok(());
     }
     cleanup(c, id, req, workspace, control)?;
-    let events = c.ledger(id)?.read()?;
+    let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
     for pending in events.iter().filter(|e| e.kind == "node_output_pending") {
         if events.iter().any(|e| {
             e.kind == "node_output" && e.node_id == pending.node_id && e.attempt == pending.attempt

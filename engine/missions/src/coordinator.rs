@@ -184,80 +184,86 @@ pub struct RunSessionSummary {
     pub slot_id: String,
 }
 impl Coordinator {
-    pub fn seats(&self, id: &str) -> io::Result<Vec<crate::AgentSeat>> {
-        let events = self.ledger(id)?.read()?;
-        let mut seats = self.inner.executor.seats(id)?;
-        for seat in &mut seats {
-            if let Some(waiting) = &mut seat.waiting {
-                if let Some(event) = events.iter().rev().find(|event| {
-                    event.kind == "seat_state"
-                        && event
-                            .data
-                            .get("dispatchId")
-                            .and_then(|value| value.as_str())
-                            == Some(seat.dispatch_id.as_str())
-                        && event
-                            .data
-                            .get("seatEventSeq")
-                            .and_then(|value| value.as_u64())
-                            == Some(waiting.seq)
-                }) {
-                    waiting.seq = event.seq;
-                } else {
-                    seat.waiting = None;
+    pub fn seats(&self, id: &str) -> Result<Vec<crate::AgentSeat>, crate::Error> {
+        (|| -> io::Result<Vec<crate::AgentSeat>> {
+            let events = self.ledger(id)?.read().map_err(crate::error::to_io)?;
+            let mut seats = self.inner.executor.seats(id).map_err(crate::error::to_io)?;
+            for seat in &mut seats {
+                if let Some(waiting) = &mut seat.waiting {
+                    if let Some(event) = events.iter().rev().find(|event| {
+                        event.kind == "seat_state"
+                            && event
+                                .data
+                                .get("dispatchId")
+                                .and_then(|value| value.as_str())
+                                == Some(seat.dispatch_id.as_str())
+                            && event
+                                .data
+                                .get("seatEventSeq")
+                                .and_then(|value| value.as_u64())
+                                == Some(waiting.seq)
+                    }) {
+                        waiting.seq = event.seq;
+                    } else {
+                        seat.waiting = None;
+                    }
                 }
             }
-        }
-        Ok(seats)
+            Ok(seats)
+        })()
+        .map_err(crate::error::io)
     }
     pub fn open(
         root: impl AsRef<Path>,
         settings: RunSettings,
         executor: Box<dyn Executor>,
-    ) -> io::Result<Self> {
-        let root = root.as_ref();
-        if !root.is_absolute()
-            || settings
-                .run_workspace_root
-                .as_ref()
-                .is_some_and(|p| !p.is_absolute())
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "state and workspace roots must be absolute",
-            ));
-        }
-        std::fs::create_dir_all(root)?;
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(root.join("coordinator.lock"))?;
-        lock.try_lock().map_err(|e| {
-            io::Error::other(format!(
-                "another coordinator owns this state directory: {e}"
-            ))
-        })?;
-        std::fs::create_dir_all(root.join("runs"))?;
-        let unmigrated = crate::ledger_migrate::migrate(&root.join("runs"))?;
-        let (subscribers, _) = tokio::sync::broadcast::channel(128);
-        let coordinator = Self {
-            inner: Arc::new(Inner {
-                root: root.into(),
-                settings,
-                _lock: lock,
-                executor: Arc::from(executor),
-                admission: Mutex::new(()),
-                shutting_down: AtomicBool::new(false),
-                controls: Mutex::new(BTreeMap::new()),
-                recovered: Mutex::new(BTreeMap::new()),
-                unmigrated,
-                subscribers,
-            }),
-        };
-        coordinator.recover()?;
-        Ok(coordinator)
+    ) -> Result<Self, crate::Error> {
+        (|| -> io::Result<Self> {
+            let root = root.as_ref();
+            if !root.is_absolute()
+                || settings
+                    .run_workspace_root
+                    .as_ref()
+                    .is_some_and(|p| !p.is_absolute())
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "state and workspace roots must be absolute",
+                ));
+            }
+            std::fs::create_dir_all(root)?;
+            let lock = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(root.join("coordinator.lock"))?;
+            lock.try_lock().map_err(|e| {
+                io::Error::other(format!(
+                    "another coordinator owns this state directory: {e}"
+                ))
+            })?;
+            std::fs::create_dir_all(root.join("runs"))?;
+            let unmigrated = crate::ledger_migrate::migrate(&root.join("runs"))?;
+            let (subscribers, _) = tokio::sync::broadcast::channel(128);
+            let coordinator = Self {
+                inner: Arc::new(Inner {
+                    root: root.into(),
+                    settings,
+                    _lock: lock,
+                    executor: Arc::from(executor),
+                    admission: Mutex::new(()),
+                    shutting_down: AtomicBool::new(false),
+                    controls: Mutex::new(BTreeMap::new()),
+                    recovered: Mutex::new(BTreeMap::new()),
+                    unmigrated,
+                    subscribers,
+                }),
+            };
+            coordinator.recover()?;
+            Ok(coordinator)
+        })()
+        .map_err(crate::error::io)
     }
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<RunProjection> {
         self.inner.subscribers.subscribe()
@@ -266,7 +272,10 @@ impl Coordinator {
         if self.inner.subscribers.receiver_count() == 0 {
             return;
         }
-        if let Ok(mut events) = self.ledger(id).and_then(|ledger| ledger.read()) {
+        if let Ok(mut events) = self
+            .ledger(id)
+            .and_then(|ledger| ledger.read().map_err(crate::error::to_io))
+        {
             events.truncate(seq as usize);
             if let Ok(projection) = RunProjection::from_events(&events, id) {
                 let _ = self.inner.subscribers.send(projection);
@@ -288,23 +297,30 @@ impl Coordinator {
             id,
         ))
     }
-    pub fn run(&self, id: &str) -> io::Result<RunProjection> {
-        RunProjection::from_events(&self.ledger(id)?.read()?, id)
+    pub fn run(&self, id: &str) -> Result<RunProjection, crate::Error> {
+        (|| -> io::Result<RunProjection> {
+            RunProjection::from_events(&self.ledger(id)?.read().map_err(crate::error::to_io)?, id)
+                .map_err(crate::error::to_io)
+        })()
+        .map_err(crate::error::io)
     }
     /// The mission as the run froze it when it started: what the run
     /// executes, whatever the editable mission has become since.
-    pub fn frozen_mission(&self, id: &str) -> io::Result<crate::Mission> {
-        let ledger = self.ledger(id)?;
-        if !ledger.path().exists() {
-            return Err(io::Error::new(io::ErrorKind::NotFound, "run not found"));
-        }
-        let path = self
-            .inner
-            .root
-            .join("runs")
-            .join(format!("{id}.snapshot.toml"));
-        crate::Mission::parse(&std::fs::read_to_string(path)?)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
+    pub fn frozen_mission(&self, id: &str) -> Result<crate::Mission, crate::Error> {
+        (|| -> io::Result<crate::Mission> {
+            let ledger = self.ledger(id)?;
+            if !ledger.path().exists() {
+                return Err(io::Error::new(io::ErrorKind::NotFound, "run not found"));
+            }
+            let path = self
+                .inner
+                .root
+                .join("runs")
+                .join(format!("{id}.snapshot.toml"));
+            crate::Mission::parse(&std::fs::read_to_string(path)?)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
+        })()
+        .map_err(crate::error::io)
     }
     /// The run a start with this client key made, if any.
     fn started_by_request(&self, key: &str) -> Result<Option<String>, AdmissionFailure> {
@@ -312,7 +328,7 @@ impl Coordinator {
             let name = entry?.file_name();
             let name = name.to_string_lossy();
             if let Some(id) = name.strip_suffix(".ndjson")
-                && let Ok(p) = self.run(id)
+                && let Ok(p) = self.run(id).map_err(crate::error::to_io)
                 && p.request_id == key
             {
                 return Ok(Some(id.to_string()));
@@ -320,113 +336,131 @@ impl Coordinator {
         }
         Ok(None)
     }
-    pub fn events(&self, id: &str) -> io::Result<Vec<crate::PublicEvent>> {
-        Ok(self.run(id)?.events)
+    pub fn events(&self, id: &str) -> Result<Vec<crate::PublicEvent>, crate::Error> {
+        (|| -> io::Result<Vec<crate::PublicEvent>> {
+            Ok(self.run(id).map_err(crate::error::to_io)?.events)
+        })()
+        .map_err(crate::error::io)
     }
-    pub fn escalations(&self, id: &str) -> io::Result<Vec<crate::Escalation>> {
-        Ok(crate::project_escalations(&self.ledger(id)?.read()?))
+    pub fn escalations(&self, id: &str) -> Result<Vec<crate::Escalation>, crate::Error> {
+        (|| -> io::Result<Vec<crate::Escalation>> {
+            Ok(crate::project_escalations(
+                &self.ledger(id)?.read().map_err(crate::error::to_io)?,
+            ))
+        })()
+        .map_err(crate::error::io)
     }
-    pub fn list(&self, mission: Option<&str>, needs_you: bool) -> io::Result<Vec<RunSummary>> {
-        let filter = mission.map(|name| {
-            Store::new(&self.inner.root)
-                .resolve(name)
-                .ok()
-                .and_then(|slug| Store::new(&self.inner.root).read_mission(&slug).ok())
-                .map(|m| m.id)
-        });
-        let mut views = Vec::new();
-        for entry in std::fs::read_dir(self.inner.root.join("runs"))? {
-            let entry = entry?;
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if let Some(id) = name.strip_suffix(".ndjson")
-                && let Ok(p) = self.run(id)
-            {
-                views.push(p);
-            }
-        }
-        views.sort_by(|a, b| {
-            let parse = |value: &str| {
-                time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+    pub fn list(
+        &self,
+        mission: Option<&str>,
+        needs_you: bool,
+    ) -> Result<Vec<RunSummary>, crate::Error> {
+        (|| -> io::Result<Vec<RunSummary>> {
+            let filter = mission.map(|name| {
+                Store::new(&self.inner.root)
+                    .resolve(name)
                     .ok()
-            };
-            (parse(&a.started_at), &a.run_id).cmp(&(parse(&b.started_at), &b.run_id))
-        });
-        let mut counts = BTreeMap::new();
-        let mut summaries = Vec::new();
-        for p in views {
-            let number = counts.entry(p.mission_id.clone()).or_insert(0);
-            *number += 1;
-            if let Some(expected) = &filter
-                && expected.as_ref() != Some(&p.mission_id)
-            {
-                continue;
-            }
-            if needs_you
-                && (p.r#final || !["blocked", "waiting_human"].contains(&p.status.as_str()))
-            {
-                continue;
-            }
-            let text = p
-                .inputs
-                .iter()
-                .find(|i| i.kind == "text")
-                .or_else(|| p.inputs.first())
-                .map(|i| i.value.split_whitespace().collect::<Vec<_>>().join(" "))
-                .unwrap_or_default();
-            let mut chars = text.chars();
-            let mut excerpt: String = chars.by_ref().take(90).collect();
-            if chars.next().is_some() {
-                excerpt = excerpt.chars().take(89).collect();
-                excerpt.push('…');
-            }
-            let mut sessions: Vec<RunSessionSummary> = Vec::new();
-            if !p.r#final {
-                for event in &p.events {
-                    if event.kind == "seat_created"
-                        && !event.session_name.is_empty()
-                        && !event.node_id.is_empty()
-                    {
-                        if !sessions
-                            .iter()
-                            .any(|s| s.session_name == event.session_name)
-                        {
-                            sessions.push(RunSessionSummary {
-                                session_name: event.session_name.clone(),
-                                node_id: event.node_id.clone(),
-                                slot_id: event.slot_id.clone(),
-                            });
-                        }
-                    } else if event.kind == "seat_cleanup"
-                        && ["ended", "gone"].contains(&event.outcome.as_str())
-                    {
-                        sessions.retain(|s| s.session_name != event.session_name);
-                    }
+                    .and_then(|slug| Store::new(&self.inner.root).read_mission(&slug).ok())
+                    .map(|m| m.id)
+            });
+            let mut views = Vec::new();
+            for entry in std::fs::read_dir(self.inner.root.join("runs"))? {
+                let entry = entry?;
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if let Some(id) = name.strip_suffix(".ndjson")
+                    && let Ok(p) = self.run(id).map_err(crate::error::to_io)
+                {
+                    views.push(p);
                 }
             }
-            summaries.push(RunSummary {
-                run_id: p.run_id,
-                number: *number,
-                status: p.status,
-                r#final: p.r#final,
-                mission_slug: p.mission_slug,
-                mission_id: p.mission_id,
-                mission_rev: p.mission_rev,
-                input_card_id: p.input_card_id,
-                work: p.work,
-                event_count: p.event_count,
-                resume_allowed: p.resume_allowed,
-                resume_policy: p.resume_policy,
-                block_code: p.block_code,
-                started_by: p.started_by,
-                started_at: p.started_at,
-                updated_at: p.updated_at,
-                input_excerpt: excerpt,
-                outputs: p.outputs,
-                sessions,
+            views.sort_by(|a, b| {
+                let parse = |value: &str| {
+                    time::OffsetDateTime::parse(
+                        value,
+                        &time::format_description::well_known::Rfc3339,
+                    )
+                    .ok()
+                };
+                (parse(&a.started_at), &a.run_id).cmp(&(parse(&b.started_at), &b.run_id))
             });
-        }
-        Ok(summaries)
+            let mut counts = BTreeMap::new();
+            let mut summaries = Vec::new();
+            for p in views {
+                let number = counts.entry(p.mission_id.clone()).or_insert(0);
+                *number += 1;
+                if let Some(expected) = &filter
+                    && expected.as_ref() != Some(&p.mission_id)
+                {
+                    continue;
+                }
+                if needs_you
+                    && (p.r#final || !["blocked", "waiting_human"].contains(&p.status.as_str()))
+                {
+                    continue;
+                }
+                let text = p
+                    .inputs
+                    .iter()
+                    .find(|i| i.kind == "text")
+                    .or_else(|| p.inputs.first())
+                    .map(|i| i.value.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .unwrap_or_default();
+                let mut chars = text.chars();
+                let mut excerpt: String = chars.by_ref().take(90).collect();
+                if chars.next().is_some() {
+                    excerpt = excerpt.chars().take(89).collect();
+                    excerpt.push('…');
+                }
+                let mut sessions: Vec<RunSessionSummary> = Vec::new();
+                if !p.r#final {
+                    for event in &p.events {
+                        if event.kind == "seat_created"
+                            && !event.session_name.is_empty()
+                            && !event.node_id.is_empty()
+                        {
+                            if !sessions
+                                .iter()
+                                .any(|s| s.session_name == event.session_name)
+                            {
+                                sessions.push(RunSessionSummary {
+                                    session_name: event.session_name.clone(),
+                                    node_id: event.node_id.clone(),
+                                    slot_id: event.slot_id.clone(),
+                                });
+                            }
+                        } else if event.kind == "seat_cleanup"
+                            && ["ended", "gone"].contains(&event.outcome.as_str())
+                        {
+                            sessions.retain(|s| s.session_name != event.session_name);
+                        }
+                    }
+                }
+                summaries.push(RunSummary {
+                    run_id: p.run_id,
+                    number: *number,
+                    status: p.status,
+                    r#final: p.r#final,
+                    mission_slug: p.mission_slug,
+                    mission_id: p.mission_id,
+                    mission_rev: p.mission_rev,
+                    input_card_id: p.input_card_id,
+                    work: p.work,
+                    event_count: p.event_count,
+                    resume_allowed: p.resume_allowed,
+                    resume_policy: p.resume_policy,
+                    block_code: p.block_code,
+                    started_by: p.started_by,
+                    started_at: p.started_at,
+                    updated_at: p.updated_at,
+                    input_excerpt: excerpt,
+                    outputs: p.outputs,
+                    sessions,
+                });
+            }
+            Ok(summaries)
+        })()
+        .map_err(crate::error::io)
     }
     pub fn start_mission(&self, request: RunStart) -> Result<String, AdmissionFailure> {
         self.start(request, false)
@@ -595,7 +629,7 @@ impl Coordinator {
         let id = crate::run_storage::run_id()?;
         let bindings =
             BindingsSnapshot::capture(&id, &mission, &request.input_card_id, &store.roles())
-                .map_err(AdmissionFailure::Invalid)?;
+                .map_err(|error| AdmissionFailure::Invalid(error.message))?;
         let workspace =
             crate::run_storage::create(self, &id, &slug, &mission, &bindings, &request)?;
         let control = Arc::new(Control::default());
@@ -616,115 +650,130 @@ impl Coordinator {
     }
     /// Removes a final run's worktree, branch and shared refs; returns a
     /// note for each shared ref it left because it moved.
-    pub fn land(&self, id: &str, force: bool) -> io::Result<Vec<String>> {
-        let _admission = self.inner.admission.lock().unwrap();
-        let projection = self.run(id)?;
-        if !projection.r#final {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "run is not final",
-            ));
-        }
-        let events = self.ledger(id)?.read()?;
-        let first = &events[0];
-        let get = |key: &str| {
-            first
-                .data
-                .get(key)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_owned()
-        };
-        let checkout = get("checkout");
-        if checkout.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "run has no worktree",
-            ));
-        }
-        let tree = crate::Worktree {
-            path: PathBuf::from(get("cwd")),
-            checkout: PathBuf::from(checkout),
-            branch: format!("parvi/run-{id}"),
-            base: get("base"),
-        };
-        // What each placed turn's node pushed, so only that is deleted.
-        let published = events
-            .iter()
-            .filter(|e| e.kind == "workspace_turn")
-            .filter_map(|e| {
-                let field = |name| e.data.get(name)?.as_str().map(str::to_owned);
-                Some((field("reference")?, field("commit")?))
-            })
-            .collect();
-        crate::Workspaces::new(
-            self.inner.root.join("worktrees"),
-            self.inner.settings.repositories.clone(),
-        )
-        .remove(&tree, force, &published)
-    }
-    /// Waits until execution has stopped and records cancellation only after cleanup.
-    pub fn abort(&self, id: &str, actor: &str, reason: &str) -> io::Result<RunProjection> {
-        let control = self.inner.controls.lock().unwrap().get(id).cloned();
-        if let Some(control) = control {
-            let mut done = control.done.lock().unwrap();
-            if *done || control.canceled.load(Ordering::Acquire) {
+    pub fn land(&self, id: &str, force: bool) -> Result<Vec<String>, crate::Error> {
+        (|| -> io::Result<Vec<String>> {
+            let _admission = self.inner.admission.lock().unwrap();
+            let projection = self.run(id).map_err(crate::error::to_io)?;
+            if !projection.r#final {
                 return Err(io::Error::new(
-                    io::ErrorKind::AlreadyExists,
-                    "run is final or aborting",
+                    io::ErrorKind::InvalidInput,
+                    "run is not final",
                 ));
             }
-            *control.actor.lock().unwrap() = if actor.is_empty() {
-                crate::DEFAULT_ACTOR.into()
-            } else {
-                actor.into()
+            let events = self.ledger(id)?.read().map_err(crate::error::to_io)?;
+            let first = &events[0];
+            let get = |key: &str| {
+                first
+                    .data
+                    .get(key)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_owned()
             };
-            *control.reason.lock().unwrap() = reason.to_owned();
-            control.canceled.store(true, Ordering::Release);
-            if let Some(wake) = control.wake.lock().unwrap().as_ref() {
-                let _ = wake.send(());
+            let checkout = get("checkout");
+            if checkout.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "run has no worktree",
+                ));
             }
-            while !*done {
-                done = control.finished.wait(done).unwrap();
-            }
-        } else {
-            let projection = self.run(id)?;
-            if projection.r#final {
-                return Err(io::Error::new(io::ErrorKind::AlreadyExists, "run is final"));
+            let tree = crate::Worktree {
+                path: PathBuf::from(get("cwd")),
+                checkout: PathBuf::from(checkout),
+                branch: format!("parvi/run-{id}"),
+                base: get("base"),
+            };
+            // What each placed turn's node pushed, so only that is deleted.
+            let published = events
+                .iter()
+                .filter(|e| e.kind == "workspace_turn")
+                .filter_map(|e| {
+                    let field = |name| e.data.get(name)?.as_str().map(str::to_owned);
+                    Some((field("reference")?, field("commit")?))
+                })
+                .collect();
+            crate::Workspaces::new(
+                self.inner.root.join("worktrees"),
+                self.inner.settings.repositories.clone(),
+            )
+            .remove(&tree, force, &published)
+            .map_err(crate::error::to_io)
+        })()
+        .map_err(crate::error::io)
+    }
+    /// Waits until execution has stopped and records cancellation only after cleanup.
+    pub fn abort(
+        &self,
+        id: &str,
+        actor: &str,
+        reason: &str,
+    ) -> Result<RunProjection, crate::Error> {
+        (|| -> io::Result<RunProjection> {
+            let control = self.inner.controls.lock().unwrap().get(id).cloned();
+            if let Some(control) = control {
+                let mut done = control.done.lock().unwrap();
+                if *done || control.canceled.load(Ordering::Acquire) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        "run is final or aborting",
+                    ));
+                }
+                *control.actor.lock().unwrap() = if actor.is_empty() {
+                    crate::DEFAULT_ACTOR.into()
+                } else {
+                    actor.into()
+                };
+                *control.reason.lock().unwrap() = reason.to_owned();
+                control.canceled.store(true, Ordering::Release);
+                if let Some(wake) = control.wake.lock().unwrap().as_ref() {
+                    let _ = wake.send(());
+                }
+                while !*done {
+                    done = control.finished.wait(done).unwrap();
+                }
             } else {
-                crate::run_left_seats::end(self, id, None, "run_final")?;
-                self.append(
-                    id,
-                    RunEvent {
-                        kind: "run_canceled".into(),
-                        actor: if actor.is_empty() {
-                            crate::DEFAULT_ACTOR.into()
-                        } else {
-                            actor.into()
+                let projection = self.run(id).map_err(crate::error::to_io)?;
+                if projection.r#final {
+                    return Err(io::Error::new(io::ErrorKind::AlreadyExists, "run is final"));
+                } else {
+                    crate::run_left_seats::end(self, id, None, "run_final")?;
+                    self.append(
+                        id,
+                        RunEvent {
+                            kind: "run_canceled".into(),
+                            actor: if actor.is_empty() {
+                                crate::DEFAULT_ACTOR.into()
+                            } else {
+                                actor.into()
+                            },
+                            timestamp: crate::run_storage::now(),
+                            data: serde_json::json!({"reason":reason,"final":true})
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                            ..Default::default()
                         },
-                        timestamp: crate::run_storage::now(),
-                        data: serde_json::json!({"reason":reason,"final":true})
-                            .as_object()
-                            .unwrap()
-                            .clone(),
-                        ..Default::default()
-                    },
-                )?;
+                    )?;
+                }
             }
-        }
-        self.inner
-            .recovered
-            .lock()
-            .unwrap()
-            .retain(|(run, _), _| run != id);
-        self.run(id)
+            self.inner
+                .recovered
+                .lock()
+                .unwrap()
+                .retain(|(run, _), _| run != id);
+            self.run(id).map_err(crate::error::to_io)
+        })()
+        .map_err(crate::error::io)
     }
     pub(crate) fn append(&self, id: &str, event: RunEvent) -> io::Result<()> {
-        let event = self.ledger(id)?.append(event)?;
+        let event = self
+            .ledger(id)?
+            .append(event)
+            .map_err(crate::error::to_io)?;
         self.changed(id, event.seq);
         if event.kind == "run_blocked"
             && let Some(OnBlock(tell)) = &self.inner.settings.on_block
-            && let Ok(run) = self.run(id)
+            && let Ok(run) = self.run(id).map_err(crate::error::to_io)
         {
             let reason = event.data.get("reason").and_then(|v| v.as_str());
             tell(&run, reason.unwrap_or(&run.block_code));

@@ -214,7 +214,7 @@ pub(crate) fn on_resume(
     control: &Control,
     mission: &Mission,
 ) -> io::Result<Option<LimitStop>> {
-    let events = c.ledger(id)?.read()?;
+    let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
     let Some(use_) = pending_resume_pick(&events) else {
         return Ok(None);
     };
@@ -440,7 +440,7 @@ fn resolve(
     choice: &Choice,
     answer: Option<(&RunEvent, &RunEvent)>,
 ) -> io::Result<()> {
-    let events = c.ledger(id)?.read()?;
+    let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
     let details = details(&events, started)?;
     let picked = (details.iter())
         .find(|detail| detail.attempt == choice.attempt)
@@ -641,7 +641,7 @@ impl Judging<'_> {
             ..
         } = *self;
         let chain = crate::graph::judge_chain(mission, &gate.id);
-        let ledger = c.ledger(id)?.read()?;
+        let ledger = c.ledger(id)?.read().map_err(crate::error::to_io)?;
         let invalidated = ledger.iter().any(|e| {
             e.seq > started.seq
                 && e.kind == "run_blocked"
@@ -653,7 +653,7 @@ impl Judging<'_> {
         let mut final_text = String::new();
         for (index, judge) in chain.into_iter().enumerate() {
             let last = index + 1 == count;
-            let events = c.ledger(id)?.read()?;
+            let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
             let previous = (!(invalidated && last))
                 .then(|| {
                     events.iter().rev().find(|e| {
@@ -743,7 +743,7 @@ impl Judging<'_> {
             Ok(mut choice) => {
                 choice.decided_by = judge;
                 if gate.kinds.iter().any(|kind| kind == "human") {
-                    let events = c.ledger(id)?.read()?;
+                    let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
                     let details = details(&events, started)?;
                     let input = pick_input(id, mission, gate, started, &details);
                     let request = ask(gate, started, &input, attempts, Some(&choice));
@@ -753,7 +753,7 @@ impl Judging<'_> {
                 }
             }
             Err(error) => {
-                let events = c.ledger(id)?.read()?;
+                let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
                 let mut failed = event(
                     "judge_attempt_failed",
                     &gate.id,
@@ -844,7 +844,13 @@ impl Coordinator {
     /// Record the operator's pick on a gate's pending pick. Like a verdict it
     /// routes nothing: the run's worker routes it, so a pick is accepted
     /// while other seats work, and on a blocked run it waits for the resume.
-    pub fn record_pick(&self, run: &str, gate: &str, pick: HumanPick) -> io::Result<RunProjection> {
+    pub fn record_pick(
+        &self,
+        run: &str,
+        gate: &str,
+        pick: HumanPick,
+    ) -> Result<RunProjection, crate::Error> {
+        (|| -> io::Result<RunProjection> {
         let relay = pick.relayed_by.as_bytes();
         if pick.requested_seq == 0
             || (!relay.is_empty()
@@ -889,7 +895,7 @@ impl Coordinator {
             ..Default::default()
         };
         let appended = self.ledger(run)?.append_checked(event, |events| {
-            let projection = RunProjection::from_events(events, run)?;
+            let projection = RunProjection::from_events(events, run).map_err(crate::error::to_io)?;
             if projection.r#final
                 || !projection.waiting_gates.iter().any(|pending| {
                     pending.gate_id == gate && pending.requested_seq == pick.requested_seq
@@ -928,7 +934,8 @@ impl Coordinator {
         {
             let _ = wake.send(());
         }
-        self.run(run)
+        self.run(run).map_err(crate::error::to_io)
+     })().map_err(crate::error::io)
     }
 }
 

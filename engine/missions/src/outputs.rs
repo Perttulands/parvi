@@ -21,16 +21,21 @@ pub struct RunOutput {
 }
 
 #[derive(Debug)]
-pub enum MissingOutput {
+pub(crate) enum MissingOutput {
     Ledger(io::Error),
     Missing(String),
 }
 
 /// Resolve declared outputs from the persisted ledger. Rejected gate inputs do
 /// not contribute their origins, even when a later attempt consumed feedback.
-pub fn resolve(ledger: &Ledger, mission: &Mission) -> Result<Vec<RunOutput>, MissingOutput> {
-    let events = ledger.read().map_err(MissingOutput::Ledger)?;
-    resolve_events(&events, mission).map(|resolved| resolved.outputs)
+pub fn resolve(ledger: &Ledger, mission: &Mission) -> Result<Vec<RunOutput>, crate::Error> {
+    let events = ledger.read()?;
+    resolve_events(&events, mission)
+        .map(|resolved| resolved.outputs)
+        .map_err(|error| match error {
+            MissingOutput::Ledger(error) => crate::error::io(error),
+            MissingOutput::Missing(message) => crate::Error::new("missing_output", message),
+        })
 }
 
 pub(crate) struct Resolved {
@@ -41,7 +46,9 @@ pub(crate) fn resolve_with_picks(
     ledger: &Ledger,
     mission: &Mission,
 ) -> Result<Resolved, MissingOutput> {
-    let events = ledger.read().map_err(MissingOutput::Ledger)?;
+    let events = ledger
+        .read()
+        .map_err(|error| MissingOutput::Ledger(crate::error::to_io(error)))?;
     resolve_events(&events, mission)
 }
 
