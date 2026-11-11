@@ -1,6 +1,8 @@
 //! Channel state and the selected mission, independent of the page's views.
 pub mod canvas;
 pub mod flow;
+pub mod staffing;
+pub mod undo;
 
 use parvi_missions_contract::{
     Layout, Mission, MissionListing, MissionSnapshot, RUNS_SNAPSHOT, RunProjection, SNAPSHOT,
@@ -17,6 +19,8 @@ pub struct Store {
     pub nodes: BTreeMap<String, Feed>,
     pub selected: Option<(String, String)>,
     pub mission: Option<Mission>,
+    pub mission_etag: Option<String>,
+    pub layout_etag: Option<String>,
     pub layout: Option<Layout>,
     pub error: Option<String>,
 }
