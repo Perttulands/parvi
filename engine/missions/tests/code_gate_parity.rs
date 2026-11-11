@@ -1,7 +1,7 @@
 #[allow(dead_code)]
 mod run_support;
+use parvi_mission_engine::{Coordinator, LabExecutor, RunSettings};
 use parvi_mission_model::RunStart;
-use parvi_missions::{Coordinator, LabExecutor, RunSettings};
 use run_support::{Scratch, gated_mission, normalized_ledger};
 use serde_json::Value;
 use std::{

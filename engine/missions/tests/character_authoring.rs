@@ -1,4 +1,4 @@
-use parvi_missions::{Character, CharacterStore};
+use parvi_mission_engine::{Character, CharacterStore};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -122,7 +122,7 @@ controller = false
     )
     .unwrap();
     std::fs::write(missions.join("broken.mission.toml"), "broken = [").unwrap();
-    let report = parvi_missions::Store::new(&dir.0)
+    let report = parvi_mission_engine::Store::new(&dir.0)
         .roles()
         .usage("builder")
         .unwrap();
@@ -156,9 +156,9 @@ controller = false
 "#,
     )
     .unwrap();
-    let roles = parvi_missions::Store::new(&dir.0).roles();
+    let roles = parvi_mission_engine::Store::new(&dir.0).roles();
     let role = roles
-        .create(parvi_missions::RoleCard {
+        .create(parvi_mission_engine::RoleCard {
             id: "critic".into(),
             display_name: "Critic".into(),
             kind: "reviewer".into(),
@@ -185,7 +185,7 @@ controller = false
 #[test]
 fn builtin_role_restore_and_role_notes_preserve_usage_safety() {
     let dir = Scratch::new();
-    let roles = parvi_missions::Store::new(&dir.0).roles();
+    let roles = parvi_mission_engine::Store::new(&dir.0).roles();
     let builtin = roles.role_edit("builder").unwrap();
     let retired = roles.retire("builder", &builtin.etag).unwrap();
     assert_eq!(retired.card.status, "retired");
@@ -229,7 +229,7 @@ fn editing_role_capabilities_preserves_unknown_text_fields() {
     std::fs::create_dir_all(&roles_dir).unwrap();
     let path = roles_dir.join("susie.toml");
     std::fs::write(&path, "schema = 1\n\n[card]\nid = \"susie\"\ndisplay_name = \"Susie\"\nkind = \"specialist\"\ntags = [\"design\", \"taste:visual\"]\nreviewerNotes = \"prefers tight grids\"\n").unwrap();
-    let roles = parvi_missions::Store::new(&dir.0).roles();
+    let roles = parvi_mission_engine::Store::new(&dir.0).roles();
     let mut current = roles.role_edit("susie").unwrap();
     current.card.tags.push("tailwind".into());
     let mut updated = roles.edit("susie", &current.etag, current.card).unwrap();
@@ -251,9 +251,9 @@ fn editing_role_capabilities_preserves_unknown_text_fields() {
 #[test]
 fn role_creation_and_edits_are_guarded_and_text_only() {
     let dir = Scratch::new();
-    let roles = parvi_missions::Store::new(&dir.0).roles();
+    let roles = parvi_mission_engine::Store::new(&dir.0).roles();
     let created = roles
-        .create(parvi_missions::RoleCard {
+        .create(parvi_mission_engine::RoleCard {
             id: "researcher".into(),
             tags: vec!["research".into(), "go".into()],
             ..Default::default()
@@ -301,7 +301,7 @@ fn role_creation_and_edits_are_guarded_and_text_only() {
     assert_eq!(roles.role_edit("researcher").unwrap().etag, updated.etag);
     assert_eq!(
         roles
-            .create(parvi_missions::RoleCard {
+            .create(parvi_mission_engine::RoleCard {
                 id: "bad/path".into(),
                 ..Default::default()
             })
@@ -316,7 +316,7 @@ fn role_creation_and_edits_are_guarded_and_text_only() {
 #[test]
 fn role_usage_reports_every_slot_in_every_mission() {
     let dir = Scratch::new();
-    let store = parvi_missions::Store::new(&dir.0);
+    let store = parvi_mission_engine::Store::new(&dir.0);
     for (slug, title) in [("one", "One"), ("two", "Two")] {
         let mut edit = store.create_mission(slug, title, "").unwrap();
         edit = store
@@ -383,9 +383,9 @@ fn role_usage_reports_every_slot_in_every_mission() {
 #[test]
 fn role_delete_requires_fresh_etag_and_restores_builtin_override() {
     let dir = Scratch::new();
-    let roles = parvi_missions::Store::new(&dir.0).roles();
+    let roles = parvi_mission_engine::Store::new(&dir.0).roles();
     let role = roles
-        .create(parvi_missions::RoleCard {
+        .create(parvi_mission_engine::RoleCard {
             id: "writer".into(),
             ..Default::default()
         })
@@ -426,7 +426,7 @@ fn role_delete_requires_fresh_etag_and_restores_builtin_override() {
 #[test]
 fn restoring_builtin_fields_preserves_extra_card_text() {
     let dir = Scratch::new();
-    let roles = parvi_missions::Store::new(&dir.0).roles();
+    let roles = parvi_mission_engine::Store::new(&dir.0).roles();
     let original = roles.role_edit("builder").unwrap();
     let mut custom = original.card.clone();
     custom.summary = "custom summary".into();
@@ -450,14 +450,14 @@ fn restoring_builtin_fields_preserves_extra_card_text() {
 #[test]
 fn role_api_returns_core_errors_with_codes_and_messages() {
     let dir = Scratch::new();
-    let roles = parvi_missions::Store::new(&dir.0).roles();
+    let roles = parvi_mission_engine::Store::new(&dir.0).roles();
     let role = roles
-        .create(parvi_missions::RoleCard {
+        .create(parvi_mission_engine::RoleCard {
             id: "writer".into(),
             ..Default::default()
         })
         .unwrap();
-    let error: parvi_missions::Error = roles.retire("writer", "stale").unwrap_err();
+    let error: parvi_mission_engine::Error = roles.retire("writer", "stale").unwrap_err();
     assert_eq!(error.code, "conflict");
     assert!(!error.message.is_empty());
     assert_eq!(roles.role_edit("writer").unwrap().etag, role.etag);

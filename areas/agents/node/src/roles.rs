@@ -9,7 +9,7 @@ use axum::{
 };
 use parvi_agents_contract::roles::{Note, PATH, Role, Roles, Unreadable, Usage};
 use parvi_core::Error;
-use parvi_missions::{RoleCard, RoleEdit, RoleStore};
+use parvi_mission_engine::{RoleCard, RoleEdit, RoleStore};
 use parvi_node_kit::{Command, args::object};
 use serde_json::{Value, json};
 use std::{path::PathBuf, sync::Arc};
@@ -21,7 +21,7 @@ pub struct Service {
 impl Service {
     pub fn new(root: PathBuf, codex_home: Option<PathBuf>) -> Self {
         Self {
-            store: parvi_missions::Store::new(root).roles(),
+            store: parvi_mission_engine::Store::new(root).roles(),
             codex_home,
         }
     }
@@ -59,8 +59,8 @@ impl Service {
             cards.retain(|c| c.status != "retired");
         }
         let harnesses = self.codex_home.as_deref().map_or_else(
-            parvi_missions::Harnesses::from_host,
-            parvi_missions::Harnesses::from_codex_home,
+            parvi_mission_engine::Harnesses::from_host,
+            parvi_mission_engine::Harnesses::from_codex_home,
         );
         let harnesses = [
             (
@@ -352,7 +352,7 @@ pub fn commands(s: Arc<Service>, node: String) -> Vec<Command> {
                     "role_edit" => json!(s.edit(id, &version()?, &args["change"])?),
                     "role_retire" | "role_restore" => { let usage = s.usage(id)?; let mut role = json!(s.edit(id, &version()?, &json!({"retire":name == "role_retire"}))?); role["usage"] = json!(usage); role },
                     "role_delete" => s.delete(id, &version()?)?,
-                    "role_characters" => json!({"characters": parvi_missions::CharacterStore::new(s.store.dir()).list()?}),
+                    "role_characters" => json!({"characters": parvi_mission_engine::CharacterStore::new(s.store.dir()).list()?}),
                     _ => unreachable!(),
                 };
                 result["node"] = json!(node);

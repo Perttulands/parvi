@@ -1,4 +1,4 @@
-use parvi_missions::{Error, Harnesses, Ledger, parse_verdict};
+use parvi_mission_engine::{Error, Harnesses, Ledger, parse_verdict};
 
 fn assert_error(error: Error, code: &str) {
     assert_eq!(error.code, code);

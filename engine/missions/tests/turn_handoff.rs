@@ -2,7 +2,7 @@
 //! placed turn is published once however often it is asked for, a publish
 //! that stopped before removing its worktree removes it when asked again, and
 //! landing the run deletes what it pushed to the remote, unless it moved since.
-use parvi_missions::{TurnWorkspace, TurnWorktrees, Workspaces};
+use parvi_mission_engine::{TurnWorkspace, TurnWorktrees, Workspaces};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},

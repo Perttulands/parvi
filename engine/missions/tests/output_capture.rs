@@ -1,8 +1,8 @@
-use parvi_mission_model::{ResumeRequest, RunStart};
-use parvi_missions::{
+use parvi_mission_engine::{
     Coordinator, ExecutionEvent, ExecutionSink, Executor, FormationExecution, FormationResult,
     RunSettings,
 };
+use parvi_mission_model::{ResumeRequest, RunStart};
 use serde_json::json;
 use std::{
     path::PathBuf,
@@ -68,7 +68,7 @@ impl Executor for Output {
         &self,
         req: FormationExecution,
         sink: ExecutionSink,
-    ) -> Result<FormationResult, parvi_missions::Error> {
+    ) -> Result<FormationResult, parvi_mission_engine::Error> {
         (|| -> Result<FormationResult, String> {
             self.count.fetch_add(1, Ordering::SeqCst);
             let slot = req.formation.slots[0].id.clone();
@@ -95,12 +95,12 @@ impl Executor for Output {
                     .clone(),
             })
         })()
-        .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+        .map_err(|message: String| parvi_mission_engine::Error::new("executor_error", message))
     }
     fn reattach(
         &self,
-        _: parvi_missions::OpenDispatch,
-    ) -> Result<FormationResult, parvi_missions::Error> {
+        _: parvi_mission_engine::OpenDispatch,
+    ) -> Result<FormationResult, parvi_mission_engine::Error> {
         Ok(FormationResult {
             status: "done".into(),
             text: "done".into(),
@@ -109,7 +109,7 @@ impl Executor for Output {
                 .unwrap()
                 .clone(),
         })
-        .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+        .map_err(|message: String| parvi_mission_engine::Error::new("executor_error", message))
     }
 }
 
@@ -158,7 +158,9 @@ fn failed_capture_after_reattach_remains_redispatchable() {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(5));
     }
-    let events = parvi_missions::Ledger::new(&path, &id).read().unwrap();
+    let events = parvi_mission_engine::Ledger::new(&path, &id)
+        .read()
+        .unwrap();
     assert_eq!(
         events.last().unwrap().data["pendingOutput"]["nodeId"],
         "fmn_work"
@@ -300,9 +302,10 @@ fn redispatch_runs_a_new_attempt_instead_of_keeping_the_pending_one() {
     let (c, id, count) = start(&root, source);
     let run = wait(&c, &id, "blocked");
     assert_eq!(run.block_code, "output_not_kept");
-    let ledger = parvi_missions::Ledger::new(root.0.join("runs").join(format!("{id}.ndjson")), &id)
-        .read()
-        .unwrap();
+    let ledger =
+        parvi_mission_engine::Ledger::new(root.0.join("runs").join(format!("{id}.ndjson")), &id)
+            .read()
+            .unwrap();
     let block = ledger
         .iter()
         .find(|event| event.kind == "run_blocked")
@@ -334,12 +337,12 @@ fn redispatch_runs_a_new_attempt_instead_of_keeping_the_pending_one() {
 fn restart_blocks_an_interrupted_copy_with_its_pending_output() {
     let root = Scratch::new("file");
     std::fs::create_dir_all(root.0.join("runs")).unwrap();
-    let ledger = parvi_missions::Ledger::new(
+    let ledger = parvi_mission_engine::Ledger::new(
         root.0.join("runs/run_interrupted.ndjson"),
         "run_interrupted",
     );
     ledger
-        .create(parvi_missions::RunEvent {
+        .create(parvi_mission_engine::RunEvent {
             kind: "run_started".into(),
             timestamp: "2026-11-06T00:00:00Z".into(),
             actor: "agent:test".into(),
@@ -347,7 +350,7 @@ fn restart_blocks_an_interrupted_copy_with_its_pending_output() {
         })
         .unwrap();
     ledger
-        .append(parvi_missions::RunEvent {
+        .append(parvi_mission_engine::RunEvent {
             kind: "output_capture_pending".into(),
             node_id: "fmn_work".into(),
             attempt: 1,
@@ -362,7 +365,7 @@ fn restart_blocks_an_interrupted_copy_with_its_pending_output() {
     let c = Coordinator::open(
         &root.0,
         RunSettings::default(),
-        Box::new(parvi_missions::LabExecutor),
+        Box::new(parvi_mission_engine::LabExecutor),
     )
     .unwrap();
     let run = c.run("run_interrupted").unwrap();
@@ -404,7 +407,7 @@ impl Executor for InvalidOnce {
         &self,
         req: FormationExecution,
         sink: ExecutionSink,
-    ) -> Result<FormationResult, parvi_missions::Error> {
+    ) -> Result<FormationResult, parvi_mission_engine::Error> {
         (|| -> Result<FormationResult, String> {
             let mut result = self
                 .0
@@ -415,7 +418,7 @@ impl Executor for InvalidOnce {
             }
             Ok(result)
         })()
-        .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+        .map_err(|message: String| parvi_mission_engine::Error::new("executor_error", message))
     }
 }
 #[test]
@@ -443,7 +446,8 @@ fn invalid_reference_can_resume_by_running_the_step_again() {
         })
         .unwrap();
     assert_eq!(wait(&c, &id, "blocked").block_code, "invalid_output_ref");
-    let ledger = parvi_missions::Ledger::new(root.0.join("runs").join(format!("{id}.ndjson")), &id);
+    let ledger =
+        parvi_mission_engine::Ledger::new(root.0.join("runs").join(format!("{id}.ndjson")), &id);
     assert!(
         !ledger
             .read()
@@ -474,7 +478,7 @@ fn interrupted_replacement_restores_the_original_source_before_recapture() {
     let (c, id, _) = start(&root, source);
     wait(&c, &id, "succeeded");
     let original =
-        parvi_missions::Ledger::new(root.0.join("runs").join(format!("{id}.ndjson")), &id)
+        parvi_mission_engine::Ledger::new(root.0.join("runs").join(format!("{id}.ndjson")), &id)
             .read()
             .unwrap();
     drop(c);
@@ -491,8 +495,10 @@ fn interrupted_replacement_restores_the_original_source_before_recapture() {
     let saved = outputs.join("old/source");
     std::fs::create_dir_all(saved.parent().unwrap()).unwrap();
     std::fs::write(&saved, "original").unwrap();
-    let ledger =
-        parvi_missions::Ledger::new(root.0.join("runs").join(format!("{new_id}.ndjson")), new_id);
+    let ledger = parvi_mission_engine::Ledger::new(
+        root.0.join("runs").join(format!("{new_id}.ndjson")),
+        new_id,
+    );
     ledger.create(original[0].clone()).unwrap();
     for e in original
         .iter()
@@ -506,7 +512,7 @@ fn interrupted_replacement_restores_the_original_source_before_recapture() {
         .find(|e| e.kind == "node_started" && e.node_id == "fmn_work")
         .unwrap();
     ledger.append(started.clone()).unwrap();
-    let event = |kind: &str, data: serde_json::Value| parvi_missions::RunEvent {
+    let event = |kind: &str, data: serde_json::Value| parvi_mission_engine::RunEvent {
         kind: kind.into(),
         node_id: "fmn_work".into(),
         attempt: 1,
@@ -527,7 +533,7 @@ fn interrupted_replacement_restores_the_original_source_before_recapture() {
     let c = Coordinator::open(
         &root.0,
         RunSettings::default(),
-        Box::new(parvi_missions::LabExecutor),
+        Box::new(parvi_mission_engine::LabExecutor),
     )
     .unwrap();
     let blocks: Vec<_> = ledger

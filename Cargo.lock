@@ -4291,7 +4291,7 @@ dependencies = [
  "futures-util",
  "parvi-agents-contract",
  "parvi-core",
- "parvi-missions",
+ "parvi-mission-engine",
  "parvi-node-kit",
  "parvi-term",
  "parvi-terminals",
@@ -4549,17 +4549,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "parvi-mission-model"
-version = "0.0.1"
-dependencies = [
- "parvi-core",
- "serde",
- "serde_json",
- "toml 1.2.1+spec-1.1.0",
-]
-
-[[package]]
-name = "parvi-missions"
+name = "parvi-mission-engine"
 version = "0.0.1"
 dependencies = [
  "getrandom 0.4.3",
@@ -4577,6 +4567,16 @@ dependencies = [
  "toml 1.2.1+spec-1.1.0",
  "toml_edit 0.25.19+spec-1.1.0",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "parvi-mission-model"
+version = "0.0.1"
+dependencies = [
+ "parvi-core",
+ "serde",
+ "serde_json",
+ "toml 1.2.1+spec-1.1.0",
 ]
 
 [[package]]

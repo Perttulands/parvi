@@ -1,4 +1,4 @@
-use parvi_missions::{
+use parvi_mission_engine::{
     Claude, Codex, HarnessAdapter, Pi, Pointer, Shell, SlotBinding, TokenUsage, TranscriptRoots,
     TurnState,
 };

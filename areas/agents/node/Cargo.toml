@@ -13,7 +13,7 @@ anyhow = "1"
 parvi-agents-contract = { path = "../contract" }
 parvi-core = { path = "../../../kit/core" }
 parvi-node-kit = { path = "../../../kit/node-kit" }
-parvi-missions = { path = "../../../engine/missions" }
+parvi-mission-engine = { path = "../../../engine/missions" }
 axum = { version = "0.8", default-features = false, features = ["json"] }
 parvi-term = { path = "../../../engine/term" }
 serde = { version = "1", features = ["derive"] }

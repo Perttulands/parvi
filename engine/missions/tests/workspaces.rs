@@ -1,4 +1,4 @@
-use parvi_missions::Workspaces;
+use parvi_mission_engine::Workspaces;
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},

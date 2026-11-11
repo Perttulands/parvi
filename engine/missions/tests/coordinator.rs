@@ -1,8 +1,8 @@
-use parvi_mission_model::RunStart;
-use parvi_missions::{
+use parvi_mission_engine::{
     Coordinator, ExecutionSink, Executor, FormationExecution, FormationResult, LabExecutor,
     RunSettings,
 };
+use parvi_mission_model::RunStart;
 use std::{
     collections::BTreeMap,
     path::PathBuf,
@@ -60,15 +60,17 @@ fn shutdown_block_with_completed_evidence_never_schedules_on_open() {
             &self,
             request: FormationExecution,
             sink: ExecutionSink,
-        ) -> Result<FormationResult, parvi_missions::Error> {
+        ) -> Result<FormationResult, parvi_mission_engine::Error> {
             LabExecutor
                 .execute_formation(request, sink)
                 .map_err(|error| error.message)
-                .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+                .map_err(|message: String| {
+                    parvi_mission_engine::Error::new("executor_error", message)
+                })
         }
         fn recover_completed(
             &self,
-            dispatch: parvi_missions::OpenDispatch,
+            dispatch: parvi_mission_engine::OpenDispatch,
         ) -> Option<FormationResult> {
             LabExecutor.recover_completed(dispatch)
         }
@@ -89,7 +91,7 @@ fn shutdown_block_with_completed_evidence_never_schedules_on_open() {
         .unwrap();
     let dispatch: serde_json::Value = serde_json::from_str(lines[cut]).unwrap();
     std::fs::write(&path, lines[..=cut].join("\n") + "\n").unwrap();
-    parvi_missions::Ledger::new(&path, &id).append(parvi_missions::RunEvent { kind:"run_blocked".into(), timestamp:"2026-01-01T00:00:00Z".into(), data:serde_json::json!({"code":"coordinator_shutdown","resumeAllowed":true,"openDispatches":[dispatch["data"]]}).as_object().unwrap().clone(), ..Default::default() }).unwrap();
+    parvi_mission_engine::Ledger::new(&path, &id).append(parvi_mission_engine::RunEvent { kind:"run_blocked".into(), timestamp:"2026-01-01T00:00:00Z".into(), data:serde_json::json!({"code":"coordinator_shutdown","resumeAllowed":true,"openDispatches":[dispatch["data"]]}).as_object().unwrap().clone(), ..Default::default() }).unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let c = loop {
         match Coordinator::open(&dir.0, RunSettings::default(), Box::new(CompletedOnly)) {
@@ -149,7 +151,9 @@ fn completed_dispatch_without_evidence_requires_reattach_or_redispatch() {
             Err(e) => panic!("open: {e}"),
         }
     };
-    let events = parvi_missions::Ledger::new(&path, &id).read().unwrap();
+    let events = parvi_mission_engine::Ledger::new(&path, &id)
+        .read()
+        .unwrap();
     let restart_block = events.iter().find(|e| e.kind == "run_blocked").unwrap();
     assert_eq!(
         restart_block.data["openDispatches"]
@@ -260,7 +264,9 @@ fn failed_publication_at_startup_blocks_only_the_affected_run() {
     assert_eq!(p.status, "blocked");
     assert_eq!(p.block_code, "workspace_publication_failed");
     assert!(p.resume_allowed);
-    let events = parvi_missions::Ledger::new(&path, &id).read().unwrap();
+    let events = parvi_mission_engine::Ledger::new(&path, &id)
+        .read()
+        .unwrap();
     assert!(
         events
             .iter()
@@ -537,13 +543,13 @@ fn shutdown_timeout_keeps_the_writer_lock_until_worker_exits() {
             &self,
             _: FormationExecution,
             _: ExecutionSink,
-        ) -> Result<FormationResult, parvi_missions::Error> {
+        ) -> Result<FormationResult, parvi_mission_engine::Error> {
             {
                 self.0.store(1, Ordering::Release);
                 std::thread::sleep(Duration::from_millis(400));
                 Err("stopped".into())
             }
-            .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+            .map_err(|message: String| parvi_mission_engine::Error::new("executor_error", message))
         }
     }
     let dir = Scratch::new();
@@ -586,22 +592,24 @@ fn detached_seat_is_ended_before_a_new_attempt() {
             &self,
             req: FormationExecution,
             sink: ExecutionSink,
-        ) -> Result<FormationResult, parvi_missions::Error> {
+        ) -> Result<FormationResult, parvi_mission_engine::Error> {
             LabExecutor
                 .execute_formation(req, sink)
                 .map_err(|error| error.message)
-                .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+                .map_err(|message: String| {
+                    parvi_mission_engine::Error::new("executor_error", message)
+                })
         }
         fn end_left_seat(
             &self,
-            seat: parvi_missions::LeftSeat,
-        ) -> Result<String, parvi_missions::Error> {
+            seat: parvi_mission_engine::LeftSeat,
+        ) -> Result<String, parvi_mission_engine::Error> {
             {
                 assert_eq!(seat.identity["sessionId"], "$owned");
                 self.0.lock().unwrap().push(seat.cause);
                 Ok("ended".into())
             }
-            .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+            .map_err(|message: String| parvi_mission_engine::Error::new("executor_error", message))
         }
     }
     let dir = Scratch::new();
@@ -623,7 +631,7 @@ fn detached_seat_is_ended_before_a_new_attempt() {
         text.lines().take(cut + 1).collect::<Vec<_>>().join("\n") + "\n",
     )
     .unwrap();
-    let ledger = parvi_missions::Ledger::new(&path, &id);
+    let ledger = parvi_mission_engine::Ledger::new(&path, &id);
     for (kind, data) in [
         (
             "seat_created",
@@ -635,7 +643,7 @@ fn detached_seat_is_ended_before_a_new_attempt() {
         ),
     ] {
         ledger
-            .append(parvi_missions::RunEvent {
+            .append(parvi_mission_engine::RunEvent {
                 kind: kind.into(),
                 timestamp: "2026-01-01T00:00:00Z".into(),
                 node_id: "fmn_work".into(),
@@ -670,21 +678,23 @@ fn aborting_a_blocked_run_ends_the_detached_seat() {
             &self,
             req: FormationExecution,
             sink: ExecutionSink,
-        ) -> Result<FormationResult, parvi_missions::Error> {
+        ) -> Result<FormationResult, parvi_mission_engine::Error> {
             LabExecutor
                 .execute_formation(req, sink)
                 .map_err(|error| error.message)
-                .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+                .map_err(|message: String| {
+                    parvi_mission_engine::Error::new("executor_error", message)
+                })
         }
         fn end_left_seat(
             &self,
-            seat: parvi_missions::LeftSeat,
-        ) -> Result<String, parvi_missions::Error> {
+            seat: parvi_mission_engine::LeftSeat,
+        ) -> Result<String, parvi_mission_engine::Error> {
             {
                 self.0.lock().unwrap().push(seat.cause);
                 Ok("ended".into())
             }
-            .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+            .map_err(|message: String| parvi_mission_engine::Error::new("executor_error", message))
         }
     }
     let dir = Scratch::new();
@@ -706,7 +716,7 @@ fn aborting_a_blocked_run_ends_the_detached_seat() {
         text.lines().take(cut + 1).collect::<Vec<_>>().join("\n") + "\n",
     )
     .unwrap();
-    let ledger = parvi_missions::Ledger::new(&path, &id);
+    let ledger = parvi_mission_engine::Ledger::new(&path, &id);
     for (kind, data) in [
         (
             "seat_created",
@@ -718,7 +728,7 @@ fn aborting_a_blocked_run_ends_the_detached_seat() {
         ),
     ] {
         ledger
-            .append(parvi_missions::RunEvent {
+            .append(parvi_mission_engine::RunEvent {
                 kind: kind.into(),
                 timestamp: "2026-01-01T00:00:00Z".into(),
                 node_id: "fmn_work".into(),
@@ -761,7 +771,7 @@ fn restart_at_each_ledger_cut_reaches_the_same_output() {
             &self,
             req: FormationExecution,
             sink: ExecutionSink,
-        ) -> Result<FormationResult, parvi_missions::Error> {
+        ) -> Result<FormationResult, parvi_mission_engine::Error> {
             (|| -> Result<FormationResult, String> {
             let slot = &req.formation.slots[0];
             let dispatch = format!("dsp_{}_{}_{}", req.run_id, slot.id, req.attempt);
@@ -780,7 +790,7 @@ fn restart_at_each_ledger_cut_reaches_the_same_output() {
                     })
                     .collect()
             };
-            sink.emit(parvi_missions::ExecutionEvent { kind:"slot_dispatch".into(), slot_id:slot.id.clone(), data:serde_json::json!({"dispatchId":dispatch,"nodeId":req.formation.id,"slotId":slot.id}).as_object().unwrap().clone() }).map_err(|error| error.message)?;
+            sink.emit(parvi_mission_engine::ExecutionEvent { kind:"slot_dispatch".into(), slot_id:slot.id.clone(), data:serde_json::json!({"dispatchId":dispatch,"nodeId":req.formation.id,"slotId":slot.id}).as_object().unwrap().clone() }).map_err(|error| error.message)?;
             self.0.lock().unwrap().push(snapshot()?);
             let result = FormationResult {
                 status: "done".into(),
@@ -797,23 +807,25 @@ fn restart_at_each_ledger_cut_reaches_the_same_output() {
                 serde_json::to_vec(&result).unwrap(),
             )
             .map_err(|e| e.to_string())?;
-            sink.emit(parvi_missions::ExecutionEvent { kind:"slot_result".into(), slot_id:slot.id.clone(), data:serde_json::json!({"dispatchId":dispatch,"status":"ok","sentinel":{"runId":req.run_id}}).as_object().unwrap().clone() }).map_err(|error| error.message)?;
+            sink.emit(parvi_mission_engine::ExecutionEvent { kind:"slot_result".into(), slot_id:slot.id.clone(), data:serde_json::json!({"dispatchId":dispatch,"status":"ok","sentinel":{"runId":req.run_id}}).as_object().unwrap().clone() }).map_err(|error| error.message)?;
             self.0.lock().unwrap().push(snapshot()?);
             Ok(result)
-         })().map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+         })().map_err(|message: String| parvi_mission_engine::Error::new("executor_error", message))
         }
         fn reattach(
             &self,
-            dispatch: parvi_missions::OpenDispatch,
-        ) -> Result<FormationResult, parvi_missions::Error> {
+            dispatch: parvi_mission_engine::OpenDispatch,
+        ) -> Result<FormationResult, parvi_mission_engine::Error> {
             LabExecutor
                 .reattach(dispatch)
                 .map_err(|error| error.message)
-                .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+                .map_err(|message: String| {
+                    parvi_mission_engine::Error::new("executor_error", message)
+                })
         }
         fn recover_completed(
             &self,
-            dispatch: parvi_missions::OpenDispatch,
+            dispatch: parvi_mission_engine::OpenDispatch,
         ) -> Option<FormationResult> {
             LabExecutor.recover_completed(dispatch)
         }
@@ -904,7 +916,7 @@ fn restart_at_each_ledger_cut_reaches_the_same_output() {
             assert!(Instant::now() < deadline, "cut {cut}");
             std::thread::sleep(Duration::from_millis(5));
         }
-        let events = parvi_missions::Ledger::new(runs.join(format!("{id}.ndjson")), &id)
+        let events = parvi_mission_engine::Ledger::new(runs.join(format!("{id}.ndjson")), &id)
             .read()
             .unwrap();
         let outputs: Vec<_> = events
@@ -1051,9 +1063,10 @@ fn lab_run_completes_with_archon_sequence_and_lock_excludes_other_owners() {
             "run_succeeded"
         ]
     );
-    let events = parvi_missions::Ledger::new(dir.0.join("runs").join(format!("{id}.ndjson")), &id)
-        .read()
-        .unwrap();
+    let events =
+        parvi_mission_engine::Ledger::new(dir.0.join("runs").join(format!("{id}.ndjson")), &id)
+            .read()
+            .unwrap();
     let dispatch = events
         .iter()
         .find(|event| event.kind == "slot_dispatch")
@@ -1072,7 +1085,7 @@ impl Executor for Waiter {
         &self,
         r: FormationExecution,
         _events: ExecutionSink,
-    ) -> Result<FormationResult, parvi_missions::Error> {
+    ) -> Result<FormationResult, parvi_mission_engine::Error> {
         {
             self.0.fetch_add(1, Ordering::SeqCst);
             while !r.canceled.load(Ordering::Acquire) {
@@ -1081,7 +1094,7 @@ impl Executor for Waiter {
             self.0.fetch_sub(1, Ordering::SeqCst);
             Err("canceled".into())
         }
-        .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+        .map_err(|message: String| parvi_mission_engine::Error::new("executor_error", message))
     }
 }
 #[test]
@@ -1150,7 +1163,7 @@ fn rejected_admission_allocates_nothing_and_stale_revision_conflicts() {
     req.inputs.clear();
     assert!(matches!(
         c.start_mission(req),
-        Err(parvi_missions::AdmissionFailure::Findings(_))
+        Err(parvi_mission_engine::AdmissionFailure::Findings(_))
     ));
     assert_eq!(std::fs::read_dir(dir.0.join("runs")).unwrap().count(), 0);
     assert!(!dir.0.join("workspaces").exists());
@@ -1158,26 +1171,26 @@ fn rejected_admission_allocates_nothing_and_stale_revision_conflicts() {
     req.expected_rev = 2;
     assert!(matches!(
         c.start_mission(req),
-        Err(parvi_missions::AdmissionFailure::Conflict)
+        Err(parvi_mission_engine::AdmissionFailure::Conflict)
     ));
     let mut req = request();
     req.context_paths.push("relative-context".into());
     assert!(matches!(
         c.start_mission(req),
-        Err(parvi_missions::AdmissionFailure::Invalid(_))
+        Err(parvi_mission_engine::AdmissionFailure::Invalid(_))
     ));
     let mut req = request();
     req.work = "bad owner/repo#1".into();
     assert!(matches!(
         c.start_mission(req),
-        Err(parvi_missions::AdmissionFailure::Invalid(_))
+        Err(parvi_mission_engine::AdmissionFailure::Invalid(_))
     ));
     // A bare Bead id names no store: the node resolves it before admission.
     let mut req = request();
     req.work = "ctx-12".into();
     assert!(matches!(
         c.start_mission(req),
-        Err(parvi_missions::AdmissionFailure::Invalid(_))
+        Err(parvi_mission_engine::AdmissionFailure::Invalid(_))
     ));
     assert_eq!(std::fs::read_dir(dir.0.join("runs")).unwrap().count(), 0);
 }
@@ -1200,7 +1213,7 @@ fn a_step_placed_elsewhere_needs_a_repository_and_a_well_formed_place() {
     };
     let c = Coordinator::open(&dir.0, settings, Box::new(LabExecutor)).unwrap();
     let refused = |code: parvi_mission_model::Code| {
-        matches!(c.start_mission(request()), Err(parvi_missions::AdmissionFailure::Findings(f))
+        matches!(c.start_mission(request()), Err(parvi_mission_engine::AdmissionFailure::Findings(f))
             if f.iter().any(|x| x.code == code && x.node_id == "fmn_work"))
     };
     place("elsewhere");
@@ -1215,7 +1228,7 @@ fn a_step_placed_elsewhere_needs_a_repository_and_a_well_formed_place() {
         let mut req = request();
         req.known_devices = Some(devices.iter().map(|d| d.to_string()).collect());
         match c.start_mission(req) {
-            Err(parvi_missions::AdmissionFailure::Findings(f)) => f
+            Err(parvi_mission_engine::AdmissionFailure::Findings(f)) => f
                 .iter()
                 .filter(|x| x.node_id == "fmn_work")
                 .map(|x| x.code)
@@ -1311,9 +1324,9 @@ impl Executor for VerifyLease {
         &self,
         request: FormationExecution,
         events: ExecutionSink,
-    ) -> Result<FormationResult, parvi_missions::Error> {
+    ) -> Result<FormationResult, parvi_mission_engine::Error> {
         (|| -> Result<FormationResult, String> {
-        let dispatch = parvi_missions::ExecutionEvent {
+        let dispatch = parvi_mission_engine::ExecutionEvent {
             kind: "slot_dispatch".into(),
             slot_id: request.formation.slots[0].id.clone(),
             data: serde_json::json!({"dispatchId":"dsp_test"})
@@ -1322,7 +1335,7 @@ impl Executor for VerifyLease {
                 .clone(),
         };
         events.emit(dispatch).map_err(|error| error.message)?;
-        let ledger = parvi_missions::Ledger::new(
+        let ledger = parvi_mission_engine::Ledger::new(
             self.root
                 .join("runs")
                 .join(format!("{}.ndjson", request.run_id)),
@@ -1334,7 +1347,7 @@ impl Executor for VerifyLease {
             .last()
             .is_some_and(|event| event.kind == "slot_dispatch");
         self.recorded.store(recorded, Ordering::Release);
-        events.emit(parvi_missions::ExecutionEvent { kind:"slot_result".into(),slot_id:request.formation.slots[0].id.clone(),data:serde_json::json!({"dispatchId":"dsp_test","sentinel":{"runId":request.run_id,"status":"ok"}}).as_object().unwrap().clone() }).map_err(|error| error.message)?;
+        events.emit(parvi_mission_engine::ExecutionEvent { kind:"slot_result".into(),slot_id:request.formation.slots[0].id.clone(),data:serde_json::json!({"dispatchId":"dsp_test","sentinel":{"runId":request.run_id,"status":"ok"}}).as_object().unwrap().clone() }).map_err(|error| error.message)?;
         let outputs = request
             .formation
             .outputs
@@ -1346,7 +1359,7 @@ impl Executor for VerifyLease {
             text: "done".into(),
             outputs,
         })
-     })().map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+     })().map_err(|message: String| parvi_mission_engine::Error::new("executor_error", message))
     }
 }
 #[test]
@@ -1369,10 +1382,10 @@ impl Executor for MissingOutput {
         &self,
         request: FormationExecution,
         events: ExecutionSink,
-    ) -> Result<FormationResult, parvi_missions::Error> {
+    ) -> Result<FormationResult, parvi_mission_engine::Error> {
         (|| -> Result<FormationResult, String> {
         let slot_id = request.formation.slots[0].id.clone();
-        events.emit(parvi_missions::ExecutionEvent {
+        events.emit(parvi_mission_engine::ExecutionEvent {
             kind: "slot_dispatch".into(),
             slot_id: slot_id.clone(),
             data: serde_json::json!({"dispatchId":"dsp_missing_output"})
@@ -1380,13 +1393,13 @@ impl Executor for MissingOutput {
                 .unwrap()
                 .clone(),
         }).map_err(|error| error.message)?;
-        events.emit(parvi_missions::ExecutionEvent{kind:"slot_result".into(),slot_id,data:serde_json::json!({"dispatchId":"dsp_missing_output","sentinel":{"runId":request.run_id,"status":"ok"}}).as_object().unwrap().clone()}).map_err(|error| error.message)?;
+        events.emit(parvi_mission_engine::ExecutionEvent{kind:"slot_result".into(),slot_id,data:serde_json::json!({"dispatchId":"dsp_missing_output","sentinel":{"runId":request.run_id,"status":"ok"}}).as_object().unwrap().clone()}).map_err(|error| error.message)?;
         Ok(FormationResult {
             status: "done".into(),
             text: "incomplete".into(),
             outputs: serde_json::Map::new(),
         })
-     })().map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+     })().map_err(|message: String| parvi_mission_engine::Error::new("executor_error", message))
     }
 }
 #[test]
@@ -1412,14 +1425,16 @@ fn a_run_that_blocks_is_told_once_with_its_mission_and_why() {
     let told = Arc::new(std::sync::Mutex::new(Vec::new()));
     let tell = told.clone();
     let settings = RunSettings {
-        on_block: Some(parvi_missions::OnBlock(Arc::new(move |run, reason| {
-            tell.lock().unwrap().push((
-                run.run_id.clone(),
-                run.mission_slug.clone(),
-                run.status.clone(),
-                reason.to_owned(),
-            ));
-        }))),
+        on_block: Some(parvi_mission_engine::OnBlock(Arc::new(
+            move |run, reason| {
+                tell.lock().unwrap().push((
+                    run.run_id.clone(),
+                    run.mission_slug.clone(),
+                    run.status.clone(),
+                    reason.to_owned(),
+                ));
+            },
+        ))),
         ..Default::default()
     };
     let c = Coordinator::open(&dir.0, settings, Box::new(MissingOutput)).unwrap();
@@ -1447,11 +1462,11 @@ impl Executor for UnknownDispatch {
         &self,
         request: FormationExecution,
         events: ExecutionSink,
-    ) -> Result<FormationResult, parvi_missions::Error> {
+    ) -> Result<FormationResult, parvi_mission_engine::Error> {
         (|| -> Result<FormationResult, String> {
-        events.emit(parvi_missions::ExecutionEvent{kind:"slot_result".into(),slot_id:request.formation.slots[0].id.clone(),data:serde_json::json!({"dispatchId":"missing","sentinel":{"runId":request.run_id,"status":"ok"}}).as_object().unwrap().clone()}).map_err(|error| error.message)?;
+        events.emit(parvi_mission_engine::ExecutionEvent{kind:"slot_result".into(),slot_id:request.formation.slots[0].id.clone(),data:serde_json::json!({"dispatchId":"missing","sentinel":{"runId":request.run_id,"status":"ok"}}).as_object().unwrap().clone()}).map_err(|error| error.message)?;
         unreachable!()
-     })().map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+     })().map_err(|message: String| parvi_mission_engine::Error::new("executor_error", message))
     }
 }
 #[test]
@@ -1482,10 +1497,10 @@ impl Executor for WrongRunSentinel {
         &self,
         request: FormationExecution,
         events: ExecutionSink,
-    ) -> Result<FormationResult, parvi_missions::Error> {
+    ) -> Result<FormationResult, parvi_mission_engine::Error> {
         (|| -> Result<FormationResult, String> {
         let slot_id = request.formation.slots[0].id.clone();
-        events.emit(parvi_missions::ExecutionEvent {
+        events.emit(parvi_mission_engine::ExecutionEvent {
             kind: "slot_dispatch".into(),
             slot_id: slot_id.clone(),
             data: serde_json::json!({"dispatchId":"dsp_wrong_run"})
@@ -1493,9 +1508,9 @@ impl Executor for WrongRunSentinel {
                 .unwrap()
                 .clone(),
         }).map_err(|error| error.message)?;
-        events.emit(parvi_missions::ExecutionEvent{kind:"slot_result".into(),slot_id,data:serde_json::json!({"dispatchId":"dsp_wrong_run","sentinel":{"runId":"run_wrong","status":"ok"}}).as_object().unwrap().clone()}).map_err(|error| error.message)?;
+        events.emit(parvi_mission_engine::ExecutionEvent{kind:"slot_result".into(),slot_id,data:serde_json::json!({"dispatchId":"dsp_wrong_run","sentinel":{"runId":"run_wrong","status":"ok"}}).as_object().unwrap().clone()}).map_err(|error| error.message)?;
         unreachable!()
-     })().map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+     })().map_err(|message: String| parvi_mission_engine::Error::new("executor_error", message))
     }
 }
 #[test]
@@ -1541,7 +1556,7 @@ fn repository_runs_isolate_commit_and_land() {
             &self,
             req: FormationExecution,
             sink: ExecutionSink,
-        ) -> Result<FormationResult, parvi_missions::Error> {
+        ) -> Result<FormationResult, parvi_mission_engine::Error> {
             (|| -> Result<FormationResult, String> {
                 std::fs::write(req.cwd.join(&req.formation.id), &req.run_id)
                     .map_err(|e| e.to_string())?;
@@ -1549,7 +1564,7 @@ fn repository_runs_isolate_commit_and_land() {
                     .execute_formation(req, sink)
                     .map_err(|error| error.message)
             })()
-            .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+            .map_err(|message: String| parvi_mission_engine::Error::new("executor_error", message))
         }
     }
     let dir = Scratch::new();
@@ -1593,7 +1608,7 @@ fn repository_runs_isolate_commit_and_land() {
     req.repository = "missing/repo".into();
     let err = c.start_mission(req.clone()).unwrap_err();
     assert!(
-        matches!(err, parvi_missions::AdmissionFailure::Findings(ref f) if f.iter().any(|x| x.code == parvi_mission_model::Code::NoCheckout))
+        matches!(err, parvi_mission_engine::AdmissionFailure::Findings(ref f) if f.iter().any(|x| x.code == parvi_mission_model::Code::NoCheckout))
     );
     req.repository = "owner/repo".into();
     let a = c.start_mission(req.clone()).unwrap();
@@ -1659,7 +1674,7 @@ fn recovery_publishes_an_output_recorded_before_its_commit() {
             &self,
             req: FormationExecution,
             sink: ExecutionSink,
-        ) -> Result<FormationResult, parvi_missions::Error> {
+        ) -> Result<FormationResult, parvi_mission_engine::Error> {
             (|| -> Result<FormationResult, String> {
                 std::fs::write(req.cwd.join("turn-file"), "accepted turn")
                     .map_err(|e| e.to_string())?;
@@ -1667,7 +1682,7 @@ fn recovery_publishes_an_output_recorded_before_its_commit() {
                     .execute_formation(req, sink)
                     .map_err(|error| error.message)
             })()
-            .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+            .map_err(|message: String| parvi_mission_engine::Error::new("executor_error", message))
         }
     }
     let dir = Scratch::new();
@@ -1777,7 +1792,7 @@ fn a_start_repeated_with_its_request_id_answers_the_run_it_made() {
 
 /// The reopened coordinator resumed the run itself, as #123 decided.
 fn resumed_after_restart(root: &std::path::Path, id: &str) -> bool {
-    parvi_missions::Ledger::new(root.join("runs").join(format!("{id}.ndjson")), id)
+    parvi_mission_engine::Ledger::new(root.join("runs").join(format!("{id}.ndjson")), id)
         .read()
         .unwrap()
         .iter()

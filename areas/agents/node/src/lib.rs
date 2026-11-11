@@ -81,7 +81,7 @@ pub fn build(setup: &Setup) -> Result<Built> {
     let root = section
         .missions_dir
         .map(|p| setup.config.path(&p))
-        .or_else(parvi_missions::Store::default_root)
+        .or_else(parvi_mission_engine::Store::default_root)
         .context("agents roles need a missions directory")?;
     let roles = Arc::new(roles::Service::new(root, fixture_codex));
     let node = setup.node.id.to_string();

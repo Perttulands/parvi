@@ -1,10 +1,10 @@
 #[allow(dead_code)]
 mod run_support;
-use parvi_mission_model::RunStart;
-use parvi_missions::{
+use parvi_mission_engine::{
     Coordinator, ExecutionSink, Executor, FormationExecution, FormationResult, LabExecutor,
     RunSettings,
 };
+use parvi_mission_model::RunStart;
 use run_support::{Scratch, gated_mission};
 use std::{
     collections::BTreeMap,
@@ -80,7 +80,7 @@ impl Executor for Committer {
         &self,
         req: FormationExecution,
         sink: ExecutionSink,
-    ) -> Result<FormationResult, parvi_missions::Error> {
+    ) -> Result<FormationResult, parvi_mission_engine::Error> {
         {
             std::fs::write(req.cwd.join("agent-file"), "committed by agent").unwrap();
             git(&req.cwd, &["add", "agent-file"]);
@@ -96,7 +96,7 @@ impl Executor for Committer {
                 .execute_formation(req, sink)
                 .map_err(|error| error.message)
         }
-        .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+        .map_err(|message: String| parvi_mission_engine::Error::new("executor_error", message))
     }
 }
 #[test]
@@ -141,7 +141,7 @@ impl Executor for Failure {
         &self,
         req: FormationExecution,
         sink: ExecutionSink,
-    ) -> Result<FormationResult, parvi_missions::Error> {
+    ) -> Result<FormationResult, parvi_mission_engine::Error> {
         (|| -> Result<FormationResult, String> {
             std::fs::write(req.cwd.join("unfinished"), "partial").unwrap();
             self.started.store(true, Ordering::Release);
@@ -161,7 +161,7 @@ impl Executor for Failure {
             result.text = format!("<<<PARVI-ESCALATE run-id={id} severity=stop reason=blocked>>>");
             Ok(result)
         })()
-        .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+        .map_err(|message: String| parvi_mission_engine::Error::new("executor_error", message))
     }
 }
 #[test]
@@ -210,7 +210,7 @@ impl Executor for Locking {
         &self,
         req: FormationExecution,
         sink: ExecutionSink,
-    ) -> Result<FormationResult, parvi_missions::Error> {
+    ) -> Result<FormationResult, parvi_mission_engine::Error> {
         {
             std::fs::write(req.cwd.join("changed"), "value").unwrap();
             let primary = req.cwd.parent().unwrap().join(&req.run_id);
@@ -220,7 +220,7 @@ impl Executor for Locking {
                 .execute_formation(req, sink)
                 .map_err(|error| error.message)
         }
-        .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+        .map_err(|message: String| parvi_mission_engine::Error::new("executor_error", message))
     }
 }
 #[test]

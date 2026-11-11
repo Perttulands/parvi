@@ -2,11 +2,11 @@
 //! in run status and the run list; `{bead}` and `{issue}` in briefs with
 //! Archon's precedence against declared inputs; and a brief's own work
 //! item beside the run's.
-use parvi_mission_model::RunStart;
-use parvi_missions::{
+use parvi_mission_engine::{
     Coordinator, ExecutionSink, Executor, FormationExecution, FormationResult, LabExecutor,
     RunSettings,
 };
+use parvi_mission_model::RunStart;
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
@@ -96,14 +96,14 @@ impl Executor for Recording {
         &self,
         execution: FormationExecution,
         events: ExecutionSink,
-    ) -> Result<FormationResult, parvi_missions::Error> {
+    ) -> Result<FormationResult, parvi_mission_engine::Error> {
         {
             self.0.lock().unwrap().push(execution.clone());
             LabExecutor
                 .execute_formation(execution, events)
                 .map_err(|error| error.message)
         }
-        .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+        .map_err(|message: String| parvi_mission_engine::Error::new("executor_error", message))
     }
 }
 
@@ -223,7 +223,10 @@ fn admission_refuses_a_work_item_it_cannot_place() {
             ..Default::default()
         });
         assert!(
-            matches!(refused, Err(parvi_missions::AdmissionFailure::Invalid(_))),
+            matches!(
+                refused,
+                Err(parvi_mission_engine::AdmissionFailure::Invalid(_))
+            ),
             "{work}"
         );
     }
@@ -238,7 +241,7 @@ impl Executor for FailOnce {
         &self,
         execution: FormationExecution,
         events: ExecutionSink,
-    ) -> Result<FormationResult, parvi_missions::Error> {
+    ) -> Result<FormationResult, parvi_mission_engine::Error> {
         (|| -> Result<FormationResult, String> {
             if !std::mem::replace(&mut *self.1.lock().unwrap(), true) {
                 return Err("seat lost".into());
@@ -247,7 +250,7 @@ impl Executor for FailOnce {
                 .execute_formation(execution, events)
                 .map_err(|error| error.message)
         })()
-        .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+        .map_err(|message: String| parvi_mission_engine::Error::new("executor_error", message))
     }
 }
 

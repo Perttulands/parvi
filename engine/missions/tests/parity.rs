@@ -8,8 +8,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use parvi_mission_engine::{Harnesses, Store, validate};
 use parvi_mission_model::Finding;
-use parvi_missions::{Harnesses, Store, validate};
 use serde::Deserialize;
 
 #[derive(Deserialize)]

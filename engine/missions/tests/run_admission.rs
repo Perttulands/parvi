@@ -1,5 +1,5 @@
+use parvi_mission_engine::{Harnesses, RoleStore, run_admission};
 use parvi_mission_model::{Formation, Mission, Slot};
-use parvi_missions::{Harnesses, RoleStore, run_admission};
 use std::collections::BTreeMap;
 
 #[test]

@@ -1,5 +1,5 @@
+use parvi_mission_engine::Store;
 use parvi_mission_model::{Patch, Precondition};
-use parvi_missions::Store;
 use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Scratch(std::path::PathBuf);
@@ -582,7 +582,7 @@ fn staffing_is_validated_and_repeated_assignment_is_a_noop() {
 fn arrange_follows_delivery_and_puts_the_judge_under_its_gate() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/parity");
     let mission = Store::new(path).read_mission("delivery").unwrap();
-    let result = parvi_missions::arrange(&mission, &Default::default());
+    let result = parvi_mission_engine::arrange(&mission, &Default::default());
     let node = |id: &str| result.nodes.iter().find(|node| node.id == id).unwrap();
     let ids = [
         "mis_delivery",
@@ -1210,8 +1210,8 @@ fn restored_node_allocates_new_wire_id_when_original_is_taken() {
 
 #[test]
 fn placement_refuses_a_full_bounded_search_and_a_foreign_layout() {
+    use parvi_mission_engine::free_layout_position;
     use parvi_mission_model::{Formation, Layout, LayoutNode, Mission};
-    use parvi_missions::free_layout_position;
     let mut mission = Mission {
         id: "msn_work".into(),
         ..Default::default()
