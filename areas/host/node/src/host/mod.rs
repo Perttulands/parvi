@@ -214,6 +214,8 @@ mod tests {
             cpu: None,
             memory: None,
             swap: None,
+            swap_activity_bps: None,
+            gpu_reason: None,
             load: None,
             disk: None,
             gpus: Vec::new(),

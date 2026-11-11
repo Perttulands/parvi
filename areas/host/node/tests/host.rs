@@ -175,6 +175,17 @@ async fn services_and_commands_use_the_same_catalog_and_coded_errors() {
     #[cfg(target_os = "linux")]
     assert!(host["latest"]["memory"].is_object());
 
+    let host_args = ["show", "--node", &node.url(), "--json"].map(String::from);
+    let mut host_output = Vec::new();
+    assert_eq!(
+        cli::run("host", &host_args, &mut host_output)
+            .await
+            .unwrap(),
+        0
+    );
+    let cli_host: Value = serde_json::from_slice(&host_output).unwrap();
+    assert!(cli_host["latest"].get("gpu_reason").is_some());
+
     let args = ["show", "fixture", "--node", &node.url(), "--json"].map(String::from);
     let mut output = Vec::new();
     assert_eq!(cli::run("service", &args, &mut output).await.unwrap(), 0);
@@ -288,4 +299,47 @@ async fn disabled_host_has_no_routes_or_tools() {
         .collect();
     assert_eq!(names, parvi_node_kit::own::COMMANDS, "only the node's own");
     node.stop().await;
+}
+
+#[cfg(unix)]
+#[test]
+fn host_cli_json_reports_gpu_failure() {
+    use std::os::unix::fs::PermissionsExt;
+    const CHILD: &str = "PARVI_GPU_REASON_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let node = start().await;
+            let args = ["show", "--node", &node.url(), "--json"].map(String::from);
+            let mut output = Vec::new();
+            assert_eq!(cli::run("host", &args, &mut output).await.unwrap(), 0);
+            let answer: Value = serde_json::from_slice(&output).unwrap();
+            let reason = answer["latest"]["gpu_reason"].as_str().unwrap();
+            assert!(
+                reason.contains("9") && reason.contains("NVIDIA-SMI has failed"),
+                "{reason}"
+            );
+            node.stop().await;
+        });
+        return;
+    }
+    let dir = parvi_testkit::fresh_dir("host-cli-gpu");
+    let executable = dir.join("nvidia-smi");
+    std::fs::write(
+        &executable,
+        "#!/bin/sh\necho 'NVIDIA-SMI has failed' >&2\nexit 9\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "host_cli_json_reports_gpu_failure",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .env("PATH", &dir)
+        .status()
+        .unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(status.success());
 }

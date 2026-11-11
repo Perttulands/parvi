@@ -27,17 +27,21 @@ const TIMEOUT: Duration = Duration::from_millis(1200);
 /// Where `nvidia-smi` is, if anywhere: on `PATH` first, then the driver's
 /// places.
 pub fn locate() -> Option<PathBuf> {
-    let on_path = std::env::var_os("PATH")
+    locate_in(std::env::var_os("PATH"), &CANDIDATES)
+}
+
+fn locate_in(path: Option<std::ffi::OsString>, candidates: &[&str]) -> Option<PathBuf> {
+    let on_path = path
         .into_iter()
         .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
         .map(|dir| dir.join(format!("nvidia-smi{}", std::env::consts::EXE_SUFFIX)));
     on_path
-        .chain(CANDIDATES.iter().map(PathBuf::from))
+        .chain(candidates.iter().map(PathBuf::from))
         .find(|path| path.is_file())
 }
 
 /// Every GPU `nvidia-smi` reports now. Empty if it fails or says nothing.
-pub async fn query(nvidia_smi: &Path) -> Vec<Gpu> {
+pub async fn query(nvidia_smi: &Path) -> Result<Vec<Gpu>, String> {
     let mut command = tokio::process::Command::new(nvidia_smi);
     // A node without a console must not flash one every reading.
     #[cfg(windows)]
@@ -48,9 +52,30 @@ pub async fn query(nvidia_smi: &Path) -> Vec<Gpu> {
         .output();
     match tokio::time::timeout(TIMEOUT, output).await {
         Ok(Ok(output)) if output.status.success() => {
-            parse(&String::from_utf8_lossy(&output.stdout))
+            Ok(parse(&String::from_utf8_lossy(&output.stdout)))
         }
-        _ => Vec::new(),
+        Ok(Ok(output)) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let line = stderr.lines().next().unwrap_or("").trim();
+            Err(format!(
+                "nvidia-smi {}{}",
+                output.status,
+                if line.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {line}")
+                }
+            ))
+        }
+        Ok(Err(error)) => Err(format!("nvidia-smi: {error}")),
+        Err(_) => Err("nvidia-smi timed out".into()),
+    }
+}
+
+pub async fn read(path: Option<&Path>) -> Result<Vec<Gpu>, String> {
+    match path {
+        Some(path) => query(path).await,
+        None => Err("nvidia-smi not found".into()),
     }
 }
 
@@ -80,6 +105,29 @@ pub fn parse(csv: &str) -> Vec<Gpu> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn missing_and_failed_commands_explain_why() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = parvi_testkit::fresh_dir("gpu-failure");
+        let missing = locate_in(Some(dir.clone().into_os_string()), &[]);
+        assert_eq!(
+            read(missing.as_deref()).await.unwrap_err(),
+            "nvidia-smi not found"
+        );
+        let path = dir.join("nvidia-smi");
+        std::fs::write(
+            &path,
+            "#!/bin/sh\necho 'NVIDIA-SMI has failed' >&2\necho ignored >&2\nexit 9\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let reason = query(&path).await.unwrap_err();
+        assert!(reason.contains("9") && reason.contains("NVIDIA-SMI has failed"));
+        assert!(!reason.contains("ignored"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn each_line_is_one_gpu_and_na_is_unknown() {
