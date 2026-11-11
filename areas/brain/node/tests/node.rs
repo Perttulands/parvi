@@ -151,3 +151,33 @@ async fn node_serves_brain_routes_commands_and_coded_errors() {
     node.stop().await;
     server.abort();
 }
+
+#[tokio::test]
+async fn disabled_brain_has_no_routes_or_tools() {
+    let node = Node::start(&[parvi_brain::LISTING], "[brain]\nenabled = false\n")
+        .await
+        .unwrap();
+    let client = NodeClient::new(Some(&format!("{}/", node.url()))).unwrap();
+    let health = client
+        .request(Method::GET, "/api/health", None, None)
+        .await
+        .unwrap()
+        .0;
+    assert_eq!(health["off"], json!(["brain"]));
+    let missing = client
+        .request(Method::GET, "/api/brain/search?q=first", None, None)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        missing.downcast_ref::<NodeError>().unwrap().status,
+        axum::http::StatusCode::NOT_FOUND
+    );
+    let rpc = json!({"jsonrpc":"2.0", "id":1, "method":"tools/list", "params":{}});
+    let tools = client
+        .request(Method::POST, "/mcp", Some(rpc), None)
+        .await
+        .unwrap()
+        .0;
+    assert_eq!(tools["result"]["tools"], json!([]));
+    node.stop().await;
+}

@@ -82,7 +82,12 @@ impl Render for BrainPage {
                     .child(div().flex_1())
                     .child(kit::note(&t, count, Some(t.dim))),
             )
-            .child(div().p(px(GAP)).child(self.field.clone()))
+            .child(
+                div()
+                    .debug_selector(|| "brain-search".into())
+                    .p(px(GAP))
+                    .child(self.field.clone()),
+            )
             .child(list)
             .when_some(self.state.search_error.clone(), |d, e| {
                 d.child(kit::note(&t, e, Some(t.error)))
@@ -175,7 +180,12 @@ impl Render for BrainPage {
                         )),
                     ),
             );
-            main = main.child(kit::note(&t, page.path.clone(), Some(t.dim)));
+            let page_selector = format!("brain-reading-{}", page.path);
+            main = main.child(
+                div()
+                    .debug_selector(move || page_selector.clone())
+                    .child(kit::note(&t, page.path.clone(), Some(t.dim))),
+            );
             if let Some(error) = &self.state.page_error {
                 main = main.child(kit::note(&t, error.clone(), Some(t.error)));
             }
@@ -278,8 +288,9 @@ impl Render for BrainPage {
                     .collect();
                 let anchor = self.anchor.clone();
                 let scroll = self.scroll.clone();
-                let body = markdown::render(&look, "brain-body", &blocks).on_children_prepainted(
-                    move |bounds, window, cx| {
+                let body = markdown::render(&look, "brain-body", &blocks)
+                    .debug_selector(|| "brain-prose".into())
+                    .on_children_prepainted(move |bounds, window, cx| {
                         selection.borrow_mut().laid_out();
                         let Some(want) = anchor.borrow_mut().take() else {
                             return;
@@ -298,8 +309,7 @@ impl Render for BrainPage {
                             offset.y + scroll.bounds().top() - child.top(),
                         ));
                         window.defer(cx, |window, _| window.refresh());
-                    },
-                );
+                    });
                 main = main.child(select::track(body, &self.select, cx.entity_id(), |_, _| {}));
             }
             main = main.child(links_section(&page.links, cx));

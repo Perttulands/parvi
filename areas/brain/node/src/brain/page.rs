@@ -1,5 +1,5 @@
 //! One corpus page as text: its front matter, title and slug, read the way
-//! Context Citadel reads them (`/srv/context-citadel/lib/brain.js`), so the
+//! Context Citadel reads them, so the
 //! reader and the search agree on what a page is called.
 
 /// What a page says about itself.

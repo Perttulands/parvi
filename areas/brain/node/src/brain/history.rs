@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn reads_a_log_with_and_without_files() {
-        let log = "\x1eaaa\x1f2026-11-01T10:00:00+02:00\x1fPerttu\x1fEdit a\tpage\n\n\
+        let log = "\x1eaaa\x1f2026-11-01T10:00:00+02:00\x1fEditor\x1fEdit a\tpage\n\n\
                    knowledge/a.md\nself/b.md\n\x1ebbb\x1f2026-10-01T10:00:00+02:00\x1fLibrarian\x1fFirst\n";
         let changes = parse_log(log);
         assert_eq!(changes.len(), 2);
