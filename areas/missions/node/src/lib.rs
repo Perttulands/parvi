@@ -12,7 +12,6 @@ use parvi_node_kit::{Area, BoxFuture, Built, Channel, Client, Listing, Setup};
 use parvi_term::Sessions;
 use serde::Deserialize;
 use std::{
-    path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -27,9 +26,7 @@ pub const LISTING: Listing = Listing {
 
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-struct Section {
-    dir: Option<PathBuf>,
-}
+struct Section {}
 
 #[derive(Clone)]
 struct Missions {
@@ -53,12 +50,10 @@ pub fn build_with_executor(
     setup: &Setup,
     override_executor: Option<Box<dyn parvi_mission_engine::Executor>>,
 ) -> Result<Built> {
-    let section: Section = setup.config.section("missions")?;
-    let root = section
-        .dir
-        .map(|dir| setup.config.path(&dir))
-        .unwrap_or_else(|| setup.dir.join("missions"));
+    let _: Section = setup.config.section("missions")?;
+    let root = Store::root_in(&setup.dir);
     let node = setup.node.id.to_string();
+    let environment = format!("{}/{}", setup.node.device, setup.node.environment.name());
     let events = setup.events.clone();
     Built::then(move |provided| {
         let sessions = provided
@@ -70,6 +65,7 @@ pub fn build_with_executor(
         let seats = LocalSeats::new(sessions, &root, node, TranscriptRoots::from_host());
         let executor = SeatExecutor::new(Arc::new(seats), tokio::runtime::Handle::current());
         let settings = RunSettings {
+            environment,
             on_block: Some(parvi_mission_engine::OnBlock(Arc::new(
                 move |run, reason| {
                     events.record(

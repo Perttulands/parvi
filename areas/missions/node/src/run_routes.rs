@@ -2,7 +2,10 @@
 use crate::{Missions, routes::ApiError};
 use axum::{
     Json, Router,
-    extract::{FromRef, Path, Query, State, rejection::JsonRejection},
+    extract::{
+        FromRef, Path, Query, State,
+        rejection::{JsonRejection, QueryRejection},
+    },
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
@@ -49,8 +52,9 @@ fn response<T: serde::Serialize>(result: Result<T, parvi_core::Error>) -> Result
 }
 async fn list(
     State(c): State<Coordinator>,
-    Query(q): Query<contract::RunsQuery>,
+    q: Result<Query<contract::RunsQuery>, QueryRejection>,
 ) -> ResultResponse {
+    let Query(q) = q.map_err(|e| parvi_core::Error::new("bad_request", e.body_text()))?;
     response(c.list(q.mission.as_deref(), q.needs.as_deref() == Some("you")))
 }
 async fn read(State(c): State<Coordinator>, Path(id): Path<String>) -> ResultResponse {
@@ -70,7 +74,27 @@ async fn frozen(State(c): State<Coordinator>, Path(id): Path<String>) -> ResultR
     .into_response())
 }
 async fn seats(State(c): State<Coordinator>, Path(id): Path<String>) -> ResultResponse {
-    response(c.seats(&id))
+    let seats = c
+        .seats(&id)?
+        .into_iter()
+        .map(|seat| contract::AgentSeat {
+            dispatch_id: seat.dispatch_id,
+            slot_id: seat.slot_id,
+            node: seat.node,
+            session: seat.session,
+            pane: seat.pane,
+            session_name: seat.session_name,
+            outcome: seat.outcome,
+            available: seat.available,
+            waiting: seat.waiting.map(|wait| contract::SeatWait {
+                state: wait.state,
+                detail: wait.detail,
+                since: wait.since,
+                seq: wait.seq,
+            }),
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(seats).into_response())
 }
 async fn escalations(State(c): State<Coordinator>, Path(id): Path<String>) -> ResultResponse {
     response(c.escalations(&id))
@@ -78,8 +102,9 @@ async fn escalations(State(c): State<Coordinator>, Path(id): Path<String>) -> Re
 async fn attempts(
     State(c): State<Coordinator>,
     Path(id): Path<String>,
-    Query(q): Query<contract::AttemptsQuery>,
+    q: Result<Query<contract::AttemptsQuery>, QueryRejection>,
 ) -> ResultResponse {
+    let Query(q) = q.map_err(|e| parvi_core::Error::new("bad_request", e.body_text()))?;
     Ok(Json(json!({"attempts":c.attempts(&id, q.step.as_deref())?})).into_response())
 }
 async fn gate_request(
@@ -145,7 +170,7 @@ async fn start(
     if !req.work.is_empty() {
         req.work = m.resolver.resolve(&req.work).await?.to_string();
     }
-    // No other node can receive seats here; reject every explicit placement.
+    // Only the local environment can receive seats here.
     req.known_devices = Some(Vec::new());
     let c = m.coordinator;
     if req.mission.is_empty()
