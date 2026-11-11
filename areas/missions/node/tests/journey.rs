@@ -43,7 +43,16 @@ impl Executor for FakeSeatLab {
                 Ok::<_, anyhow::Error>(())
             })
             .map_err(|e| parvi_core::Error::new("test", e.to_string()))?;
-        LabExecutor.execute_formation(execution, sink)
+        let judge = execution.formation.title == "Judge";
+        let mut result = LabExecutor.execute_formation(execution, sink)?;
+        if judge {
+            let verdict = "```parvi-verdict\n{\"verdict\":\"pass\",\"reason\":\"ready\",\"evidence\":[]}\n```";
+            result.text = verdict.into();
+            for output in result.outputs.values_mut() {
+                output["text"] = verdict.into();
+            }
+        }
+        Ok(result)
     }
 }
 fn build(setup: &Setup) -> anyhow::Result<Built> {
@@ -109,7 +118,7 @@ async fn cli_authors_two_steps_answers_gate_and_finishes_with_fake_sessions() {
         .unwrap()
         .to_owned();
     let mut steps = Vec::new();
-    for title in ["Draft", "Polish"] {
+    for title in ["Draft", "Polish", "Judge"] {
         let result = cli(
             &node,
             "formation",
@@ -147,6 +156,28 @@ async fn cli_authors_two_steps_answers_gate_and_finishes_with_fake_sessions() {
             id,
         ));
     }
+    let judge_gate = cli(
+        &node,
+        "gate",
+        &[
+            "create",
+            "relay",
+            "--title",
+            "Judge review",
+            "--kinds",
+            "formation",
+        ],
+    )
+    .await["gate"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    cli(
+        &node,
+        "gate",
+        &["judge", "relay", &judge_gate, "--chain", &steps[2].2],
+    )
+    .await;
     let gate = cli(
         &node,
         "gate",
@@ -179,7 +210,9 @@ async fn cli_authors_two_steps_answers_gate_and_finishes_with_fake_sessions() {
     )
     .await;
     for (from, to) in [
-        (&steps[0].1, format!("{gate}:in")),
+        (&steps[0].1, format!("{judge_gate}:in")),
+        (&format!("{judge_gate}:pass"), format!("{gate}:in")),
+        (&format!("{judge_gate}:fail"), format!("{rejected}:in")),
         (&format!("{gate}:pass"), steps[1].0.clone()),
         (&format!("{gate}:fail"), format!("{rejected}:in")),
         (&steps[1].1, format!("{done}:in")),
@@ -197,7 +230,20 @@ async fn cli_authors_two_steps_answers_gate_and_finishes_with_fake_sessions() {
     assert_eq!(waiting["outcome"], "needs-you", "{waiting}");
     assert_eq!(waiting["asks"][0]["gate"], gate);
     let gates = cli(&node, "run", &["gates", run]).await;
-    assert_eq!(gates["gates"][0]["state"], "waiting");
+    let human_gate = gates["gates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["gate"] == gate)
+        .unwrap();
+    assert_eq!(human_gate["state"], "waiting");
+    assert!(
+        gates["gates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|g| g["gate"] == judge_gate && g["state"] == "answered")
+    );
     let request = cli(&node, "gate", &["request", run, &gate]).await;
     assert_eq!(request["criterion"], "Is this ready?");
     assert_eq!(request["inputs"][0]["fromNodeId"], steps[0].2);
@@ -293,9 +339,15 @@ async fn cli_authors_two_steps_answers_gate_and_finishes_with_fake_sessions() {
     )
     .await;
     let gates = cli(&node, "run", &["gates", run]).await;
-    assert_eq!(gates["gates"][0]["state"], "answered");
-    assert_eq!(gates["gates"][0]["verdict"], "pass");
-    assert_eq!(gates["gates"][0]["by"], "agent:journey");
+    let human_gate = gates["gates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["gate"] == gate)
+        .unwrap();
+    assert_eq!(human_gate["state"], "answered");
+    assert_eq!(human_gate["verdict"], "pass");
+    assert_eq!(human_gate["by"], "agent:journey");
     let error = node
         .call("gate_request", serde_json::json!({"run":run,"gate":gate}))
         .await
@@ -373,7 +425,7 @@ async fn cli_authors_two_steps_answers_gate_and_finishes_with_fake_sessions() {
             .any(|event| event.text.starts_with("run blocked:"))
     );
     let delivered = fake.delivered();
-    assert_eq!(delivered.len(), 2);
+    assert_eq!(delivered.len(), 3);
     assert!(delivered.iter().all(|d| d.enter));
     *FAKE.lock().unwrap() = None;
     node.stop().await;

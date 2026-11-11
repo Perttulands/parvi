@@ -1549,11 +1549,11 @@ impl Render for MissionsPage {
                         .child(kit::button(&t, "mission-mode-canvas", "Canvas", if self.mission_canvas_mode { Kind::Plain } else { Kind::Quiet }).debug_selector(|| "mission-mode-canvas".into()).on_click(cx.listener(|p, _, _, cx| { p.mission_canvas_mode = true; cx.notify(); })))
                         .child(div().debug_selector({ let complete = self.validation_complete(); move || if complete { "mission-validation-complete".into() } else { "mission-validation-pending".into() } }).child(div().debug_selector({ let ready = self.mission_run_ready(); move || if ready { "mission-run-ready".into() } else { "mission-run-quiet".into() } }).child(kit::button(&t, "prepare-run", "Run", if self.mission_run_ready() { Kind::Primary } else { Kind::Quiet }).debug_selector(|| "prepare-run".into()).on_click(cx.listener(|p, _, _, cx| p.prepare_run(cx))))))
                         .when(self.validation_failed(), |d| d.child(kit::button(&t, "retry-validation", "Retry validation", Kind::Quiet).debug_selector(|| "retry-validation".into()).on_click(cx.listener(|p, _, _, cx| { p.validation.clear(); p.sync_validation(cx); cx.notify(); }))))
-                        .child(kit::button(&t, "new-input", "+ Input", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createInputCard":{"title":"Input","goal":"","x":200,"y":200}}), WriteMode::Edit, cx))))
-                        .child(kit::button(&t, "new-step", "+ Step", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createFormation":{"type":"solo","title":"New step","x":200,"y":200}}), WriteMode::Edit, cx))))
-                        .child(kit::button(&t, "new-gate", "+ Gate", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createGate":{"title":"New gate","kinds":["human"],"x":200,"y":200}}), WriteMode::Edit, cx))))
-                        .child(kit::button(&t, "new-end", "+ End", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createEnd":{"title":"End","outcome":"done","x":200,"y":200}}), WriteMode::Edit, cx))))
-                        .child(kit::button(&t, "arrange", "Arrange", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.arrange(cx))))
+                        .child(kit::button(&t, "new-input", "+ Input", Kind::Quiet).debug_selector(|| "new-input".into()).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createInputCard":{"title":"Input","goal":"","x":200,"y":200}}), WriteMode::Edit, cx))))
+                        .child(kit::button(&t, "new-step", "+ Step", Kind::Quiet).debug_selector(|| "new-step".into()).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createFormation":{"type":"solo","title":"New step","x":200,"y":200}}), WriteMode::Edit, cx))))
+                        .child(kit::button(&t, "new-gate", "+ Gate", Kind::Quiet).debug_selector(|| "new-gate".into()).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createGate":{"title":"New gate","kinds":["human"],"x":200,"y":200}}), WriteMode::Edit, cx))))
+                        .child(kit::button(&t, "new-end", "+ End", Kind::Quiet).debug_selector(|| "new-end".into()).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createEnd":{"title":"End","outcome":"done","x":200,"y":200}}), WriteMode::Edit, cx))))
+                        .child(kit::button(&t, "arrange", "Arrange", Kind::Quiet).debug_selector(|| "arrange".into()).on_click(cx.listener(|p, _, _, cx| p.arrange(cx))))
                         .child(kit::button(&t, "undo", "Undo", Kind::Quiet).debug_selector({ let busy = self.writing; move || if busy { "undo-busy".into() } else { "undo".into() } }).on_click(cx.listener(|p, _, _, cx| p.undo(false, cx))))
                         .child(kit::button(&t, "redo", "Redo", Kind::Quiet).debug_selector({ let busy = self.writing; move || if busy { "redo-busy".into() } else { "redo".into() } }).on_click(cx.listener(|p, _, _, cx| p.undo(true, cx)))))
                     .when_some(self.state.error.clone(), |d, e| d.child(div().text_color(t.error).child(e)))
@@ -1626,7 +1626,7 @@ impl Render for MissionsPage {
                                 EditKind::End => "Outcome",
                                 _ => "",
                             })
-                            .child(div().child(self.extra.clone()))
+                            .child(div().debug_selector(|| "step-extra".into()).child(self.extra.clone()))
                         })
                         .when(matches!(ed.kind, EditKind::Step), |mut d| {
                             if let Some(f) = self.state.mission.as_ref().and_then(|m| m.formations.iter().find(|f| f.id == ed.id)) {

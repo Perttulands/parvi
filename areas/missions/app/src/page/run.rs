@@ -2030,7 +2030,9 @@ impl MissionsPage {
                 .as_ref()
                 .map(|m| m.node_name(&point.node))
                 .unwrap_or(point.node.as_str());
-            view = view.child(run_state::phrase(&point, title));
+            let phrase = run_state::phrase(&point, title);
+            let selector = format!("run-sentence-{phrase}");
+            view = view.child(div().debug_selector(move || selector.clone()).child(phrase));
         }
         let mission = self
             .run

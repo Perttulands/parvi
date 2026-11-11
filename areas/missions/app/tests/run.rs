@@ -357,6 +357,7 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
     click(cx, "run-start");
     until(cx, "active step", |cx| {
         cx.debug_bounds("run-step-fmn_work-running").is_some()
+            && cx.debug_bounds("run-sentence-running Work").is_some()
     });
     for _ in 0..8 {
         let y = f32::from(cx.debug_bounds("run-abort").unwrap().center().y);
@@ -488,6 +489,10 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
     let mission = cx.debug_bounds(mission_selector).unwrap();
     assert!(row.origin.y < mission.origin.y);
     until(cx, "human gate", |cx| cx.debug_bounds("run-gate").is_some());
+    until(cx, "waiting sentence", |cx| {
+        cx.debug_bounds("run-sentence-waiting for you at Review")
+            .is_some()
+    });
     until(cx, "gate read failure", |cx| {
         cx.debug_bounds("gate-retry").is_some()
     });
