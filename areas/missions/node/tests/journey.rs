@@ -287,13 +287,15 @@ async fn cli_authors_two_steps_answers_gate_and_finishes_with_fake_sessions() {
             &seq.to_string(),
             "--response",
             "approved",
+            "--actor",
+            "agent:journey",
         ],
     )
     .await;
     let gates = cli(&node, "run", &["gates", run]).await;
     assert_eq!(gates["gates"][0]["state"], "answered");
     assert_eq!(gates["gates"][0]["verdict"], "pass");
-    assert_eq!(gates["gates"][0]["by"], "human:operator");
+    assert_eq!(gates["gates"][0]["by"], "agent:journey");
     let error = node
         .call("gate_request", serde_json::json!({"run":run,"gate":gate}))
         .await

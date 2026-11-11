@@ -329,7 +329,7 @@ async fn run_changes_arrive_on_the_socket_through_completion() {
                         let error = client.request(Method::POST, &path, Some(body), None).await.unwrap_err();
                         assert_eq!(error.downcast_ref::<NodeError>().unwrap().status, status);
                     }
-                    client.request(Method::POST, &path, Some(json!({"requestedSeq":gate.requested_seq,"verdict":"pass","reason":"  accepted\n"})), None).await.unwrap();
+                    client.request(Method::POST, &path, Some(json!({"requestedSeq":gate.requested_seq,"verdict":"pass","reason":"  accepted\n","actor":"agent:http"})), None).await.unwrap();
                     let duplicate = client.request(Method::POST, &path, Some(json!({"requestedSeq":gate.requested_seq,"verdict":"pass"})), None).await.unwrap_err();
                     assert_eq!(duplicate.downcast_ref::<NodeError>().unwrap().status, axum::http::StatusCode::CONFLICT);
                     answered = true;
@@ -351,7 +351,9 @@ async fn run_changes_arrive_on_the_socket_through_completion() {
         events
             .iter()
             .any(|event| event.kind == "human_verdict_recorded"
-                && event.data["reason"] == "  accepted\n")
+                && event.data["reason"] == "  accepted\n"
+                && event.actor == "agent:http"
+                && event.data["decidedBy"] == "agent:http")
     );
     let unknown = client
         .request(

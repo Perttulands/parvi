@@ -399,6 +399,32 @@ mod tests {
     }
 
     #[test]
+    fn every_wire_ends_at_the_named_visible_ports() {
+        let mission = delivery();
+        assert!(mission.formations.len() >= 5);
+        let board = board(&mission, &build(&mission), &[], false);
+        let ports = ports(&mission, &board);
+        assert_eq!(board.wires.len(), mission.connections.len());
+        for connection in &mission.connections {
+            let wire = board
+                .wires
+                .iter()
+                .find(|wire| wire.id == connection.id)
+                .unwrap();
+            let source = ports
+                .iter()
+                .find(|port| port.endpoint == connection.from)
+                .unwrap();
+            let target = ports
+                .iter()
+                .find(|port| port.endpoint == connection.to)
+                .unwrap();
+            assert_eq!(wire.from, source.at, "source {}", connection.id);
+            assert_eq!(wire.to, target.at, "target {}", connection.id);
+        }
+    }
+
+    #[test]
     fn a_saved_place_wins_over_the_arrangement() {
         let m = delivery();
         let saved = [LayoutNode {

@@ -1,15 +1,23 @@
+mod canvas;
+mod editor_diff;
+mod edits;
+mod flow_view;
+mod manage;
+mod navigator;
+mod notes;
 mod run;
+mod staffing;
+mod validation;
 use crate::store::{Store, canvas as board, flow, undo};
 use gpui::{
-    AppContext, Bounds, Context, Div, Entity, FontWeight, IntoElement, PathBuilder, Pixels, Render,
-    SystemNotification, Window, canvas, div, point, prelude::*, px,
+    AppContext, Context, Div, Entity, FocusHandle, FontWeight, IntoElement, KeyDownEvent,
+    MouseButton, Render, SystemNotification, Window, div, prelude::*, px,
 };
 use parvi_app_kit::{
     Host, Page,
     host::Request,
-    theme::{board::LIST_W, size, theme},
+    theme::{size, theme},
     widgets::{
-        boundary,
         field::{FieldEvent, TextField},
         kit::{self, Kind},
     },
@@ -25,10 +33,16 @@ const TAB_PAD: f32 = 20.;
 const TAB_GAP: f32 = 6.;
 const EDGE: f32 = 2.;
 const EDITOR_W: f32 = 360.;
-const LINK_FIELD_W: f32 = 180.;
 pub struct MissionsPage {
     host: Host,
+    focus: FocusHandle,
     state: Store,
+    validation: crate::store::validation::Validation,
+    navigator: navigator::Navigator,
+    manage: manage::Manage,
+    canvas: canvas::View,
+    mission_canvas_mode: bool,
+    note_paper: notes::NotesUi,
     run: run::RunUi,
     generation: u64,
     editor: Option<Editor>,
@@ -42,12 +56,8 @@ pub struct MissionsPage {
     check: Entity<TextField>,
     check_version: Entity<TextField>,
     check_value: Entity<TextField>,
-    source: Entity<TextField>,
-    target: Entity<TextField>,
     history: undo::History,
-    pending_history: Option<(WriteMode, undo::Entry)>,
     writing: bool,
-    deleting_mission: bool,
     roles: Option<parvi_agents_contract::roles::Roles>,
     role: Entity<TextField>,
     harness: Entity<TextField>,
@@ -68,6 +78,7 @@ pub struct MissionsPage {
     limit_spent: Entity<TextField>,
     note_id: Option<String>,
     note_base: String,
+    note_etag: Option<String>,
     note_saving: bool,
     wanted: Option<Wanted>,
     reveal_card: Option<String>,
@@ -83,8 +94,6 @@ enum EditKind {
 #[derive(Clone, Copy)]
 enum WriteMode {
     Edit,
-    Undo,
-    Redo,
 }
 struct OutputDraft {
     name: Entity<TextField>,
@@ -117,7 +126,6 @@ struct Editor {
     etag: String,
     busy: bool,
     error: Option<String>,
-    brief: parvi_missions_contract::Brief,
     deleting: bool,
     baseline: Option<EditorSnapshot>,
     outputs: Vec<OutputDraft>,
@@ -126,7 +134,14 @@ impl MissionsPage {
     pub fn new(host: Host, _: &mut Window, cx: &mut Context<Self>) -> Self {
         let page = Self {
             host,
+            focus: cx.focus_handle(),
             state: Store::default(),
+            validation: Default::default(),
+            navigator: navigator::Navigator::new(cx),
+            manage: manage::Manage::default(),
+            canvas: canvas::View::default(),
+            mission_canvas_mode: false,
+            note_paper: notes::NotesUi::default(),
             run: run::RunUi::new(cx),
             generation: 0,
             editor: None,
@@ -140,12 +155,8 @@ impl MissionsPage {
             check: cx.new(|cx| TextField::new(cx, "Check profile")),
             check_version: cx.new(|cx| TextField::new(cx, "Profile version")),
             check_value: cx.new(|cx| TextField::new(cx, "Check value")),
-            source: cx.new(|cx| TextField::new(cx, "From node:port")),
-            target: cx.new(|cx| TextField::new(cx, "To node:port")),
             history: undo::History::default(),
-            pending_history: None,
             writing: false,
-            deleting_mission: false,
             roles: None,
             role: cx.new(|cx| TextField::new(cx, "Role id")),
             harness: cx.new(|cx| TextField::new(cx, "Harness")),
@@ -166,6 +177,7 @@ impl MissionsPage {
             limit_spent: cx.new(|cx| TextField::new(cx, "stop, best, or fail")),
             note_id: None,
             note_base: String::new(),
+            note_etag: None,
             note_saving: false,
             wanted: None,
             reveal_card: None,
@@ -198,6 +210,15 @@ impl MissionsPage {
         ] {
             Self::watch_editor_field(field, cx);
         }
+        cx.subscribe(&page.note, |page, field, event: &FieldEvent, cx| {
+            if matches!(event, FieldEvent::Changed)
+                && page.note_etag.is_none()
+                && field.read(cx).text != page.note_base
+            {
+                page.note_etag = page.notes.as_ref().map(|notes| notes.etag.clone());
+            }
+        })
+        .detach();
         page.host.channel(WATCH_RUNS, true, cx);
         host_guard(&page.host, cx);
         page
@@ -307,33 +328,6 @@ impl MissionsPage {
             }
         }
     }
-    fn run_row(
-        &self,
-        node: &str,
-        run: &parvi_missions_contract::RunProjection,
-        cx: &mut Context<Self>,
-    ) -> gpui::Stateful<Div> {
-        let t = theme(cx).clone();
-        let id = run.run_id.clone();
-        let node = node.to_owned();
-        let slug = run.mission_slug.clone();
-        let selector = format!("run-row-{id}");
-        div()
-            .id(gpui::SharedString::from(selector.clone()))
-            .debug_selector(move || selector.clone())
-            .px(px(PAD))
-            .cursor_pointer()
-            .text_color(t.text2)
-            .child(format!("{} · {}", run.run_id, run.status))
-            .on_click(cx.listener(move |page, _, _, cx| {
-                if page.state.selected.as_ref() != Some(&(node.clone(), slug.clone())) {
-                    page.open(node.clone(), slug.clone(), cx);
-                }
-                if page.state.selected.as_ref() == Some(&(node.clone(), slug.clone())) {
-                    page.show_run(id.clone(), cx);
-                }
-            }))
-    }
     fn watch_editor_field(field: &Entity<TextField>, cx: &mut Context<Self>) {
         cx.subscribe(field, |page, _, event: &FieldEvent, cx| {
             if matches!(event, FieldEvent::Changed) && page.wanted.is_some() {
@@ -343,6 +337,9 @@ impl MissionsPage {
         .detach();
     }
     fn unsaved(&self, cx: &gpui::App) -> Option<String> {
+        if let Some(reason) = self.manage_unsaved(cx) {
+            return Some(reason);
+        }
         if let Some(editor) = &self.editor
             && editor
                 .baseline
@@ -458,20 +455,23 @@ impl MissionsPage {
             return;
         }
         self.run = run::RunUi::new(cx);
+        self.canvas = canvas::View::default();
         self.reveal_card = None;
         self.generation += 1;
         let generation = self.generation;
         self.state.selected = Some((node.clone(), slug.clone()));
         self.state.mission = None;
         self.state.mission_etag = None;
+        self.validation.clear();
         self.state.layout_etag = None;
         self.editor = None;
         self.history = undo::History::default();
-        self.deleting_mission = false;
         self.state.layout = None;
         self.notes = None;
         self.note_id = None;
         self.note_base.clear();
+        self.note_etag = None;
+        self.note_paper = notes::NotesUi::default();
         self.note.update(cx, |field, cx| field.set("", false, cx));
         self.state.error = None;
         // Encode a path segment, including non-ASCII bytes.
@@ -485,32 +485,7 @@ impl MissionsPage {
                 }
             })
             .collect();
-        let note_request = self.host.request(
-            Request::get(
-                NodeId(node.clone()),
-                format!("{}/notes", mission_path(&slug)),
-            ),
-            cx,
-        );
-        cx.spawn(async move |this, cx| {
-            let result = note_request.await;
-            let _ = this.update(cx, |page, cx| {
-                if page.generation == generation {
-                    page.notes = result
-                        .ok()
-                        .filter(|a| a.ok())
-                        .and_then(|a| {
-                            serde_json::from_slice::<parvi_missions_contract::NotesResponse>(
-                                &a.body,
-                            )
-                            .ok()
-                        })
-                        .map(|n| n.notes);
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
+        self.load_canvas_notes(node.clone(), slug.clone(), cx);
         for layout in [false, true] {
             let path = format!(
                 "/api/missions/{encoded}{}",
@@ -533,6 +508,7 @@ impl MissionsPage {
                                     Ok(v) => {
                                         page.state.layout_etag = Some(v.layout.etag);
                                         page.state.layout = Some(v.layout.layout);
+                                        page.canvas.invalidate_fit();
                                     }
                                     Err(e) => page.state.error = Some(e.to_string()),
                                 }
@@ -556,88 +532,6 @@ impl MissionsPage {
         }
         cx.notify();
     }
-    fn create_mission(&mut self, cx: &mut Context<Self>) {
-        let Some(node) = self.host.nodes(cx).first().map(|n| n.id.clone()) else {
-            return;
-        };
-        let request = Request::new("POST", node.clone(), "/api/missions")
-            .json(&json!({"updatedBy":"user:parvi-app"}));
-        let asked = self.host.request(request, cx);
-        cx.spawn(async move |this, cx| {
-            let result = asked.await;
-            let _ = this.update(cx, |page, cx| {
-                match result {
-                    Ok(a) if a.ok() => match serde_json::from_slice::<MissionResponse>(&a.body) {
-                        Ok(v) => page.open(node.to_string(), v.mission.mission.slug, cx),
-                        Err(e) => page.state.error = Some(e.to_string()),
-                    },
-                    Ok(a) => {
-                        page.state.error = Some(
-                            serde_json::from_slice::<ErrorResponse>(&a.body)
-                                .map(|e| format!("{}: {}", e.error.code, e.error.message))
-                                .unwrap_or_else(|_| a.error_text()),
-                        )
-                    }
-                    Err(e) => page.state.error = Some(format!("{}: {}", e.code, e.message)),
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-    fn delete_mission(&mut self, cx: &mut Context<Self>) {
-        if self.writing || self.editor.is_some() {
-            return;
-        }
-        if !self.deleting_mission {
-            self.deleting_mission = true;
-            cx.notify();
-            return;
-        }
-        let (Some((node, slug)), Some(m), Some(etag)) = (
-            self.state.selected.clone(),
-            self.state.mission.as_ref(),
-            self.state.mission_etag.clone(),
-        ) else {
-            return;
-        };
-        let request = Request::new("DELETE", NodeId(node), mission_path(&slug))
-            .header("If-Match", etag)
-            .json(&json!({"expectedRev":m.rev}));
-        self.writing = true;
-        let asked = self.host.request(request, cx);
-        let generation = self.generation;
-        cx.spawn(async move |this, cx| {
-            let result = asked.await;
-            let _ = this.update(cx, |page, cx| {
-                if page.generation != generation {
-                    return;
-                }
-                page.writing = false;
-                page.deleting_mission = false;
-                match result {
-                    Ok(a) if a.ok() => {
-                        page.state.selected = None;
-                        page.state.mission = None;
-                        page.state.layout = None;
-                        page.notes = None;
-                        page.history = undo::History::default();
-                    }
-                    Ok(a) => {
-                        page.state.error = Some(
-                            serde_json::from_slice::<ErrorResponse>(&a.body)
-                                .map(|e| format!("{}: {}", e.error.code, e.error.message))
-                                .unwrap_or_else(|_| a.error_text()),
-                        )
-                    }
-                    Err(e) => page.state.error = Some(format!("{}: {}", e.code, e.message)),
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
-    }
     fn edit_step(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.writing || self.editor.as_ref().is_some_and(|e| e.busy) {
             return;
@@ -646,6 +540,13 @@ impl MissionsPage {
             self.state.error = Some("Save or discard the current draft first.".into());
             cx.notify();
             return;
+        }
+        if self.note_paper.open.is_some() {
+            self.note_paper = notes::NotesUi::default();
+            self.note_id = None;
+            self.note_base.clear();
+            self.note_etag = None;
+            self.note.update(cx, |field, cx| field.set("", false, cx));
         }
         let Some(m) = &self.state.mission else {
             return;
@@ -761,7 +662,6 @@ impl MissionsPage {
             id: id.to_owned(),
             rev: m.rev,
             etag,
-            brief,
             busy: false,
             error: None,
             deleting: false,
@@ -850,16 +750,8 @@ impl MissionsPage {
             .as_ref()
             .map(|l| l.nodes.as_slice())
             .unwrap_or(&[]);
-        let reverse = match undo::inverse(&before, layout, &undo::Step::Board(patch.clone())) {
-            Ok(v) => v,
-            Err(_) if matches!(mode, WriteMode::Edit) => Vec::new(),
-            Err(e) => {
-                self.state.error = Some(e);
-                self.restore_history();
-                cx.notify();
-                return;
-            }
-        };
+        let reverse =
+            undo::inverse(&before, layout, &undo::Step::Board(patch.clone())).unwrap_or_default();
         let submitted = self.editor.as_ref().map(|ed| self.editor_snapshot(ed, cx));
         let saved_fields = if patch.get("assignSlot").is_some() {
             Some(10..14)
@@ -911,12 +803,6 @@ impl MissionsPage {
                     return;
                 }
                 page.writing = false;
-                let ok = result.as_ref().is_ok_and(|a| {
-                    a.ok() && serde_json::from_slice::<EditResponse>(&a.body).is_ok()
-                });
-                if !ok {
-                    page.restore_history();
-                }
                 match result {
                     Ok(answer) if answer.ok() => {
                         match serde_json::from_slice::<EditResponse>(&answer.body) {
@@ -938,11 +824,8 @@ impl MissionsPage {
                                     rev: v.mission.mission.rev,
                                     layout: Some(v.layout.etag.clone()),
                                 });
-                                page.pending_history = None;
                                 match mode {
                                     WriteMode::Edit => page.history.record(entry),
-                                    WriteMode::Undo => page.history.undone(entry),
-                                    WriteMode::Redo => page.history.redone(entry),
                                 }
                                 if page.editor.as_ref().is_some_and(|ed| {
                                     deleted_card.as_deref() == Some(ed.id.as_str())
@@ -983,53 +866,8 @@ impl MissionsPage {
         .detach();
         cx.notify();
     }
-    fn restore_history(&mut self) {
-        if let Some((mode, entry)) = self.pending_history.take() {
-            match mode {
-                WriteMode::Undo => self.history.redone(entry),
-                WriteMode::Redo => self.history.undone(entry),
-                WriteMode::Edit => {}
-            }
-        }
-    }
     fn undo(&mut self, redo: bool, cx: &mut Context<Self>) {
-        if self.writing || self.editor.as_ref().is_some_and(|e| e.busy) {
-            return;
-        }
-        let Some(m) = &self.state.mission else {
-            return;
-        };
-        let version = undo::Version {
-            rev: m.rev,
-            layout: self.state.layout_etag.clone(),
-        };
-        match self.history.take(redo, &version) {
-            Ok(Some(entry)) => {
-                let mode = if redo {
-                    WriteMode::Redo
-                } else {
-                    WriteMode::Undo
-                };
-                let step = (entry.steps.len() == 1).then(|| entry.steps[0].clone());
-                self.pending_history = Some((mode, entry));
-                if let Some(undo::Step::Board(patch)) = step {
-                    self.write_board(patch, mode, cx);
-                } else {
-                    self.restore_history();
-                    self.state.error = Some(
-                        "This edit has several steps or changes layout and cannot be undone here."
-                            .into(),
-                    );
-                    cx.notify();
-                }
-            }
-            Ok(None) => {}
-            Err(_) => {
-                self.state.error =
-                    Some("The mission changed elsewhere; undo history was cleared.".into());
-                cx.notify();
-            }
-        }
+        self.step_history(redo, cx);
     }
     fn select_note(&mut self, id: &str, text: &str, cx: &mut Context<Self>) {
         if self.note_saving || self.note.read(cx).text != self.note_base {
@@ -1039,6 +877,7 @@ impl MissionsPage {
         }
         self.note_id = Some(id.to_owned());
         self.note_base = text.to_owned();
+        self.note_etag = self.notes.as_ref().map(|notes| notes.etag.clone());
         self.note.update(cx, |f, cx| f.set(text, false, cx));
         cx.notify();
     }
@@ -1048,6 +887,7 @@ impl MissionsPage {
         }
         self.note_id = None;
         self.note_base.clear();
+        self.note_etag = None;
         self.note.update(cx, |f, cx| f.set("", false, cx));
         self.resolve_wanted(cx);
         cx.notify();
@@ -1065,9 +905,10 @@ impl MissionsPage {
             return;
         }
         let target = self
-            .editor
-            .as_ref()
-            .map(|e| e.id.as_str())
+            .note_paper
+            .open
+            .as_deref()
+            .or_else(|| self.editor.as_ref().map(|e| e.id.as_str()))
             .unwrap_or("mission");
         let sent_text = text.clone();
         let sent_id = self.note_id.clone();
@@ -1076,7 +917,7 @@ impl MissionsPage {
             NodeId(node),
             format!("{}/notes", mission_path(&slug)),
         )
-        .header("If-Match", notes.etag.clone())
+        .header("If-Match", self.note_etag.clone().unwrap_or_else(|| notes.etag.clone()))
         .json(&json!({"target":target, "text":text,"author":"human:ui", "action":if delete {"delete"} else if self.note_id.is_some() {"edit"} else {"append"}, "entryId":self.note_id}));
         self.note_saving = true;
         let asked = self.host.request(request, cx);
@@ -1094,17 +935,21 @@ impl MissionsPage {
                     >(&a.body)
                     {
                         Ok(n) => {
+                            let next_etag = n.notes.etag.clone();
                             page.notes = Some(n.notes);
                             if page.note.read(cx).text == sent_text {
                                 page.note_id = None;
                                 page.note_base.clear();
+                                page.note_etag = None;
                                 page.note.update(cx, |f, cx| f.set("", false, cx));
                             } else if sent_id.is_some() && !delete {
                                 page.note_id = sent_id;
                                 page.note_base = sent_text;
+                                page.note_etag = Some(next_etag.clone());
                             } else {
                                 page.note_id = None;
                                 page.note_base.clear();
+                                page.note_etag = Some(next_etag);
                             }
                             page.resolve_wanted(cx);
                         }
@@ -1297,25 +1142,6 @@ impl MissionsPage {
         }
         cx.notify();
     }
-    fn choose_harness(&mut self, id: &str, cx: &mut Context<Self>) {
-        let Some(catalog) = &self.roles else {
-            return;
-        };
-        let mut staff = [
-            self.role.read(cx).text.clone(),
-            self.harness.read(cx).text.clone(),
-            self.model.read(cx).text.clone(),
-            self.effort.read(cx).text.clone(),
-        ];
-        crate::store::staffing::pick_harness(catalog, &mut staff, id);
-        for (field, value) in [
-            (&self.harness, &staff[1]),
-            (&self.model, &staff[2]),
-            (&self.effort, &staff[3]),
-        ] {
-            field.update(cx, |f, cx| f.set(value, false, cx));
-        }
-    }
     fn set_type(&mut self, kind: &str, cx: &mut Context<Self>) {
         let Some(ed) = &self.editor else {
             return;
@@ -1367,6 +1193,7 @@ impl MissionsPage {
                         Ok(v) => {
                             page.state.layout_etag = Some(v.layout.etag);
                             page.state.layout = Some(v.layout.layout);
+                            page.canvas.invalidate_fit();
                         }
                         Err(e) => page.state.error = Some(e.to_string()),
                     },
@@ -1384,15 +1211,6 @@ impl MissionsPage {
         })
         .detach();
         cx.notify();
-    }
-    fn link(&mut self, cx: &mut Context<Self>) {
-        let from = self.source.read(cx).text.clone();
-        let to = self.target.read(cx).text.clone();
-        self.write_board(
-            json!({"wireConnection":{"from":from, "to":to}}),
-            WriteMode::Edit,
-            cx,
-        );
     }
     fn delete_card(&mut self, cx: &mut Context<Self>) {
         let Some(ed) = &mut self.editor else {
@@ -1413,151 +1231,7 @@ impl MissionsPage {
         self.write_board(patch, WriteMode::Edit, cx);
     }
     fn save_step(&mut self, cx: &mut Context<Self>) {
-        let Some(ed) = &mut self.editor else {
-            return;
-        };
-        if ed.busy {
-            return;
-        }
-        let Some((node, slug)) = self.state.selected.clone() else {
-            return;
-        };
-        let title = self.title.read(cx).text.clone();
-        let goal = self.goal.read(cx).text.clone();
-        let extra = self.extra.read(cx).text.clone();
-        let operation = match ed.kind {
-            EditKind::Step => {
-                let mut brief = ed.brief.clone();
-                brief.goal = goal;
-                brief.repository = self.repository.read(cx).text.clone();
-                brief.work = self.work.read(cx).text.clone();
-                brief.files = self
-                    .files
-                    .read(cx)
-                    .text
-                    .lines()
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_owned)
-                    .collect();
-                brief.links = self
-                    .links
-                    .read(cx)
-                    .text
-                    .lines()
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_owned)
-                    .collect();
-                json!({"editFormation": {"id": ed.id, "title": title, "brief": brief}})
-            }
-            EditKind::Input => {
-                let outputs: Vec<_> = ed
-                    .outputs
-                    .iter()
-                    .map(|o| parvi_missions_contract::MissionOutput {
-                        name: o.name.read(cx).text.clone(),
-                        description: o.description.read(cx).text.clone(),
-                        kind: o.kind.read(cx).text.clone(),
-                        required: o.required,
-                        from: o.from.read(cx).text.clone(),
-                    })
-                    .collect();
-                if outputs.iter().any(|o| o.name.trim().is_empty()) {
-                    ed.error = Some("Every output needs a name.".into());
-                    cx.notify();
-                    return;
-                }
-                json!({"updateInputCard": {"id": ed.id, "title": title, "goal": goal, "humanChannel":extra, "outputs":outputs}})
-            }
-            EditKind::Gate => {
-                json!({"updateGate": {"id":ed.id, "title":title, "criterion":goal, "kinds":extra.split(',').map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>(), "check":self.check.read(cx).text, "checkVersion":self.check_version.read(cx).text, "checkValue":self.check_value.read(cx).text, "files":self.files.read(cx).text.lines().map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>()}})
-            }
-            EditKind::End => json!({"updateEnd": {"id": ed.id, "title":title, "outcome":extra}}),
-        };
-        let before = self.state.mission.as_ref().and_then(|m| {
-            serde_json::to_value(parvi_missions_contract::document::MissionDocument {
-                mission: m.clone(),
-                etag: None,
-            })
-            .ok()
-        });
-        let reverse = before
-            .as_ref()
-            .and_then(|before| {
-                undo::inverse(
-                    before,
-                    self.state
-                        .layout
-                        .as_ref()
-                        .map(|l| l.nodes.as_slice())
-                        .unwrap_or(&[]),
-                    &undo::Step::Board(operation.clone()),
-                )
-                .ok()
-            })
-            .unwrap_or_default();
-        let mut body = operation;
-        body["expectedRev"] = json!(ed.rev);
-        body["updatedBy"] = json!("user:parvi-app");
-        let path = mission_path(&slug);
-        let request = Request::new("PATCH", NodeId(node.clone()), path)
-            .header("If-Match", ed.etag.clone())
-            .json(&body);
-        ed.busy = true;
-        ed.error = None;
-        let asked = self.host.request(request, cx);
-        let generation = self.generation;
-        cx.spawn(async move |this, cx| {
-            let answer = asked.await;
-            let _ = this.update(cx, |page, cx| {
-                if page.generation != generation {
-                    return;
-                }
-                match answer {
-                    Ok(answer) if answer.ok() => {
-                        match serde_json::from_slice::<EditResponse>(&answer.body) {
-                            Ok(v) => {
-                                page.history.wrote(undo::Version {
-                                    rev: v.mission.mission.rev,
-                                    layout: Some(v.layout.etag.clone()),
-                                });
-                                page.history.record(undo::Entry {
-                                    label: "edit card".into(),
-                                    steps: reverse,
-                                });
-                                page.state.mission_etag = v.mission.etag;
-                                page.state.mission = Some(v.mission.mission);
-                                page.state.layout_etag = Some(v.layout.etag);
-                                page.state.layout = Some(v.layout.layout);
-                                page.editor = None;
-                                page.resolve_wanted(cx);
-                            }
-                            Err(e) => {
-                                if let Some(ed) = &mut page.editor {
-                                    ed.busy = false;
-                                    ed.error = Some(e.to_string());
-                                }
-                            }
-                        }
-                    }
-                    answer => {
-                        if let Some(ed) = &mut page.editor {
-                            ed.busy = false;
-                            ed.error = Some(match answer {
-                                Ok(a) => serde_json::from_slice::<ErrorResponse>(&a.body)
-                                    .map(|e| format!("{}: {}", e.error.code, e.error.message))
-                                    .unwrap_or_else(|_| a.error_text()),
-                                Err(e) => format!("{}: {}", e.code, e.message),
-                            });
-                        }
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
+        self.save_editor_merged(cx);
     }
 }
 fn host_guard(host: &Host, cx: &mut Context<MissionsPage>) {
@@ -1612,6 +1286,10 @@ impl Page for MissionsPage {
         }
     }
 
+    fn focus(&self, _: &gpui::App) -> Option<FocusHandle> {
+        Some(self.focus.clone())
+    }
+
     fn tabs(
         &mut self,
         shown: bool,
@@ -1664,6 +1342,15 @@ impl Page for MissionsPage {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if state != Some(parvi_app_kit::link::client::LinkState::Open)
+            && self
+                .state
+                .selected
+                .as_ref()
+                .is_some_and(|(selected, _)| selected == node.as_str())
+        {
+            self.validation.clear();
+        }
         if state.is_none() {
             self.state.nodes.remove(node.as_str());
             self.seen_run_snapshots.remove(node.as_str());
@@ -1707,85 +1394,15 @@ impl Page for MissionsPage {
     }
 }
 impl Render for MissionsPage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.setup_start_keys(window, cx);
+        self.sync_validation(cx);
         let t = theme(cx).clone();
-        let mut list = div().flex().flex_col().gap(px(PAD));
-        let attention: Vec<_> = self
-            .state
-            .nodes
-            .iter()
-            .flat_map(|(node, feed)| {
-                feed.runs
-                    .values()
-                    .filter(|run| crate::store::words::needs_you(run))
-                    .map(move |run| (node.clone(), run.clone()))
-            })
-            .collect();
-        if !attention.is_empty() {
-            list = list.child(
-                div()
-                    .debug_selector(|| "needs-you-group".into())
-                    .child("Needs you"),
-            );
-            for (node, run) in &attention {
-                list = list.child(self.run_row(node, run, cx));
-            }
-        }
-        for (node, feed) in &self.state.nodes {
-            if let Some(missions) = &feed.missions {
-                for mission in missions {
-                    let (node, slug) = (node.clone(), mission.slug.clone());
-                    let label = if mission.title.is_empty() {
-                        slug.clone()
-                    } else {
-                        mission.title.clone()
-                    };
-                    let selector = format!("mission-{node}-{slug}");
-                    let selected_node = node.clone();
-                    list = list.child(
-                        div()
-                            .id(gpui::SharedString::from(selector.clone()))
-                            .debug_selector(move || selector.clone())
-                            .p(px(PAD))
-                            .cursor_pointer()
-                            .border_1()
-                            .border_color(t.divider)
-                            .child(label)
-                            .on_click(cx.listener(move |page, _, _, cx| {
-                                page.open(selected_node.clone(), slug.clone(), cx)
-                            })),
-                    );
-                    let mut runs: Vec<_> = feed
-                        .runs
-                        .values()
-                        .filter(|r| {
-                            r.mission_slug == mission.slug && !crate::store::words::needs_you(r)
-                        })
-                        .collect();
-                    runs.sort_by(|a, b| {
-                        let attention = |r: &parvi_missions_contract::RunProjection| {
-                            (
-                                r.r#final,
-                                match r.status.as_str() {
-                                    "waiting_human" => 0,
-                                    "running" => 1,
-                                    "blocked" => 2,
-                                    _ => 3,
-                                },
-                            )
-                        };
-                        attention(a)
-                            .cmp(&attention(b))
-                            .then_with(|| b.started_at.cmp(&a.started_at))
-                    });
-                    for run in runs {
-                        list = list.child(self.run_row(node.as_str(), run, cx));
-                    }
-                }
-            }
-        }
+        let mut list = self.render_navigator(&t, cx);
         if self.state.selected.is_some()
+            && (!self.mission_canvas_mode || self.note.read(cx).text != self.note_base)
             && self.editor.is_none()
+            && self.note_paper.open.is_none()
             && let Some(notes) = &self.notes
         {
             list = list.child("Mission notes");
@@ -1852,132 +1469,74 @@ impl Render for MissionsPage {
         }
         let content: Div = if let Some(view) = self.run_view(&t, cx) {
             view
-        } else if let Some(m) = &self.state.mission {
-            let layout = self
-                .state
-                .layout
-                .as_ref()
-                .map(|l| l.nodes.as_slice())
-                .unwrap_or(&[]);
-            let board = board::board(m, &flow::build(m), layout, false);
-            let (x, y, width, height) = board::extent(&board);
-            let dx = PAD - x.min(0.);
-            let dy = PAD - (y - 24.).min(0.);
-            let wires = board.wires.clone();
-            let ink = t.text2;
-            let lines = canvas(
-                |_, _, _| (),
-                boundary::paint(move |b: Bounds<Pixels>, _: (), window, _| {
-                    for wire in &wires {
-                        let at = |p: (f32, f32)| {
-                            point(b.origin.x + px(p.0 + dx), b.origin.y + px(p.1 + dy))
-                        };
-                        let mut path = PathBuilder::stroke(px(EDGE));
-                        path.move_to(at(wire.from));
-                        if let Some(y) = wire.lane {
-                            path.line_to(at((wire.from.0, y)));
-                            path.line_to(at((wire.to.0, y)));
-                        }
-                        path.line_to(at(wire.to));
-                        if let Ok(path) = path.build() {
-                            window.paint_path(path, ink);
-                        }
-                    }
-                }),
-            )
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full();
-            let mut drawing = div()
-                .relative()
-                .flex_none()
-                .w(px(width + x + dx + PAD))
-                .h(px(height + y + dy + PAD))
-                .child(lines);
-            for card in board.cards {
-                let selector = format!("mission-card-{}", card.id);
-                let card_id = card.id.clone();
-                let details = m
-                    .formations
-                    .iter()
-                    .find(|f| f.id == card.id)
-                    .map(|f| {
-                        let brief = f.brief.as_ref().map(|b| b.goal.as_str()).unwrap_or("");
-                        let slots = f
-                            .slots
-                            .iter()
-                            .map(|s| s.name())
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        format!("{}\n{}\n{}", f.kind, brief, slots)
-                    })
-                    .or_else(|| {
-                        m.input_cards
-                            .iter()
-                            .find(|c| c.id == card.id)
-                            .map(|c| c.goal.clone())
-                    })
-                    .unwrap_or_default();
-                drawing = drawing.child(
-                    div()
-                        .id(gpui::SharedString::from(format!("card-{}", card.id)))
-                        .absolute()
-                        .left(px(card.x + dx))
-                        .top(px(card.y + dy))
-                        .w(px(card.w))
-                        .h(px(card.h))
-                        .p(px(PAD))
-                        .bg(t.bg)
-                        .border_1()
-                        .border_color(if self.reveal_card.as_deref() == Some(card.id.as_str()) {
-                            t.accent
-                        } else {
-                            t.divider
-                        })
-                        .rounded(px(size::RADIUS))
-                        .debug_selector(move || selector.clone())
-                        .child(m.node_name(&card.id).to_owned())
-                        .child(div().text_color(t.text2).child(details))
-                        .on_click(cx.listener(move |page, _, _, cx| page.edit_step(&card_id, cx))),
-                );
-            }
-            if let Some(id) = &self.reveal_card {
-                let selector = format!("mission-reveal-{id}");
-                div()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .debug_selector(move || selector.clone())
-                            .child(format!("Card: {}", m.node_name(id))),
-                    )
-                    .child(drawing)
+        } else if let Some(m) = self.state.mission.clone() {
+            if self.mission_canvas_mode {
+                self.render_canvas(&t, &m, false, cx)
             } else {
-                drawing
+                self.render_mission_flow(&t, &m, cx)
             }
         } else {
-            div().p(px(PAD)).child(
+            let mut empty = div().p(px(PAD)).child(
                 self.state
                     .error
                     .clone()
                     .unwrap_or_else(|| "Select a mission".into()),
-            )
+            );
+            if self.state.error.is_some() && self.state.selected.is_some() {
+                empty = empty.child(
+                    kit::button(&t, "retry-mission-definition", "Try again", Kind::Plain)
+                        .debug_selector(|| "retry-mission-definition".into())
+                        .on_click(cx.listener(|page, _, _, cx| {
+                            if let Some((node, slug)) = page.state.selected.clone() {
+                                page.open(node, slug, cx);
+                            }
+                        })),
+                );
+            }
+            empty
         };
+        let form = self.mission_form(&t, cx);
+        let start_form = self.run_start_form(&t, cx);
+        let attempts_form = self.attempts_form(&t, cx);
+        let stop_form = self.stop_form(&t, cx);
         div()
+            .id("missions-root")
+            .track_focus(&self.focus)
+            .relative()
             .size_full()
             .flex()
+            .on_mouse_down(MouseButton::Left, cx.listener(|page, _, window, cx| {
+                if window.focused(cx).is_none() { window.focus(&page.focus, cx); }
+            }))
+            .on_key_down(cx.listener(|page, event: &KeyDownEvent, window, cx| {
+                let key = &event.keystroke;
+                if (key.modifiers.control || key.modifiers.platform) && (key.key == "z" || key.key == "y") && window.focused(cx).is_some_and(|focus| focus == page.focus) {
+                    page.step_history(key.key == "y" || key.modifiers.shift, cx);
+                    cx.stop_propagation();
+                } else if key.key == "escape" {
+                    if page.canvas.close_menu() { cx.notify(); }
+                    else if page.manage_is_open() { page.close_manage(cx); }
+                    else if page.note_paper.open.is_some() { page.close_canvas_note(cx); }
+                    else if page.escape_run(cx) {}
+                    else if page.editor.is_some() {
+                        if page.unsaved(cx).is_none() { page.editor = None; page.resolve_wanted(cx); }
+                        else { page.state.error = Some("Save or discard the current draft first.".into()); }
+                        cx.notify();
+                    }
+                    cx.stop_propagation();
+                }
+            }))
             .bg(t.bg)
             .text_color(t.text)
             .child(
                 div()
                     .id("missions-list")
-                    .w(px(LIST_W))
+                    .debug_selector(|| "missions-rail".into())
+                    .w(px(size::LABEL_COL))
                     .flex_none()
                     .overflow_y_scroll()
-                    .child(kit::button(&t, "new-mission", "+ Mission", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.create_mission(cx))))
-                    .child(list)
-                    .when(self.state.selected.is_some(), |d| d.child(kit::button(&t, "delete-mission", if self.deleting_mission { "Confirm delete mission" } else { "Delete mission" }, Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.delete_mission(cx))))),
+                    .child(kit::button(&t, "new-mission", "+ Mission", Kind::Quiet).debug_selector(|| "new-mission".into()).on_click(cx.listener(|p, _, window, cx| p.open_mission_create(window, cx))))
+                    .child(list),
             )
             .child(
                 div()
@@ -1986,15 +1545,17 @@ impl Render for MissionsPage {
                     .min_w_0()
                     .flex().flex_col()
                     .child(div().flex().gap(px(PAD))
-                        .child(kit::button(&t, "prepare-run", "Run", Kind::Primary).debug_selector(|| "prepare-run".into()).on_click(cx.listener(|p, _, _, cx| p.prepare_run(cx))))
+                        .child(kit::button(&t, "mission-mode-flow", "Flow", if !self.mission_canvas_mode { Kind::Plain } else { Kind::Quiet }).debug_selector(|| "mission-mode-flow".into()).on_click(cx.listener(|p, _, _, cx| { p.mission_canvas_mode = false; cx.notify(); })))
+                        .child(kit::button(&t, "mission-mode-canvas", "Canvas", if self.mission_canvas_mode { Kind::Plain } else { Kind::Quiet }).debug_selector(|| "mission-mode-canvas".into()).on_click(cx.listener(|p, _, _, cx| { p.mission_canvas_mode = true; cx.notify(); })))
+                        .child(div().debug_selector({ let complete = self.validation_complete(); move || if complete { "mission-validation-complete".into() } else { "mission-validation-pending".into() } }).child(div().debug_selector({ let ready = self.mission_run_ready(); move || if ready { "mission-run-ready".into() } else { "mission-run-quiet".into() } }).child(kit::button(&t, "prepare-run", "Run", if self.mission_run_ready() { Kind::Primary } else { Kind::Quiet }).debug_selector(|| "prepare-run".into()).on_click(cx.listener(|p, _, _, cx| p.prepare_run(cx))))))
+                        .when(self.validation_failed(), |d| d.child(kit::button(&t, "retry-validation", "Retry validation", Kind::Quiet).debug_selector(|| "retry-validation".into()).on_click(cx.listener(|p, _, _, cx| { p.validation.clear(); p.sync_validation(cx); cx.notify(); }))))
                         .child(kit::button(&t, "new-input", "+ Input", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createInputCard":{"title":"Input","goal":"","x":200,"y":200}}), WriteMode::Edit, cx))))
                         .child(kit::button(&t, "new-step", "+ Step", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createFormation":{"type":"solo","title":"New step","x":200,"y":200}}), WriteMode::Edit, cx))))
                         .child(kit::button(&t, "new-gate", "+ Gate", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createGate":{"title":"New gate","kinds":["human"],"x":200,"y":200}}), WriteMode::Edit, cx))))
                         .child(kit::button(&t, "new-end", "+ End", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createEnd":{"title":"End","outcome":"done","x":200,"y":200}}), WriteMode::Edit, cx))))
                         .child(kit::button(&t, "arrange", "Arrange", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.arrange(cx))))
-                        .child(kit::button(&t, "undo", "Undo", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.undo(false, cx))))
-                        .child(kit::button(&t, "redo", "Redo", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.undo(true, cx)))))
-                    .child(div().flex().gap(px(PAD)).child(div().w(px(LINK_FIELD_W)).child(self.source.clone())).child(div().w(px(LINK_FIELD_W)).child(self.target.clone())).child(kit::button(&t, "link", "Connect", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.link(cx)))))
+                        .child(kit::button(&t, "undo", "Undo", Kind::Quiet).debug_selector({ let busy = self.writing; move || if busy { "undo-busy".into() } else { "undo".into() } }).on_click(cx.listener(|p, _, _, cx| p.undo(false, cx))))
+                        .child(kit::button(&t, "redo", "Redo", Kind::Quiet).debug_selector({ let busy = self.writing; move || if busy { "redo-busy".into() } else { "redo".into() } }).on_click(cx.listener(|p, _, _, cx| p.undo(true, cx)))))
                     .when_some(self.state.error.clone(), |d, e| d.child(div().text_color(t.error).child(e)))
                     .child(div().id("missions-board-scroll").flex_1().overflow_scroll().child(content)),
             )
@@ -2020,8 +1581,17 @@ impl Render for MissionsPage {
                                 .debug_selector(|| "step-save".into())
                                 .on_click(cx.listener(|p, _, _, cx| p.save_step(cx))),
                         )
-                        .child(kit::button(&t, "step-delete", if ed.deleting { "Confirm delete" } else { "Delete" }, Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.delete_card(cx))))
+                        .when(!ed.deleting, |d| d.child(kit::button(&t, "step-delete", "Delete", Kind::Quiet).debug_selector(|| "step-delete".into()).on_click(cx.listener(|p, _, _, cx| p.delete_card(cx)))))
+                        .when(ed.deleting, |d| d.child(div().child("Delete this card? Its wires go with it; Undo brings both back.").child(kit::button(&t, "delete-keep", "Keep", Kind::Quiet).debug_selector(|| "delete-keep".into()).on_click(cx.listener(|p, _, _, cx| { if let Some(ed) = &mut p.editor { ed.deleting = false; } cx.notify(); }))).child(kit::button(&t, "delete-yes", "Delete", Kind::Quiet).debug_selector(|| "delete-yes".into()).on_click(cx.listener(|p, _, _, cx| p.delete_card(cx))))))
                         .when(matches!(ed.kind, EditKind::Step), |d| { let id = ed.id.clone(); d.child(kit::button(&t, "run-step", "Run this step", Kind::Quiet).on_click(cx.listener(move |p, _, _, cx| p.prepare_step_run(id.clone(), cx)))) })
+                        .when(matches!(ed.kind, EditKind::Step), |mut d| {
+                            if let Some((node, slug)) = &self.state.selected && let Some(feed) = self.state.nodes.get(node) {
+                                for seat in feed.runs.values().filter(|run| &run.mission_slug == slug).flat_map(crate::store::seats::seats).filter(|seat| seat.step == ed.id) {
+                                    d = d.child(self.seat_control(&t, seat, "step", cx));
+                                }
+                            }
+                            d
+                        })
                         .child("Title")
                         .child(
                             div()
@@ -2062,36 +1632,27 @@ impl Render for MissionsPage {
                             if let Some(f) = self.state.mission.as_ref().and_then(|m| m.formations.iter().find(|f| f.id == ed.id)) {
                                 d = d.child("Ports");
                                 for port in f.inputs.iter().chain(&f.outputs) {
-                                    let id = port.id.clone(); let selected = id.clone(); let label = port.label.clone(); let kind = port.kind.clone();
-                                    d = d.child(kit::button(&t, gpui::SharedString::from(format!("port-{id}")), format!("{} ({})", port.label, id), Kind::Quiet).on_click(cx.listener(move |p, _, _, cx| { p.select_port(&selected, &label, &kind, cx); })));
+                                    let id = port.id.clone(); let selected = id.clone(); let label = port.label.clone(); let kind = port.kind.clone(); let selector = format!("port-{id}");
+                                    d = d.child(kit::button(&t, gpui::SharedString::from(format!("port-{id}")), format!("{} ({})", port.label, id), Kind::Quiet).debug_selector(move || selector.clone()).on_click(cx.listener(move |p, _, _, cx| { p.select_port(&selected, &label, &kind, cx); })));
                                 }
                                 d = d.child(div().child(self.port_label.clone())).child(div().child(self.port_kind.clone()))
                                     .child(kit::button(&t, "port-add-in", "+ Input port", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.port_edit("input", cx))))
                                     .child(kit::button(&t, "port-add-out", "+ Output port", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.port_edit("output", cx))))
-                                    .when(self.port.is_some(), |d| d.child(kit::button(&t, "port-update", "Rename port", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.port_edit("update", cx)))).child(kit::button(&t, "port-remove", "Remove port", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.port_edit("remove", cx)))))
+                                    .when(self.port.is_some(), |d| d.child(kit::button(&t, "port-update", "Rename port", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.port_edit("update", cx)))).child(kit::button(&t, "port-remove", "Remove port", Kind::Quiet).debug_selector(|| "port-remove".into()).on_click(cx.listener(|p, _, _, cx| p.port_edit("remove", cx)))))
                                     .child("Slots");
                                 for slot in &f.slots {
-                                    let id = slot.id.clone(); let selected = id.clone();
-                                    d = d.child(kit::button(&t, gpui::SharedString::from(format!("slot-{id}")), slot.name(), Kind::Quiet).on_click(cx.listener(move |p, _, _, cx| p.select_slot(&selected, cx))));
+                                    let id = slot.id.clone(); let selected = id.clone(); let selector = format!("slot-{id}");
+                                    d = d.child(kit::button(&t, gpui::SharedString::from(format!("slot-{id}")), crate::store::words::slot_label(slot), Kind::Quiet).debug_selector(move || selector.clone()).on_click(cx.listener(move |p, _, _, cx| p.select_slot(&selected, cx))));
                                 }
                             }
                             d
                         })
                         .when(matches!(ed.kind, EditKind::Step) && self.slot.is_some(), |mut d| {
                             d = d.child("Staff selected slot");
-                            if let Some(catalog) = &self.roles {
-                                for role in catalog.roles.iter().filter(|r| r.status != "retired") {
-                                    let id = role.id.clone(); let selected = id.clone();
-                                    d = d.child(kit::button(&t, gpui::SharedString::from(format!("role-{id}")), role.display_name.clone(), Kind::Quiet).on_click(cx.listener(move |p, _, _, cx| { if p.role.read(cx).text != selected { p.role.update(cx, |f, cx| f.set(&selected, false, cx)); cx.notify(); } })));
-                                }
-                                for harness in &catalog.harnesses {
-                                    let id = harness.id.clone(); let selected = id.clone();
-                                    d = d.child(kit::button(&t, gpui::SharedString::from(format!("harness-{id}")), id, Kind::Quiet).on_click(cx.listener(move |p, _, _, cx| { p.choose_harness(&selected, cx); })));
-                                }
-                            }
+                            d = d.child(self.slot_pickers(&t, cx));
                             d.child(div().child(self.role.clone())).child(div().child(self.harness.clone()))
                                 .child(div().child(self.model.clone())).child(div().child(self.effort.clone()))
-                                .child(kit::button(&t, "assign-slot", "Assign", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.assign_slot(cx))))
+                                .child(kit::button(&t, "assign-slot", "Assign", Kind::Quiet).debug_selector(|| "assign-slot".into()).on_click(cx.listener(|p, _, _, cx| p.assign_slot(cx))))
                         })
                         .when(matches!(ed.kind, EditKind::Step | EditKind::Input), |mut d| {
                             d = d.child("Limits");
@@ -2146,6 +1707,10 @@ impl Render for MissionsPage {
                         ),
                 )
             })
+            .children(start_form)
+            .children(form)
+            .children(attempts_form)
+            .children(stop_form)
     }
 }
 

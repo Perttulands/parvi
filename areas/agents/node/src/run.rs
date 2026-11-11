@@ -54,7 +54,7 @@ pub async fn git(home: &Home, dir: &Path, args: &[&str]) -> Option<String> {
     stdout(command).await.map(|out| out.trim().to_owned())
 }
 
-/// Fetches `dir`'s upstream. `Err` holds git's last line of complaint.
+/// Fetches `dir`'s upstream. `Err` retains git's complaint without URL credentials.
 pub async fn fetch(home: &Home, dir: &Path) -> Result<(), String> {
     let mut command = command(home, Path::new("git"));
     command.arg("-C").arg(dir).args(["fetch", "--quiet"]);
@@ -67,11 +67,12 @@ pub async fn fetch(home: &Home, dir: &Path) -> Result<(), String> {
         return Ok(());
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let line = stderr
-        .lines()
-        .rfind(|line| !line.trim().is_empty())
-        .unwrap_or("fetch failed");
-    Err(without_userinfo(line.trim()))
+    let message = stderr.trim();
+    Err(without_userinfo(if message.is_empty() {
+        "fetch failed"
+    } else {
+        message
+    }))
 }
 
 /// The text with any `user:password@` taken out of URLs in it, since a
@@ -97,6 +98,31 @@ fn without_userinfo(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn failed_fetch_disables_terminal_prompts_and_reports_git_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("parvi-fetch-command-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = dir.join("git");
+        std::fs::write(&git, "#!/bin/sh\nprintf '%s' \"$GIT_TERMINAL_PROMPT\" > \"$HOME/prompt-state\"\necho \"fatal: could not read Username for 'https://private:token@example.invalid/repo': terminal prompts disabled\" >&2\nexit 1\n").unwrap();
+        std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let home = Home {
+            dir: dir.clone(),
+            path: vec![dir.clone()],
+        };
+        let error = fetch(&home, &dir).await.unwrap_err();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("prompt-state")).unwrap(),
+            "0"
+        );
+        assert_eq!(
+            error,
+            "fatal: could not read Username for 'https://example.invalid/repo': terminal prompts disabled"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn takes_credentials_out_of_urls() {

@@ -87,13 +87,22 @@ pub fn role_name(agent: &str) -> String {
         .unwrap_or_default()
 }
 
+/// A human-readable slot label. Internal IDs are not names.
+pub fn slot_label(slot: &Slot) -> &str {
+    if slot.label.trim().is_empty() {
+        "Agent"
+    } else {
+        slot.label.trim()
+    }
+}
+
 /// Flow's staffing sentence for one slot: `Plan (controller) is Planner on
 /// Claude · default · xhigh.`
 pub fn staffing(s: &Slot) -> String {
     let role = if s.controller { " (controller)" } else { "" };
     format!(
         "{}{role} is {} on {}.",
-        s.label,
+        slot_label(s),
         role_name(&s.agent_id),
         slot_line(s)
     )
@@ -253,7 +262,7 @@ pub fn work_label(work: &str) -> String {
 pub fn actor_label(actor: &str) -> String {
     match actor {
         "human:operator" => "you".into(),
-        "parvi" => "Parvi".into(),
+        "parvi" | "archond" => "Parvi".into(),
         other => other.trim_start_matches("agent:").to_string(),
     }
 }

@@ -2,7 +2,7 @@
 use gpui::ParentElement;
 use gpui::{
     App, Context, IntoElement, Modifiers, SystemNotificationResponse, TestAppContext,
-    VisualTestContext, Window,
+    VisualTestContext, Window, point, px,
 };
 use parvi_app_kit::{Ask, Host, Mounted, Page, link::client::LinkState, mount};
 use parvi_core::NodeId;
@@ -19,6 +19,7 @@ use serde_json::json;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
+static FAIL_GATE_READ: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static WATCHES: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
 struct ObservedArea(Arc<dyn parvi_node_kit::Area>);
 struct ObservedChannel(Box<dyn parvi_node_kit::Channel>);
@@ -33,7 +34,20 @@ impl parvi_node_kit::Channel for ObservedChannel {
 }
 impl parvi_node_kit::Area for ObservedArea {
     fn routes(&self) -> axum::Router {
-        self.0.routes()
+        self.0.routes().layer(axum::middleware::from_fn(
+            |request: axum::extract::Request, next: axum::middleware::Next| async move {
+                if request.uri().path().contains("/gates/")
+                    && request.uri().path().ends_with("/request")
+                    && FAIL_GATE_READ.load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    return axum::response::IntoResponse::into_response((
+                        http::StatusCode::SERVICE_UNAVAILABLE,
+                        "test gate read failure",
+                    ));
+                }
+                next.run(request).await
+            },
+        ))
     }
     fn commands(&self) -> Vec<parvi_node_kit::Command> {
         self.0.commands()
@@ -229,6 +243,10 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
             s.hub().read(cx).fleet.here().state == LinkState::Open
         })
     });
+    until(cx, "mission flow", |cx| {
+        cx.debug_bounds("flow-step-fmn_work").is_some()
+    });
+    click(cx, "mission-mode-canvas");
     until(cx, "mission opened by role ask", |cx| {
         cx.debug_bounds("mission-card-fmn_work").is_some()
     });
@@ -266,6 +284,10 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
             .read_with(cx, |s, cx| s.hub().read(cx).unsaved(cx))
             .is_empty()
     );
+    click(cx, "prepare-run");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("run-input-brief").is_none());
+    assert!(cx.debug_bounds("step-goal").is_some());
     assert!(!cx.simulate_close());
     cx.run_until_parked();
     assert!(cx.debug_bounds("close-guard").is_some());
@@ -316,6 +338,14 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
     until(cx, "brief field", |cx| {
         cx.debug_bounds("run-input-brief").is_some()
     });
+    click(cx, "run-cancel");
+    until(cx, "start cancelled", |cx| {
+        cx.debug_bounds("run-input-brief").is_none()
+    });
+    click(cx, "prepare-run");
+    until(cx, "brief reopened", |cx| {
+        cx.debug_bounds("run-input-brief").is_some()
+    });
     click(cx, "run-input-brief");
     cx.simulate_input("hello");
     cx.run_until_parked();
@@ -327,6 +357,60 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
     click(cx, "run-start");
     until(cx, "active step", |cx| {
         cx.debug_bounds("run-step-fmn_work-running").is_some()
+    });
+    for _ in 0..8 {
+        let y = f32::from(cx.debug_bounds("run-abort").unwrap().center().y);
+        if (100. ..800.).contains(&y) {
+            break;
+        }
+        cx.simulate_event(gpui::ScrollEvent {
+            position: point(px(700.), px(500.)),
+            delta: gpui::ScrollDelta::Pixels(point(px(0.), px((500. - y).clamp(-400., 400.)))),
+            modifiers: Default::default(),
+            touch_phase: gpui::TouchPhase::Moved,
+            source: gpui::ScrollSource::Pointer,
+        });
+        cx.run_until_parked();
+    }
+    click(cx, "run-abort");
+    until(cx, "stop confirmation", |cx| {
+        cx.debug_bounds("stop-run").is_some()
+    });
+    click(cx, "stop-reason");
+    cx.simulate_input("Checking the stop dialog");
+    click(cx, "stop-keep");
+    until(cx, "stop dismissed", |cx| {
+        cx.debug_bounds("stop-run").is_none()
+    });
+    for _ in 0..8 {
+        let y = f32::from(cx.debug_bounds("run-mode-canvas").unwrap().center().y);
+        if (100. ..800.).contains(&y) {
+            break;
+        }
+        cx.simulate_event(gpui::ScrollEvent {
+            position: point(px(700.), px(500.)),
+            delta: gpui::ScrollDelta::Pixels(point(px(0.), px((500. - y).clamp(-400., 400.)))),
+            modifiers: Default::default(),
+            touch_phase: gpui::TouchPhase::Moved,
+            source: gpui::ScrollSource::Pointer,
+        });
+        cx.run_until_parked();
+    }
+    click(cx, "run-mode-canvas");
+    until(cx, "run canvas", |cx| {
+        cx.debug_bounds("mission-canvas").is_some()
+    });
+    click(cx, "run-mode-flow");
+    until(cx, "run flow", |cx| {
+        cx.debug_bounds("run-step-fmn_work-running").is_some()
+    });
+    click(cx, "run-events");
+    until(cx, "events drawer", |cx| {
+        cx.debug_bounds("run-events-drawer").is_some()
+    });
+    click(cx, "run-events");
+    until(cx, "events closed", |cx| {
+        cx.debug_bounds("run-events-drawer").is_none()
     });
     let run_id = client_runtime.block_on(async {
         let client = NodeClient::new(Some(&format!("{}/", running.url))).unwrap();
@@ -378,6 +462,7 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
     cx.run_until_parked();
     cx.deactivate_window();
     assert!(!cx.update(|window, _| window.is_window_active()));
+    FAIL_GATE_READ.store(true, std::sync::atomic::Ordering::SeqCst);
     release.send(()).unwrap();
     until(cx, "hidden missions count", |cx| {
         cx.debug_bounds("missions-count-1").is_some()
@@ -402,11 +487,17 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
     let mission = cx.debug_bounds(mission_selector).unwrap();
     assert!(row.origin.y < mission.origin.y);
     until(cx, "human gate", |cx| cx.debug_bounds("run-gate").is_some());
-    until(cx, "gate request", |cx| {
-        cx.debug_bounds("gate-request-loaded").is_some()
+    until(cx, "gate read failure", |cx| {
+        cx.debug_bounds("gate-retry").is_some()
     });
     click(cx, "gate-response");
     cx.simulate_input("Approved after review");
+    FAIL_GATE_READ.store(false, std::sync::atomic::Ordering::SeqCst);
+    click(cx, "gate-retry");
+    until(cx, "gate request", |cx| {
+        cx.debug_bounds("gate-request-loaded").is_some()
+    });
+    assert!(cx.debug_bounds("gate-input-quote").is_some());
     cx.run_until_parked();
     assert!(
         !shell
@@ -443,6 +534,10 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
             .unwrap();
     });
     until(cx, "mission after run", |cx| {
+        cx.debug_bounds("mission-mode-flow").is_some()
+    });
+    click(cx, "mission-mode-flow");
+    until(cx, "mission notes in Flow", |cx| {
         cx.debug_bounds("mission-note-draft").is_some()
     });
     click(cx, "mission-note-draft");
@@ -459,6 +554,7 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
             .read_with(cx, |s, cx| s.hub().read(cx).unsaved(cx))
             .is_empty()
     });
+    click(cx, "mission-mode-canvas");
     let bad = format!("mission-{}-admission-findings", running.id);
     click(cx, &bad);
     until(cx, "bad mission", |cx| {
@@ -468,10 +564,16 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
     until(cx, "start form", |cx| {
         cx.debug_bounds("run-start").is_some()
     });
+    click(cx, "run-start");
+    until(cx, "required input", |cx| {
+        cx.debug_bounds("run-required-topic").is_some()
+    });
+    click(cx, "run-input-topic");
+    cx.simulate_input("A topic");
     let expected = tokio::runtime::Runtime::new().unwrap().block_on(async {
         let client = NodeClient::new(Some(&format!("{}/", running.url))).unwrap();
         let (mission, etag) = client.request(http::Method::GET, "/api/missions/admission-findings", None, None).await.unwrap();
-        let error = client.request(http::Method::POST, "/api/runs", Some(json!({"mission":"admission-findings", "inputCardId":"inp", "expectedRev":mission["mission"]["rev"], "inputs":{"topic":"", "sketch":""}})), Some(&etag)).await.unwrap_err();
+        let error = client.request(http::Method::POST, "/api/runs", Some(json!({"mission":"admission-findings", "inputCardId":"inp", "expectedRev":mission["mission"]["rev"], "inputs":{"topic":"A topic"}})), Some(&etag)).await.unwrap_err();
         error.downcast_ref::<parvi_node_kit::NodeError>().unwrap().findings.as_ref().unwrap().as_array().unwrap().iter().map(|f| format!("{} · {} · {}", f["code"].as_str().unwrap(), f["nodeId"].as_str().unwrap(), f["message"].as_str().unwrap())).collect::<Vec<_>>()
     });
     assert!(expected.len() > 1);

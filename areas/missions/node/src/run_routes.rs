@@ -128,7 +128,9 @@ async fn verdict(
     body: Result<Json<HumanVerdict>, JsonRejection>,
 ) -> ResultResponse {
     let Json(mut body) = body.map_err(bad_json)?;
-    body.actor = "human:operator".into();
+    if body.actor.trim().is_empty() {
+        body.actor = "human:operator".into();
+    }
     c.record_verdict(&id, &gate, body)?;
     Ok((StatusCode::ACCEPTED, Json(contract::RunId { run_id: id })).into_response())
 }
@@ -138,7 +140,9 @@ async fn pick(
     body: Result<Json<HumanPick>, JsonRejection>,
 ) -> ResultResponse {
     let Json(mut body) = body.map_err(bad_json)?;
-    body.actor = "human:operator".into();
+    if body.actor.trim().is_empty() {
+        body.actor = "human:operator".into();
+    }
     c.record_pick(&id, &gate, body)?;
     Ok((StatusCode::ACCEPTED, Json(contract::RunId { run_id: id })).into_response())
 }

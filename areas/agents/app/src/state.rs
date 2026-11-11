@@ -97,15 +97,6 @@ fn upstream_drift(c: &Checkout) -> Vec<Drift> {
             tone: Tone::Behind,
         });
     }
-    if c.fetch == "failed" {
-        out.push(Drift {
-            path: at.clone(),
-            what: format!("fetch failed: {}", c.fetch_error.as_deref().unwrap_or(""))
-                .trim()
-                .to_string(),
-            tone: Tone::Error,
-        });
-    }
     if c.upstream.is_none() {
         out.push(Drift {
             path: at,
@@ -216,29 +207,25 @@ pub fn checkout_drift(r: &Report, c: &Checkout) -> Vec<Drift> {
 }
 
 /// A tool's one-word state, as the rail and the versions table say it.
-pub fn tool_state(r: &Report, t: &Tool) -> (String, Tone) {
-    if t.path.is_none() {
-        return ("not installed".into(), Tone::Plain);
+pub fn tool_state(_report: &Report, tool: &Tool) -> (String, Tone) {
+    if tool.path.is_some() {
+        ("available".into(), Tone::Ok)
+    } else {
+        ("not installed".into(), Tone::Plain)
     }
-    if t.signed_in == Some(false) {
-        return ("not signed in".into(), Tone::Behind);
+}
+
+/// A checkout fetch failure is a sync problem, not a harness problem.
+pub fn sync_failure(checkout: &Checkout) -> Option<String> {
+    if checkout.fetch != "failed" {
+        return None;
     }
-    let drift = tool_drift(r, t);
-    if drift.iter().any(|d| d.tone == Tone::Error) {
-        return ("broken".into(), Tone::Error);
-    }
-    let unlinked = drift.iter().filter(|d| d.tone == Tone::Unlinked).count();
-    if unlinked > 0 {
-        return (format!("{unlinked} not linked"), Tone::Unlinked);
-    }
-    let behind = drift.iter().filter(|d| d.tone == Tone::Behind).count();
-    if behind > 0 {
-        return (format!("{behind} behind"), Tone::Behind);
-    }
-    match t.signed_in {
-        None => ("sign-in unknown".into(), Tone::Plain),
-        Some(_) => ("current".into(), Tone::Ok),
-    }
+    let message = checkout
+        .fetch_error
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("git did not report a reason");
+    Some(format!("Sync failed: {message}"))
 }
 
 /// The checkout's distance from upstream, in words.
@@ -260,7 +247,7 @@ pub fn upstream_words(c: &Checkout) -> String {
     };
     let when = match c.fetch.as_str() {
         "fetching" => "fetching…",
-        "failed" => "fetch failed",
+        "failed" => "last known",
         _ => "just fetched",
     };
     format!("{at} {up} · {when}")
@@ -418,7 +405,7 @@ mod tests {
                 "skills › lost link leads nowhere",
             ]
         );
-        assert_eq!(tool_state(&r, claude), ("broken".into(), Tone::Error));
+        assert_eq!(tool_state(&r, claude), ("available".into(), Tone::Ok));
         assert_eq!(
             tool_state(&r, &r.tools[1]),
             ("not installed".into(), Tone::Plain)
@@ -462,10 +449,7 @@ mod tests {
         linked.links.insert("claude".into(), "linked".into());
         linked.locations.get_mut("claude").unwrap().behind = 0;
         r.skills.push(linked);
-        assert_eq!(
-            tool_state(&r, &r.tools[0]),
-            ("1 not linked".into(), Tone::Unlinked)
-        );
+        assert_eq!(tool_state(&r, &r.tools[0]), ("available".into(), Tone::Ok));
         assert_eq!(
             checkout_drift(&r, &r.checkouts[0])
                 .iter()
@@ -473,6 +457,31 @@ mod tests {
                 .count(),
             3
         );
+    }
+
+    #[test]
+    fn a_failed_fetch_is_one_checkout_failure_not_a_harness_failure() {
+        let mut r = report();
+        r.checkouts[0].fetch = "failed".into();
+        r.checkouts[0].fetch_error = Some("fatal: could not read Username".into());
+        for tool in &r.tools {
+            assert!(
+                !tool_drift(&r, tool)
+                    .iter()
+                    .any(|drift| drift.what.contains("fetch failed"))
+            );
+        }
+        assert_eq!(tool_state(&r, &r.tools[0]), ("available".into(), Tone::Ok));
+        assert_eq!(
+            sync_failure(&r.checkouts[0]).as_deref(),
+            Some("Sync failed: fatal: could not read Username")
+        );
+        assert!(
+            !checkout_drift(&r, &r.checkouts[0])
+                .iter()
+                .any(|drift| drift.what.contains("fetch failed"))
+        );
+        assert!(!upstream_words(&r.checkouts[0]).contains("failed"));
     }
 
     #[test]

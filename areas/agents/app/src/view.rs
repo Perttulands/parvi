@@ -126,11 +126,7 @@ impl AgentsPage {
             for tool in list {
                 let (word, tone) = worst(reports.iter().filter_map(|(_, r)| {
                     let mine = r.tools.iter().find(|x| x.id == tool.id)?;
-                    let (w, tone) = agents::tool_state(r, mine);
-                    Some(match (tone, &mine.version) {
-                        (Tone::Ok, Some(v)) => (v.clone(), tone),
-                        _ => (w, tone),
-                    })
+                    Some(agents::tool_state(r, mine))
                 }));
                 let chosen = self.state.chosen == Chosen::Tool(tool.id.clone());
                 let sub = div()
@@ -138,7 +134,16 @@ impl AgentsPage {
                     .gap(px(tokens::P4))
                     .child(tool.command.clone())
                     .child("·")
-                    .child(div().text_color(tone_colour(&t, tone)).child(word));
+                    .child(
+                        div()
+                            .debug_selector({
+                                let id = tool.id.clone();
+                                let word = word.clone();
+                                move || format!("agents-tool-state-{id}-{word}")
+                            })
+                            .text_color(tone_colour(&t, tone))
+                            .child(word),
+                    );
                 let pick = Chosen::Tool(tool.id.clone());
                 rail = rail.child(self.rail_row(
                     &t,
@@ -220,6 +225,26 @@ impl AgentsPage {
             }
             _ => kit::note(&t, "Choose a harness, a tool or a checkout.", Some(t.dim)),
         };
+        let mut sync_failures = div().flex().flex_col().gap(px(tokens::P8));
+        for (node, report) in &reports {
+            for checkout in &report.checkouts {
+                if let Some(message) = agents::sync_failure(checkout) {
+                    let selector = format!("agents-sync-failure-{node}-{}", checkout.name);
+                    let message_selector = format!("agents-sync-message-{message}");
+                    sync_failures = sync_failures.child(
+                        div()
+                            .debug_selector(move || selector.clone())
+                            .text_color(t.error)
+                            .child(format!("{} · {} · ", self.place_name(node), checkout.name))
+                            .child(
+                                div()
+                                    .debug_selector(move || message_selector.clone())
+                                    .child(message),
+                            ),
+                    );
+                }
+            }
+        }
         div()
             .size_full()
             .flex()
@@ -236,6 +261,7 @@ impl AgentsPage {
                         div()
                             .p(px(board::PAD))
                             .max_w(px(tokens::DETAIL_MAX))
+                            .child(sync_failures)
                             .child(detail),
                     ),
             )
