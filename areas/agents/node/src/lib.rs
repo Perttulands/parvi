@@ -13,7 +13,9 @@ use parvi_core::Error;
 use parvi_node_kit::args::{object, text};
 use parvi_node_kit::{Area, BoxFuture, Built, Channel, Client, Command, Listing, Setup};
 use parvi_term::Sessions;
+use serde::Deserialize;
 use serde_json::{Value, json};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -37,8 +39,26 @@ struct AgentsArea {
     node: String,
 }
 
+/// Overrides the probed home and executable path for a node environment.
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct Section {
+    home: Option<PathBuf>,
+    path: Option<Vec<PathBuf>>,
+}
+
 pub fn build(setup: &Setup) -> Result<Built> {
-    let home = Home::from_env();
+    let section: Section = setup.config.section(NAME)?;
+    let mut home = Home::from_env();
+    if let Some(dir) = section.home {
+        home = Some(Home {
+            dir: setup.config.path(&dir),
+            path: home.map(|h| h.path).unwrap_or_default(),
+        });
+    }
+    if let (Some(home), Some(path)) = (&mut home, section.path) {
+        home.path = path.iter().map(|p| setup.config.path(p)).collect();
+    }
     let node = setup.node.id.to_string();
     Built::then(move |provided| {
         Ok(Arc::new(AgentsArea {
@@ -104,6 +124,42 @@ impl Area for AgentsArea {
         vec![show, sync]
     }
 }
+#[derive(Debug, PartialEq, Eq)]
+enum Request {
+    Watch(bool),
+    Sync { id: u32, checkout: String },
+}
+
+fn decode(frame: &[u8]) -> Option<Request> {
+    match frame {
+        [WATCH, on] => Some(Request::Watch(*on != 0)),
+        [SYNC, rest @ ..] if rest.len() >= 4 => Some(Request::Sync {
+            id: u32::from_le_bytes(rest[..4].try_into().ok()?),
+            checkout: std::str::from_utf8(&rest[4..]).ok()?.to_owned(),
+        }),
+        _ => None,
+    }
+}
+
+fn report_frame(json: &str) -> Vec<u8> {
+    [&[REPORT][..], json.as_bytes()].concat()
+}
+
+fn synced_frame(id: u32, answer: Result<String, Error>) -> Vec<u8> {
+    let ok = answer.is_ok();
+    let text = match answer {
+        Ok(session) => session,
+        Err(error) => serde_json::to_string(&error).expect("error serializes"),
+    };
+    [
+        &[SYNCED][..],
+        &id.to_le_bytes(),
+        &[u8::from(ok)],
+        text.as_bytes(),
+    ]
+    .concat()
+}
+
 struct Connection {
     home: Option<Home>,
     sessions: Arc<dyn Sessions>,
@@ -124,54 +180,32 @@ impl Channel for Connection {
             let Some(home) = self.home.clone() else {
                 return;
             };
-            match frame.as_slice() {
-                [WATCH, on] => {
+            match decode(&frame) {
+                Some(Request::Watch(on)) => {
                     if let Some(task) = self.watch.take() {
                         task.abort();
                     }
-                    if *on != 0 {
+                    if on {
                         let out = self.out.clone();
                         self.watch = Some(tokio::spawn(async move {
                             let mut report = gather(&home, Fetch::Fetching).await;
-                            let mut frame = vec![REPORT];
-                            frame.extend(report.json(&home).as_bytes());
+                            let frame = report_frame(&report.json(&home));
                             if out.send(frame).await.is_err() || report.checkouts.is_empty() {
                                 return;
                             }
                             report.fetch(&home).await;
-                            let mut frame = vec![REPORT];
-                            frame.extend(report.json(&home).as_bytes());
+                            let frame = report_frame(&report.json(&home));
                             let _ = out.send(frame).await;
                         }));
                     }
                 }
-                [SYNC, id @ ..] if id.len() >= 4 => {
-                    let number = &id[..4];
-                    let Ok(checkout) = std::str::from_utf8(&id[4..]) else {
-                        return;
-                    };
-                    let (number, checkout, out, sessions) = (
-                        number.to_vec(),
-                        checkout.to_owned(),
-                        self.out.clone(),
-                        self.sessions.clone(),
-                    );
+                Some(Request::Sync { id, checkout }) => {
+                    let (out, sessions) = (self.out.clone(), self.sessions.clone());
                     tokio::spawn(async move {
-                        let answer = sync::sync(&home, sessions.as_ref(), &checkout).await;
-                        let mut frame = vec![SYNCED];
-                        frame.extend(number);
-                        frame.push(u8::from(answer.is_ok()));
-                        frame.extend(
-                            match answer {
-                                Ok(session) => session,
-                                Err(error) => {
-                                    serde_json::to_string(&Error::new(FAILED, format!("{error:#}")))
-                                        .expect("error serializes")
-                                }
-                            }
-                            .as_bytes(),
-                        );
-                        let _ = out.send(frame).await;
+                        let answer = sync::sync(&home, sessions.as_ref(), &checkout)
+                            .await
+                            .map_err(|e| Error::new(FAILED, format!("{e:#}")));
+                        let _ = out.send(synced_frame(id, answer)).await;
                     });
                 }
                 _ => {}
@@ -180,5 +214,42 @@ impl Channel for Connection {
     }
     fn next(&mut self) -> BoxFuture<'_, Option<Vec<u8>>> {
         Box::pin(self.incoming.recv())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_watch_and_sync() {
+        assert_eq!(decode(&[WATCH, 1]), Some(Request::Watch(true)));
+        assert_eq!(decode(&[WATCH, 0]), Some(Request::Watch(false)));
+        assert_eq!(
+            decode(b"\x81\x07\0\0\0~/kit"),
+            Some(Request::Sync {
+                id: 7,
+                checkout: "~/kit".into()
+            })
+        );
+        assert_eq!(decode(&[WATCH]), None);
+        assert_eq!(decode(&[SYNC, 1]), None);
+        assert_eq!(decode(&[SYNC, 0, 0, 0, 0, 0xff]), None);
+        assert_eq!(decode(&[0x8a]), None);
+    }
+
+    #[test]
+    fn encodes_report_and_synced() {
+        assert_eq!(report_frame("{}"), b"\x88{}");
+        assert_eq!(
+            synced_frame(2, Ok("sync-kit".into())),
+            b"\x89\x02\0\0\0\x01sync-kit"
+        );
+        let failed = synced_frame(3, Err(Error::new(FAILED, "refused")));
+        assert_eq!(&failed[..6], b"\x89\x03\0\0\0\0");
+        assert_eq!(
+            serde_json::from_slice::<Error>(&failed[6..]).unwrap(),
+            Error::new(FAILED, "refused")
+        );
     }
 }
