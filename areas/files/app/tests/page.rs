@@ -8,6 +8,18 @@ use std::{
 
 thread_local! {
     static SENT: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    static SEARCH_PAGE: std::cell::RefCell<Option<gpui::Entity<parvi_files_app::FilesPage>>> = const { std::cell::RefCell::new(None) };
+}
+
+fn observed_files(
+    host: parvi_app_kit::Host,
+    window: &mut gpui::Window,
+    cx: &mut gpui::App,
+) -> parvi_app_kit::Mounted {
+    parvi_app_kit::mount(host, window, cx, |host, window, cx| {
+        SEARCH_PAGE.with(|page| *page.borrow_mut() = Some(cx.entity()));
+        parvi_files_app::FilesPage::new(host, window, cx)
+    })
 }
 
 struct Toy;
@@ -872,6 +884,86 @@ fn open_path_beside_keeps_the_terminal_and_the_draft(cx: &mut TestAppContext) {
 }
 
 /// Name search reaches into a folder and opens a result from the node.
+#[gpui::test]
+fn find_updates_as_typed_shows_paths_lines_and_truncation(cx: &mut TestAppContext) {
+    let root = parvi_testkit::fresh_dir("files-find-live");
+    std::fs::create_dir(root.join("sub")).unwrap();
+    std::fs::write(root.join("sub/readme.md"), "read me").unwrap();
+    std::fs::write(root.join("sub/realm.txt"), "other").unwrap();
+    let text = format!(
+        "{}line marker\n{}",
+        "blank\n".repeat(11),
+        "tail\n".repeat(80)
+    );
+    std::fs::write(root.join("sub/a.rs"), text).unwrap();
+    for n in 0..55 {
+        std::fs::write(root.join(format!("capword-{n:02}.txt")), "x").unwrap();
+    }
+    let running = start(root.clone());
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let url = running.url.clone();
+    let (_, cx) = cx.add_window_view(move |w, cx| {
+        parvi_app_shell::start(&[observed_files], Some(url), None, w, cx)
+    });
+    until(cx, "folder", |cx| {
+        cx.debug_bounds("file-row-0-sub").is_some()
+    });
+    let page = SEARCH_PAGE.with(|page| page.borrow().as_ref().unwrap().clone());
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("rea");
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(300));
+    until(cx, "first results", |cx| {
+        cx.debug_bounds("find-label-0-sub/readme.md").is_some()
+            && cx.debug_bounds("find-label-0-sub/realm.txt").is_some()
+    });
+    let old_revision = page.read_with(cx, |p, _| p.sides[0].pane.find_revision);
+    cx.simulate_input("d");
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(300));
+    until(cx, "new results", |cx| {
+        cx.debug_bounds("find-label-0-sub/readme.md").is_some()
+            && cx.debug_bounds("find-label-0-sub/realm.txt").is_none()
+    });
+    page.update(cx, |p, cx| {
+        p.sides[0].pane.found(
+            old_revision,
+            Ok(parvi_files_contract::Matches {
+                matches: vec![parvi_files_contract::Match {
+                    path: "/stale".into(),
+                    name: "stale".into(),
+                    line: None,
+                    text: None,
+                }],
+                truncated: false,
+            }),
+        );
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("find-label-0-sub/readme.md").is_some());
+    assert!(cx.debug_bounds("find-result-0-stale").is_none());
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("line marker");
+    click(cx, "search-mode-0");
+    until(cx, "content result", |cx| {
+        cx.debug_bounds("find-label-0-sub/a.rs:12").is_some()
+    });
+    click(cx, "find-result-0-a.rs");
+    until(cx, "line 12 in view", |cx| {
+        page.read_with(cx, |p, cx| p.sides[0].code.read(cx).top_line() == 11)
+    });
+    cx.simulate_keystrokes("escape / ctrl-a");
+    cx.simulate_input("capword");
+    click(cx, "search-mode-0");
+    until(cx, "truncation note", |cx| {
+        cx.debug_bounds("files-find-truncated").is_some()
+    });
+    drop(running);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[gpui::test]
 fn find_opens_a_file_below_the_current_folder(cx: &mut TestAppContext) {
     let root = parvi_testkit::fresh_dir("files-find");

@@ -236,16 +236,21 @@ impl FilesPage {
                     FieldEvent::Changed => {
                         let query = field.read(cx).text.clone();
                         page.sides[i].pane.filter = query.clone();
-                        page.sides[i]
+                        let revision = page.sides[i]
                             .pane
                             .set_find(&query, page.sides[i].search_content);
+                        let node = page.sides[i].pane.node.clone();
+                        let folder = page.sides[i].pane.path.clone();
                         if !query.trim().is_empty() {
                             cx.spawn(async move |this, cx| {
                                 cx.background_executor()
                                     .timer(std::time::Duration::from_millis(250))
                                     .await;
                                 let _ = this.update(cx, |page, cx| {
-                                    if page.sides[i].search.read(cx).text == query {
+                                    if page.sides[i].pane.find_revision == revision
+                                        && page.sides[i].pane.node == node
+                                        && page.sides[i].pane.path == folder
+                                    {
                                         page.find(i, query, cx);
                                     }
                                 });
@@ -545,7 +550,7 @@ impl FilesPage {
             return;
         };
         let content = self.sides[i].search_content;
-        self.sides[i].pane.set_find(&q, content);
+        let revision = self.sides[i].pane.set_find(&q, content);
         if q.trim().is_empty() {
             cx.notify();
             return;
@@ -557,14 +562,18 @@ impl FilesPage {
             enc(&q)
         );
         self.request(
-            Request::get(NodeId(node), uri),
+            Request::get(NodeId(node.clone()), uri),
             move |p, s, b, cx| {
                 let found = if s == 200 {
                     serde_json::from_slice::<Matches>(&b).map_err(|e| e.to_string())
                 } else {
                     Err(String::from_utf8_lossy(&b).into_owned())
                 };
-                p.sides[i].pane.found(&q, content, found);
+                if p.sides[i].pane.node == node
+                    && p.sides[i].pane.path.as_deref() == Some(path.as_str())
+                {
+                    p.sides[i].pane.found(revision, found);
+                }
                 cx.notify()
             },
             cx,
@@ -720,6 +729,9 @@ impl FilesPage {
                     }
                 });
                 let o = p.sides[i].opened.as_mut().unwrap();
+                if line.is_some() {
+                    o.source = true;
+                }
                 o.show = show;
                 o.saved = text;
                 o.base = draft.map_or(base, |d| d.base);

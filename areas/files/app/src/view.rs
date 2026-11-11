@@ -28,24 +28,45 @@ impl FilesPage {
             .and_then(|f| f.found.as_ref())
             .and_then(|r| r.as_ref().ok())
         {
+            if found.truncated {
+                list = list.child(
+                    div()
+                        .debug_selector(|| "files-find-truncated".into())
+                        .child(kit::note(&t, "Results truncated", None)),
+                );
+            }
             for item in &found.matches {
                 let path = item.path.clone();
                 let line = item.line;
                 let name = item.name.clone();
                 let selector = format!("find-result-{i}-{name}");
+                let relative = paths::relative(side.pane.path.as_deref().unwrap_or(""), &path);
+                let label = match line {
+                    Some(line) => format!("{relative}:{line}"),
+                    None => relative.to_owned(),
+                };
+                let label_selector = format!("find-label-{i}-{label}");
                 list = list.child(
                     kit::button(
                         &t,
-                        gpui::SharedString::from(format!("find-{i}-{path}")),
-                        name,
+                        gpui::SharedString::from(format!("find-{i}-{path}-{}", line.unwrap_or(0))),
+                        label,
                         Kind::Quiet,
                     )
                     .debug_selector(move || selector.clone())
+                    .child(div().debug_selector(move || label_selector.clone()))
                     .on_click(
                         cx.listener(move |p, _, w, cx| p.open_at(i, path.clone(), line, w, cx)),
                     ),
                 );
             }
+        } else if let Some(find) = &side.pane.find {
+            let text = match &find.found {
+                None => "Searching…".to_owned(),
+                Some(Err(error)) => error.clone(),
+                Some(Ok(_)) => unreachable!(),
+            };
+            list = list.child(kit::note(&t, text, None));
         } else {
             for entry in side.pane.shown() {
                 let name = entry.name.clone();

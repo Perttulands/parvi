@@ -43,6 +43,7 @@ pub struct Pane {
     /// that writes is offered.
     pub away: bool,
     pub find: Option<Find>,
+    pub find_revision: u64,
     /// Delete was pressed once on the selection; the next press deletes.
     pub armed: bool,
     /// A listing or roots request in flight, so answers to older ones are
@@ -207,7 +208,8 @@ impl Pane {
         !self.away && self.path.is_some()
     }
 
-    pub fn set_find(&mut self, query: &str, content: bool) {
+    pub fn set_find(&mut self, query: &str, content: bool) -> u64 {
+        self.find_revision = self.find_revision.wrapping_add(1);
         if query.trim().is_empty() {
             self.find = None;
         } else {
@@ -218,13 +220,13 @@ impl Pane {
                 cursor: 0,
             });
         }
+        self.find_revision
     }
 
     /// Find results: dropped when they answer a query no longer asked.
-    pub fn found(&mut self, query: &str, content: bool, found: Result<Matches, String>) {
+    pub fn found(&mut self, revision: u64, found: Result<Matches, String>) {
         if let Some(f) = &mut self.find
-            && f.query == query
-            && f.content == content
+            && self.find_revision == revision
         {
             f.found = Some(found);
             f.cursor = 0;
@@ -376,10 +378,10 @@ mod tests {
     #[test]
     fn stale_find_answers_are_dropped() {
         let mut p = pane();
-        p.set_find("ab", false);
+        let stale = p.set_find("a", false);
+        let current = p.set_find("ab", false);
         p.found(
-            "a",
-            false,
+            stale,
             Ok(Matches {
                 matches: vec![],
                 truncated: false,
@@ -387,8 +389,7 @@ mod tests {
         );
         assert!(p.find.as_ref().unwrap().found.is_none());
         p.found(
-            "ab",
-            false,
+            current,
             Ok(Matches {
                 matches: vec![],
                 truncated: true,
