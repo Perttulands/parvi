@@ -163,6 +163,33 @@ async fn reads_a_page_with_its_links_and_backlinks() {
 }
 
 #[tokio::test]
+async fn save_route_rejects_a_stale_page_revision() {
+    let corpus = Corpus::new("stale-route");
+    corpus.write("notes/a.md", "# A\n");
+    git(&corpus.0, &["init", "-q"]);
+    git(&corpus.0, &["config", "user.name", "Fixture"]);
+    git(&corpus.0, &["config", "user.email", "fixture@example.org"]);
+    git(&corpus.0, &["add", "."]);
+    git(&corpus.0, &["commit", "-qm", "Initial"]);
+    let base = git(&corpus.0, &["rev-parse", "HEAD"]);
+    let addr = serve_brain(Some(&corpus.0), None).await;
+    let (status, _) = put(addr, "/api/brain/page", json!({"path":"notes/a.md", "content":"# Changed\n", "summary":"Changed", "base":base.trim()})).await;
+    assert_eq!(status, 200);
+    let (status, body) = put(
+        addr,
+        "/api/brain/page",
+        json!({"path":"notes/a.md", "content":"# Stale\n", "summary":"Stale", "base":base.trim()}),
+    )
+    .await;
+    assert_eq!(status, 409);
+    assert_eq!(body["error"]["code"], "conflict");
+    assert_eq!(
+        std::fs::read_to_string(corpus.0.join("notes/a.md")).unwrap(),
+        "# Changed\n"
+    );
+}
+
+#[tokio::test]
 async fn related_pages_include_links_and_selective_shared_tags() {
     let corpus = Corpus::new("related");
     corpus.write(

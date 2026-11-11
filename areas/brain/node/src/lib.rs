@@ -11,7 +11,13 @@ use std::{path::PathBuf, sync::Arc};
 pub const LISTING: Listing = Listing {
     name: "brain",
     kinds: &[],
-    commands: &["brain_search", "brain_read"],
+    commands: &[
+        "brain_search",
+        "brain_read",
+        "brain_save",
+        "brain_collections",
+        "brain_changes",
+    ],
     build,
 };
 

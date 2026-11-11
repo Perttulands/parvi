@@ -132,7 +132,16 @@ async fn node_serves_brain_routes_commands_and_coded_errors() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["brain_search", "brain_read"]);
+    assert_eq!(
+        names,
+        [
+            "brain_search",
+            "brain_read",
+            "brain_save",
+            "brain_collections",
+            "brain_changes"
+        ]
+    );
     let read = node
         .call("brain_read", json!({"path":"notes/second.md"}))
         .await
