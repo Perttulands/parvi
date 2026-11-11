@@ -201,16 +201,15 @@ impl Page for FilesPage {
             }
             Ask::Reveal { what, id, node, .. } if what == "path" => {
                 self.landing = false;
+                let i = self.active;
                 if let Some(n) = node {
-                    self.sides[self.active].pane.node = n.to_string();
+                    let changed = self.sides[i].pane.node != n.as_str();
+                    self.sides[i].pane.choose_node(n.as_str());
+                    if changed {
+                        self.roots(i, cx);
+                    }
                 }
-                let dir = paths::parent(&id);
-                self.list(
-                    self.active,
-                    dir,
-                    Some(paths::base_name(&id).to_string()),
-                    cx,
-                );
+                self.reveal(i, id, window, cx);
             }
             _ => {}
         }
@@ -566,6 +565,7 @@ impl FilesPage {
     }
     fn roots(&mut self, i: usize, cx: &mut Context<Self>) {
         let node = self.sides[i].pane.node.clone();
+        let asked = self.sides[i].pane.asked;
         self.request(
             Request::get(NodeId(node.clone()), "/api/files/roots"),
             move |p, s, b, cx| {
@@ -582,7 +582,8 @@ impl FilesPage {
                 match serde_json::from_slice::<NodeRoots>(&b) {
                     Ok(r) => {
                         p.sides[i].pane.roots = r.roots;
-                        if (!p.landing || p.beside || p.dock)
+                        if p.sides[i].pane.asked == asked
+                            && (!p.landing || p.beside || p.dock)
                             && let Some(path) = p.sides[i].pane.start_path(i)
                         {
                             p.list(i, path, None, cx)
@@ -595,7 +596,58 @@ impl FilesPage {
             cx,
         )
     }
+    fn reveal(&mut self, i: usize, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        let node = self.sides[i].pane.node.clone();
+        self.sides[i].pane.asked += 1;
+        let asked = self.sides[i].pane.asked;
+        let task = self.host.request(
+            Request::get(NodeId(node.clone()), route("folder", &path)),
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = task.await;
+            let _ = this.update_in(cx, |page, window, cx| {
+                if page.sides[i].pane.node != node || page.sides[i].pane.asked != asked {
+                    return;
+                }
+                match answer {
+                    Ok(answer) if answer.status == 200 => page.list(i, path, None, cx),
+                    Ok(answer)
+                        if serde_json::from_slice::<serde_json::Value>(&answer.body)
+                            .ok()
+                            .is_some_and(|v| {
+                                v["error"]["code"] == parvi_files_contract::NOT_FOLDER
+                            }) =>
+                    {
+                        page.list(
+                            i,
+                            paths::parent(&path),
+                            Some(paths::base_name(&path).to_string()),
+                            cx,
+                        );
+                        page.open(i, path, window, cx);
+                    }
+                    Ok(answer) => page.fail(answer.status, &answer.body),
+                    Err(error) => page.error = Some(error.message),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub fn list(&mut self, i: usize, path: String, select: Option<String>, cx: &mut Context<Self>) {
+        self.list_with_menu(i, path, select, None, cx);
+    }
+
+    fn list_with_menu(
+        &mut self,
+        i: usize,
+        path: String,
+        select: Option<String>,
+        menu: Option<gpui::Point<gpui::Pixels>>,
+        cx: &mut Context<Self>,
+    ) {
         let node = self.sides[i].pane.node.clone();
         self.sides[i].pane.asked += 1;
         let id = self.sides[i].pane.asked;
@@ -620,8 +672,18 @@ impl FilesPage {
                                     && select.as_deref() == Some(paths::base_name(&o.path))
                             });
                             p.sides[i].pane.listed(l.path, l.entries, select);
-                            if moved && !opening_selected {
+                            if moved && !opening_selected && menu.is_none() {
                                 p.sides[i].opened = None;
+                            }
+                            if let Some(at) = menu {
+                                p.sides[i].pane.find = None;
+                                p.sides[i]
+                                    .search
+                                    .update(cx, |field, cx| field.set("", false, cx));
+                                if p.sides[i].pane.selection().is_some() {
+                                    p.sides[i].pane.armed = false;
+                                    p.menu = Some((i, at));
+                                }
                             }
                             p.keep(cx)
                         }
@@ -1411,12 +1473,27 @@ impl FilesPage {
         at: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
-        self.active = i;
         self.sides[i].pane.select(&name);
         self.sides[i].pane.armed = false;
         self.menu = Some((i, at));
         cx.notify();
     }
+    pub fn find_context_menu(
+        &mut self,
+        i: usize,
+        path: String,
+        at: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        self.list_with_menu(
+            i,
+            paths::parent(&path),
+            Some(paths::base_name(&path).to_owned()),
+            Some(at),
+            cx,
+        );
+    }
+
     pub fn toggle_pin(&mut self, i: usize, cx: &mut Context<Self>) {
         let pane = &self.sides[i].pane;
         let Some(path) = pane.selected_path() else {
@@ -1743,6 +1820,18 @@ impl FilesPage {
         );
         self.open(i, at, window, cx);
     }
+    pub fn send_selected(&self, i: usize, cx: &mut Context<Self>) {
+        if let Some(path) = self.sides[i].pane.selected_path() {
+            let _ = self.host.ask(
+                Ask::Send {
+                    reference: paths::reference(&path),
+                    target: None,
+                },
+                cx,
+            );
+        }
+    }
+
     pub fn send(&self, i: usize, cx: &mut Context<Self>) {
         let path = self.sides[i]
             .opened

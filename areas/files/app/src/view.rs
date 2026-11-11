@@ -11,17 +11,42 @@ use parvi_app_kit::theme::{
 };
 use parvi_app_kit::widgets::kit::{self, Kind};
 
+const ROW_INSET: f32 = 6.;
+const SIZE_COLUMN: f32 = 70.;
+const MODIFIED_COLUMN: f32 = 100.;
+
 impl FilesPage {
     fn projects_landing(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
         let mut body = div()
             .id("files-projects-list")
+            .debug_selector(|| "files-projects-list".into())
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .gap(px(GAP));
+            .gap(px(ROW_INSET));
+        let node = self.sides[0].pane.node.clone();
+        for (index, root) in self.sides[0].pane.roots.iter().enumerate() {
+            let folder = root.path.clone();
+            let node = node.clone();
+            body = body.child(
+                kit::button(
+                    &t,
+                    ("browse-root", index),
+                    format!("Browse {}", root.name),
+                    Kind::Plain,
+                )
+                .debug_selector({
+                    let id = format!("files-browse-root-{index}");
+                    move || id.clone()
+                })
+                .on_click(cx.listener(move |p, _, w, cx| {
+                    p.browse_project(node.clone(), folder.clone(), None, w, cx)
+                })),
+            );
+        }
         for (node, result) in &self.projects {
             for group in &result.groups {
                 body = body.child(kit::label(&t, group.parent.clone()));
@@ -31,11 +56,12 @@ impl FilesPage {
                     let selector = format!("files-project-{}", project.name);
                     let mut card = div()
                         .flex()
-                        .flex_col()
-                        .gap(px(GAP))
+                        .flex_wrap()
+                        .items_center()
+                        .gap(px(ROW_INSET))
                         .border_1()
                         .border_color(t.divider)
-                        .p(px(PAD))
+                        .px(px(ROW_INSET))
                         .child(
                             kit::button(
                                 &t,
@@ -101,26 +127,6 @@ impl FilesPage {
                 }
             }
         }
-        let node = self.sides[0].pane.node.clone();
-        for (index, root) in self.sides[0].pane.roots.iter().enumerate() {
-            let folder = root.path.clone();
-            let node = node.clone();
-            body = body.child(
-                kit::button(
-                    &t,
-                    ("browse-root", index),
-                    format!("Browse {}", root.name),
-                    Kind::Quiet,
-                )
-                .debug_selector({
-                    let id = format!("files-browse-root-{index}");
-                    move || id.clone()
-                })
-                .on_click(cx.listener(move |p, _, w, cx| {
-                    p.browse_project(node.clone(), folder.clone(), None, w, cx)
-                })),
-            );
-        }
         body
     }
     fn pane(&self, i: usize, cx: &mut Context<Self>) -> Div {
@@ -166,6 +172,14 @@ impl FilesPage {
                     )
                     .debug_selector(move || selector.clone())
                     .child(div().debug_selector(move || label_selector.clone()))
+                    .on_mouse_down(MouseButton::Right, {
+                        let path = path.clone();
+                        cx.listener(move |p, e: &gpui::MouseDownEvent, window, cx| {
+                            window.focus(&p.focus, cx);
+                            p.find_context_menu(i, path.clone(), e.position, cx);
+                            cx.stop_propagation();
+                        })
+                    })
                     .on_click(
                         cx.listener(move |p, _, w, cx| p.open_at(i, path.clone(), line, w, cx)),
                     ),
@@ -190,48 +204,91 @@ impl FilesPage {
                 let folder = entry.folder;
                 let selected = side.pane.selected.as_deref() == Some(name.as_str());
                 list = list.child(
-                    kit::button(
-                        &t,
-                        gpui::SharedString::from(format!("file-{i}-{full}")),
-                        label,
-                        Kind::Quiet,
-                    )
-                    .when(selected, |row| {
-                        let id = format!("selected-{i}-{name}");
-                        row.bg(t.raised).child(
+                    div()
+                        .id(gpui::SharedString::from(format!("file-{i}-{full}")))
+                        .flex()
+                        .items_center()
+                        .w_full()
+                        .h(px(size::ROW))
+                        .px(px(ROW_INSET))
+                        .text_size(px(size::TEXT))
+                        .text_color(t.text2)
+                        .cursor_pointer()
+                        .child({
+                            let selector = format!("file-name-{i}-{label}");
                             div()
-                                .id(("selection", i))
-                                .debug_selector(move || id.clone()),
-                        )
-                    })
-                    .debug_selector({
-                        let id = format!("file-row-{i}-{name}");
-                        move || id.clone()
-                    })
-                    .when(folder, |row| {
-                        let destination = full.clone();
-                        row.on_drop(cx.listener(move |p, paths: &gpui::ExternalPaths, _, cx| {
-                            p.upload_paths(i, destination.clone(), paths.paths(), cx);
-                            cx.stop_propagation();
-                        }))
-                    })
-                    .on_mouse_down(MouseButton::Right, {
-                        let name = name.clone();
-                        cx.listener(move |p, e: &gpui::MouseDownEvent, window, cx| {
-                            window.focus(&p.focus, cx);
-                            p.context_menu(i, name.clone(), e.position, cx);
-                            cx.stop_propagation();
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .debug_selector(move || selector.clone())
+                                .child(label)
                         })
-                    })
-                    .on_click(cx.listener(move |p, _, w, cx| {
-                        p.active = i;
-                        p.sides[i].pane.select(&name);
-                        if folder {
-                            p.list(i, full.clone(), None, cx)
-                        } else {
-                            p.open(i, full.clone(), w, cx)
-                        }
-                    })),
+                        .child({
+                            let value = if folder {
+                                String::new()
+                            } else {
+                                crate::store::format::size(entry.size)
+                            };
+                            let selector = format!("file-size-{i}-{name}-{value}");
+                            div()
+                                .w(px(SIZE_COLUMN))
+                                .flex_none()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .debug_selector(move || selector.clone())
+                                .child(value)
+                        })
+                        .child({
+                            let value = crate::store::format::modified(entry.modified);
+                            let selector = format!("file-modified-{i}-{name}-{value}");
+                            div()
+                                .w(px(MODIFIED_COLUMN))
+                                .flex_none()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .debug_selector(move || selector.clone())
+                                .child(value)
+                        })
+                        .when(selected, |row| {
+                            let id = format!("selected-{i}-{name}");
+                            row.bg(t.raised).child(
+                                div()
+                                    .id(("selection", i))
+                                    .debug_selector(move || id.clone()),
+                            )
+                        })
+                        .debug_selector({
+                            let id = format!("file-row-{i}-{name}");
+                            move || id.clone()
+                        })
+                        .when(folder, |row| {
+                            let destination = full.clone();
+                            row.on_drop(cx.listener(
+                                move |p, paths: &gpui::ExternalPaths, _, cx| {
+                                    p.upload_paths(i, destination.clone(), paths.paths(), cx);
+                                    cx.stop_propagation();
+                                },
+                            ))
+                        })
+                        .on_mouse_down(MouseButton::Right, {
+                            let name = name.clone();
+                            cx.listener(move |p, e: &gpui::MouseDownEvent, window, cx| {
+                                window.focus(&p.focus, cx);
+                                p.context_menu(i, name.clone(), e.position, cx);
+                                cx.stop_propagation();
+                            })
+                        })
+                        .on_click(cx.listener(move |p, _, w, cx| {
+                            p.active = i;
+                            p.sides[i].pane.select(&name);
+                            if folder {
+                                p.list(i, full.clone(), None, cx)
+                            } else {
+                                p.open(i, full.clone(), w, cx)
+                            }
+                        })),
                 );
             }
         }
@@ -252,6 +309,10 @@ impl FilesPage {
             })
             .collect::<Vec<_>>();
         div()
+            .debug_selector({
+                let id = format!("files-pane-{i}");
+                move || id.clone()
+            })
             .flex_1()
             .min_w_0()
             .min_h_0()
@@ -287,10 +348,18 @@ impl FilesPage {
                                 }
                             })),
                     )
-                    .child(div().overflow_hidden().child(path)),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(path),
+                    ),
             )
             .child(
-                kit::button(&t, ("upload", i), "Upload…", Kind::Quiet)
+                kit::button(&t, ("upload", i), "Upload…", Kind::Plain)
                     .debug_selector({
                         let id = format!("files-upload-{i}");
                         move || id.clone()
@@ -324,7 +393,7 @@ impl FilesPage {
                     } else {
                         "Find names"
                     },
-                    Kind::Quiet,
+                    Kind::Plain,
                 )
                 .debug_selector({
                     let id = format!("search-mode-{i}");
@@ -335,27 +404,34 @@ impl FilesPage {
             .child(
                 div()
                     .flex()
-                    .gap(px(GAP))
+                    .px(px(ROW_INSET))
                     .child(
-                        kit::button(&t, ("sort-name", i), "Name", Kind::Quiet).on_click(
-                            cx.listener(move |p, _, _, cx| {
+                        kit::button(&t, ("sort-name", i), "Name", Kind::Quiet)
+                            .flex_1()
+                            .min_w_0()
+                            .justify_start()
+                            .px_0()
+                            .on_click(cx.listener(move |p, _, _, cx| {
                                 p.sort(i, crate::store::listing::Column::Name, cx)
-                            }),
-                        ),
+                            })),
                     )
                     .child(
-                        kit::button(&t, ("sort-size", i), "Size", Kind::Quiet).on_click(
-                            cx.listener(move |p, _, _, cx| {
+                        kit::button(&t, ("sort-size", i), "Size", Kind::Quiet)
+                            .w(px(SIZE_COLUMN))
+                            .justify_start()
+                            .px_0()
+                            .on_click(cx.listener(move |p, _, _, cx| {
                                 p.sort(i, crate::store::listing::Column::Size, cx)
-                            }),
-                        ),
+                            })),
                     )
                     .child(
-                        kit::button(&t, ("sort-modified", i), "Modified", Kind::Quiet).on_click(
-                            cx.listener(move |p, _, _, cx| {
+                        kit::button(&t, ("sort-modified", i), "Modified", Kind::Quiet)
+                            .w(px(MODIFIED_COLUMN))
+                            .justify_start()
+                            .px_0()
+                            .on_click(cx.listener(move |p, _, _, cx| {
                                 p.sort(i, crate::store::listing::Column::Modified, cx)
-                            }),
-                        ),
+                            })),
                     ),
             )
             .child(list)
@@ -369,7 +445,7 @@ impl FilesPage {
                     .child(kit::note(&t, error.clone(), Some(t.error)))
             }))
             .child(
-                kit::button(&t, ("copy", i), "Copy to other pane", Kind::Quiet)
+                kit::button(&t, ("copy", i), "Copy to other pane", Kind::Plain)
                     .debug_selector({
                         let id = format!("copy-{i}");
                         move || id.clone()
@@ -388,7 +464,8 @@ impl FilesPage {
             .child(
                 div()
                     .flex()
-                    .gap(px(GAP))
+                    .flex_wrap()
+                    .gap(px(ROW_INSET))
                     .child(
                         kit::button(&t, ("create-file", i), "New file", Kind::Quiet)
                             .debug_selector({
@@ -529,6 +606,13 @@ impl FilesPage {
                     if let Some(error) = &diff.error {
                         view = view.child(kit::note(&t, error.clone(), Some(t.error)));
                     }
+                    if diff.diff.trim().is_empty() && diff.error.is_none() {
+                        view = view.child(
+                            div()
+                                .debug_selector(|| "files-diff-empty".into())
+                                .child(kit::note(&t, "No changes", None)),
+                        );
+                    }
                     for row in crate::store::diff::rows(&diff.diff) {
                         let (prefix, color) = match row.kind {
                             crate::store::diff::Kind::Add => {
@@ -662,13 +746,19 @@ impl FilesPage {
                         select: None,
                     };
                     div()
+                        .id(("files-markdown-scroll", i))
                         .size_full()
+                        .overflow_y_scroll()
                         .debug_selector(|| "files-markdown-rendered".into())
-                        .child(parvi_app_kit::widgets::markdown::render(
-                            &look,
-                            "file-markdown",
-                            blocks,
-                        ))
+                        .child(
+                            div()
+                                .debug_selector(|| "files-markdown-content".into())
+                                .child(parvi_app_kit::widgets::markdown::render(
+                                    &look,
+                                    "file-markdown",
+                                    blocks,
+                                )),
+                        )
                         .into_any_element()
                 }
                 Show::Text { .. }
@@ -695,6 +785,10 @@ impl FilesPage {
             }
         };
         div()
+            .debug_selector({
+                let id = format!("files-viewer-bounds-{i}");
+                move || id.clone()
+            })
             .flex_1()
             .min_w_0()
             .min_h_0()
@@ -711,6 +805,7 @@ impl Render for FilesPage {
         self.release_pictures(window);
         let t = theme(cx).clone();
         let mut page = div()
+            .debug_selector(|| "files-page".into())
             .size_full()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key))
@@ -916,7 +1011,7 @@ impl Render for FilesPage {
                     kit::button(&t, "file-menu-send", "Send to Session", Kind::Quiet).on_click(
                         cx.listener(move |p, _, _, cx| {
                             p.menu = None;
-                            p.send(i, cx)
+                            p.send_selected(i, cx)
                         }),
                     ),
                 )
@@ -1115,7 +1210,13 @@ impl Render for FilesPage {
                 .gap(px(GAP))
                 .child(self.pane(0, cx))
                 .child(self.pane(1, cx))
-                .child(self.viewer(self.active, cx)),
+                .child(
+                    self.viewer(self.active, cx)
+                        .debug_selector(|| "files-viewer".into())
+                        .when(self.sides[self.active].opened.is_some(), |v| {
+                            v.flex_grow(2.5)
+                        }),
+                ),
         )
     }
 }

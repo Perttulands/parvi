@@ -108,6 +108,22 @@ fn files_dock_browses_sends_and_remembers_beside_a_page(cx: &mut TestAppContext)
     until(cx, "dock file", |cx| {
         cx.debug_bounds("file-row-0-note.txt").is_some()
     });
+    let modified = std::fs::metadata(&file)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let date = parvi_files_app::store::format::modified(modified);
+    let name = cx.debug_bounds("file-name-0-note.txt").expect("name drawn");
+    let size = cx
+        .debug_bounds("file-size-0-note.txt-5 B")
+        .expect("size drawn");
+    let date_selector: &'static str =
+        Box::leak(format!("file-modified-0-note.txt-{date}").into_boxed_str());
+    let modified = cx.debug_bounds(date_selector).expect("modified time drawn");
+    assert!(name.right() <= size.left() && size.right() <= modified.left());
     click(cx, "file-row-0-note.txt");
     until(cx, "dock viewer", |cx| {
         cx.debug_bounds("files-send").is_some()
@@ -422,8 +438,13 @@ fn browse_root(cx: &mut VisualTestContext) {
 #[gpui::test]
 fn projects_landing_groups_repositories_sessions_and_scopes_find(cx: &mut TestAppContext) {
     let root = parvi_testkit::fresh_dir("files-projects-landing");
-    for dir in ["one", "two", "plain"] {
+    for dir in [
+        "one", "two", "plain", "three", "four", "five", "six", "seven", "eight",
+    ] {
         std::fs::create_dir(root.join(dir)).unwrap();
+    }
+    for dir in ["three", "four", "five", "six", "seven", "eight"] {
+        std::fs::create_dir(root.join(dir).join(".git")).unwrap();
     }
     std::fs::create_dir(root.join("one/.git")).unwrap();
     std::fs::write(root.join("two/.git"), "gitdir: elsewhere").unwrap();
@@ -466,6 +487,24 @@ fn projects_landing_groups_repositories_sessions_and_scopes_find(cx: &mut TestAp
                 .is_some()
     });
     assert!(cx.debug_bounds("files-project-plain").is_none());
+    let list = cx.debug_bounds("files-projects-list").unwrap();
+    for id in [
+        "files-browse-root-0",
+        "files-project-one",
+        "files-project-two",
+        "files-project-three",
+        "files-project-four",
+        "files-project-five",
+        "files-project-six",
+        "files-project-seven",
+        "files-project-eight",
+    ] {
+        let item = cx.debug_bounds(id).expect("project or browse drawn");
+        assert!(
+            item.top() >= list.top() && item.bottom() <= list.bottom(),
+            "{id} is visible without scrolling"
+        );
+    }
     for doc in [
         "files-project-doc-one-README.md",
         "files-project-doc-one-AGENTS.md",
@@ -736,6 +775,34 @@ fn page_renders_node_data(cx: &mut TestAppContext) {
     until(cx, "file viewer", |cx| {
         cx.debug_bounds("files-edit").is_some()
     });
+    let viewer = cx.debug_bounds("files-viewer").unwrap();
+    let page = cx.debug_bounds("files-page").unwrap();
+    assert!(
+        viewer.size.width >= page.size.width / 2.,
+        "viewer should use at least half the window"
+    );
+    let pane = cx.debug_bounds("files-pane-0").unwrap();
+    for id in [
+        "files-create-file-0",
+        "files-create-folder-0",
+        "files-rename-0",
+        "files-delete-0",
+    ] {
+        let action = cx.debug_bounds(id).expect("action drawn");
+        assert!(
+            action.right() <= pane.right() && action.bottom() <= pane.bottom(),
+            "{id} stays inside its pane"
+        );
+    }
+    until(cx, "other pane", |cx| {
+        cx.debug_bounds("file-row-1-note.txt").is_some()
+    });
+    menu_on(cx, "file-row-1-note.txt");
+    assert!(
+        cx.debug_bounds("file-view-note.txt").is_some(),
+        "right-click keeps the viewer"
+    );
+    click(cx, "file-menu-copy-path");
     let edit = cx.debug_bounds("files-edit").unwrap().center();
     cx.simulate_click(edit, Modifiers::none());
     until(cx, "editing", |cx| cx.debug_bounds("files-save").is_some());
@@ -745,6 +812,59 @@ fn page_renders_node_data(cx: &mut TestAppContext) {
     until(cx, "saved text", |_| {
         std::fs::read(root.join("note.txt")).ok().as_deref() == Some(b"edited")
     });
+    drop(running);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Revealing either kind of path opens its actual location, including a root
+/// and a folder whose name looks like a media file.
+#[gpui::test]
+fn reveal_opens_files_and_lists_folders(cx: &mut TestAppContext) {
+    let root = parvi_testkit::fresh_dir("files-reveal");
+    let folder = root.join("clips.pdf");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join("note.txt"), "hello reveal").unwrap();
+    std::fs::write(root.join("outside.txt"), "outside").unwrap();
+    let running = start(root.clone());
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let url = running.url.clone();
+    let (shell, cx) = cx.add_window_view(move |window, cx| {
+        parvi_app_shell::start(&[toy, parvi_files_app::build], Some(url), None, window, cx)
+    });
+    until(cx, "node linked", |cx| {
+        shell.read_with(cx, |s, cx| {
+            s.hub().read(cx).fleet.here().state == parvi_app_kit::link::client::LinkState::Open
+        })
+    });
+    let host = shell.read_with(cx, |s, _| {
+        parvi_app_kit::Host::new(s.hub()).for_page("toy", &[])
+    });
+    let reveal = |path: &std::path::Path| parvi_app_kit::Ask::Reveal {
+        what: "path".into(),
+        id: path.to_string_lossy().into_owned(),
+        node: Some(parvi_core::NodeId(running.node.clone())),
+        part: None,
+        beside: false,
+    };
+    cx.update(|_, cx| host.ask(reveal(&folder.join("note.txt")), cx).unwrap());
+    until(cx, "revealed file selected and open", |cx| {
+        cx.debug_bounds("selected-0-note.txt").is_some()
+            && cx.debug_bounds("file-view-note.txt").is_some()
+            && cx.debug_bounds("files-edit").is_some()
+    });
+    assert!(cx.debug_bounds("file-row-0-outside.txt").is_none());
+    cx.update(|_, cx| host.ask(reveal(&root), cx).unwrap());
+    until(cx, "revealed root contents", |cx| {
+        cx.debug_bounds("file-row-0-outside.txt").is_some()
+            && cx.debug_bounds("file-row-0-clips.pdf").is_some()
+    });
+    cx.update(|_, cx| host.ask(reveal(&folder), cx).unwrap());
+    until(cx, "revealed folder contents", |cx| {
+        cx.debug_bounds("file-row-0-note.txt").is_some()
+            && cx.debug_bounds("file-row-0-outside.txt").is_none()
+    });
+    assert!(cx.debug_bounds("file-view-clips.pdf").is_none());
     drop(running);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -1054,6 +1174,74 @@ fn terminal(
     parvi_app_kit::mount(host, window, cx, |host, _, _| TerminalPage { host })
 }
 
+/// A long rendered document stays in the terminal's side pane and scrolls.
+#[gpui::test]
+fn markdown_beside_terminal_scrolls_inside_its_border(cx: &mut TestAppContext) {
+    let root = parvi_testkit::fresh_dir("files-beside-markdown");
+    let file = root.join("long.md");
+    std::fs::write(
+        &file,
+        (0..120)
+            .map(|n| format!("Paragraph {n}: text in a long document.\n\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    let running = start(root.clone());
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let url = running.url.clone();
+    let (shell, cx) = cx.add_window_view(move |w, cx| {
+        parvi_app_shell::start(&[terminal, parvi_files_app::build], Some(url), None, w, cx)
+    });
+    until(cx, "node linked", |cx| {
+        shell.read_with(cx, |s, cx| {
+            s.hub().read(cx).fleet.here().state == parvi_app_kit::link::client::LinkState::Open
+        })
+    });
+    let host = shell.read_with(cx, |s, _| {
+        parvi_app_kit::Host::new(s.hub()).for_page("terminals", &[])
+    });
+    cx.update(|_, cx| {
+        host.ask(
+            parvi_app_kit::Ask::OpenPath {
+                node: parvi_core::NodeId(running.node.clone()),
+                path: file.to_string_lossy().into_owned(),
+                beside: true,
+            },
+            cx,
+        )
+        .unwrap()
+    });
+    until(cx, "rendered Markdown", |cx| {
+        cx.debug_bounds("files-markdown-rendered").is_some()
+    });
+    let viewer = cx.debug_bounds("files-viewer-bounds-0").unwrap();
+    let viewport = cx.debug_bounds("files-markdown-rendered").unwrap();
+    let before = cx.debug_bounds("files-markdown-content").unwrap();
+    assert!(viewport.top() >= viewer.top() && viewport.bottom() <= viewer.bottom());
+    assert!(
+        before.size.height > viewport.size.height,
+        "document exceeds the viewport"
+    );
+    cx.simulate_event(gpui::ScrollEvent {
+        position: viewport.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(-500.))),
+        modifiers: Modifiers::none(),
+        touch_phase: gpui::TouchPhase::Moved,
+        source: gpui::ScrollSource::Pointer,
+    });
+    cx.run_until_parked();
+    let after = cx.debug_bounds("files-markdown-content").unwrap();
+    assert!(
+        after.top() < before.top(),
+        "scroll moves the document within its viewport"
+    );
+    let viewport_after = cx.debug_bounds("files-markdown-rendered").unwrap();
+    assert_eq!(viewport, viewport_after);
+    drop(running);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// A beside ask leaves the terminal shown and switching files keeps the draft.
 #[gpui::test]
 fn open_path_beside_keeps_the_terminal_and_the_draft(cx: &mut TestAppContext) {
@@ -1234,7 +1422,20 @@ fn find_opens_a_file_below_the_current_folder(cx: &mut TestAppContext) {
     until(cx, "search result", |cx| {
         cx.debug_bounds("find-result-0-needle.txt").is_some()
     });
-    click(cx, "find-result-0-needle.txt");
+    menu_on(cx, "find-result-0-needle.txt");
+    click(cx, "file-menu-copy-path");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|v| v.text()),
+        Some(
+            root.join("nested/needle.txt")
+                .to_string_lossy()
+                .into_owned()
+        )
+    );
+    until(cx, "matched file in its folder", |cx| {
+        cx.debug_bounds("selected-0-needle.txt").is_some()
+    });
+    click(cx, "file-row-0-needle.txt");
     until(cx, "viewer", |cx| cx.debug_bounds("files-edit").is_some());
     cx.simulate_keystrokes("escape / ctrl-a");
     cx.simulate_input("found");
@@ -1439,7 +1640,8 @@ fn create_rename_delete_and_diff_in_the_files_page(cx: &mut TestAppContext) {
     };
     git(&["init", "-q"]);
     std::fs::write(root.join("tracked.txt"), "before\n").unwrap();
-    git(&["add", "tracked.txt"]);
+    std::fs::write(root.join("clean.txt"), "unchanged\n").unwrap();
+    git(&["add", "tracked.txt", "clean.txt"]);
     git(&[
         "-c",
         "user.name=Test",
@@ -1461,6 +1663,14 @@ fn create_rename_delete_and_diff_in_the_files_page(cx: &mut TestAppContext) {
     let page = SEARCH_PAGE.with(|p| p.borrow().as_ref().unwrap().clone());
     until(cx, "tracked file", |cx| {
         cx.debug_bounds("file-row-0-tracked.txt").is_some()
+    });
+    click(cx, "file-row-0-clean.txt");
+    until(cx, "clean diff action", |cx| {
+        cx.debug_bounds("files-diff").is_some()
+    });
+    click(cx, "files-diff");
+    until(cx, "empty diff message", |cx| {
+        cx.debug_bounds("files-diff-empty").is_some()
     });
     click(cx, "file-row-0-tracked.txt");
     until(cx, "diff action", |cx| {
