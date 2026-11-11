@@ -149,6 +149,7 @@ mod tests {
         let missions = Missions {
             store: Store::new(&root),
             coordinator,
+            notify_task: None,
             changes: broadcast::channel(32).0,
             resolver: std::sync::Arc::new(NoResolver),
             node: "test".into(),
@@ -183,6 +184,7 @@ mod tests {
         let missions = Missions {
             store: Store::new(&root),
             coordinator,
+            notify_task: None,
             changes: broadcast::channel(32).0,
             resolver: std::sync::Arc::new(NoResolver),
             node: "test".into(),
