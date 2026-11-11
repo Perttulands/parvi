@@ -3,6 +3,7 @@
 //! a frame to the page whose kinds hold it, an ask to the page that
 //! answers it, the keyboard to the top layer. It knows no page by name.
 
+use crate::close::{self, CloseGuard};
 use crate::keys::KeysPanel;
 use crate::settings_page::SettingsPage;
 use crate::view_control::{self, ViewControl};
@@ -37,6 +38,8 @@ pub struct Shell {
     pub(crate) view: ViewControl,
     /// Pages whose channels are on: the one shown, and those docked.
     channels_on: HashSet<&'static str>,
+    /// The operator chose to close the window over unsaved work.
+    leaving: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -154,6 +157,7 @@ impl Shell {
             failed: HashMap::new(),
             view: ViewControl::default(),
             channels_on: HashSet::new(),
+            leaving: false,
             _subscriptions: subscriptions,
         }
     }
@@ -274,6 +278,36 @@ impl Shell {
             }
         }
         cx.notify();
+    }
+
+    /// Whether the window may close: yes when no guarded view holds unsaved
+    /// work, or the operator chose to leave it. Otherwise the page holding
+    /// the first comes forward and the close guard asks over the window.
+    pub fn may_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.leaving {
+            return true;
+        }
+        let unsaved = self.hub.read(cx).unsaved(cx);
+        let Some((page, _)) = unsaved.first() else {
+            return true;
+        };
+        self.show_id(page, window, cx);
+        let labels = unsaved.into_iter().map(|(_, label)| label).collect();
+        let me = cx.weak_entity();
+        let host = self.host.clone();
+        let guard = cx.new(|cx| CloseGuard::new(me, host, labels, cx));
+        let focus = guard.read(cx).focus();
+        let layer = Layer::new(close::LAYER, guard)
+            .cover(Cover::Window)
+            .focus(focus);
+        self.host.layer(layer, cx);
+        false
+    }
+
+    /// Closes the window over the unsaved work, as the operator chose.
+    pub fn leave(&mut self, window: &mut Window) {
+        self.leaving = true;
+        window.remove_window();
     }
 
     /// The keyboard goes to the top layer that takes it, or to the page.

@@ -17,7 +17,8 @@ use crate::menu::Menu;
 use crate::settings::Settings;
 use crate::theme::motion;
 use gpui::{
-    AnyEntity, AnyView, AppContext, Context, Entity, EventEmitter, SystemNotification, Task,
+    AnyEntity, AnyView, AnyWeakEntity, App, AppContext, Context, Entity, EventEmitter,
+    SystemNotification, Task,
 };
 use parvi_core::{Error, NodeId};
 use std::any::{TypeId, type_name};
@@ -108,6 +109,20 @@ pub struct Hub {
     /// The docks open beside every page, by the page that supplies each,
     /// in the order they opened.
     docks: Vec<(&'static str, AnyView)>,
+    /// The views that may hold unsaved work, each with the page it is from.
+    guards: Vec<Guard>,
+}
+
+/// What a guarded view holds unsaved now: `None` when all is saved or the
+/// view is gone.
+pub type Unsaved = Rc<dyn Fn(&App) -> Option<String>>;
+
+/// A view that may hold unsaved work: while it lives, closing the window
+/// asks it first.
+struct Guard {
+    page: &'static str,
+    view: AnyWeakEntity,
+    unsaved: Unsaved,
 }
 
 /// A read model: its entity, and the page that publishes it once one has.
@@ -156,6 +171,7 @@ impl Hub {
             models: HashMap::new(),
             beside: HashMap::new(),
             docks: vec![],
+            guards: vec![],
         }
     }
 
@@ -576,6 +592,26 @@ impl Hub {
             (None, None) => return,
         }
         cx.notify();
+    }
+
+    /// Asks `unsaved` about `view`, of page `page`, whenever the window
+    /// would close, until `view` is gone.
+    pub fn guard_close(&mut self, page: &'static str, view: AnyWeakEntity, unsaved: Unsaved) {
+        self.guards.retain(|g| g.view.is_upgradable());
+        self.guards.push(Guard {
+            page,
+            view,
+            unsaved,
+        });
+    }
+
+    /// What every live view holds unsaved now, by the page it is from, in
+    /// the order they were guarded.
+    pub fn unsaved(&self, cx: &App) -> Vec<(&'static str, String)> {
+        self.guards
+            .iter()
+            .filter_map(|g| (g.unsaved)(cx).map(|label| (g.page, label)))
+            .collect()
     }
 
     /// Hands `ask`, from page `from`, to the page that answers it. When

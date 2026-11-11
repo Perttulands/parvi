@@ -3,6 +3,7 @@
 //! with their own page without building any other area.
 
 mod chrome;
+mod close;
 mod keys;
 mod settings_page;
 pub mod shell;
@@ -47,6 +48,11 @@ pub fn start(
         })
         .detach();
     follow_clicks(&hub, window, cx);
+    let me = cx.weak_entity();
+    window.on_window_should_close(cx, move |window, cx| {
+        me.update(cx, |s, cx| s.may_close(window, cx))
+            .unwrap_or(true)
+    });
     let pages = shell::mount(builds, &hub, window, cx)
         .unwrap_or_else(|e| panic!("Parvi refuses to start: {e}"));
     let shell = Shell::new(hub.clone(), pages, window, cx);

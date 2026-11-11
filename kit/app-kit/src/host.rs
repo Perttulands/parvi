@@ -417,6 +417,25 @@ impl Host {
         self.read(cx, |h| h.docked(self.page)).unwrap_or(false)
     }
 
+    /// Guards `view` (this page, or a view it shows beside another page or
+    /// in a dock) against the window closing over its unsaved work: while
+    /// `view` lives, closing the window asks `unsaved`, which names what it
+    /// holds unsaved (a file's name) or is `None` when all is saved. While
+    /// any guarded view names something, the window stays open until the
+    /// operator chooses to leave.
+    pub fn guard_close<T: 'static>(
+        &self,
+        view: &Entity<T>,
+        unsaved: impl Fn(&T, &App) -> Option<String> + 'static,
+        cx: &mut App,
+    ) {
+        let page = self.page;
+        let weak = view.downgrade();
+        let any = weak.clone().into();
+        let unsaved = Rc::new(move |cx: &App| weak.upgrade().and_then(|v| unsaved(v.read(cx), cx)));
+        self.update(cx, |h, _| h.guard_close(page, any, unsaved));
+    }
+
     /// The read model of type `T` pages share: one page publishes it, any
     /// page reads and observes it, built in any order. `None` only while
     /// the app closes.
