@@ -4351,6 +4351,7 @@ dependencies = [
  "parvi-core",
  "parvi-files",
  "parvi-host",
+ "parvi-missions",
  "parvi-node-kit",
  "parvi-scheduled",
  "parvi-terminals",
@@ -4660,6 +4661,39 @@ dependencies = [
  "serde",
  "serde_json",
  "toml 1.2.1+spec-1.1.0",
+]
+
+[[package]]
+name = "parvi-missions"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "futures-util",
+ "parvi-agents",
+ "parvi-core",
+ "parvi-mission-engine",
+ "parvi-missions-contract",
+ "parvi-node-kit",
+ "parvi-term",
+ "parvi-testkit",
+ "parvi-work",
+ "parvi-work-contract",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.29.0",
+ "tower",
+]
+
+[[package]]
+name = "parvi-missions-contract"
+version = "0.0.1"
+dependencies = [
+ "parvi-core",
+ "parvi-mission-model",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
