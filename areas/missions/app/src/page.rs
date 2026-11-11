@@ -2022,6 +2022,14 @@ impl Render for MissionsPage {
                         )
                         .child(kit::button(&t, "step-delete", if ed.deleting { "Confirm delete" } else { "Delete" }, Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.delete_card(cx))))
                         .when(matches!(ed.kind, EditKind::Step), |d| { let id = ed.id.clone(); d.child(kit::button(&t, "run-step", "Run this step", Kind::Quiet).on_click(cx.listener(move |p, _, _, cx| p.prepare_step_run(id.clone(), cx)))) })
+                        .when(matches!(ed.kind, EditKind::Step), |mut d| {
+                            if let Some((node, slug)) = &self.state.selected && let Some(feed) = self.state.nodes.get(node) {
+                                for seat in feed.runs.values().filter(|run| &run.mission_slug == slug).flat_map(crate::store::seats::seats).filter(|seat| seat.step == ed.id) {
+                                    d = d.child(self.seat_control(&t, seat, "step", cx));
+                                }
+                            }
+                            d
+                        })
                         .child("Title")
                         .child(
                             div()

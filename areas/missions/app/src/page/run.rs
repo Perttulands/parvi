@@ -639,6 +639,51 @@ impl MissionsPage {
         self.load_attempt_images(cx);
         cx.notify();
     }
+    pub(super) fn seat_control(
+        &self,
+        t: &Theme,
+        seat: crate::store::seats::Seat,
+        scope: &str,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        use crate::store::seats::State;
+        let state = match seat.state {
+            State::Live => "live",
+            State::Ended => "ended",
+            State::Unavailable => "unavailable",
+        };
+        let selector = format!(
+            "{scope}-seat-{}-{}-{state}-{}",
+            seat.run, seat.seq, seat.name
+        );
+        let text = match seat.state {
+            State::Live => format!("Open terminal · {}", seat.name),
+            State::Ended => format!("Seat ended · {}", seat.name),
+            State::Unavailable => format!("Seat unavailable · {}", seat.name),
+        };
+        let button = kit::button(t, SharedString::from(selector.clone()), text, Kind::Quiet)
+            .debug_selector(move || selector.clone());
+        let button = if seat.state == State::Live {
+            button.on_click(cx.listener(move |page, _, _, cx| {
+                if let Err(error) = page.host.ask(
+                    Ask::Reveal {
+                        what: "session".into(),
+                        id: seat.session.clone(),
+                        node: Some(NodeId(seat.node.clone())),
+                        part: None,
+                        beside: false,
+                    },
+                    cx,
+                ) {
+                    page.state.error = Some(error.message);
+                    cx.notify();
+                }
+            }))
+        } else {
+            button.cursor_default().text_color(t.dim)
+        };
+        div().child(button)
+    }
     pub(super) fn run_view(&self, t: &Theme, cx: &mut Context<Self>) -> Option<Div> {
         if self.run.starting {
             let mut form = div()
@@ -734,6 +779,9 @@ impl MissionsPage {
             .find(|n| n.id.as_str() == node)
             .map(|n| format!("{} ({})", n.device, n.environment))
             .unwrap_or_else(|| node.clone());
+        for seat in crate::store::seats::seats(&run) {
+            view = view.child(self.seat_control(t, seat, "run-bar", cx));
+        }
         for gate in &run.waiting_gates {
             let gate_id = gate.gate_id.clone();
             let seq = gate.requested_seq;
