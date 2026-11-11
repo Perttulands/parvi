@@ -4849,6 +4849,7 @@ dependencies = [
  "parvi-terminals",
  "parvi-terminals-contract",
  "parvi-testkit",
+ "parvi-work-contract",
  "serde",
  "serde_json",
  "tokio",

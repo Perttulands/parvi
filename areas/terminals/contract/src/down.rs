@@ -33,6 +33,16 @@ pub enum Seat {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SessionList {
     pub sessions: Vec<Session>,
+    /// The session shown in the focused terminal tile, if one is bound.
+    pub focused: Option<FocusedSession>,
+}
+
+/// A focused session's identity across nodes and tmux servers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FocusedSession {
+    pub node: String,
+    pub user: String,
+    pub name: String,
 }
 
 /// A session as one node lists it.

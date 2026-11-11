@@ -181,6 +181,7 @@ fn the_page_lists_a_task_made_through_the_cli(cx: &mut TestAppContext) {
                     ..Session::default()
                 })
                 .collect(),
+            ..Default::default()
         };
         let terminals = Host::new(s.hub()).for_page("terminals", &[]);
         terminals.publish(list, cx).expect("one publisher");
