@@ -1,4 +1,5 @@
 //! Work's table, filters and item card.
+mod beside;
 mod column;
 mod fit;
 mod graph_view;
@@ -45,6 +46,8 @@ pub struct Work {
     selected: Option<RowKey>,
     selected_node: Option<String>,
     card: bool,
+    beside_from: Option<&'static str>,
+    card_line: Option<String>,
     trail: Vec<(Option<String>, RowKey)>,
     prose: Rc<RefCell<Selectable>>,
     scroll: UniformListScrollHandle,
@@ -79,15 +82,39 @@ impl Page for Work {
             self.rebuild(cx);
         }
     }
-    fn answer(&mut self, ask: Ask, _: &'static str, _: &mut Window, cx: &mut Context<Self>) {
-        if let Ask::Reveal { id, node, .. } = ask {
+    fn answer(
+        &mut self,
+        ask: Ask,
+        from: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Ask::Reveal {
+            id,
+            node,
+            beside: true,
+            ..
+        } = ask
+        {
+            self.open_beside(from, id, node, window, cx);
+        } else if let Ask::Reveal { id, node, .. } = ask {
             self.wanted = Some((id, node.map(|n| n.to_string())));
             self.open_wanted(cx);
         }
     }
     fn chords(&self, _: &App) -> Vec<parvi_app_kit::chords::Chord> {
         let me = self.me.clone();
+        let close = self.me.clone();
         vec![
+            parvi_app_kit::chords::Chord::new("i", "Close the table", move |_, cx| {
+                let _ = close.update(cx, |work, cx| {
+                    if let Some(from) = work.beside_from.take() {
+                        work.host.close_beside(from, cx);
+                    }
+                });
+            })
+            .alt("i", Some(false))
+            .everywhere(),
             parvi_app_kit::chords::Chord::new("b", "Work column", move |_, cx| {
                 let _ = me.update(cx, |work, cx| work.toggle_column(cx));
             })
@@ -133,6 +160,8 @@ impl Work {
             selected: None,
             selected_node: None,
             card: false,
+            beside_from: None,
+            card_line: None,
             trail: Vec::new(),
             prose: Rc::default(),
             scroll: UniformListScrollHandle::new(),
@@ -459,7 +488,10 @@ impl Work {
     pub fn send(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(row) = self.selected_row() {
             let item = &self.board.rows[row];
-            let line = item.line(&self.board);
+            let line = self
+                .card_line
+                .clone()
+                .unwrap_or_else(|| item.line(&self.board));
             let node = self.node_for_project(item.project);
             let folder = self.board.projects[item.project].checkout.as_deref();
             let target = self.sessions.as_ref().and_then(|list| {
