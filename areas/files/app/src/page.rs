@@ -16,7 +16,20 @@ use parvi_app_kit::{
 };
 use parvi_core::NodeId;
 use parvi_files_contract::{Listing, Matches, NodeRoots};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
+
+struct Upload {
+    source: PathBuf,
+    node: NodeId,
+    folder: String,
+    side: usize,
+}
+struct UploadConflict {
+    upload: Upload,
+    name: String,
+    bytes: Vec<u8>,
+}
 
 pub struct Side {
     pub pane: Pane,
@@ -52,6 +65,9 @@ pub struct FilesPage {
     dock_view: Option<Entity<FilesPage>>,
     pub(crate) dock: bool,
     dock_previous_focus: Option<FocusHandle>,
+    uploads: VecDeque<Upload>,
+    uploading: bool,
+    upload_conflict: Option<UploadConflict>,
 }
 fn enc(s: &str) -> String {
     s.bytes()
@@ -66,6 +82,14 @@ fn enc(s: &str) -> String {
 }
 fn route(kind: &str, path: &str) -> String {
     format!("/api/files/{kind}?path={}", enc(path))
+}
+fn upload_copy_name(name: &str, ordinal: usize) -> String {
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() => {
+            format!("{stem} ({ordinal}).{ext}")
+        }
+        _ => format!("{name} ({ordinal})"),
+    }
 }
 impl Page for FilesPage {
     const ID: &'static str = "files";
@@ -316,6 +340,9 @@ impl FilesPage {
             dock_view: None,
             dock: false,
             dock_previous_focus: None,
+            uploads: VecDeque::new(),
+            uploading: false,
+            upload_conflict: None,
         }
     }
     fn toggle_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1096,6 +1123,178 @@ impl FilesPage {
             },
             cx,
         );
+    }
+    pub(crate) fn pick_uploads(&mut self, i: usize, folder: String, cx: &mut Context<Self>) {
+        let node = NodeId(self.sides[i].pane.node.clone());
+        let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Upload files".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let result = picked.await;
+            let _ = this.update(cx, |page, cx| match result {
+                Ok(Ok(Some(paths))) => page.queue_uploads(i, node, folder, &paths, cx),
+                Ok(Ok(None)) | Err(_) => {}
+                Ok(Err(e)) => {
+                    page.error = Some(format!("The file picker failed: {e}"));
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+    pub(crate) fn upload_paths(
+        &mut self,
+        i: usize,
+        folder: String,
+        paths: &[PathBuf],
+        cx: &mut Context<Self>,
+    ) {
+        let node = NodeId(self.sides[i].pane.node.clone());
+        self.queue_uploads(i, node, folder, paths, cx);
+    }
+    fn queue_uploads(
+        &mut self,
+        i: usize,
+        node: NodeId,
+        folder: String,
+        paths: &[PathBuf],
+        cx: &mut Context<Self>,
+    ) {
+        if !self.uploading {
+            self.error = None;
+        }
+        self.uploads
+            .extend(paths.iter().cloned().map(|source| Upload {
+                source,
+                node: node.clone(),
+                folder: folder.clone(),
+                side: i,
+            }));
+        self.next_upload(cx);
+    }
+    fn next_upload(&mut self, cx: &mut Context<Self>) {
+        if self.uploading {
+            return;
+        }
+        let Some(upload) = self.uploads.pop_front() else {
+            return;
+        };
+        self.uploading = true;
+        cx.spawn(async move |this, cx| {
+            let source = upload.source.clone();
+            let task = cx.background_executor().spawn(async move {
+                let name = source
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .ok_or_else(|| "The file name is not valid UTF-8.".to_owned())?
+                    .to_owned();
+                let metadata = std::fs::metadata(&source)
+                    .map_err(|e| format!("Cannot read {}: {e}", source.display()))?;
+                if !metadata.is_file() {
+                    return Err(format!("{} is not a file.", source.display()));
+                }
+                if metadata.len() > 64 * 1024 * 1024 {
+                    return Err(format!("{} is larger than 64 MiB.", source.display()));
+                }
+                let bytes = std::fs::read(&source)
+                    .map_err(|e| format!("Cannot read {}: {e}", source.display()))?;
+                Ok((name, bytes))
+            });
+            let result = task.await;
+            let _ = this.update(cx, |page, cx| match result {
+                Ok((name, bytes)) => page.write_upload(upload, name, bytes, false, 0, cx),
+                Err(error) => {
+                    page.error = Some(error);
+                    page.uploading = false;
+                    page.next_upload(cx);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+    fn write_upload(
+        &mut self,
+        upload: Upload,
+        name: String,
+        bytes: Vec<u8>,
+        replace: bool,
+        ordinal: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let target_name = if ordinal == 0 {
+            name.clone()
+        } else {
+            upload_copy_name(&name, ordinal)
+        };
+        let path = paths::join(&upload.folder, &target_name);
+        let mut request = Request::new(
+            if replace { "PUT" } else { "POST" },
+            upload.node.clone(),
+            route("file", &path),
+        );
+        request.body = Some(("application/octet-stream".into(), bytes.clone()));
+        self.request(
+            request,
+            move |page, status, body, cx| {
+                if (200..300).contains(&status) {
+                    if page.sides[upload.side].pane.node == upload.node.as_str()
+                        && page.sides[upload.side].pane.path.as_deref()
+                            == Some(upload.folder.as_str())
+                    {
+                        page.list(upload.side, upload.folder.clone(), Some(target_name), cx);
+                    }
+                    page.uploading = false;
+                    page.next_upload(cx);
+                } else if status == 409
+                    && serde_json::from_slice::<serde_json::Value>(&body)
+                        .ok()
+                        .is_some_and(|v| v["error"]["code"] == parvi_files_contract::ALREADY_EXISTS)
+                {
+                    if ordinal > 0 {
+                        page.write_upload(upload, name, bytes, false, ordinal + 1, cx);
+                    } else {
+                        page.upload_conflict = Some(UploadConflict {
+                            upload,
+                            name,
+                            bytes,
+                        });
+                    }
+                } else {
+                    page.fail(status, &body);
+                    page.uploading = false;
+                    page.next_upload(cx);
+                }
+                cx.notify();
+            },
+            cx,
+        );
+    }
+    pub(crate) fn upload_conflict_name(&self) -> Option<&str> {
+        self.upload_conflict.as_ref().map(|c| c.name.as_str())
+    }
+    pub(crate) fn resolve_upload(&mut self, replace: Option<bool>, cx: &mut Context<Self>) {
+        let Some(conflict) = self.upload_conflict.take() else {
+            return;
+        };
+        match replace {
+            Some(replace) => self.write_upload(
+                conflict.upload,
+                conflict.name,
+                conflict.bytes,
+                replace,
+                if replace { 0 } else { 2 },
+                cx,
+            ),
+            None => {
+                self.uploading = false;
+                self.next_upload(cx);
+            }
+        }
+        cx.notify();
     }
     pub fn context_menu(
         &mut self,

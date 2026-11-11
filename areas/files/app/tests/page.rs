@@ -268,6 +268,93 @@ fn menu_on(cx: &mut VisualTestContext, row: &'static str) {
     });
 }
 
+fn drop_files(cx: &mut VisualTestContext, row: &'static str, files: Vec<std::path::PathBuf>) {
+    let position = cx.debug_bounds(row).expect("drop target").center();
+    cx.simulate_event(gpui::FileDropEvent::Entered {
+        position,
+        paths: gpui::ExternalPaths(files.into_iter().collect()),
+    });
+    cx.simulate_event(gpui::FileDropEvent::Submit { position });
+}
+
+#[cfg(unix)]
+#[gpui::test]
+fn upload_drop_conflicts_picker_and_node_error(cx: &mut TestAppContext) {
+    use std::os::unix::fs::PermissionsExt;
+    let root = parvi_testkit::fresh_dir("files-upload-root");
+    let sources = parvi_testkit::fresh_dir("files-upload-sources");
+    std::fs::create_dir(root.join("target")).unwrap();
+    std::fs::create_dir(root.join("locked")).unwrap();
+    std::fs::set_permissions(root.join("locked"), std::fs::Permissions::from_mode(0o555)).unwrap();
+    let first = sources.join("one.bin");
+    let second = sources.join("two.txt");
+    std::fs::write(&first, [0, 255, 128, 42]).unwrap();
+    std::fs::write(&second, b"second file").unwrap();
+    let running = start(root.clone());
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let url = running.url.clone();
+    let (_, cx) = cx.add_window_view(move |w, cx| {
+        parvi_app_shell::start(&[parvi_files_app::build], Some(url), None, w, cx)
+    });
+    until(cx, "folder rows", |cx| {
+        cx.debug_bounds("file-row-0-target").is_some()
+            && cx.debug_bounds("file-row-0-locked").is_some()
+    });
+    drop_files(cx, "file-row-0-target", vec![first.clone(), second.clone()]);
+    until(cx, "two files uploaded", |_| {
+        std::fs::read(root.join("target/one.bin")).ok().as_deref() == Some(&[0, 255, 128, 42])
+            && std::fs::read(root.join("target/two.txt")).ok().as_deref() == Some(b"second file")
+    });
+    std::fs::write(&second, b"changed").unwrap();
+    drop_files(cx, "file-row-0-target", vec![second.clone()]);
+    until(cx, "collision options", |cx| {
+        cx.debug_bounds("upload-replace").is_some() && cx.debug_bounds("upload-keep").is_some()
+    });
+    click(cx, "upload-keep");
+    until(cx, "both files", |_| {
+        std::fs::read(root.join("target/two (2).txt"))
+            .ok()
+            .as_deref()
+            == Some(b"changed")
+    });
+    assert_eq!(
+        std::fs::read(root.join("target/two.txt")).unwrap(),
+        b"second file"
+    );
+    drop_files(cx, "file-row-0-target", vec![second.clone()]);
+    until(cx, "replace option", |cx| {
+        cx.debug_bounds("upload-replace").is_some()
+    });
+    click(cx, "upload-replace");
+    until(cx, "replacement", |_| {
+        std::fs::read(root.join("target/two.txt")).ok().as_deref() == Some(b"changed")
+    });
+    drop_files(cx, "file-row-0-locked", vec![first.clone()]);
+    until(cx, "node permission error", |cx| {
+        cx.debug_bounds("files-error-Permission denied").is_some()
+    });
+    menu_on(cx, "file-row-0-target");
+    click(cx, "file-menu-upload");
+    assert!(cx.did_prompt_for_paths());
+    let third = sources.join("picked.txt");
+    std::fs::write(&third, b"picked").unwrap();
+    cx.simulate_path_prompt_response(move |options| {
+        assert!(options.files && options.multiple && !options.directories);
+        Some(vec![third])
+    });
+    until(cx, "picker upload", |_| {
+        std::fs::read(root.join("target/picked.txt"))
+            .ok()
+            .as_deref()
+            == Some(b"picked")
+    });
+    drop(running);
+    std::fs::set_permissions(root.join("locked"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+    std::fs::remove_dir_all(sources).unwrap();
+}
+
 #[gpui::test]
 fn file_menu_paths_pins_download_and_refresh(cx: &mut TestAppContext) {
     let root = parvi_testkit::fresh_dir("files-menu-journey");

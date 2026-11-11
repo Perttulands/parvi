@@ -76,6 +76,13 @@ impl FilesPage {
                         let id = format!("file-row-{i}-{name}");
                         move || id.clone()
                     })
+                    .when(folder, |row| {
+                        let destination = full.clone();
+                        row.on_drop(cx.listener(move |p, paths: &gpui::ExternalPaths, _, cx| {
+                            p.upload_paths(i, destination.clone(), paths.paths(), cx);
+                            cx.stop_propagation();
+                        }))
+                    })
                     .on_mouse_down(MouseButton::Right, {
                         let name = name.clone();
                         cx.listener(move |p, e: &gpui::MouseDownEvent, window, cx| {
@@ -120,6 +127,15 @@ impl FilesPage {
             .flex_col()
             .border_1()
             .border_color(t.divider)
+            .on_drop({
+                let destination = side.pane.path.clone();
+                cx.listener(move |p, paths: &gpui::ExternalPaths, _, cx| {
+                    if let Some(folder) = destination.clone() {
+                        p.upload_paths(i, folder, paths.paths(), cx);
+                        cx.stop_propagation();
+                    }
+                })
+            })
             .child(
                 div()
                     .h(px(size::TAB_BAR))
@@ -140,6 +156,18 @@ impl FilesPage {
                             })),
                     )
                     .child(div().overflow_hidden().child(path)),
+            )
+            .child(
+                kit::button(&t, ("upload", i), "Upload…", Kind::Quiet)
+                    .debug_selector({
+                        let id = format!("files-upload-{i}");
+                        move || id.clone()
+                    })
+                    .on_click(cx.listener(move |p, _, _, cx| {
+                        if let Some(folder) = p.sides[i].pane.path.clone() {
+                            p.pick_uploads(i, folder, cx);
+                        }
+                    })),
             )
             .children(pins)
             .child(
@@ -493,7 +521,36 @@ impl Render for FilesPage {
             .p(px(PAD))
             .gap(px(GAP));
         if let Some(e) = &self.error {
-            page = page.child(kit::note(&t, e.clone(), Some(t.error)));
+            page = page.child(
+                div()
+                    .debug_selector({
+                        let id = format!("files-error-{e}");
+                        move || id.clone()
+                    })
+                    .child(kit::note(&t, e.clone(), Some(t.error))),
+            );
+        }
+        if let Some(name) = self.upload_conflict_name() {
+            page = page.child(
+                div()
+                    .flex()
+                    .gap(px(GAP))
+                    .child(kit::note(&t, format!("{name} already exists."), None))
+                    .child(
+                        kit::button(&t, "upload-replace", "Replace", Kind::Primary)
+                            .debug_selector(|| "upload-replace".into())
+                            .on_click(cx.listener(|p, _, _, cx| p.resolve_upload(Some(true), cx))),
+                    )
+                    .child(
+                        kit::button(&t, "upload-keep", "Keep both", Kind::Quiet)
+                            .debug_selector(|| "upload-keep".into())
+                            .on_click(cx.listener(|p, _, _, cx| p.resolve_upload(Some(false), cx))),
+                    )
+                    .child(
+                        kit::button(&t, "upload-cancel", "Cancel", Kind::Quiet)
+                            .on_click(cx.listener(|p, _, _, cx| p.resolve_upload(None, cx))),
+                    ),
+            );
         }
         if let Some(notice) = &self.notice {
             page = page.child(
@@ -541,6 +598,23 @@ impl Render for FilesPage {
                     kit::button(&t, "file-menu-open", "Open", Kind::Quiet)
                         .debug_selector(|| "file-menu-open".into())
                         .on_click(open),
+                )
+                .child(
+                    kit::button(&t, "file-menu-upload", "Upload…", Kind::Quiet)
+                        .debug_selector(|| "file-menu-upload".into())
+                        .on_click(cx.listener(move |p, _, _, cx| {
+                            p.menu = None;
+                            let pane = &p.sides[i].pane;
+                            let folder = pane
+                                .selection()
+                                .filter(|entry| entry.folder)
+                                .and_then(|_| pane.selected_path())
+                                .or_else(|| pane.path.clone());
+                            if let Some(folder) = folder {
+                                p.pick_uploads(i, folder, cx);
+                            }
+                            cx.notify();
+                        })),
                 )
                 .child(
                     kit::button(&t, "file-menu-copy-path", "Copy path", Kind::Quiet).on_click(
