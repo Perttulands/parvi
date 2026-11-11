@@ -25,6 +25,8 @@ pub const NAMES: &[&str] = &[
     "run_list",
     "run_status",
     "run_wait",
+    "run_evidence",
+    "run_attempts",
     "run_gates",
     "run_seats",
     "run_logs",
@@ -105,6 +107,8 @@ fn description(name: &str) -> &'static str {
         "run_list" => "List runs, optionally by mission.",
         "run_status" => "Read a run and its current events.",
         "run_wait" => "Wait for a run to need its driver, finish, or change.",
+        "run_evidence" => "Read a run’s problems, briefs and files.",
+        "run_attempts" => "Read a run’s step attempts, verdicts and picks.",
         "run_gates" => "List a run’s gates and their state.",
         "gate_request" => "Read a waiting gate’s request and routes.",
         "run_seats" => "Read the seats belonging to a run.",
@@ -151,6 +155,7 @@ fn schema(name: &str) -> Value {
             object(json!({"mission":s}), &["mission"])
         }
         "run_list" => object(json!({"mission":s}), &[]),
+        "run_evidence" | "run_attempts" => object(json!({"run":s,"step":s}), &["run"]),
         "run_wait" => object(json!({"run":s,"until":s,"since":i,"timeout":i}), &["run"]),
         "run_abort" => object(json!({"run":s,"reason":s,"actor":s}), &["run"]),
         "run_resume" => object(
@@ -388,6 +393,21 @@ async fn call(m: Missions, name: &str, a: Value) -> Result<Value, Error> {
             Ok(v)
         }
         "run_wait" => wait(m, &a).await,
+        "run_evidence" => Ok(
+            json!({"evidence":m.coordinator.evidence(required(&a,"run")?, maybe_text(&a,"step").map_err(bad)?)?}),
+        ),
+        "run_attempts" => {
+            let id = required(&a, "run")?;
+            // Give both evidence commands the same unknown-run error.
+            m.coordinator.run(id).map_err(|error| {
+                if error.code == "not_found" || error.code == "invalid_input" {
+                    Error::new("unknown_run", format!("run {id:?} not found"))
+                } else {
+                    error
+                }
+            })?;
+            Ok(json!({"attempts":m.coordinator.attempts(id, maybe_text(&a,"step").map_err(bad)?)?}))
+        }
         "run_gates" => Ok(json!({"gates":m.coordinator.gates(required(&a,"run")?)?})),
         "gate_request" => m
             .coordinator

@@ -53,6 +53,7 @@ mod run_bindings;
 mod run_capture;
 mod run_dispatch;
 mod run_escalation;
+mod run_evidence;
 mod run_gate;
 mod run_inputs;
 mod run_job;
