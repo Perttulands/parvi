@@ -14,6 +14,43 @@ impl MissionsPage {
             etag: self.state.mission_etag.clone()?,
         })
     }
+    /// Errors and warnings for the saved, current mission. Never paint an old
+    /// report on a changed definition or on a run's frozen canvas.
+    pub(super) fn canvas_findings(&self) -> Vec<(parvi_missions_contract::Finding, bool)> {
+        if self.writing || self.is_showing_run() {
+            return Vec::new();
+        }
+        let Some(key) = self.validation_key() else {
+            return Vec::new();
+        };
+        if self
+            .state
+            .nodes
+            .get(&key.node)
+            .and_then(|feed| feed.missions.as_ref())
+            .and_then(|list| list.iter().find(|item| item.slug == key.slug))
+            .and_then(|item| item.rev)
+            .is_some_and(|rev| rev != key.rev)
+        {
+            return Vec::new();
+        }
+        let Some(report) = self.validation.report(&key) else {
+            return Vec::new();
+        };
+        report
+            .errors
+            .iter()
+            .cloned()
+            .map(|finding| (finding, true))
+            .chain(
+                report
+                    .warnings
+                    .iter()
+                    .cloned()
+                    .map(|finding| (finding, false)),
+            )
+            .collect()
+    }
     pub(super) fn mission_input_runnable(&self, input: &str) -> bool {
         if self.writing || self.is_showing_run() {
             return false;

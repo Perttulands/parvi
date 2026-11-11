@@ -139,6 +139,11 @@ impl MissionsPage {
             .selected_run()
             .map(|run| crate::store::run_state::project(&run.events));
         let ports = board::ports(mission, &board);
+        let findings = if running {
+            Vec::new()
+        } else {
+            self.canvas_findings()
+        };
         let view = self.canvas.clone();
         let drag_ports = ports.clone();
         let mut layer = div()
@@ -246,6 +251,7 @@ impl MissionsPage {
             view.clone(),
             cx.weak_entity(),
             self.generation,
+            &findings,
         ));
         for card in &board.cards {
             let state = states
@@ -256,8 +262,9 @@ impl MissionsPage {
                 .as_ref()
                 .and_then(|s| s.attempts.get(&card.id))
                 .copied();
-            layer = layer
-                .child(self.canvas_card(t, mission, card, &view, running, state, attempts, cx));
+            layer = layer.child(self.canvas_card(
+                t, mission, card, &view, running, state, attempts, &findings, cx,
+            ));
         }
         for note in self.canvas_notes(t, mission, &board, &view, cx) {
             layer = layer.child(note);
@@ -267,6 +274,121 @@ impl MissionsPage {
                 layer = layer.child(self.canvas_port(t, mission, port, &view, cx));
             }
         }
+        for edge in &mission.connections {
+            let matching: Vec<_> = findings
+                .iter()
+                .filter(|(finding, _)| finding.node_id == edge.id)
+                .collect();
+            if matching.is_empty() {
+                continue;
+            }
+            // A dangling connection can have no drawn wire. Anchor its mark
+            // by the surviving port, or by a surviving endpoint's card.
+            let location = board
+                .wires
+                .iter()
+                .find(|wire| wire.id == edge.id)
+                .map(|wire| {
+                    (
+                        (wire.from.0 + wire.to.0) / 2.,
+                        wire.lane.unwrap_or((wire.from.1 + wire.to.1) / 2.),
+                    )
+                })
+                .or_else(|| {
+                    ports
+                        .iter()
+                        .find(|port| port.endpoint == edge.from || port.endpoint == edge.to)
+                        .map(|port| (port.at.0 + board::PORT, port.at.1 + board::PORT))
+                })
+                .or_else(|| {
+                    board
+                        .cards
+                        .iter()
+                        .find(|card| {
+                            edge.from.split(':').next() == Some(card.id.as_str())
+                                || edge.to.split(':').next() == Some(card.id.as_str())
+                        })
+                        .map(|card| (card.x + card.w / 2., card.y + card.h / 2.))
+                });
+            let Some((x, y)) = location else {
+                continue;
+            };
+            let (x, y) = view.position(x, y);
+            let selector = format!("validation-edge-{}", edge.id);
+            let message = matching
+                .iter()
+                .map(|(finding, _)| finding.message.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let color = if matching.iter().any(|(_, error)| *error) {
+                t.error
+            } else {
+                parvi_app_kit::theme::rgb(t.ansi[3])
+            };
+            layer = layer.child(
+                div()
+                    .id(SharedString::from(selector.clone()))
+                    .debug_selector(move || selector.clone())
+                    .absolute()
+                    .left(px(x))
+                    .top(px(y))
+                    .size(px(size::CONTROL * view.zoom))
+                    .rounded_full()
+                    .bg(color)
+                    .text_color(t.bg)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child("!")
+                    .tooltip(kit::tip(message)),
+            );
+        }
+        let summary = if !findings.is_empty() {
+            let mut list = div()
+                .id("canvas-findings-list")
+                .debug_selector(|| "canvas-findings-list".into())
+                .max_h(px(size::LABEL_COL))
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .gap(px(TAB_GAP));
+            for (finding, error) in &findings {
+                let title = if finding.node_id.is_empty() {
+                    "Mission".to_owned()
+                } else if mission
+                    .connections
+                    .iter()
+                    .any(|edge| edge.id == finding.node_id)
+                {
+                    format!("Connection {}", finding.node_id)
+                } else {
+                    mission.node_name(&finding.node_id).to_owned()
+                };
+                let selector =
+                    format!("validation-message-{}-{}", finding.node_id, finding.message);
+                let color = if *error {
+                    t.error
+                } else {
+                    parvi_app_kit::theme::rgb(t.ansi[3])
+                };
+                list = list.child(
+                    div()
+                        .debug_selector(move || selector.clone())
+                        .text_color(color)
+                        .child(format!("{title}: {}", finding.message)),
+                );
+            }
+            Some(
+                kit::panel(t)
+                    .flex_none()
+                    .w_full()
+                    .p(px(PAD))
+                    .child(kit::label(t, "Mission findings"))
+                    .child(list),
+            )
+        } else {
+            None
+        };
         if !running && let Some(at) = view.menu {
             layer = layer.child(self.canvas_menu(t, mission, at, &view, cx));
         }
@@ -327,7 +449,12 @@ impl MissionsPage {
                     .child(format!("Card: {}", mission.node_name(id))),
             );
         }
-        div().size_full().child(layer.child(controls))
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .children(summary)
+            .child(layer.flex_1().min_h_0().child(controls))
     }
     #[allow(clippy::too_many_arguments)]
     fn canvas_card(
@@ -339,6 +466,7 @@ impl MissionsPage {
         running: bool,
         state: Option<crate::store::run_state::NodeState>,
         attempts: Option<i64>,
+        findings: &[(parvi_missions_contract::Finding, bool)],
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let z = view.zoom;
@@ -346,6 +474,15 @@ impl MissionsPage {
         let from = (card.x, card.y);
         let selector = format!("mission-card-{id}");
         let face = card_face(t, mission, card, z, running, state);
+        let issues: Vec<_> = findings
+            .iter()
+            .filter(|(finding, _)| finding.node_id == id)
+            .collect();
+        let issue_color = if issues.iter().any(|(_, error)| *error) {
+            t.error
+        } else {
+            parvi_app_kit::theme::rgb(t.ansi[3])
+        };
         let color = match state {
             Some(crate::store::run_state::NodeState::Done) => parvi_app_kit::theme::rgb(t.ansi[2]),
             Some(
@@ -378,13 +515,13 @@ impl MissionsPage {
             .h(px(card.h * z))
             .overflow_hidden()
             .border_1()
-            .border_color(
-                if self.reveal_card.as_deref() == Some(&id) || card.kind == board::Kind::Input {
-                    t.accent
-                } else {
-                    color
-                },
-            )
+            .border_color(if !issues.is_empty() {
+                issue_color
+            } else if self.reveal_card.as_deref() == Some(&id) || card.kind == board::Kind::Input {
+                t.accent
+            } else {
+                color
+            })
             .bg(t.surface)
             .shadow_md()
             .when(card.kind == board::Kind::End, |d| {
@@ -396,6 +533,31 @@ impl MissionsPage {
             .cursor_pointer()
             .debug_selector(move || selector.clone())
             .child(face);
+        let rendered = if issues.is_empty() {
+            rendered
+        } else {
+            let selector = format!("validation-card-{id}");
+            let message = issues
+                .iter()
+                .map(|(finding, _)| finding.message.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            rendered.child(
+                div()
+                    .id(SharedString::from(selector.clone()))
+                    .debug_selector(move || selector.clone())
+                    .absolute()
+                    .top(px(EDGE * z))
+                    .left(px(EDGE * z))
+                    .px(px(GAP * z))
+                    .rounded(px(size::RADIUS * z))
+                    .bg(issue_color)
+                    .text_color(t.bg)
+                    .text_size(px(size::SMALL * z))
+                    .child("!")
+                    .tooltip(kit::tip(message)),
+            )
+        };
         let rendered = if card.kind == board::Kind::Input && !running {
             let card_id = card.id.clone();
             let runnable = self.mission_input_runnable(&card_id);
@@ -695,9 +857,15 @@ fn wires(
     view: View,
     entity: gpui::WeakEntity<MissionsPage>,
     generation: u64,
+    findings: &[(parvi_missions_contract::Finding, bool)],
 ) -> impl IntoElement {
     let fit_board = board.clone();
     let list = board.wires.clone();
+    let errors: std::collections::HashSet<_> = findings
+        .iter()
+        .filter(|(_, error)| *error)
+        .map(|(finding, _)| finding.node_id.clone())
+        .collect();
     let accent = t.accent;
     let colors = (
         t.text2,
@@ -741,11 +909,15 @@ fn wires(
                 )
             };
             for w in &list {
-                let colour = match w.route.as_str() {
-                    "pass" => colors.3,
-                    "fail" => colors.1,
-                    "judge" => colors.2,
-                    _ => colors.0,
+                let colour = if errors.contains(&w.id) {
+                    colors.1
+                } else {
+                    match w.route.as_str() {
+                        "pass" => colors.3,
+                        "fail" => colors.1,
+                        "judge" => colors.2,
+                        _ => colors.0,
+                    }
                 };
                 let (a, end) = (at(w.from), at(w.to));
                 let mut path = PathBuilder::stroke(px(EDGE));

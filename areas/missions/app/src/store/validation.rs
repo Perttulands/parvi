@@ -54,6 +54,13 @@ impl Validation {
     pub fn failed(&self, key: &Key) -> bool {
         self.key.as_ref() == Some(key) && matches!(self.report, Some(Err(_)))
     }
+    /// The report is available only for the exact selected definition.
+    pub fn report(&self, key: &Key) -> Option<&ValidationResponse> {
+        if self.key.as_ref() != Some(key) {
+            return None;
+        }
+        self.report.as_ref()?.as_ref().ok()
+    }
     pub fn runnable(&self, key: &Key, input: &str) -> bool {
         if self.key.as_ref() != Some(key) {
             return false;
