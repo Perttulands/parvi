@@ -226,7 +226,7 @@ pub fn description(name: &str) -> &'static str {
             "Remove a gate and its routes, including its judge attachment; judge formations remain."
         }
         "end_create" => {
-            "Add an End node. Wire a route into it with parvi formation wire <mission> <node:port> <end-id>:in."
+            "Add an End node. --outcome is done (the default) or rejected. Wire a route into it with parvi formation wire <mission> <node:port> <end-id>:in."
         }
         "end_update" => "Change an End node's title or outcome.",
         "end_delete" => "Remove an End node.",

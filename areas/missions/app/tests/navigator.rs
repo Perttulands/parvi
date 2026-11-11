@@ -117,20 +117,35 @@ fn filters_folds_and_expands_a_missions_run_history(cx: &mut TestAppContext) {
         )
     });
     let group = format!("mission-group-{}/hello", running.node);
-    let edit = format!("mission-{}-hello", running.node);
+    let title = format!("mission-{}-hello", running.node);
+    let fold = format!("mission-fold-{}/hello", running.node);
     let oldest = format!("run-row-{}", running.oldest);
     let latest = format!("run-row-{}", running.latest);
     let more = format!("mission-more-{}/hello", running.node);
     until(cx, "navigator history", |cx| {
-        selector(cx, &group) && selector(cx, &more) && selector(cx, &latest)
+        selector(cx, &group)
+            && selector(cx, &title)
+            && selector(cx, &fold)
+            && selector(cx, &more)
+            && selector(cx, &latest)
+    });
+    click(cx, &title);
+    until(cx, "mission opened by its name", |cx| {
+        selector(cx, "flow-step-fmn_work")
     });
     assert!(!selector(cx, &oldest));
     click(cx, &more);
     until(cx, "older run", |cx| selector(cx, &oldest));
-    click(cx, &group);
-    until(cx, "folded mission", |cx| !selector(cx, &edit));
-    click(cx, &group);
-    until(cx, "opened mission", |cx| selector(cx, &edit));
+    click(cx, &fold);
+    until(cx, "folded mission history", |cx| !selector(cx, &latest));
+    assert!(selector(cx, &title));
+    click(cx, &title);
+    until(cx, "folded mission still opens by name", |cx| {
+        selector(cx, "flow-step-fmn_work")
+    });
+    assert!(!selector(cx, &latest));
+    click(cx, &fold);
+    until(cx, "unfolded mission history", |cx| selector(cx, &latest));
     click(cx, "mission-filter");
     cx.simulate_input(&running.oldest);
     until(cx, "filtered run", |cx| {

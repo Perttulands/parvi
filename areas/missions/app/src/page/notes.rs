@@ -14,6 +14,7 @@ const GAP: f32 = 6.;
 const STICKY_ROOM: f32 = 130.;
 const PIN: f32 = 22.;
 const PIN_IN: f32 = 9.;
+const PIN_MIN: f32 = 16.;
 const AUTHOR: &str = "human:ui";
 
 #[derive(Default)]
@@ -271,10 +272,21 @@ impl MissionsPage {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let z = view.zoom();
-        let (x, y) = if card.kind == board::Kind::End {
-            view.position(card.x + card.w + 10. - PIN, card.y - 14.)
+        let size = (PIN * z).max(PIN_MIN);
+        let inset = (PIN_IN * z).max(EDGE);
+        let (right, top) = view.position(card.x + card.w, card.y);
+        let play_space = if card.kind == board::Kind::Input {
+            (PAD + size::CONTROL + GAP) * z
+        } else if card.kind == board::Kind::End {
+            board::END_H * z / 3.
         } else {
-            view.position(card.x + card.w - PIN_IN - PIN, card.y - PIN_IN)
+            0.
+        };
+        let x = right - inset - size - play_space;
+        let y = if card.kind == board::Kind::End {
+            top + (card.h * z - size) / 2.
+        } else {
+            top + inset
         };
         let (fill, edge) = paper(t, false);
         let target = card.id.clone();
@@ -285,19 +297,19 @@ impl MissionsPage {
             .absolute()
             .left(px(x))
             .top(px(y))
-            .size(px(PIN * z))
+            .size(px(size))
             .border_1()
             .border_color(edge)
             .bg(if has { fill } else { edge })
             .shadow_sm()
-            .text_size(px(size::TEXT * z))
+            .text_size(px((size::TEXT * z).max(size::SMALL)))
             .font_weight(FontWeight::BOLD)
             .text_color(t.bg)
             .flex()
             .items_center()
             .justify_center()
             .cursor_pointer()
-            .opacity(if has { 1. } else { 0.35 })
+            .opacity(if has { 1. } else { 0.8 })
             .hover(|d| d.opacity(1.))
             .tooltip(kit::tip(if has {
                 "Open the note thread"

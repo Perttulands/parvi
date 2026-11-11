@@ -85,6 +85,7 @@ impl View {
             at.1 - (at.1 - self.pan.1) * k,
         );
         self.zoom = z;
+        self.fitted = true;
     }
     fn world(&self, p: Point<Pixels>) -> (f32, f32) {
         let (x, y, _, _) = self.bounds.get();
@@ -183,6 +184,7 @@ impl MissionsPage {
                     Some(Drag::Pan(from, pan)) => {
                         let d = e.position - *from;
                         p.canvas.pan = (pan.0 + f32::from(d.x), pan.1 + f32::from(d.y));
+                        p.canvas.fitted = true;
                     }
                     Some(Drag::Card {
                         at,
@@ -241,6 +243,7 @@ impl MissionsPage {
                 } else {
                     p.canvas.pan.0 += f32::from(delta.x);
                     p.canvas.pan.1 += f32::from(delta.y);
+                    p.canvas.fitted = true;
                 }
                 p.canvas.menu = None;
                 cx.notify();
@@ -252,6 +255,7 @@ impl MissionsPage {
             cx.weak_entity(),
             self.generation,
             &findings,
+            running || self.state.layout.is_some(),
         ));
         for card in &board.cards {
             let state = states
@@ -317,7 +321,9 @@ impl MissionsPage {
             let selector = format!("validation-edge-{}", edge.id);
             let message = matching
                 .iter()
-                .map(|(finding, _)| finding.message.as_str())
+                .map(|(finding, _)| {
+                    crate::store::validation::readable_message(mission, &finding.message)
+                })
                 .collect::<Vec<_>>()
                 .join("\n");
             let color = if matching.iter().any(|(_, error)| *error) {
@@ -360,12 +366,14 @@ impl MissionsPage {
                     .iter()
                     .any(|edge| edge.id == finding.node_id)
                 {
-                    format!("Connection {}", finding.node_id)
+                    "Connection".to_owned()
                 } else {
                     mission.node_name(&finding.node_id).to_owned()
                 };
                 let selector =
                     format!("validation-message-{}-{}", finding.node_id, finding.message);
+                let message = crate::store::validation::readable_message(mission, &finding.message);
+                let display_selector = format!("validation-display-{title}: {message}");
                 let color = if *error {
                     t.error
                 } else {
@@ -375,13 +383,17 @@ impl MissionsPage {
                     div()
                         .debug_selector(move || selector.clone())
                         .text_color(color)
-                        .child(format!("{title}: {}", finding.message)),
+                        .child(
+                            div()
+                                .debug_selector(move || display_selector.clone())
+                                .child(format!("{title}: {message}")),
+                        ),
                 );
             }
             Some(
                 kit::panel(t)
                     .flex_none()
-                    .w_full()
+                    .w(px(size::LABEL_COL))
                     .p(px(PAD))
                     .child(kit::label(t, "Mission findings"))
                     .child(list),
@@ -452,9 +464,8 @@ impl MissionsPage {
         div()
             .size_full()
             .flex()
-            .flex_col()
+            .child(layer.flex_1().min_w_0().min_h_0().child(controls))
             .children(summary)
-            .child(layer.flex_1().min_h_0().child(controls))
     }
     #[allow(clippy::too_many_arguments)]
     fn canvas_card(
@@ -539,7 +550,9 @@ impl MissionsPage {
             let selector = format!("validation-card-{id}");
             let message = issues
                 .iter()
-                .map(|(finding, _)| finding.message.as_str())
+                .map(|(finding, _)| {
+                    crate::store::validation::readable_message(mission, &finding.message)
+                })
                 .collect::<Vec<_>>()
                 .join("\n");
             rendered.child(
@@ -858,6 +871,7 @@ fn wires(
     entity: gpui::WeakEntity<MissionsPage>,
     generation: u64,
     findings: &[(parvi_missions_contract::Finding, bool)],
+    ready_to_fit: bool,
 ) -> impl IntoElement {
     let fit_board = board.clone();
     let list = board.wires.clone();
@@ -887,7 +901,7 @@ fn wires(
                 f32::from(b.size.width),
                 f32::from(b.size.height),
             ));
-            if !view.fitted {
+            if ready_to_fit && !view.fitted {
                 let entity = entity.clone();
                 let fit_board = fit_board.clone();
                 cx.defer(move |cx| {
@@ -1317,8 +1331,15 @@ fn card_face(
                     div()
                         .flex()
                         .flex_col()
-                        .child(label("✓ PASS".into(), parvi_app_kit::theme::rgb(t.ansi[2])))
-                        .child(label("× FAIL".into(), t.error)),
+                        .pt(px(size::CONTROL * z))
+                        .child(
+                            label("✓ PASS".into(), parvi_app_kit::theme::rgb(t.ansi[2]))
+                                .debug_selector(|| "canvas-gate-pass-label".into()),
+                        )
+                        .child(
+                            label("× FAIL".into(), t.error)
+                                .debug_selector(|| "canvas-gate-fail-label".into()),
+                        ),
                 )
         }
         board::Kind::End => {

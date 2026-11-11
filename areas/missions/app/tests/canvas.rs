@@ -229,6 +229,9 @@ fn canvas_ports_drag_move_zoom_and_undo(cx: &mut TestAppContext) {
     });
     click(cx, "canvas-fit");
     cx.run_until_parked();
+    click(cx, "canvas-in");
+    cx.run_until_parked();
+    let before_wire = cx.debug_bounds("mission-card-fmn_work").unwrap();
     let from = cx
         .debug_bounds("mission-port-fmn_work:port_out")
         .unwrap()
@@ -260,6 +263,11 @@ fn canvas_ports_drag_move_zoom_and_undo(cx: &mut TestAppContext) {
         cx.debug_bounds("undo").is_some()
             && cx.debug_bounds("mission-validation-complete").is_some()
     });
+    let after_wire = cx.debug_bounds("mission-card-fmn_work").unwrap();
+    assert!((f32::from(after_wire.origin.x) - f32::from(before_wire.origin.x)).abs() < 1.);
+    assert!((f32::from(after_wire.origin.y) - f32::from(before_wire.origin.y)).abs() < 1.);
+    assert!((f32::from(after_wire.size.width) - f32::from(before_wire.size.width)).abs() < 1.);
+    let before_create = after_wire;
     let canvas = cx.debug_bounds("mission-canvas").unwrap();
     let at = point(canvas.origin.x + px(20.), canvas.origin.y + px(20.));
     cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
@@ -293,4 +301,8 @@ fn canvas_ports_drag_move_zoom_and_undo(cx: &mut TestAppContext) {
     until(cx, "new gate acknowledged", |cx| {
         cx.debug_bounds("undo").is_some()
     });
+    let after_create = cx.debug_bounds("mission-card-fmn_work").unwrap();
+    assert!((f32::from(after_create.origin.x) - f32::from(before_create.origin.x)).abs() < 1.);
+    assert!((f32::from(after_create.origin.y) - f32::from(before_create.origin.y)).abs() < 1.);
+    assert!((f32::from(after_create.size.width) - f32::from(before_create.size.width)).abs() < 1.);
 }

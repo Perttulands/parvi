@@ -450,6 +450,32 @@ async fn cli_uses_the_same_mission_commands() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn end_create_help_names_the_outcomes_and_default() {
+    let node = Node::start(&[sessions::LISTING, parvi_work::LISTING, LAB], "")
+        .await
+        .unwrap();
+    let args = vec![
+        "create".to_owned(),
+        "--help".to_owned(),
+        "--node".to_owned(),
+        format!("{}/", node.url()),
+    ];
+    let mut output = Vec::new();
+    assert_eq!(
+        parvi_node_kit::cli::run("end", &args, &mut output)
+            .await
+            .unwrap(),
+        0
+    );
+    let help = String::from_utf8(output).unwrap();
+    assert!(
+        help.contains("--outcome is done (the default) or rejected"),
+        "{help}"
+    );
+    node.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn specialized_authoring_commands_build_and_edit_a_graph() {
     let node = Node::start(&[sessions::LISTING, parvi_work::LISTING, LAB], "")
         .await

@@ -1087,7 +1087,13 @@ impl MissionsPage {
                 form = form.child("Retry sends the same start request and its original values.");
             }
             form = form.when_some(self.run.error.clone(), |d, e| {
-                d.child(div().text_color(t.error).child(e))
+                let message = self
+                    .run
+                    .start_definition
+                    .as_ref()
+                    .map(|(mission, _)| crate::store::validation::readable_message(mission, &e))
+                    .unwrap_or(e);
+                d.child(div().text_color(t.error).child(message))
             });
             for (i, finding) in self.run.findings.iter().enumerate() {
                 let selector = if finding.ends_with(" is required.") {
@@ -1095,11 +1101,19 @@ impl MissionsPage {
                 } else {
                     format!("run-finding-{i}-{finding}")
                 };
+                let display = self
+                    .run
+                    .start_definition
+                    .as_ref()
+                    .map(|(mission, _)| {
+                        crate::store::validation::readable_message(mission, finding)
+                    })
+                    .unwrap_or_else(|| finding.clone());
                 form = form.child(
                     div()
                         .debug_selector(move || selector.clone())
                         .text_color(t.error)
-                        .child(finding.clone()),
+                        .child(display),
                 );
             }
             let mut actions = div()
@@ -1175,7 +1189,13 @@ impl MissionsPage {
             .flex_col()
             .gap(px(PAD))
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(format!("Stop run {}?", run.run_id));
+            .child(format!(
+                "Stop {}?",
+                mission
+                    .map(|m| m.title.as_str())
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or(&run.mission_slug)
+            ));
         for point in run_state::points(run) {
             if point.kind == run_state::PointKind::Running && !point.node.is_empty() {
                 let title = mission

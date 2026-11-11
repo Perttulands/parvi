@@ -456,7 +456,9 @@ impl MissionsPage {
             return;
         }
         self.run = run::RunUi::new(cx);
-        self.canvas = canvas::View::default();
+        if self.state.selected.as_ref() != Some(&(node.clone(), slug.clone())) {
+            self.canvas = canvas::View::default();
+        }
         self.reveal_card = None;
         self.generation += 1;
         let generation = self.generation;
@@ -509,7 +511,6 @@ impl MissionsPage {
                                     Ok(v) => {
                                         page.state.layout_etag = Some(v.layout.etag);
                                         page.state.layout = Some(v.layout.layout);
-                                        page.canvas.invalidate_fit();
                                     }
                                     Err(e) => page.state.error = Some(e.to_string()),
                                 }
@@ -532,6 +533,24 @@ impl MissionsPage {
             .detach();
         }
         cx.notify();
+    }
+    fn refresh_selected_if_newer(&mut self, cx: &mut Context<Self>) {
+        if self.editor.is_none()
+            && !self.writing
+            && !self.is_showing_run()
+            && let Some((node, slug)) = self.state.selected.clone()
+            && let Some(mission) = &self.state.mission
+            && let Some(listing) = self
+                .state
+                .nodes
+                .get(&node)
+                .and_then(|feed| feed.missions.as_ref())
+                .and_then(|list| list.iter().find(|item| item.slug == slug))
+            && ((!listing.id.is_empty() && listing.id != mission.id)
+                || listing.rev.is_some_and(|rev| rev > mission.rev))
+        {
+            self.open(node, slug, cx);
+        }
     }
     fn edit_step(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.writing || self.editor.as_ref().is_some_and(|e| e.busy) {
@@ -861,6 +880,7 @@ impl MissionsPage {
                     }
                     Err(e) => page.state.error = Some(format!("{}: {}", e.code, e.message)),
                 }
+                page.refresh_selected_if_newer(cx);
                 cx.notify();
             });
         })
@@ -1194,7 +1214,6 @@ impl MissionsPage {
                         Ok(v) => {
                             page.state.layout_etag = Some(v.layout.etag);
                             page.state.layout = Some(v.layout.layout);
-                            page.canvas.invalidate_fit();
                         }
                         Err(e) => page.state.error = Some(e.to_string()),
                     },
@@ -1375,21 +1394,14 @@ impl Page for MissionsPage {
         if kind == parvi_missions_contract::RUNS_SNAPSHOT {
             self.sync_gate(cx);
         }
-        if self.editor.is_none()
-            && !self.is_showing_run()
-            && kind == parvi_missions_contract::SNAPSHOT
-            && let Some((selected_node, slug)) = self.state.selected.clone()
-            && selected_node == node.as_str()
-            && let Some(mission) = &self.state.mission
-            && let Some(listing) = self
+        if kind == parvi_missions_contract::SNAPSHOT
+            && self
                 .state
-                .nodes
-                .get(&selected_node)
-                .and_then(|n| n.missions.as_ref())
-                .and_then(|list| list.iter().find(|m| m.slug == slug))
-            && listing.rev.is_some_and(|rev| rev != mission.rev)
+                .selected
+                .as_ref()
+                .is_some_and(|(selected, _)| selected == node.as_str())
         {
-            self.open(selected_node, slug, cx);
+            self.refresh_selected_if_newer(cx);
         }
         cx.notify();
     }
@@ -1634,7 +1646,7 @@ impl Render for MissionsPage {
                                 d = d.child("Ports");
                                 for port in f.inputs.iter().chain(&f.outputs) {
                                     let id = port.id.clone(); let selected = id.clone(); let label = port.label.clone(); let kind = port.kind.clone(); let selector = format!("port-{id}");
-                                    d = d.child(kit::button(&t, gpui::SharedString::from(format!("port-{id}")), format!("{} ({})", port.label, id), Kind::Quiet).debug_selector(move || selector.clone()).on_click(cx.listener(move |p, _, _, cx| { p.select_port(&selected, &label, &kind, cx); })));
+                                    d = d.child(kit::button(&t, gpui::SharedString::from(format!("port-{id}")), if port.label.trim().is_empty() { id.clone() } else { port.label.clone() }, Kind::Quiet).debug_selector(move || selector.clone()).on_click(cx.listener(move |p, _, _, cx| { p.select_port(&selected, &label, &kind, cx); })));
                                 }
                                 d = d.child(div().child(self.port_label.clone())).child(div().child(self.port_kind.clone()))
                                     .child(kit::button(&t, "port-add-in", "+ Input port", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.port_edit("input", cx))))

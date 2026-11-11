@@ -1,5 +1,80 @@
 //! Validation answers are usable only for the exact definition they describe.
-use parvi_missions_contract::{Code, ValidationResponse};
+use parvi_missions_contract::{Code, Mission, ValidationResponse};
+use std::collections::HashMap;
+
+/// Render validation prose using known titles and labels while retaining the
+/// node IDs in the underlying report for actions and diagnostics.
+pub fn readable_message(mission: &Mission, message: &str) -> String {
+    let mut names = HashMap::<&str, &str>::new();
+    fn add<'a>(names: &mut HashMap<&'a str, &'a str>, id: &'a str, name: &'a str) {
+        if !id.is_empty() && !name.trim().is_empty() {
+            names.insert(id, name.trim());
+        }
+    }
+    for node in &mission.input_cards {
+        add(&mut names, &node.id, &node.title);
+    }
+    for node in &mission.formations {
+        add(&mut names, &node.id, &node.title);
+        for port in node.inputs.iter().chain(&node.outputs) {
+            add(&mut names, &port.id, &port.label);
+        }
+        for slot in &node.slots {
+            add(&mut names, &slot.id, &slot.label);
+        }
+    }
+    for node in &mission.gates {
+        add(&mut names, &node.id, &node.title);
+    }
+    for node in &mission.ends {
+        add(&mut names, &node.id, &node.title);
+    }
+    for node in &mission.limits {
+        add(&mut names, &node.id, &node.title);
+    }
+    for edge in &mission.connections {
+        add(&mut names, &edge.id, "connection");
+    }
+
+    let mut out = String::with_capacity(message.len());
+    let mut start = 0;
+    let mut quoted = false;
+    for (i, c) in message.char_indices() {
+        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+            continue;
+        }
+        if start < i {
+            let token = &message[start..i];
+            let distinctive = token
+                .bytes()
+                .any(|b| b == b'_' || b == b'-' || b.is_ascii_digit());
+            if let Some(name) = names.get(token).filter(|_| quoted || distinctive) {
+                out.push_str(name);
+            } else {
+                out.push_str(token);
+            }
+        }
+        out.push(c);
+        if c == '"' {
+            quoted = !quoted;
+        }
+        start = i + c.len_utf8();
+    }
+    if start < message.len() {
+        let token = &message[start..];
+        let distinctive = token
+            .bytes()
+            .any(|b| b == b'_' || b == b'-' || b.is_ascii_digit());
+        out.push_str(
+            names
+                .get(token)
+                .filter(|_| quoted || distinctive)
+                .copied()
+                .unwrap_or(token),
+        );
+    }
+    out
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Key {
@@ -73,6 +148,27 @@ impl Validation {
 mod tests {
     use super::*;
     use parvi_missions_contract::Finding;
+    #[test]
+    fn findings_use_known_names_without_replacing_parts_of_other_words() {
+        let mission: Mission = toml_fixture();
+        assert_eq!(
+            readable_message(
+                &mission,
+                "Input card \"inp_1\" has no outgoing connection; step \"fmn_10\" uses \"slot_1\"; unknown inp_12"
+            ),
+            "Input card \"Start\" has no outgoing connection; step \"Build\" uses \"Worker\"; unknown inp_12"
+        );
+        assert_eq!(
+            readable_message(
+                &mission,
+                "connection \"edge_1\" from \"inp_1:out\" to \"fmn_10:port_1\""
+            ),
+            "connection \"connection\" from \"Start:out\" to \"Build:Input\""
+        );
+    }
+    fn toml_fixture() -> Mission {
+        serde_json::from_value(serde_json::json!({"inputCard":[{"id":"inp_1","title":"Start"}],"formation":[{"id":"fmn_10","title":"Build","input":[{"id":"port_1","label":"Input"}],"slot":[{"id":"slot_1","label":"Worker"}]}],"connection":[{"id":"edge_1","from":"inp_1:out","to":"fmn_10:port_1"}]})).unwrap()
+    }
     fn key(rev: i64) -> Key {
         Key {
             node: "n".into(),

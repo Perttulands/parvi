@@ -242,38 +242,72 @@ impl MissionsPage {
             }
             let open = !q.is_empty() || !self.navigator.folded.contains(&key);
             let fold_key = key.clone();
+            let node = group.node.clone();
+            let slug = group.slug.clone();
+            let selector = format!("mission-{node}-{slug}");
+            let fold_selector = format!("mission-fold-{key}");
+            let group_selector = format!("mission-group-{key}");
+            let hover = t.accent_soft();
             list = list.child(
-                heading(
-                    t,
-                    format!("mission-group-{key}"),
-                    open,
-                    group.title.clone(),
-                    group.runs.len(),
-                )
-                .on_click(cx.listener(move |page, _, _, cx| {
-                    fold(&mut page.navigator.folded, &fold_key);
-                    cx.notify();
-                })),
+                div()
+                    .id(SharedString::from(group_selector.clone()))
+                    .debug_selector(move || group_selector.clone())
+                    .flex()
+                    .items_center()
+                    .gap(px(TAB_GAP))
+                    .h(px(size::ROW))
+                    .px(px(PAD))
+                    .hover(move |d| d.bg(hover))
+                    .child(
+                        div()
+                            .id(SharedString::from(fold_selector.clone()))
+                            .debug_selector(move || fold_selector.clone())
+                            .flex_none()
+                            .w(px(PAD * 2.))
+                            .h(px(size::ROW))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .text_size(px(size::SMALL))
+                            .text_color(t.text2)
+                            .child(if open { "▼" } else { "▶" })
+                            .on_click(cx.listener(move |page, _, _, cx| {
+                                fold(&mut page.navigator.folded, &fold_key);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(selector.clone()))
+                            .debug_selector(move || selector.clone())
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .cursor_pointer()
+                            .text_size(px(size::TEXT))
+                            .font_weight(FontWeight::BOLD)
+                            .child(group.title.clone())
+                            .on_click(cx.listener(move |page, _, _, cx| {
+                                page.open(node.clone(), slug.clone(), cx)
+                            })),
+                    )
+                    .when(!group.runs.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .flex_none()
+                                .px(px(TAB_GAP))
+                                .rounded_full()
+                                .bg(t.raised)
+                                .text_size(px(size::SMALL))
+                                .text_color(t.text2)
+                                .child(group.runs.len().to_string()),
+                        )
+                    }),
             );
             if !open {
                 continue;
             }
-            let node = group.node.clone();
-            let slug = group.slug.clone();
-            let selector = format!("mission-{node}-{slug}");
-            list =
-                list.child(
-                    div()
-                        .id(SharedString::from(selector.clone()))
-                        .debug_selector(move || selector.clone())
-                        .px(px(PAD))
-                        .cursor_pointer()
-                        .text_color(t.text2)
-                        .child("Edit mission")
-                        .on_click(cx.listener(move |page, _, _, cx| {
-                            page.open(node.clone(), slug.clone(), cx)
-                        })),
-                );
             if self.state.selected.as_ref() == Some(&(group.node.clone(), group.slug.clone()))
                 && self.state.mission.is_some()
                 && self.state.mission_etag.is_some()

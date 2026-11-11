@@ -106,6 +106,17 @@ fn canvas_note_pin_opens_thread_and_preserves_edits(cx: &mut TestAppContext) {
     until(cx, "canvas mode", |cx| has(cx, "mission-mode-canvas"));
     click(cx, "mission-mode-canvas");
     until(cx, "note pin", |cx| has(cx, "canvas-note-pin-fmn_work"));
+    for id in ["inp_hello", "fmn_work", "end_done"] {
+        let card = cx
+            .debug_bounds(Box::leak(format!("mission-card-{id}").into_boxed_str()))
+            .unwrap();
+        let pin = cx
+            .debug_bounds(Box::leak(format!("canvas-note-pin-{id}").into_boxed_str()))
+            .unwrap();
+        assert!(pin.origin.x >= card.origin.x && pin.origin.y >= card.origin.y);
+        assert!(pin.origin.x + pin.size.width <= card.origin.x + card.size.width);
+        assert!(pin.origin.y + pin.size.height <= card.origin.y + card.size.height);
+    }
     click(cx, "canvas-note-pin-fmn_work");
     until(cx, "open thread", |cx| has(cx, "canvas-note-field"));
     click(cx, "canvas-note-field");
