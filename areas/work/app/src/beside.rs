@@ -123,7 +123,7 @@ impl Work {
         );
         // The Work page may not be watched while the asker is shown. Ask the
         // node for project metadata so a GitHub card can offer its checkout.
-        let projects_task = host.request(Request::new("POST", node.clone(), "/mcp").json(&serde_json::json!({"jsonrpc":"2.0", "id":1, "method":"tools/call", "params":{"name":"work_list", "arguments":{}}})).within(Duration::from_secs(35)), cx);
+        let projects_task = host.request(Request::new("POST", node.clone(), "/mcp").json(&serde_json::json!({"jsonrpc":"2.0", "id":1, "method":"tools/call", "params":{"name":"work_list", "arguments":{"all":true}}})).within(Duration::from_secs(35)), cx);
         cx.spawn(async move |_, cx| {
             let answer = task.await;
             let result = match answer {

@@ -352,8 +352,11 @@ fn typed(key: &str, spec: &Value, raw: &str) -> Result<Value> {
     })
 }
 
-/// A readable answer, with nested values on indented lines. `--json`
-/// bypasses this renderer and prints the original value.
+/// A readable answer. An object is `key: value` lines, with a nested value
+/// indented under its key. A list of objects is one row per item, its plain
+/// fields as tab-separated `key=value`, and whatever an item nests indented
+/// under its row. Text of several lines follows its key as it is. Nulls and
+/// empty values are left out. `--json` prints the value itself instead.
 fn render(value: &Value) -> String {
     let mut text = String::new();
     render_value(value, 0, &mut text);
@@ -371,63 +374,107 @@ fn has_content(value: &Value) -> bool {
     }
 }
 
+/// A value that fits on its key's line: not nested, and one line of text.
+fn plain(value: &Value) -> bool {
+    match value {
+        Value::Array(_) | Value::Object(_) => false,
+        Value::String(s) => s.trim_end().lines().count() <= 1,
+        _ => true,
+    }
+}
+
+fn scalar(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.trim_end().to_owned(),
+        _ => value.to_string(),
+    }
+}
+
+fn pad(indent: usize, out: &mut String) {
+    out.push_str(&" ".repeat(indent));
+}
+
 fn render_value(value: &Value, indent: usize, out: &mut String) {
     match value {
         Value::Object(fields) => {
             for (key, value) in fields.iter().filter(|(_, v)| has_content(v)) {
-                out.push_str(&" ".repeat(indent));
-                out.push_str(key);
-                out.push(':');
-                match value {
-                    Value::Array(_) | Value::Object(_) => {
-                        out.push('\n');
-                        render_value(value, indent + 2, out);
-                    }
-                    _ => {
-                        out.push(' ');
-                        render_scalar(value, indent + 2, out);
-                    }
-                }
+                render_field(key, value, indent, out);
             }
         }
         Value::Array(items) => {
             for item in items.iter().filter(|v| has_content(v)) {
-                out.push_str(&" ".repeat(indent));
-                out.push('-');
+                pad(indent, out);
                 match item {
-                    Value::Array(_) | Value::Object(_) => {
+                    Value::Object(fields) => {
+                        let (row, nested): (Vec<_>, Vec<_>) = fields
+                            .iter()
+                            .filter(|(_, v)| has_content(v))
+                            .partition(|(_, v)| plain(v));
+                        let row: Vec<String> = row
+                            .iter()
+                            .map(|(key, value)| format!("{key}={}", scalar(value)))
+                            .collect();
+                        out.push_str(if row.is_empty() { "-" } else { "" });
+                        out.push_str(&row.join("\t"));
                         out.push('\n');
+                        for (key, value) in nested {
+                            render_field(key, value, indent + 2, out);
+                        }
+                    }
+                    Value::Array(_) => {
+                        out.push_str("-\n");
                         render_value(item, indent + 2, out);
                     }
                     _ => {
-                        out.push(' ');
-                        render_scalar(item, indent + 2, out);
+                        out.push_str("- ");
+                        render_text(&scalar(item), indent + 2, out);
                     }
                 }
             }
         }
         _ if has_content(value) => {
-            out.push_str(&" ".repeat(indent));
-            render_scalar(value, indent, out);
+            pad(indent, out);
+            render_text(&scalar(value), indent, out);
         }
         _ => {}
     }
 }
 
-fn render_scalar(value: &Value, continuation_indent: usize, out: &mut String) {
-    let text = match value {
-        Value::String(s) => s.clone(),
-        _ => value.to_string(),
-    };
+/// One field of an object at `indent`.
+fn render_field(key: &str, value: &Value, indent: usize, out: &mut String) {
+    pad(indent, out);
+    out.push_str(key);
+    if plain(value) {
+        out.push_str(": ");
+        out.push_str(&scalar(value));
+        out.push('\n');
+    } else if value.is_string() {
+        // Text of several lines (a diff, a file) stays as it was written,
+        // so its lines can be read and matched as they are.
+        out.push_str(":\n");
+        for line in scalar(value).lines() {
+            pad(indent, out);
+            out.push_str(line);
+            out.push('\n');
+        }
+    } else {
+        out.push_str(":\n");
+        render_value(value, indent + 2, out);
+    }
+}
+
+/// Text whose first line follows what is already written and whose other
+/// lines start at `indent`.
+fn render_text(text: &str, indent: usize, out: &mut String) {
     let mut lines = text.lines();
     if let Some(first) = lines.next() {
         out.push_str(first);
         out.push('\n');
-        for line in lines {
-            out.push_str(&" ".repeat(continuation_indent));
-            out.push_str(line);
-            out.push('\n');
-        }
+    }
+    for line in lines {
+        pad(indent, out);
+        out.push_str(line);
+        out.push('\n');
     }
 }
 
@@ -530,8 +577,8 @@ mod tests {
             concat!(
                 "node: local\n",
                 "host:\n  cpu:\n    percent: 0\n  gpu:\n    reason: unavailable\n",
-                "tasks:\n  -\n    name: check\n    targets:\n      -\n        name: agent\n        paused: false\n",
-                "  -\n    name: review\n    schedule:\n      every: 15\n",
+                "tasks:\n  name=check\n    targets:\n      name=agent\tpaused=false\n",
+                "  name=review\n    schedule:\n      every: 15\n",
             )
         );
     }
@@ -540,12 +587,27 @@ mod tests {
     fn renders_mixed_arrays_multiline_text_and_empty_values() {
         assert_eq!(
             render(&json!(["one", null, ["two", 0], {"text": "first\nsecond", "off": false}])),
-            "- one\n-\n  - two\n  - 0\n-\n  text: first\n    second\n  off: false\n"
+            "- one\n-\n  - two\n  - 0\noff=false\n  text:\n  first\n  second\n"
         );
         assert_eq!(
             render(&json!({"warning": null, "empty": [null, {}], "blank": "  "})),
             ""
         );
         assert_eq!(render(&json!("hello")), "hello\n");
+    }
+
+    #[test]
+    fn a_list_reads_as_one_row_per_item_and_long_text_as_it_was_written() {
+        assert_eq!(
+            render(&json!({"sessions": [
+                {"id": "$1", "name": "main", "question": null},
+                {"id": "$2", "name": "build"}
+            ]})),
+            "sessions:\n  id=$1\tname=main\n  id=$2\tname=build\n"
+        );
+        assert_eq!(
+            render(&json!({"path": "a.txt", "diff": "-before\n+after\n"})),
+            "path: a.txt\ndiff:\n-before\n+after\n"
+        );
     }
 }
