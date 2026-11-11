@@ -204,6 +204,14 @@ pub struct Geo {
     pub display_offset: usize,
 }
 
+/// A launch awaiting its node's answer, including the status it started with.
+pub struct PendingLaunch {
+    launch: Launch,
+    window: Option<usize>,
+    tab: usize,
+    status_revision: u64,
+}
+
 pub struct Terminals {
     pub host: Host,
     pub me: WeakEntity<Self>,
@@ -251,7 +259,10 @@ pub struct Terminals {
     pub hover_row: Option<String>,
     /// Launches asked of a node, by node and request: the recipe, the window
     /// it goes to and that window's tab.
-    pub launches: HashMap<(String, u32), (Launch, Option<usize>, usize)>,
+    pub launches: HashMap<(String, u32), PendingLaunch>,
+    /// Changes whenever this page publishes a status: older async successes
+    /// cannot replace a later status the operator has already been shown.
+    pub status_revision: u64,
     /// Kills asked of nodes, answered together (`store::selection`).
     pub kills: crate::store::selection::Kills,
     /// Rail rows picked to kill together; on this device only, never kept.
@@ -363,6 +374,7 @@ impl Terminals {
             overview_cursor: 0,
             hover_row: None,
             launches: HashMap::new(),
+            status_revision: 0,
             kills: Default::default(),
             pick: Default::default(),
             rail_shown: vec![],
@@ -659,8 +671,12 @@ impl Terminals {
             }
             Notice::Launched { id, ok, text } => {
                 self.send_launched(node, id, ok, &text, cx);
-                let Some((launch, window_index, tab)) =
-                    self.launches.remove(&(node.to_string(), id))
+                let Some(PendingLaunch {
+                    launch,
+                    window: window_index,
+                    tab,
+                    status_revision,
+                }) = self.launches.remove(&(node.to_string(), id))
                 else {
                     return;
                 };
@@ -706,7 +722,10 @@ impl Terminals {
                         Some((_, warning)) => {
                             self.report(&format!("Launched {name}, but {warning}"), true, None)
                         }
-                        None => self.report(&format!("Launched {name}"), false, None),
+                        None if self.status_revision == status_revision => {
+                            self.report(&format!("Launched {name}"), false, None)
+                        }
+                        None => {}
                     }
                     window.focus(&self.term_focus, cx);
                 } else {
@@ -821,6 +840,7 @@ impl Terminals {
     /// Says something on the app's status line, with a button that does
     /// `action` on this page.
     pub fn report(&mut self, text: &str, failure: bool, action: Option<(String, Act)>) {
+        self.status_revision = self.status_revision.wrapping_add(1);
         let mut status = if failure {
             Status::failure(text)
         } else {
@@ -833,6 +853,25 @@ impl Terminals {
             });
         }
         self.said.push(status);
+    }
+
+    pub(super) fn track_launch(
+        &mut self,
+        node: &str,
+        id: u32,
+        launch: Launch,
+        window: Option<usize>,
+        tab: usize,
+    ) {
+        self.launches.insert(
+            (node.to_string(), id),
+            PendingLaunch {
+                launch,
+                window,
+                tab,
+                status_revision: self.status_revision,
+            },
+        );
     }
 
     pub fn toast(&mut self, text: &str, cx: &mut Context<Self>) {
@@ -1170,9 +1209,8 @@ impl Terminals {
         match self.fleet.launch_on(&k.node, launch.clone()) {
             Some(id) => {
                 let tab = self.settings.workspace.active;
-                self.launches
-                    .insert((k.node.clone(), id), (launch, None, tab));
                 self.report(&format!("Restarting {}…", k.name), false, None);
+                self.track_launch(&k.node, id, launch, None, tab);
                 self.restarting.insert(k);
             }
             None => self.report(
