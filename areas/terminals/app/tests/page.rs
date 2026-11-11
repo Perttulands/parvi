@@ -2026,6 +2026,20 @@ fn opening_a_session_sizes_it_with_another_node_following(cx: &mut TestAppContex
                 .map(|_| ())
         },
     ));
+    let second_sessions = second.sessions();
+    runtime.block_on(parvi_testkit::tmux::eventually(
+        "second node attaches only to alpha",
+        || {
+            let sessions = second_sessions.list();
+            let pane = sessions
+                .iter()
+                .find(|s| s.name == "alpha")?
+                .panes
+                .first()?
+                .0;
+            second_sessions.screen(pane).map(|_| ())
+        },
+    ));
     let (_shell, cx, settings) = open_with_alpha(&running, "second-node", cx);
     let page = PAGE.with(|p| p.borrow().clone()).unwrap();
     until(cx, "session claims the tile at its grid", |cx| {
@@ -2193,8 +2207,18 @@ fn connecting_the_app_preserves_idle_session_activity(cx: &mut TestAppContext) {
     );
     let second = runtime.block_on(Node::start(AREAS, &config)).unwrap();
     runtime.block_on(parvi_testkit::tmux::eventually(
-        "second node follows both sessions",
-        || (second.sessions().list().len() == 2).then_some(()),
+        "second node lists both sessions with their old output times",
+        || {
+            let sessions = second.sessions().list();
+            (sessions.len() == 2
+                && sessions.iter().all(|s| {
+                    s.activity
+                        .last_output
+                        .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+                        .is_some_and(|age| Some(age.as_secs()) == baseline[&s.name].as_u64())
+                }))
+            .then_some(())
+        },
     ));
     let (_shell, cx, settings) = open_with_alpha(&running, "idle-journey", cx);
     // Exercise a resize even when another follower makes automatic claim wait.
@@ -2220,6 +2244,20 @@ fn connecting_the_app_preserves_idle_session_activity(cx: &mut TestAppContext) {
             "{name} became active on connect: {after}"
         );
     }
+    for session in second.sessions().list() {
+        assert_eq!(
+            session
+                .activity
+                .last_output
+                .unwrap()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            baseline[&session.name].as_u64().unwrap(),
+            "second node changed {} on app connection",
+            session.name
+        );
+    }
     tmux(
         &running,
         &[
@@ -2238,6 +2276,37 @@ fn connecting_the_app_preserves_idle_session_activity(cx: &mut TestAppContext) {
                 .any(|s| s.name == "alpha" && s.active == Some(true))
         })
     });
+    let after_output = read();
+    let alpha = after_output["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "alpha")
+        .unwrap();
+    assert!(alpha["last_output"].as_u64().unwrap() > baseline["alpha"].as_u64().unwrap());
+    runtime.block_on(parvi_testkit::tmux::eventually(
+        "second node observes actual output",
+        || {
+            let sessions = second.sessions().list();
+            let alpha = sessions.iter().find(|s| s.name == "alpha")?;
+            let beta = sessions.iter().find(|s| s.name == "beta")?;
+            let alpha_seconds = alpha
+                .activity
+                .last_output?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_secs();
+            let beta_seconds = beta
+                .activity
+                .last_output?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_secs();
+            (alpha_seconds > baseline["alpha"].as_u64()?
+                && beta_seconds == baseline["beta"].as_u64()?)
+            .then_some(())
+        },
+    ));
     runtime.block_on(second.stop());
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }

@@ -1,7 +1,7 @@
-//! Follows every tmux session through control mode and keeps every pane's
-//! screen in memory.
+//! Lists tmux sessions and follows the panes consumers need through control
+//! mode, keeping their screens in memory.
 //!
-//! One control-mode client per session. Each client attaches with
+//! One control-mode client per followed session. Each client attaches with
 //! `-f ignore-size` and sends no `refresh-client -C`, so it is never a sizing
 //! candidate (issue #4 proved it) until a browser claims the sizing seat. Each pane is
 //! owned by the first session that lists it, so a window linked into two
@@ -29,7 +29,7 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result, anyhow, bail};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-use tokio::sync::{broadcast, mpsc, oneshot, watch};
+use tokio::sync::{Notify, broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use crate::backend::Backend;
@@ -106,6 +106,7 @@ pub struct Engine {
 
 struct Shared {
     backend: Arc<dyn Backend>,
+    lazy: bool,
     state: Mutex<State>,
     /// Bumped whenever the set of sessions or panes changes.
     generation: watch::Sender<u64>,
@@ -130,6 +131,20 @@ struct Session {
     seat: Option<u64>,
     facts: Option<Facts>,
     activity: Activity,
+    /// A listing-only session has no control client until output is needed.
+    follow: Option<Arc<Notify>>,
+    following: bool,
+}
+
+impl Session {
+    fn need_output(&mut self) {
+        if !self.following {
+            self.following = true;
+            if let Some(follow) = &self.follow {
+                follow.notify_one();
+            }
+        }
+    }
 }
 
 struct Pane {
@@ -301,9 +316,19 @@ impl Engine {
     /// Starts following the sessions on `backend`. Returns immediately;
     /// sessions show up in [`Engine::snapshot`] as they are found.
     pub fn start(backend: impl Backend) -> Engine {
+        Self::start_mode(backend, false)
+    }
+
+    /// Lists sessions without attaching until a consumer needs pane output.
+    pub fn start_lazy(backend: impl Backend) -> Engine {
+        Self::start_mode(backend, true)
+    }
+
+    fn start_mode(backend: impl Backend, lazy: bool) -> Engine {
         let (generation, _) = watch::channel(0);
         let shared = Arc::new(Shared {
             backend: Arc::new(backend),
+            lazy,
             state: Mutex::new(State::default()),
             generation,
             renamed: broadcast::channel(16).0,
@@ -449,7 +474,10 @@ impl Engine {
     /// ceiling however many are busy. Updates `seen` and forgets panes that
     /// went. The first pane is the one a tile or Peek shows by default.
     pub fn thumbnails(&self, seen: &mut Sent, limit: usize) -> Vec<Thumbnail> {
-        let state = self.shared.state.lock().unwrap();
+        let mut state = self.shared.state.lock().unwrap();
+        for session in state.sessions.values_mut() {
+            session.need_output();
+        }
         let mut shown = Vec::with_capacity(state.sessions.len());
         let mut waiting = Vec::new();
         for session in state.sessions.values() {
@@ -492,6 +520,8 @@ impl Engine {
     /// returned here and the first update. `None` if the pane doesn't exist.
     pub fn subscribe(&self, pane: PaneId) -> Option<PaneStream> {
         let mut state = self.shared.state.lock().unwrap();
+        let owner = state.panes.get(&pane)?.owner.clone();
+        state.sessions.get_mut(&owner)?.need_output();
         let pane = state.panes.get_mut(&pane)?;
         let updates = pane
             .viewers
@@ -503,14 +533,18 @@ impl Engine {
 
     /// A fresh screen for a pane, for a viewer that fell behind.
     pub fn screen(&self, pane: PaneId) -> Option<PaneUpdate> {
-        let state = self.shared.state.lock().unwrap();
+        let mut state = self.shared.state.lock().unwrap();
+        let owner = state.panes.get(&pane)?.owner.clone();
+        state.sessions.get_mut(&owner)?.need_output();
         let pane = state.panes.get(&pane)?;
         pane.synced.then(|| pane.screen_update())
     }
 
     /// Reads the visible cells and cursor together from the held screen.
     pub fn read_screen(&self, pane: PaneId) -> Option<crate::Screen> {
-        let state = self.shared.state.lock().unwrap();
+        let mut state = self.shared.state.lock().unwrap();
+        let owner = state.panes.get(&pane)?.owner.clone();
+        state.sessions.get_mut(&owner)?.need_output();
         let pane = state.panes.get(&pane)?;
         pane.synced
             .then(|| crate::Screen::from_vt(pane.screen.screen()))
@@ -518,7 +552,9 @@ impl Engine {
 
     /// A pane's visible screen as plain text, one line per row, once seeded.
     pub fn text(&self, pane: PaneId) -> Option<String> {
-        let state = self.shared.state.lock().unwrap();
+        let mut state = self.shared.state.lock().unwrap();
+        let owner = state.panes.get(&pane)?.owner.clone();
+        state.sessions.get_mut(&owner)?.need_output();
         let pane = state.panes.get(&pane)?;
         pane.synced.then(|| pane.screen.screen().contents())
     }
@@ -549,9 +585,16 @@ impl Engine {
     /// Types bytes into a pane, through the control client that owns it.
     pub async fn send_input(&self, pane: PaneId, data: Vec<u8>) -> Result<()> {
         let requests = {
-            let state = self.shared.state.lock().unwrap();
-            let owner = &state.panes.get(&pane).context("unknown pane")?.owner;
-            state.sessions[owner].requests.clone()
+            let mut state = self.shared.state.lock().unwrap();
+            let owner = state
+                .panes
+                .get(&pane)
+                .context("unknown pane")?
+                .owner
+                .clone();
+            let session = state.sessions.get_mut(&owner).context("unknown session")?;
+            session.need_output();
+            session.requests.clone()
         };
         tell(&requests, Request::Input(pane, data)).await
     }
@@ -582,13 +625,16 @@ impl Engine {
 
     async fn queue(&self, (delivery, delivering): (Delivery, Delivering)) -> Result<Delivering> {
         let requests = {
-            let state = self.shared.state.lock().unwrap();
-            let owner = &state
+            let mut state = self.shared.state.lock().unwrap();
+            let owner = state
                 .panes
                 .get(&delivery.pane)
                 .context("unknown pane")?
-                .owner;
-            state.sessions[owner].requests.clone()
+                .owner
+                .clone();
+            let session = state.sessions.get_mut(&owner).context("unknown session")?;
+            session.need_output();
+            session.requests.clone()
         };
         tell(&requests, Request::Send(delivery)).await?;
         Ok(delivering)
@@ -620,6 +666,7 @@ impl Engine {
                 .owner
                 .clone();
             let session = state.sessions.get_mut(&owner).context("unknown session")?;
+            session.need_output();
             let changed = session.seat.replace(holder) != Some(holder);
             let requests = session.requests.clone();
             drop(state);
@@ -661,7 +708,9 @@ impl Engine {
     pub fn refresh_facts(&self) {
         let state = self.shared.state.lock().unwrap();
         for session in state.sessions.values() {
-            let _ = session.requests.try_send(Request::RefreshFacts);
+            if session.following {
+                let _ = session.requests.try_send(Request::RefreshFacts);
+            }
         }
     }
 
@@ -782,26 +831,61 @@ async fn supervise(shared: Arc<Shared>, mut stopped: oneshot::Receiver<()>) {
     loop {
         match list_sessions(shared.backend.as_ref()).await {
             Ok(found) => {
+                // Three server-wide reads, independent of the number of
+                // sessions, keep list-only clients cheap on a large fleet.
+                let discovered = if shared.lazy && !found.is_empty() {
+                    discover_all(shared.backend.as_ref()).await
+                } else {
+                    None
+                };
+                if shared.lazy {
+                    let live: Vec<_> = found.iter().map(|(id, _)| id.clone()).collect();
+                    let gone: Vec<_> = tasks
+                        .keys()
+                        .filter(|id| !live.contains(id))
+                        .cloned()
+                        .collect();
+                    for id in gone {
+                        if let Some(task) = tasks.remove(&id) {
+                            task.abort();
+                        }
+                        forget_session(&shared, &id);
+                    }
+                }
                 for (id, name) in found {
                     if tasks.contains_key(&id) {
+                        if let Some(discovered) = &discovered {
+                            discover_unfollowed(&shared, &id, &name, discovered);
+                        }
                         continue;
                     }
                     let (requests, requests_rx) = mpsc::channel(64);
+                    let follow = shared.lazy.then(|| Arc::new(Notify::new()));
                     shared.state.lock().unwrap().sessions.insert(
                         id.clone(),
                         Session {
                             replace_invalid_utf8: false,
-                            name,
+                            name: name.clone(),
                             panes: Vec::new(),
                             requests,
                             seat: None,
                             facts: None,
                             activity: Activity::default(),
+                            follow: follow.clone(),
+                            following: !shared.lazy,
                         },
                     );
                     shared.bump();
-                    let task =
-                        tokio::spawn(follow(shared.clone(), id.clone(), requests_rx, tx.clone()));
+                    if let Some(discovered) = &discovered {
+                        discover_unfollowed(&shared, &id, &name, discovered);
+                    }
+                    let task = tokio::spawn(follow_when_needed(
+                        shared.clone(),
+                        id.clone(),
+                        requests_rx,
+                        tx.clone(),
+                        follow,
+                    ));
                     tasks.insert(id, task);
                 }
             }
@@ -817,7 +901,7 @@ async fn supervise(shared: Arc<Shared>, mut stopped: oneshot::Receiver<()>) {
         let msg = tokio::select! {
             _ = &mut stopped => break,
             msg = rx.recv() => msg,
-            _ = tokio::time::sleep(NO_SERVER_RETRY), if tasks.is_empty() => None,
+            _ = tokio::time::sleep(NO_SERVER_RETRY), if tasks.is_empty() || shared.lazy => None,
         };
         let mut msgs: Vec<SupervisorMsg> = msg.into_iter().collect();
         while let Ok(msg) = rx.try_recv() {
@@ -838,13 +922,176 @@ async fn supervise(shared: Arc<Shared>, mut stopped: oneshot::Receiver<()>) {
         .unwrap()
         .sessions
         .values()
+        .filter(|session| session.following)
         .map(|session| session.requests.clone())
         .collect();
     for request in requests {
         let _ = request.send(Request::Stop).await;
     }
-    for (_, task) in tasks {
+    for (id, task) in tasks {
+        if shared.lazy
+            && shared
+                .state
+                .lock()
+                .unwrap()
+                .sessions
+                .get(&id)
+                .is_some_and(|s| !s.following)
+        {
+            task.abort();
+        }
         let _ = task.await;
+    }
+}
+
+async fn follow_when_needed(
+    shared: Arc<Shared>,
+    session: String,
+    requests: mpsc::Receiver<Request>,
+    supervisor: mpsc::UnboundedSender<SupervisorMsg>,
+    needed: Option<Arc<Notify>>,
+) {
+    if let Some(needed) = needed {
+        needed.notified().await;
+    }
+    follow(shared, session, requests, supervisor).await;
+}
+
+#[derive(Default)]
+struct Discovery {
+    panes: HashMap<String, Vec<(PaneId, u16, u16)>>,
+    facts: HashMap<String, Facts>,
+    activity: HashMap<String, SystemTime>,
+}
+
+/// Read all unopened sessions with a fixed number of tmux commands.
+async fn discover_all(backend: &dyn Backend) -> Option<Discovery> {
+    let pane_format = "#{session_id}\t#{pane_id} #{pane_width} #{pane_height} #{window_activity}";
+    let fact_format = format!("#{{session_id}}\t{FACTS_FORMAT}");
+    let pane_args = ["list-panes", "-a", "-F", pane_format];
+    let fact_args = ["list-sessions", "-F", &fact_format];
+    let client_args = ["list-clients", "-F", "#{session_id}\t#{client_flags}"];
+    let (panes, facts, clients) = tokio::join!(
+        backend.command(&pane_args),
+        backend.command(&fact_args),
+        backend.command(&client_args)
+    );
+    let (Ok(panes), Ok(facts), Ok(clients)) = (panes, facts, clients) else {
+        return None;
+    };
+    let mut found = Discovery::default();
+    for line in facts.lines() {
+        if let Some((id, value)) = line.split_once('\t')
+            && let Some(mut fact) = Facts::parse(value)
+        {
+            fact.foreign_clients = 0;
+            found.facts.insert(id.to_owned(), fact);
+        }
+    }
+    for line in clients.lines() {
+        if let Some((id, flags)) = line.split_once('\t') {
+            let mut flags = flags.split(',');
+            let follower = flags.clone().any(|f| f == "control-mode")
+                && flags.any(|f| f.starts_with("pause-after"));
+            if !follower && let Some(facts) = found.facts.get_mut(id) {
+                facts.foreign_clients += 1;
+            }
+        }
+    }
+    for line in panes.lines() {
+        let Some((session, fields)) = line.split_once('\t') else {
+            continue;
+        };
+        let mut fields = fields.split_whitespace();
+        let (Some(id), Some(cols), Some(rows), Some(activity)) = (
+            fields.next().and_then(control::parse_pane),
+            fields.next().and_then(|v| v.parse().ok()),
+            fields.next().and_then(|v| v.parse().ok()),
+            fields.next().and_then(|v| v.parse::<u64>().ok()),
+        ) else {
+            continue;
+        };
+        found
+            .panes
+            .entry(session.to_owned())
+            .or_default()
+            .push((id, cols, rows));
+        let at = SystemTime::UNIX_EPOCH + Duration::from_secs(activity);
+        found
+            .activity
+            .entry(session.to_owned())
+            .and_modify(|old| *old = (*old).max(at))
+            .or_insert(at);
+    }
+    Some(found)
+}
+
+/// Publish metadata without making the session a tmux client.
+fn discover_unfollowed(shared: &Shared, session: &str, name: &str, found: &Discovery) {
+    let (Some(listed), Some(facts)) = (found.panes.get(session), found.facts.get(session)) else {
+        return;
+    };
+    let facts = facts.clone();
+    let activity = found.activity.get(session).copied();
+    let mut state = shared.state.lock().unwrap();
+    if state.sessions.get(session).is_none_or(|s| s.following) {
+        return;
+    }
+    let mut changed = false;
+    for &(id, cols, rows) in listed {
+        let pane = state.panes.entry(id).or_insert_with(|| {
+            changed = true;
+            Pane {
+                owner: session.to_owned(),
+                screen: pane_screen(rows, cols, false),
+                synced: false,
+                seeding: false,
+                capture: None,
+                late_output: false,
+                viewers: None,
+                changes: 0,
+                utf8: Utf8Gate::new(false),
+                waiting: None,
+                looked: 0,
+            }
+        });
+        if pane.owner == session && pane.screen.screen().size() != (rows, cols) {
+            pane.screen.screen_mut().set_size(rows, cols);
+            changed = true;
+        }
+    }
+    let ids: Vec<_> = listed.iter().map(|&(id, _, _)| id).collect();
+    let before = state.panes.len();
+    state
+        .panes
+        .retain(|id, pane| pane.owner != session || ids.contains(id));
+    changed |= before != state.panes.len();
+    let entry = state.sessions.get_mut(session).unwrap();
+    if entry.name != name {
+        let old = std::mem::replace(&mut entry.name, name.to_owned());
+        let _ = shared.renamed.send((old, name.to_owned()));
+        changed = true;
+    }
+    if entry.panes != ids {
+        entry.panes = ids;
+        changed = true;
+    }
+    if entry.facts.as_ref() != Some(&facts) {
+        entry.facts = Some(facts);
+        changed = true;
+    }
+    if activity.is_some() && entry.activity.last_output != activity {
+        entry.activity.last_output = activity;
+        changed = true;
+    }
+    let active = activity.is_some_and(|at| at.elapsed().is_ok_and(|elapsed| elapsed < ACTIVE_FOR));
+    if entry.activity.active != active {
+        entry.activity.active = active;
+        changed = true;
+    }
+    drop(state);
+    if changed {
+        shared.bump();
     }
 }
 
@@ -937,6 +1184,21 @@ async fn follow_inner(
     requests: &mut mpsc::Receiver<Request>,
     supervisor: &mpsc::UnboundedSender<SupervisorMsg>,
 ) -> Result<()> {
+    // Attaching updates tmux's session_activity. Capture the pane's output
+    // time before it happens rather than seeding from the attach itself.
+    if let Ok(before) = shared
+        .backend
+        .command(&["display-message", "-p", "-t", session, "#{window_activity}"])
+        .await
+        && let Ok(seconds) = before.trim().parse::<u64>()
+        && let Some(entry) = shared.state.lock().unwrap().sessions.get_mut(session)
+        && entry
+            .activity
+            .last_output
+            .is_none_or(|last| last < SystemTime::UNIX_EPOCH + Duration::from_secs(seconds))
+    {
+        entry.activity.last_output = Some(SystemTime::UNIX_EPOCH + Duration::from_secs(seconds));
+    }
     let mut client = shared.backend.attach(session).await?;
     // Kept across loop turns: `read_until` keeps a partly read line here when
     // another branch of the select wins.

@@ -344,10 +344,17 @@ fn session(session: &SessionInfo) -> Value {
 
 async fn read_screen(ctx: &Ctx, args: &Value) -> Result<Value> {
     let (session, pane) = target(ctx, args)?;
-    let text = ctx
-        .hub
-        .text(pane)
-        .context("the pane is still being read from tmux; try again")?;
+    let mut changed = ctx.hub.watch();
+    let text = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Some(text) = ctx.hub.text(pane) {
+                break Ok::<_, anyhow::Error>(text);
+            }
+            changed.changed().await.context("session stream closed")?;
+        }
+    })
+    .await
+    .context("the pane is still being read from tmux; try again")??;
     Ok(json!({
         "node": ctx.node,
         "session": session.id,

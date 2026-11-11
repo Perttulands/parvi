@@ -163,7 +163,7 @@ fn servers(section: &Section, setup: &Setup) -> Result<Vec<Server>> {
         .chain(users)
         .map(|(user, socket)| Server {
             user,
-            engine: Arc::new(Engine::start(socket)),
+            engine: Arc::new(Engine::start_lazy(socket)),
         })
         .collect())
 }

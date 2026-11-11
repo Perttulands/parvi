@@ -124,9 +124,22 @@ async fn listing_does_not_touch_sessions_with_other_clients() {
         _master: master,
     };
     let first = node(&tmux, "").await;
+    let first_sessions = first.sessions();
+    eventually("first node follows both sessions", || {
+        let listed = first_sessions.list();
+        (listed.len() == 2
+            && listed.iter().all(|s| {
+                s.panes
+                    .first()
+                    .and_then(|p| first_sessions.screen(p.0))
+                    .is_some()
+            }))
+        .then_some(())
+    })
+    .await;
     let second = node(&tmux, "").await;
-    eventually("both nodes and the terminal attached", || {
-        (tmux.clients().len() == 5).then_some(())
+    eventually("first node and the terminal attached", || {
+        (tmux.clients().len() == 3).then_some(())
     })
     .await;
     eventually("full-screen programs ready", || {
@@ -160,7 +173,7 @@ async fn listing_does_not_touch_sessions_with_other_clients() {
         })
         .unwrap();
     let offset = std::fs::metadata(&log).unwrap().len() as usize;
-    let (mut ws, _) = tokio_tungstenite::connect_async(first.ws()).await.unwrap();
+    let (mut ws, _) = tokio_tungstenite::connect_async(second.ws()).await.unwrap();
     until(&mut ws, "both sessions", |f| {
         f[0] == protocol::SESSIONS
             && std::str::from_utf8(&f[1..]).is_ok_and(|s| s.contains("alpha") && s.contains("beta"))
@@ -181,7 +194,7 @@ async fn listing_does_not_touch_sessions_with_other_clients() {
         .filter(|line| line.contains("cmdq_fire_command"))
         .collect();
     assert!(
-        commands.iter().any(|line| line.contains("display-message")),
+        commands.iter().any(|line| line.contains("list-sessions")),
         "{commands:?}"
     );
     assert!(
@@ -195,6 +208,11 @@ async fn listing_does_not_touch_sessions_with_other_clients() {
         "{commands:?}"
     );
     assert_eq!(before, snapshot(), "listing changed tmux session state");
+    assert_eq!(
+        tmux.clients().len(),
+        3,
+        "listing attached an unopened session"
+    );
     drop(ws);
     second.stop().await;
     first.stop().await;

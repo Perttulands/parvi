@@ -351,9 +351,12 @@ pub async fn launch(
                     .iter()
                     .find(|s| s.id == id)
                     .and_then(|s| s.panes.first())
-                    .filter(|p| p.synced)
                 {
-                    return Ok::<_, anyhow::Error>(pane.id);
+                    // Launch needs the shell's output before releasing the
+                    // gate, so it is a consumer of this pane.
+                    if engine.text(pane.id).is_some() {
+                        return Ok::<_, anyhow::Error>(pane.id);
+                    }
                 }
                 changes.changed().await.context("engine stopped")?;
             }

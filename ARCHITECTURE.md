@@ -188,6 +188,7 @@ carry that shape; nothing returns a bare string.
 
 Terminal sessions belong to the holder process, not to the node. Installing,
 upgrading or restarting Parvi never stops a session.
+tmux records a session as active when a node attaches a control client; Parvi preserves the pane's earlier output time until it writes again.
 
 ## Install and upgrade
 
