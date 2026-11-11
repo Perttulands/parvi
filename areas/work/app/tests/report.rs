@@ -4,8 +4,21 @@ use gpui::{
     App, Context, IntoElement, Render, TestAppContext, VisualTestContext, Window, div, prelude::*,
 };
 use parvi_app_kit::{Host, Mounted, Page, mount};
+use parvi_node_kit::{Built, Listing, Setup};
 use parvi_testkit::node::Node;
-use std::sync::mpsc;
+use std::sync::{OnceLock, mpsc};
+static GH: OnceLock<String> = OnceLock::new();
+fn build_work(setup: &Setup) -> anyhow::Result<Built> {
+    parvi_work::build_with(
+        setup,
+        parvi_work::Bd::default(),
+        parvi_work::Gh::new(GH.get().unwrap()),
+    )
+}
+const WORK: Listing = Listing {
+    build: build_work,
+    ..parvi_work::LISTING
+};
 use std::time::{Duration, Instant};
 
 struct Toy;
@@ -50,7 +63,7 @@ fn bd(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
 }
 
 #[gpui::test]
-fn report_files_from_the_current_page_and_escape_discards(cx: &mut TestAppContext) {
+fn reports_file_to_beads_and_github_with_context_and_escape_discards(cx: &mut TestAppContext) {
     let dir = parvi_testkit::fresh_dir("parvi-report-store");
     let init = bd(
         &dir,
@@ -68,6 +81,16 @@ fn report_files_from_the_current_page_and_escape_discards(cx: &mut TestAppContex
         "{}",
         String::from_utf8_lossy(&init.stderr)
     );
+    let gh = dir.join("fake-gh");
+    let args = dir.join("gh-args");
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../node/tests/fixtures/work/parvi.json");
+    let item = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../node/tests/fixtures/work/item.json");
+    std::fs::write(&gh, format!("#!/bin/sh\nif [ \"$1\" = issue ]; then printf '%s\\n' \"$@\" > '{}'; echo https://github.com/o/r/issues/51; else case \"$*\" in *number=51*) cat '{}';; *) cat '{}';; esac; fi\n", args.display(), item.display(), fixture.display())).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    GH.set(gh.display().to_string()).unwrap();
     let (ready, wait) = mpsc::channel();
     let (stop, stopped) = mpsc::channel();
     let store = dir.clone();
@@ -75,10 +98,36 @@ fn report_files_from_the_current_page_and_escape_discards(cx: &mut TestAppContex
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             let config = format!(
-                "[work]\nprojects = [{:?}]\n",
-                format!("beads {}", store.display())
+                "[work]\nprojects = [{:?}, {:?}]\n",
+                format!("beads {}", store.display()),
+                "github o/r"
             );
-            let node = Node::start(&[parvi_work::LISTING], &config).await.unwrap();
+            let node = Node::start(&[WORK], &config).await.unwrap();
+            let list = vec!["list".to_owned(), "--node".into(), node.url()];
+            let mut output = Vec::new();
+            assert_eq!(
+                parvi_node_kit::cli::run("work", &list, &mut output)
+                    .await
+                    .unwrap(),
+                0
+            );
+            assert!(String::from_utf8(output).unwrap().contains("gh:o/r#70"));
+            let show = vec![
+                "show".to_owned(),
+                "--node".into(),
+                node.url(),
+                "--ref".into(),
+                "gh:o/r#51".into(),
+            ];
+            let mut output = Vec::new();
+            assert_eq!(
+                parvi_node_kit::cli::run("work", &show, &mut output)
+                    .await
+                    .unwrap(),
+                0
+            );
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains("gh:o/r#51") && output.contains("Example work item"));
             ready.send(node.url()).unwrap();
             while stopped.try_recv().is_err() {
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -148,6 +197,32 @@ fn report_files_from_the_current_page_and_escape_discards(cx: &mut TestAppContex
     assert_eq!(items.as_array().unwrap().len(), 1);
     assert_eq!(items[0]["title"], "Title");
     assert_eq!(items[0]["description"], "Body\n\nContext: alpha");
+    cx.simulate_keystrokes("alt-r");
+    until(cx, "GitHub project", |cx| {
+        cx.debug_bounds("report-project-1").is_some()
+    });
+    let point = cx.debug_bounds("report-project-1").unwrap().center();
+    cx.simulate_click(point, gpui::Modifiers::none());
+    let point = cx.debug_bounds("report-field").unwrap().center();
+    cx.simulate_click(point, gpui::Modifiers::none());
+    cx.simulate_input("GitHub title");
+    cx.simulate_keystrokes("enter");
+    cx.simulate_input("GitHub body");
+    cx.simulate_keystrokes("ctrl-enter");
+    until(cx, "GitHub filed", |cx| {
+        shell.read_with(cx, |s, cx| {
+            s.hub()
+                .read(cx)
+                .status
+                .as_ref()
+                .is_some_and(|s| s.text == "Filed 51")
+        })
+    });
+    assert_eq!(
+        std::fs::read_to_string(&args).unwrap(),
+        "issue\ncreate\n--repo\no/r\n--title\nGitHub title\n--body\nGitHub body\n\nContext: alpha\n"
+    );
+    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy"));
     cx.simulate_keystrokes("alt-r");
     until(cx, "report reopened", |cx| {
         cx.debug_bounds("report-box").is_some()

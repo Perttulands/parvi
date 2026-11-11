@@ -49,7 +49,7 @@ async fn work_is_pushed_only_while_watched() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn create_from_cli_files_a_bead_in_the_configured_store() {
+async fn cli_lists_shows_and_creates_a_work_item() {
     let dir = parvi_testkit::fresh_dir("parvi-work-create");
     let bd = |args: &[&str]| {
         std::process::Command::new("bd")
@@ -149,6 +149,32 @@ async fn create_from_cli_files_a_bead_in_the_configured_store() {
     assert_eq!(value[0]["title"], "T");
     assert_eq!(value[0]["description"], "D");
     assert_eq!(value[0]["issue_type"], "bug");
+    let list = vec!["list".into(), "--node".into(), node.url()];
+    let mut out = Vec::new();
+    assert_eq!(
+        parvi_node_kit::cli::run("work", &list, &mut out)
+            .await
+            .unwrap(),
+        0
+    );
+    assert!(String::from_utf8(out).unwrap().contains(id));
+    let show = vec![
+        "show".into(),
+        "--node".into(),
+        node.url(),
+        "--ref".into(),
+        id.into(),
+    ];
+    let mut out = Vec::new();
+    assert_eq!(
+        parvi_node_kit::cli::run("work", &show, &mut out)
+            .await
+            .unwrap(),
+        0
+    );
+    let shown = String::from_utf8(out).unwrap();
+    assert!(shown.contains("T") && shown.contains(id));
+
     node.stop().await;
     std::fs::remove_dir_all(dir).unwrap();
 }
