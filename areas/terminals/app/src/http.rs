@@ -50,18 +50,6 @@ pub fn dropped(answer: Result<Answer, Error>) -> Result<String, String> {
     }
 }
 
-/// A folder as the node lists it: what is in it.
-#[derive(Debug, serde::Deserialize)]
-pub struct Folder {
-    pub entries: Vec<Entry>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-pub struct Entry {
-    pub name: String,
-    pub folder: bool,
-}
-
 /// A JSON answer, or the node's words for why not.
 pub fn json<T: serde::de::DeserializeOwned>(answer: Result<Answer, Error>) -> Result<T, String> {
     match answer {

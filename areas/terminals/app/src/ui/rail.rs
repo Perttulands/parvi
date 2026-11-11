@@ -637,7 +637,8 @@ pub(super) fn running_mark(t: &Theme, s: &Session, cx: &gpui::App) -> Option<Any
 /// A session's name as CHROTE's `SessionLabel` draws it: the head clipped
 /// with an ellipsis when the row is narrow, the tail always whole.
 fn name_label(name: &str) -> gpui::Div {
-    let (head, tail) = sessions::split_name(name);
+    let label = sessions::rail_name(name, size::RAIL_NAME_COLUMNS);
+    let (head, tail) = sessions::split_name(&label);
     div()
         .min_w_0()
         .flex()

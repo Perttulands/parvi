@@ -908,6 +908,7 @@ enum Pending {
     Continue,
     Me,
     Clients,
+    Observers,
     Seat,
     Delivery(delivery::Step),
     /// The current window's last activity, to start from before any output.
@@ -986,7 +987,7 @@ async fn follow_inner(
         list_panes(session),
         Pending::ListPanes,
     );
-    send(&mut out, &mut pending, facts_command(), Pending::Facts);
+    request_facts(session, &mut out, &mut pending);
     send(
         &mut out,
         &mut pending,
@@ -1087,7 +1088,7 @@ async fn follow_inner(
                         }
                     }
                     Event::Notification(Notification::ClientsChanged) => {
-                        send(&mut out, &mut pending, facts_command(), Pending::Facts);
+                        request_facts(session, &mut out, &mut pending);
                     }
                     Event::Notification(Notification::Pause { pane: id }) => {
                         // We fell behind and tmux dropped the pane's output
@@ -1106,7 +1107,7 @@ async fn follow_inner(
                     Event::Notification(Notification::WindowsChanged) => {
                         layout_changed = Some(tokio::time::Instant::now());
                         send(&mut out, &mut pending, list_panes(session), Pending::ListPanes);
-                        send(&mut out, &mut pending, facts_command(), Pending::Facts);
+                        request_facts(session, &mut out, &mut pending);
                     }
                     Event::Notification(Notification::SessionsChanged) => {
                         let _ = supervisor.send(SupervisorMsg::Rediscover);
@@ -1138,7 +1139,7 @@ async fn follow_inner(
                     }
                     shared.bump();
                     // A program that started or ended wrote first.
-                    send(&mut out, &mut pending, facts_command(), Pending::Facts);
+                    request_facts(session, &mut out, &mut pending);
                 }
             }
             () = &mut look, if looking => {
@@ -1172,7 +1173,7 @@ async fn follow_inner(
                     seat.claim(session, cols, rows, &mut out, &mut pending);
                 }
                 Some(Request::Release) => seat.release(&mut out, &mut pending),
-                Some(Request::RefreshFacts) => send(&mut out, &mut pending, facts_command(), Pending::Facts),
+                Some(Request::RefreshFacts) => request_facts(session, &mut out, &mut pending),
                 Some(Request::Send(delivery)) => {
                     deliveries.push(session, delivery, &mut out, &mut pending);
                 }
@@ -1343,6 +1344,18 @@ fn facts_command() -> String {
     format!("display-message -p '{FACTS_FORMAT}'")
 }
 
+/// A second Parvi node follows in control mode without owning the sizing
+/// seat. Count actual attached viewers separately from those followers.
+fn request_facts(session: &str, out: &mut String, pending: &mut VecDeque<Pending>) {
+    send(out, pending, facts_command(), Pending::Facts);
+    send(
+        out,
+        pending,
+        format!("list-clients -t '{session}' -F '#{{client_flags}}'"),
+        Pending::Observers,
+    );
+}
+
 fn list_panes(session: &str) -> String {
     format!("list-panes -s -t '{session}' -F '{LIST_PANES_FORMAT}'")
 }
@@ -1397,10 +1410,17 @@ fn on_reply(
     match what {
         Pending::Input | Pending::Continue | Pending::Seat => {}
         Pending::Facts => {
-            let facts = lines
+            let mut facts = lines
                 .first()
                 .filter(|_| ok)
                 .and_then(|line| Facts::parse(line));
+            if let Some(entry) = state.sessions.get_mut(session)
+                && let Some(facts) = &mut facts
+            {
+                // Stay conservative until the corresponding client list has
+                // arrived; a later facts poll must retain the counted value.
+                facts.foreign_clients = entry.facts.as_ref().map_or(1, |f| f.foreign_clients);
+            }
             if let Some(entry) = state.sessions.get_mut(session)
                 && facts.is_some()
                 && entry.facts != facts
@@ -1408,6 +1428,28 @@ fn on_reply(
                 entry.facts = facts;
                 drop(state);
                 shared.bump();
+            }
+        }
+        Pending::Observers => {
+            if ok {
+                let count = lines
+                    .iter()
+                    .filter(|line| {
+                        let mut flags = line.split(',');
+                        !(flags.clone().any(|f| f == "control-mode")
+                            && flags.any(|f| f.starts_with("pause-after")))
+                    })
+                    .count() as u32;
+                if let Some(facts) = state
+                    .sessions
+                    .get_mut(session)
+                    .and_then(|s| s.facts.as_mut())
+                    && facts.foreign_clients != count
+                {
+                    facts.foreign_clients = count;
+                    drop(state);
+                    shared.bump();
+                }
             }
         }
         Pending::Activity => {

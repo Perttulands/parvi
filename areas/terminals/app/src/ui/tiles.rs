@@ -208,6 +208,10 @@ impl Terminals {
             self.dragging_over = None;
         }
         let tiles: Vec<AnyElement> = (0..n).map(|i| self.render_tile(i, window, cx)).collect();
+        let send_room = self.is_open(super::surface::SEND).then(|| {
+            let room = window.viewport_size().width / px(1.);
+            crate::store::send::width(self.settings.send_width, room)
+        });
         let mut grid = div()
             .id("grid")
             .track_focus(&self.term_focus)
@@ -217,6 +221,7 @@ impl Terminals {
             .flex_col()
             .gap(px(size::TILE_GAP))
             .p(px(size::TILE_GAP))
+            .when_some(send_room, |grid, width| grid.pr(px(size::TILE_GAP + width)))
             .bg(t.raised)
             .on_key_down(cx.listener(Self::term_key))
             .on_mouse_move(cx.listener(Self::term_mouse_move))

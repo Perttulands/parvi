@@ -54,6 +54,8 @@ pub struct Draft {
     pub sending: Option<(u32, Key, bool, bool)>,
     /// Files being written on the target's node.
     pub uploading: bool,
+    /// The focused tile grid before the drawer made room for itself.
+    pub launch_grid: Option<super::page::Grid>,
     /// What had the focus when the drawer opened.
     pub opener: Option<FocusHandle>,
     /// The inner edge is being dragged.
@@ -92,8 +94,10 @@ impl Terminals {
             return;
         }
         let opener = window.focused(cx);
+        let launch_grid = self.launch_grids.borrow()[self.settings.workspace.focus];
         self.send = Draft {
             reference,
+            launch_grid,
             opener,
             ..Default::default()
         };
@@ -448,6 +452,7 @@ impl Terminals {
                     .text_color(t.text2)
                     .overflow_hidden()
                     .whitespace_nowrap()
+                    .text_ellipsis()
                     .child(r.clone()),
             );
         }
@@ -498,6 +503,7 @@ impl Terminals {
         );
         let drawer = div()
             .id("send")
+            .debug_selector(|| "send-drawer".into())
             .absolute()
             .top_0()
             .bottom_0()

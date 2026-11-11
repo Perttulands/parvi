@@ -1070,6 +1070,99 @@ async fn ready_with_no_server_lists_nothing() {
     engine.stop().await;
 }
 
+/// Other Parvi followers use control mode with pause-after; they do not own a
+/// sizing seat. A viewer that actually sizes the session still counts.
+#[tokio::test(flavor = "multi_thread")]
+async fn another_follower_is_not_a_foreign_viewer() {
+    let Some(server) = Server::start_in("terminal-other-follower") else {
+        return;
+    };
+    server.new_session("alpha", 200, 50);
+    let first = Engine::start(server.socket());
+    let second = Engine::start(server.socket());
+    seeded_pane(&first).await;
+    seeded_pane(&second).await;
+    eventually("both followers attached", || {
+        (server.clients().len() == 2).then_some(())
+    })
+    .await;
+    eventually("followers excluded from foreign clients", || {
+        first
+            .sessions()
+            .first()?
+            .facts
+            .as_ref()
+            .filter(|f| f.foreign_clients == 0)
+            .map(|_| ())
+    })
+    .await;
+    use std::os::fd::FromRawFd;
+    struct Viewer(std::process::Child, std::fs::File);
+    impl Drop for Viewer {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let (mut master, mut slave) = (-1, -1);
+    let size = libc::winsize {
+        ws_row: 40,
+        ws_col: 120,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    // SAFETY: openpty initializes both descriptors, and each is owned once below.
+    assert_eq!(
+        unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                &size,
+            )
+        },
+        0
+    );
+    // SAFETY: the successful openpty call returned fresh owned descriptors.
+    let master = unsafe { std::fs::File::from_raw_fd(master) };
+    // SAFETY: the slave descriptor is separate from master and also freshly owned.
+    let slave = unsafe { std::fs::File::from_raw_fd(slave) };
+    let process = std::process::Command::new(parvi_term::backend::tmux::program())
+        .args([
+            "-S",
+            server.socket_path().to_str().unwrap(),
+            "attach-session",
+            "-t",
+            "alpha",
+        ])
+        .env("TERM", "xterm")
+        .stdin(slave.try_clone().unwrap())
+        .stdout(slave.try_clone().unwrap())
+        .stderr(slave)
+        .spawn()
+        .unwrap();
+    let viewer = Viewer(process, master);
+    eventually("real terminal client attached", || {
+        (server.clients().len() == 3).then_some(())
+    })
+    .await;
+    eventually("real viewer counted", || {
+        first
+            .sessions()
+            .first()?
+            .facts
+            .as_ref()
+            .filter(|f| f.foreign_clients == 1)
+            .map(|_| ())
+    })
+    .await;
+    let _ = &viewer.1;
+    drop(viewer);
+    first.stop().await;
+    second.stop().await;
+}
+
 /// Starting a follower on an idle session reads the pre-existing activity
 /// timestamp; a later real write still marks it active.
 #[tokio::test(flavor = "multi_thread")]

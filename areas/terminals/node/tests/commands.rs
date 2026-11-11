@@ -771,3 +771,34 @@ async fn cli_launches_on_the_offered_users_scratch_server() {
     );
     node.stop().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn launcher_lists_accessible_folders_and_explains_missing_ones() {
+    let Some(node) = Node::start("launcher-folders").await else {
+        return;
+    };
+    std::fs::create_dir(node.other.join("inside")).unwrap();
+    let client = parvi_node_kit::NodeClient::new(Some(&node.node.url())).unwrap();
+    let path = format!("/api/terminal/folders?path={}", node.other.display());
+    let (answer, _) = client
+        .request(axum::http::Method::GET, &path, None, None)
+        .await
+        .unwrap();
+    assert!(
+        answer
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|name| name == "inside")
+    );
+    let missing = format!(
+        "/api/terminal/folders?path={}/missing",
+        node.other.display()
+    );
+    let error = client
+        .request(axum::http::Method::GET, &missing, None, None)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("Cannot list"), "{error}");
+    node.stop().await;
+}

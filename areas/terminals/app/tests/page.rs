@@ -1976,6 +1976,150 @@ fn terminal_send_carries_source_reference_to_another_session(cx: &mut TestAppCon
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }
 
+#[gpui::test]
+fn send_drawer_keeps_the_terminal_visible_beside_it(cx: &mut TestAppContext) {
+    let Some(running) = start("terminals-send-layout") else {
+        return;
+    };
+    let (_shell, cx, settings) = open_with_alpha(&running, "send-layout", cx);
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    until(cx, "terminal geometry", |cx| {
+        page.read_with(cx, |p, _| p.geo.borrow()[0].body.is_some())
+    });
+    cx.simulate_keystrokes("alt-s");
+    until(cx, "drawer beside terminal", |cx| {
+        let Some(drawer) = cx.debug_bounds("send-drawer") else {
+            return false;
+        };
+        page.read_with(cx, |p, _| {
+            p.geo.borrow()[0]
+                .body
+                .is_some_and(|body| body.origin.x + body.size.width <= drawer.origin.x)
+        })
+    });
+    assert!(!shown(cx).trim().is_empty());
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+/// A second node following the same scratch server is not a sizing viewer.
+#[gpui::test]
+fn opening_a_session_sizes_it_with_another_node_following(cx: &mut TestAppContext) {
+    let Some(running) = start("terminals-second-node") else {
+        return;
+    };
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let config = format!(
+        "[terminals]\nsocket = {:?}\nlaunch = {:?}\n",
+        running.socket,
+        running.fixture.join("no-launch.conf")
+    );
+    let second = runtime.block_on(Node::start(AREAS, &config)).unwrap();
+    runtime.block_on(parvi_testkit::tmux::eventually(
+        "second node follows alpha",
+        || {
+            second
+                .sessions()
+                .list()
+                .iter()
+                .find(|s| s.name == "alpha" && !s.panes.is_empty())
+                .map(|_| ())
+        },
+    ));
+    let (_shell, cx, settings) = open_with_alpha(&running, "second-node", cx);
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    until(cx, "session claims the tile at its grid", |cx| {
+        page.read_with(cx, |p, _| {
+            let Some(binding) = p.settings.workspace.shown(0) else {
+                return false;
+            };
+            let Some(session) = p.fleet.session(&binding.key) else {
+                return false;
+            };
+            let Some(grid) = p.launch_grids.borrow()[0] else {
+                return false;
+            };
+            session.foreign == Some(0)
+                && session.seat == Some(parvi_terminals_contract::Seat::Mine)
+                && tmux(
+                    &running,
+                    &[
+                        "display-message",
+                        "-p",
+                        "-t",
+                        "alpha",
+                        "#{window_width}x#{window_height}",
+                    ],
+                ) == format!("{}x{}", grid.0, grid.1)
+        })
+    });
+    runtime.block_on(second.stop());
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+/// Completion reads the launch user's filesystem even outside Files roots.
+#[gpui::test]
+fn launcher_completes_a_folder_outside_files_roots(cx: &mut TestAppContext) {
+    let Some(running) = start_with_restart_harness("terminals-folder-outside", true, true) else {
+        return;
+    };
+    let chosen = running.fixture.join("subfolder");
+    std::fs::create_dir(&chosen).unwrap();
+    let settings = parvi_testkit::fresh_dir("folder-outside-settings").join("app.json");
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let (url, path) = (running.url.clone(), settings.clone());
+    let (shell, cx) = cx.add_window_view(move |window, cx| {
+        parvi_app_shell::start(&[terminals], Some(url), Some(path), window, cx)
+    });
+    until(cx, "fake harness offered", |cx| {
+        cx.debug_bounds("harness-0-fake").is_some()
+    });
+    click(cx, "harness-0-fake".into());
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    cx.update(|window, cx| {
+        page.update(cx, |p, cx| {
+            p.launchers[0].update(cx, |l, cx| l.focus_first(window, cx))
+        })
+    });
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input(&format!("{}/sub", running.fixture.display()));
+    let row: &'static str =
+        Box::leak(format!("folder-row-0-{}", chosen.display()).into_boxed_str());
+    until(cx, "folder completion", |cx| cx.debug_bounds(row).is_some());
+    cx.simulate_keystrokes("tab");
+    scroll_to_launch(cx, "launcher-scroll-0");
+    until(cx, "launch available", |cx| {
+        cx.debug_bounds("launch-0")
+            .zip(cx.debug_bounds("launcher-scroll-0"))
+            .is_some_and(|(button, viewport)| viewport.contains(&button.center()))
+    });
+    click(cx, "launch-0".into());
+    let expected = format!("{}|--marker", chosen.display());
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        cx.run_until_parked();
+        let runs = std::fs::read_to_string(running.fixture.join("runs")).unwrap_or_default();
+        if runs.lines().any(|line| {
+            line.split_once('|').is_some_and(|(folder, flags)| {
+                std::path::Path::new(folder).canonicalize().ok() == chosen.canonicalize().ok()
+                    && flags == "--marker"
+            })
+        }) {
+            break;
+        }
+        let status = shell.read_with(cx, |s, cx| {
+            s.hub().read(cx).status.as_ref().map(|s| s.text.clone())
+        });
+        assert!(
+            Instant::now() < deadline,
+            "expected {expected:?}, runs {runs:?}, status {status:?}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
 /// Opening the app and following idle sessions must not make them look busy.
 #[gpui::test]
 fn connecting_the_app_preserves_idle_session_activity(cx: &mut TestAppContext) {

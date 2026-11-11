@@ -153,6 +153,7 @@ impl Launcher {
     pub fn done(&mut self, cx: &mut Context<Self>) {
         self.pending = false;
         self.named = false;
+        self.folder.update(cx, |f, _| f.reset_recent());
         self.name.update(cx, |f, cx| f.set("", false, cx));
         cx.notify();
     }
@@ -317,17 +318,12 @@ impl Launcher {
                 notify: s.settings.notify
                     && notify_offered(&command, &user)
                     && conf.as_ref().is_some_and(|l| l.notify_off.is_none()),
-                // Send's launcher targets the focused tile.
-                size: s
-                    .launch_grids
-                    .borrow()
-                    .get(if index == SEND {
-                        s.settings.workspace.focus
-                    } else {
-                        index
-                    })
-                    .copied()
-                    .flatten(),
+                // Once Send closes, its new agent has the full focused tile.
+                size: if index == SEND {
+                    s.send.launch_grid
+                } else {
+                    s.launch_grids.borrow().get(index).copied().flatten()
+                },
             };
             let id = s.fleet.launch_on(&node, l.clone())?;
             let tab = s.settings.workspace.active;
@@ -497,7 +493,11 @@ impl Render for Launcher {
         let field_empty = self.folder.read(cx).text(cx).is_empty();
         let field_focused = self.folder.read(cx).field.read(cx).is_focused(window);
         self.folder.update(cx, |f, cx| {
-            f.serve(&at, offered);
+            f.serve(&at, &self.user, offered);
+            if field_empty {
+                f.field
+                    .update(cx, |field, _| field.set_placeholder(&folder));
+            }
             if field_empty && !field_focused {
                 f.set(&folder, cx);
             }

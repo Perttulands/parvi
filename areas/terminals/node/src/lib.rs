@@ -187,6 +187,7 @@ impl Area for Terminals {
     fn routes(&self) -> Router {
         Router::new()
             .route("/api/terminal/windows", get(windows))
+            .route("/api/terminal/folders", get(folders))
             .with_state(self.ctx.hub.clone())
             .merge(agent_events::routes(self.ctx.hub.clone()))
             .merge(flags::routes(self.ctx.launcher.clone()))
@@ -203,6 +204,52 @@ impl Area for Terminals {
 
     fn stop(&self) -> BoxFuture<'_, ()> {
         Box::pin(self.ctx.hub.stop())
+    }
+}
+
+#[derive(Deserialize)]
+struct FolderQuery {
+    path: String,
+}
+
+/// Folder completion uses the same user and filesystem as session launch.
+async fn folders(Query(query): Query<FolderQuery>) -> Response {
+    let path = std::path::PathBuf::from(&query.path);
+    if !path.is_absolute() {
+        return Failure(
+            StatusCode::BAD_REQUEST,
+            Error::new(
+                parvi_terminals_contract::COMMAND_FAILED,
+                "An absolute folder is required",
+            ),
+        )
+        .into_response();
+    }
+    let result = async {
+        let mut entries = tokio::fs::read_dir(&path).await?;
+        let mut names = Vec::new();
+        while let Some(entry) = entries.next_entry().await? {
+            if tokio::fs::metadata(entry.path())
+                .await
+                .is_ok_and(|m| m.is_dir())
+            {
+                names.push(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+        names.sort();
+        Ok::<_, std::io::Error>(names)
+    }
+    .await;
+    match result {
+        Ok(names) => axum::Json(names).into_response(),
+        Err(error) => Failure(
+            StatusCode::BAD_REQUEST,
+            Error::new(
+                parvi_terminals_contract::COMMAND_FAILED,
+                format!("Cannot list {}: {error}", path.display()),
+            ),
+        )
+        .into_response(),
     }
 }
 

@@ -163,7 +163,7 @@ pub enum Running<'a> {
 pub fn running(s: &Session) -> Running<'_> {
     match s.command.as_deref().map(program) {
         None | Some("") => Running::Nothing,
-        Some(c) if is_shell(c) => Running::Nothing,
+        Some(c) if is_shell(c) || c == "systemd-run" => Running::Nothing,
         Some("claude") => Running::Harness("claude-code"),
         Some("codex") => Running::Harness("codex"),
         Some(c) => Running::Command(c),
@@ -359,6 +359,40 @@ pub fn elide_middle(name: &str, max: usize) -> String {
     s
 }
 
+/// Shorten a rail name at hyphen boundaries, preserving its identifying end.
+pub fn rail_name(name: &str, max: usize) -> String {
+    if name.chars().count() <= max || max < 2 {
+        return name.to_owned();
+    }
+    let boundaries: Vec<usize> = name.match_indices('-').map(|(i, _)| i + 1).collect();
+    let tail_start = boundaries
+        .iter()
+        .rev()
+        .nth(1)
+        .copied()
+        .or_else(|| boundaries.last().copied())
+        .unwrap_or(0);
+    let tail = &name[tail_start..];
+    if tail.chars().count() + 1 >= max {
+        let tail: String = name
+            .chars()
+            .rev()
+            .take(max - 1)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        return format!("…{tail}");
+    }
+    let budget = max - 1 - tail.chars().count();
+    let prefix_end = boundaries
+        .iter()
+        .copied()
+        .rfind(|&i| i < tail_start && name[..i].chars().count() <= budget)
+        .unwrap_or(0);
+    format!("{}…{tail}", &name[..prefix_end])
+}
+
 /// A name split for tail-preserving truncation, as CHROTE's
 /// `splitSessionName`: the head is everything up to and including the last
 /// hyphen, the tail the rest. Names share prefixes (`claude-chrote-…`), so
@@ -524,6 +558,8 @@ mod tests {
             ("claude", Running::Harness("claude-code")),
             ("codex", Running::Harness("codex")),
             ("bash", Running::Nothing),
+            ("systemd-run", Running::Nothing),
+            ("/usr/bin/systemd-run", Running::Nothing),
             ("sleep", Running::Command("sleep")),
             ("powershell.exe", Running::Nothing),
             (r"C:\Tools\htop.EXE", Running::Command("htop")),
@@ -603,6 +639,19 @@ mod tests {
             "service-contro…agent"
         );
         assert_eq!(elide_middle("short", 20), "short");
+    }
+
+    #[test]
+    fn rail_names_keep_whole_words_and_the_distinguishing_end() {
+        assert_eq!(
+            rail_name("parvi-move-fin-control", 22),
+            "parvi-move-fin-control"
+        );
+        assert_eq!(
+            rail_name("parvi-move-fin-terminals", 22),
+            "parvi-…fin-terminals"
+        );
+        assert_eq!(rail_name("short", 22), "short");
     }
 
     #[test]

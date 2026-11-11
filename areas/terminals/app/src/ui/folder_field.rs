@@ -30,12 +30,11 @@ pub enum FolderEvent {
     Submit,
 }
 
-/// One folder's listing, as the node answered: its folders' names, or
-/// `None` if it could not be listed.
+/// One folder listing, or the node's reason it could not be read.
 struct Listing {
     node: String,
     dir: String,
-    folders: Option<Vec<String>>,
+    folders: Result<Vec<String>, String>,
 }
 
 pub struct FolderField {
@@ -46,6 +45,7 @@ pub struct FolderField {
     host: Host,
     /// What the list offers before anything is typed.
     offered: Vec<String>,
+    offered_user: String,
     /// Typing turns the list into suggestions; a folder picked, launched
     /// or left alone is not being typed.
     editing: bool,
@@ -54,6 +54,16 @@ pub struct FolderField {
     listing: Option<Listing>,
     /// The (node, folder) being read now.
     reading: Option<(String, String)>,
+}
+
+/// Keep existing rows in place while a launcher is open; new choices join
+/// the end rather than moving underneath the pointer.
+fn keep_recent_order(current: &mut Vec<String>, offered: Vec<String>) {
+    for folder in offered {
+        if !current.contains(&folder) {
+            current.push(folder);
+        }
+    }
 }
 
 impl EventEmitter<FolderEvent> for FolderField {}
@@ -71,6 +81,7 @@ impl FolderField {
             node: String::new(),
             host,
             offered: vec![],
+            offered_user: String::new(),
             editing: false,
             lit: None,
             listing: None,
@@ -90,12 +101,18 @@ impl FolderField {
     }
 
     /// Where paths are listed and what is offered: the launcher's node now.
-    pub fn serve(&mut self, node: &str, offered: Vec<String>) {
-        if self.node != node {
+    pub fn serve(&mut self, node: &str, user: &str, offered: Vec<String>) {
+        if self.node != node || self.offered_user != user {
             self.listing = None;
+            self.offered.clear();
         }
         self.node = node.to_string();
-        self.offered = offered;
+        self.offered_user = user.to_string();
+        keep_recent_order(&mut self.offered, offered);
+    }
+
+    pub fn reset_recent(&mut self) {
+        self.offered.clear();
     }
 
     fn value(&self, cx: &gpui::App) -> String {
@@ -134,17 +151,8 @@ impl FolderField {
         }
     }
 
-    /// The folder a launch takes now: the lit match for a fragment (the
-    /// session is named after the folder chosen, not the fragment typed),
-    /// else what the field holds.
+    /// The folder a launch takes now, exactly as the field shows it.
     pub fn chosen(&self, cx: &gpui::App) -> String {
-        let list = self.list(cx);
-        if list == FolderList::Matching {
-            let rows = self.suggestions(&list, cx);
-            if let Some(i) = self.lit(&list, rows.len(), cx) {
-                return rows[i].path.clone();
-            }
-        }
         self.value(cx).trim().to_string()
     }
 
@@ -222,24 +230,18 @@ impl FolderField {
             return;
         }
         self.reading = Some(at.clone());
-        let path = format!("/api/files/folder?path={}", http::enc(&at.1));
+        let path = format!("/api/terminal/folders?path={}", http::enc(&at.1));
         let task = self
             .host
             .request(Request::get(NodeId(at.0.clone()), path), cx);
         cx.spawn(async move |this, cx| {
-            let answer = http::json::<http::Folder>(task.await);
+            let answer = http::json::<Vec<String>>(task.await);
             let _ = this.update(cx, |f, cx| {
                 if f.reading.as_ref() != Some(&at) {
                     return;
                 }
                 f.reading = None;
-                let folders = answer.ok().map(|l| {
-                    l.entries
-                        .into_iter()
-                        .filter(|e| e.folder)
-                        .map(|e| e.name)
-                        .collect()
-                });
+                let folders = answer;
                 f.listing = Some(Listing {
                     node: at.0,
                     dir: at.1,
@@ -252,16 +254,16 @@ impl FolderField {
     }
 
     /// What the list says when it holds nothing.
-    fn note(&self, list: &FolderList) -> &'static str {
+    fn note(&self, list: &FolderList) -> String {
         match list {
-            FolderList::Offered => "Nothing recent",
-            FolderList::Matching => "No folder matches",
+            FolderList::Offered => "Nothing recent".into(),
+            FolderList::Matching => "No folder matches".into(),
             FolderList::Inside { dir, .. } => match &self.listing {
                 Some(l) if l.node == self.node && l.dir == *dir => match l.folders {
-                    None => "Cannot list this folder",
-                    Some(_) => "No folders here",
+                    Err(ref why) => why.clone(),
+                    Ok(_) => "No folders here".into(),
                 },
-                _ => "Reading…",
+                _ => "Reading…".into(),
             },
         }
     }
@@ -298,6 +300,11 @@ impl Render for FolderField {
             body = body.child(
                 div()
                     .id(("folder-row", self.id * 1000 + n))
+                    .debug_selector({
+                        let id = self.id;
+                        let path = path.clone();
+                        move || format!("folder-row-{id}-{path}")
+                    })
                     .flex_none()
                     .h(px(ROW_H))
                     .px(px(4.))
@@ -332,5 +339,20 @@ impl Render for FolderField {
                     .child(label.to_uppercase()),
             )
             .child(body)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::keep_recent_order;
+
+    #[test]
+    fn recent_folders_do_not_move_when_session_activity_changes() {
+        let mut rows = vec!["/first".into(), "/second".into()];
+        keep_recent_order(
+            &mut rows,
+            vec!["/second".into(), "/first".into(), "/third".into()],
+        );
+        assert_eq!(rows, ["/first", "/second", "/third"]);
     }
 }
