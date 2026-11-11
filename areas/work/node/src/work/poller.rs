@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Result;
+use futures_util::{StreamExt, stream};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -28,6 +29,8 @@ use super::model::{ProjectView, RepoView, Snapshot, StoreView};
 /// GitHub read a new watcher takes as it is. A Beads store costs a file
 /// read unless it changed.
 pub const EVERY: Duration = Duration::from_secs(60);
+/// Limit tracker processes while letting independent projects overlap.
+const READ_CONCURRENCY: usize = 8;
 
 /// The Work module's state on this node. Cheap to clone.
 #[derive(Clone)]
@@ -251,7 +254,7 @@ impl Drop for Subscription {
     }
 }
 
-/// Looks at every project in turn, at once and then each [`EVERY`] or
+/// Looks at every project concurrently, at once and then each [`EVERY`] or
 /// when a refresh is asked, publishing each as it arrives, until aborted.
 /// The stores' manifests are looked at every round; GitHub is read in the
 /// first round (unless read within [`EVERY`]) and in a refresh's.
@@ -267,27 +270,11 @@ async fn rounds(work: Arc<Inner>) {
             // Every store is read again, one without a manifest too.
             attempted.clear();
         }
+        let mut jobs = Vec::new();
         for (index, project) in work.config.projects.iter().enumerate() {
             match project {
                 Project::GitHub(_) if !github => {}
-                Project::GitHub(repo) => {
-                    let read = work.gh.read(repo).await;
-                    work.snapshot.send_modify(|snapshot| {
-                        let ProjectView::Github(view) =
-                            &mut Arc::make_mut(snapshot).projects[index]
-                        else {
-                            unreachable!("views follow the configuration")
-                        };
-                        match read {
-                            Ok(fresh) => {
-                                view.work = Some(fresh);
-                                view.synced = Some(unix_ms());
-                                view.error = None;
-                            }
-                            Err(error) => view.error = Some(format!("{error:#}")),
-                        }
-                    });
-                }
+                Project::GitHub(_) => jobs.push((index, project, None)),
                 Project::Beads(store) => {
                     let marker = beads::marker(&store.folder);
                     let due = due(attempted.get(&index), &marker);
@@ -306,36 +293,67 @@ async fn rounds(work: Arc<Inner>) {
                         });
                         continue;
                     }
-                    let read = work.store_now(&store.folder, refreshing).await;
-                    work.snapshot.send_if_modified(|snapshot| {
-                        let ProjectView::Beads(view) = &mut Arc::make_mut(snapshot).projects[index]
-                        else {
-                            unreachable!("views follow the configuration")
-                        };
-                        let unwatched_changed = view.unwatched != unseen;
-                        view.unwatched = unseen;
-                        match read {
-                            Ok((items, false))
-                                if view.error.is_none()
-                                    && view.items.as_deref() == Some(items.as_slice()) =>
-                            {
-                                unwatched_changed
-                            }
-                            Ok((items, _)) => {
-                                view.items = Some(items.to_vec());
-                                view.synced = Some(unix_ms());
-                                view.error = None;
-                                true
-                            }
-                            Err(error) => {
-                                view.error = Some(format!("{error:#}"));
-                                true
-                            }
-                        }
-                    });
+                    jobs.push((index, project, unseen));
                 }
             }
         }
+        stream::iter(jobs)
+            .for_each_concurrent(READ_CONCURRENCY, |(index, project, unseen)| {
+                let work = &work;
+                async move {
+                    match project {
+                        Project::GitHub(repo) => {
+                            let read = work.gh.read(repo).await;
+                            work.snapshot.send_modify(|snapshot| {
+                                let ProjectView::Github(view) =
+                                    &mut Arc::make_mut(snapshot).projects[index]
+                                else {
+                                    unreachable!("views follow the configuration")
+                                };
+                                match read {
+                                    Ok(fresh) => {
+                                        view.work = Some(fresh);
+                                        view.synced = Some(unix_ms());
+                                        view.error = None;
+                                    }
+                                    Err(error) => view.error = Some(format!("{error:#}")),
+                                }
+                            });
+                        }
+                        Project::Beads(store) => {
+                            let read = work.store_now(&store.folder, refreshing).await;
+                            work.snapshot.send_if_modified(|snapshot| {
+                                let ProjectView::Beads(view) =
+                                    &mut Arc::make_mut(snapshot).projects[index]
+                                else {
+                                    unreachable!("views follow the configuration")
+                                };
+                                let unwatched_changed = view.unwatched != unseen;
+                                view.unwatched = unseen;
+                                match read {
+                                    Ok((items, false))
+                                        if view.error.is_none()
+                                            && view.items.as_deref() == Some(items.as_slice()) =>
+                                    {
+                                        unwatched_changed
+                                    }
+                                    Ok((items, _)) => {
+                                        view.items = Some(items.to_vec());
+                                        view.synced = Some(unix_ms());
+                                        view.error = None;
+                                        true
+                                    }
+                                    Err(error) => {
+                                        view.error = Some(format!("{error:#}"));
+                                        true
+                                    }
+                                }
+                            });
+                        }
+                    }
+                }
+            })
+            .await;
         if github {
             work.poll.lock().unwrap().last_github = Some(Instant::now());
         }
@@ -474,6 +492,66 @@ pub(super) mod tests {
             ProjectView::Beads(view) => view,
             ProjectView::Github(_) => panic!("not a store"),
         }
+    }
+
+    #[tokio::test]
+    async fn twenty_one_slow_stores_overlap_with_a_bounded_number_of_processes() {
+        let fixture = fixture("beads.json");
+        let fake = Fake::new(
+            "parallel-stores",
+            "exit 1",
+            &format!(
+                "echo start >> \"$(dirname \"$0\")/overlap\"; sleep 1; echo end >> \"$(dirname \"$0\")/overlap\"; {fixture}"
+            ),
+        );
+        let mut projects = Vec::new();
+        for i in 0..21 {
+            let folder = fake.dir.join(format!("store-{i}"));
+            let noms = folder.join(".beads/embeddeddolt/tst/.dolt/noms");
+            std::fs::create_dir_all(&noms).unwrap();
+            std::fs::write(noms.join("manifest"), "one").unwrap();
+            projects.push(Project::Beads(Store {
+                folder: folder.display().to_string(),
+            }));
+        }
+        let work = fake.work(projects);
+        let mut watching = work.subscribe();
+        let start = Instant::now();
+        tokio::time::timeout(Duration::from_secs(12), async {
+            loop {
+                let snapshot = watching.next().await;
+                if snapshot
+                    .projects
+                    .iter()
+                    .all(|p| matches!(p, ProjectView::Beads(s) if s.items.is_some()))
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("21 one-second stores should not read serially");
+        let elapsed = start.elapsed();
+        let log = std::fs::read_to_string(fake.dir.join("overlap")).unwrap();
+        let (mut running, mut peak, mut finished) = (0, 0, 0);
+        for line in log.lines() {
+            match line {
+                "start" => {
+                    running += 1;
+                    peak = peak.max(running);
+                }
+                "end" => {
+                    running -= 1;
+                    finished += 1;
+                }
+                _ => panic!("unexpected fake-bd event: {line}"),
+            }
+        }
+        assert_eq!(finished, 21);
+        assert!(
+            peak > 1 && peak <= READ_CONCURRENCY,
+            "peak {peak}, elapsed {elapsed:?}"
+        );
     }
 
     #[tokio::test]
