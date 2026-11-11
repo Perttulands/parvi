@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext, Window, div, prelude::*, px};
 use parvi_app_kit::ask::SessionTarget;
 use parvi_app_kit::link::client::LinkState;
-use parvi_app_kit::{Ask, Host, Mounted, Page, mount};
+use parvi_app_kit::{Answers, Ask, Host, Mounted, Page, mount};
 use parvi_app_shell::Shell;
 use parvi_core::NodeId;
 use parvi_node_kit::Listing;
@@ -28,6 +28,7 @@ const AREAS: &[Listing] = &[parvi_terminals::LISTING];
 
 thread_local! {
     static PAGE: RefCell<Option<Entity<Terminals>>> = const { RefCell::new(None) };
+    static ITEM_ASK: RefCell<Option<Ask>> = const { RefCell::new(None) };
 }
 
 /// The Terminals page, kept where the test can read what it shows.
@@ -50,6 +51,14 @@ const REFERENCE: &str = "echo sent-$((40+2))";
 impl Page for Toy {
     const ID: &'static str = "toy";
     const TITLE: &'static str = "Toy";
+    const ANSWERS: &'static [Answers] = &[Answers::Reveal("item")];
+
+    fn answer(&mut self, ask: Ask, from: &'static str, _: &mut Window, cx: &mut Context<Self>) {
+        if ask.beside() {
+            self.host.show_beside(from, cx.new(|_| Note).into(), cx);
+        }
+        ITEM_ASK.with(|slot| *slot.borrow_mut() = Some(ask));
+    }
 }
 
 impl Render for Toy {
@@ -1061,6 +1070,7 @@ fn reveal_session_shows_the_requested_session_and_pane(cx: &mut TestAppContext) 
         host.ask(
             Ask::Reveal {
                 what: "session".into(),
+                beside: false,
                 id: "beta".into(),
                 node: None,
                 part: None,
@@ -1079,6 +1089,7 @@ fn reveal_session_shows_the_requested_session_and_pane(cx: &mut TestAppContext) 
         host.ask(
             Ask::Reveal {
                 what: "session".into(),
+                beside: false,
                 id: "beta".into(),
                 node: None,
                 part: Some("1".into()),
@@ -1127,6 +1138,7 @@ fn reveal_session_shows_the_requested_session_and_pane(cx: &mut TestAppContext) 
         host.ask(
             Ask::Reveal {
                 what: "session".into(),
+                beside: false,
                 id: beta_id,
                 node: Some(NodeId(running.node.clone())),
                 part: Some(format!("%{}", panes[1])),
@@ -1149,6 +1161,7 @@ fn reveal_session_shows_the_requested_session_and_pane(cx: &mut TestAppContext) 
         host.ask(
             Ask::Reveal {
                 what: "session".into(),
+                beside: false,
                 id: "missing".into(),
                 node: Some(NodeId(running.node.clone())),
                 part: None,
@@ -1172,6 +1185,7 @@ fn reveal_session_shows_the_requested_session_and_pane(cx: &mut TestAppContext) 
         host.ask(
             Ask::Reveal {
                 what: "session".into(),
+                beside: false,
                 id: "beta".into(),
                 node: Some(NodeId(running.node.clone())),
                 part: Some("99999".into()),
@@ -1193,5 +1207,107 @@ fn reveal_session_shows_the_requested_session_and_pane(cx: &mut TestAppContext) 
         page.read_with(cx, |p, _| p.settings.workspace.clone()),
         before
     );
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+#[gpui::test]
+fn work_item_in_terminal_opens_beside_and_focus_is_published(cx: &mut TestAppContext) {
+    let Some(running) = start("terminals-work-link") else {
+        return;
+    };
+    let (shell, cx, settings) = open_with_alpha(&running, "work-link", cx);
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    let toy = shell.read_with(cx, |s, _| Host::new(s.hub()).for_page("toy", &[]));
+    let sessions = cx.update(|_, cx| toy.model::<SessionList>(cx)).unwrap();
+    until(cx, "alpha focused in the shared model", |cx| {
+        sessions.read_with(cx, |list, _| {
+            list.focused
+                .as_ref()
+                .is_some_and(|f| f.node == running.node && f.user.is_empty() && f.name == "alpha")
+        })
+    });
+    tmux(
+        &running,
+        &[
+            "send-keys",
+            "-t",
+            "alpha",
+            "printf '\\033[2J\\033[Hparvi-pnu.7.3\\n'",
+            "Enter",
+        ],
+    );
+    until(cx, "work id printed", |cx| {
+        page.read_with(cx, |p, _| {
+            p.window_text(0)
+                .is_some_and(|t| t.lines().any(|l| l.trim() == "parvi-pnu.7.3"))
+        })
+    });
+    let pos = page.read_with(cx, |p, _| {
+        let text = p.window_text(0).unwrap();
+        let row = text
+            .lines()
+            .position(|line| line.trim() == "parvi-pnu.7.3")
+            .unwrap();
+        let geo = p.geo.borrow()[0];
+        let origin = geo.origin.unwrap();
+        let cell = geo.cell.unwrap();
+        gpui::point(
+            origin.x + cell.width * 3. + px(2.),
+            origin.y + cell.height * row as f32 + px(2.),
+        )
+    });
+    ITEM_ASK.with(|slot| *slot.borrow_mut() = None);
+    cx.simulate_click(pos, Modifiers::none());
+    until(cx, "work item asked", |_| {
+        ITEM_ASK.with(|slot| slot.borrow().is_some())
+    });
+    let ask = ITEM_ASK.with(|slot| slot.borrow().clone()).unwrap();
+    assert_eq!(
+        ask,
+        Ask::Reveal {
+            what: "item".into(),
+            id: "parvi-pnu.7.3".into(),
+            node: Some(NodeId(running.node.clone())),
+            part: None,
+            beside: true
+        }
+    );
+    until(cx, "item beside terminals", |cx| {
+        cx.debug_bounds("terminals-beside").is_some()
+    });
+    assert_eq!(
+        shell.read_with(cx, |s, _| s.shown_page()),
+        Some("terminals")
+    );
+    let beta = Key {
+        node: running.node.clone(),
+        user: String::new(),
+        name: "beta".into(),
+    };
+    cx.update(|window, cx| {
+        page.update(cx, |p, cx| {
+            p.settings.workspace.set_windows(0, 2);
+            p.attach(beta, 1, window, cx);
+        })
+    });
+    until(cx, "beta focused in shared model", |cx| {
+        sessions.read_with(cx, |list, _| {
+            list.focused
+                .as_ref()
+                .is_some_and(|f| f.node == running.node && f.user.is_empty() && f.name == "beta")
+        })
+    });
+    until(cx, "alpha tile painted", |cx| {
+        page.read_with(cx, |p, _| p.geo.borrow()[0].body.is_some())
+    });
+    let alpha = page.read_with(cx, |p, _| p.geo.borrow()[0].body.unwrap().center());
+    cx.simulate_click(alpha, Modifiers::none());
+    until(cx, "click focuses alpha in shared model", |cx| {
+        sessions.read_with(cx, |list, _| {
+            list.focused
+                .as_ref()
+                .is_some_and(|f| f.node == running.node && f.user.is_empty() && f.name == "alpha")
+        })
+    });
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }

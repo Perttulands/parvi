@@ -1403,6 +1403,7 @@ impl Terminals {
     ) {
         if self.settings.workspace.focus != i {
             self.settings.workspace.focus = i;
+            self.publish_sessions(cx);
             self.save(cx);
             cx.notify();
         }
@@ -1531,29 +1532,37 @@ impl Terminals {
     /// A link was clicked: an address opens in the browser, a path in the
     /// file viewer beside, on the device of the window's session.
     fn open_link(&mut self, i: usize, target: links::Target, cx: &mut Context<Self>) {
-        match target {
-            links::Target::Url(url) => cx.open_url(&url),
-            links::Target::Path(path) => {
-                let node = match self.histories.get(&i) {
-                    Some(h) => Some(h.pane.node.clone()),
-                    None => self
-                        .window_panes()
-                        .get(i)
-                        .cloned()
-                        .flatten()
-                        .map(|a| a.node),
-                };
-                if let Some(node) = node {
-                    let ask = Ask::OpenPath {
-                        node: NodeId(node),
-                        path,
-                        beside: true,
-                    };
-                    if let Err(e) = self.host.ask(ask, cx) {
-                        self.report(&e.message, true, None);
-                    }
-                }
-            }
+        if let links::Target::Url(url) = target {
+            cx.open_url(&url);
+            return;
+        }
+        let node = match self.histories.get(&i) {
+            Some(h) => Some(h.pane.node.clone()),
+            None => self
+                .window_panes()
+                .get(i)
+                .cloned()
+                .flatten()
+                .map(|a| a.node),
+        };
+        let Some(node) = node else { return };
+        let ask = match target {
+            links::Target::Path(path) => Ask::OpenPath {
+                node: NodeId(node),
+                path,
+                beside: true,
+            },
+            links::Target::WorkItem(id) => Ask::Reveal {
+                what: "item".into(),
+                id,
+                node: Some(NodeId(node)),
+                part: None,
+                beside: true,
+            },
+            links::Target::Url(_) => unreachable!(),
+        };
+        if let Err(e) = self.host.ask(ask, cx) {
+            self.report(&e.message, true, None);
         }
     }
 

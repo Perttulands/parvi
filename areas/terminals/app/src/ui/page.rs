@@ -564,16 +564,22 @@ impl Terminals {
     /// launched session's message delivered, and the panes watched.
     fn after_news(&mut self, cx: &mut Context<Self>) {
         self.remember_sessions(cx);
-        self.publish_sessions(cx);
         self.send_waited(cx);
         self.sync(cx);
         cx.notify();
     }
 
     /// Tells other pages the sessions as now heard ([`SessionList`]).
-    fn publish_sessions(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn publish_sessions(&mut self, cx: &mut Context<Self>) {
         let list = SessionList {
             sessions: self.fleet.all.clone(),
+            focused: self
+                .focused_key()
+                .map(|k| parvi_terminals_contract::FocusedSession {
+                    node: k.node,
+                    user: k.user,
+                    name: k.name,
+                }),
         };
         if let Err(e) = self.host.publish(list, cx) {
             self.report(&e.message, true, None);
@@ -769,7 +775,7 @@ impl Terminals {
 
     /// Subscriptions follow the bindings (every tab, so a tab switch shows
     /// a live screen at once) and Peek.
-    pub fn sync(&mut self, _cx: &mut Context<Self>) {
+    pub fn sync(&mut self, cx: &mut Context<Self>) {
         let bindings = self
             .settings
             .workspace
@@ -807,6 +813,7 @@ impl Terminals {
         }
         // A window whose session went stops sizing it.
         self.fleet.watch(&panes);
+        self.publish_sessions(cx);
     }
 
     // ---- reporting ----
@@ -1540,6 +1547,7 @@ impl Page for Terminals {
                 id,
                 node,
                 part,
+                ..
             } if what == "session" => {
                 self.reveal_session(&id, node, part.as_deref(), window, cx);
             }
