@@ -97,7 +97,7 @@ impl Coordinator {
             .map_err(request_io)?
             .read()
             .map_err(request_io)?;
-        let mission = self.frozen_mission(id).map_err(request_io)?;
+        let mission = self.frozen_mission(id)?;
         let criterion = (mission.gates.iter())
             .find(|g| g.id == gate)
             .map(|g| g.criterion.clone())

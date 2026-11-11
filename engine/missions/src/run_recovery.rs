@@ -17,7 +17,7 @@ impl Coordinator {
             if self.inner.unmigrated.contains_key(id) {
                 continue;
             }
-            let projection = self.run(id)?;
+            let projection = self.run(id).map_err(crate::error::to_io)?;
             if projection.r#final {
                 continue;
             }
@@ -123,7 +123,7 @@ impl Coordinator {
                 recovery_error = Some(error.to_string());
             }
             let events = self.ledger(id)?.read()?;
-            let projection = self.run(id)?;
+            let projection = self.run(id).map_err(crate::error::to_io)?;
             if finalizing || !only_waiting(&mission, &events, &projection) {
                 let open: Vec<_> = crate::run_open_dispatch::unresolved(&events)
                     .into_iter()

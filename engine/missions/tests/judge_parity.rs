@@ -96,7 +96,7 @@ fn lab_judge_routes_a_synthetic_verdict() {
             },
         ) {
             Ok(_) => break,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(e) if e.code == "conflict" => {
                 assert!(Instant::now() < deadline);
                 std::thread::sleep(Duration::from_millis(5));
             }
@@ -296,7 +296,7 @@ fn resuming_invalid_final_judge_keeps_the_earlier_review() {
     loop {
         match c.resume(&id, Default::default()) {
             Ok(_) => break,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(e) if e.code == "conflict" => {
                 assert!(Instant::now() < deadline);
                 std::thread::sleep(Duration::from_millis(5));
             }

@@ -171,9 +171,7 @@ fn reattach_keeps_other_completed_dispatches_when_one_fails() {
             },
         ) {
             Ok(_) => break,
-            Err(e)
-                if e.kind() == std::io::ErrorKind::AlreadyExists && Instant::now() < deadline =>
-            {
+            Err(e) if e.code == "conflict" && Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(5))
             }
             Err(e) => panic!("resume: {e}"),
@@ -229,7 +227,7 @@ fn restart_cuts_preserve_branch_and_human_gate_outcomes() {
                     },
                 ) {
                     Ok(_) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(e) if e.code == "conflict" => {}
                     Err(e) => panic!("resume: {e}"),
                 }
             } else if let Some(gate) = p.waiting_gates.first() {
@@ -252,7 +250,7 @@ fn restart_cuts_preserve_branch_and_human_gate_outcomes() {
                     },
                 ) {
                     Ok(_) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(e) if e.code == "conflict" => {}
                     Err(e) => panic!("verdict: {e}"),
                 }
             }
@@ -752,7 +750,7 @@ fn a_newer_human_request_makes_the_old_sequence_stale() {
             },
         )
         .unwrap_err();
-    assert_eq!(stale.kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(stale.code, "conflict");
     c.record_verdict(
         &id,
         "gate_review",
@@ -923,7 +921,7 @@ fn a_blocked_run_accepts_another_gates_verdict_and_routes_it_on_resume() {
             },
         ) {
             Ok(_) => break,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(e) if e.code == "conflict" => {
                 assert!(Instant::now() < deadline);
                 std::thread::sleep(Duration::from_millis(5));
             }
@@ -974,7 +972,7 @@ fn a_blocked_run_accepts_another_gates_verdict_and_routes_it_on_resume() {
             },
         ) {
             Ok(_) => break,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(error) if error.code == "conflict" => {
                 assert!(Instant::now() < deadline);
                 std::thread::sleep(Duration::from_millis(5));
             }
@@ -1216,7 +1214,7 @@ fn a_step_error_is_recorded_while_other_work_finishes_and_resume_retries_it() {
     loop {
         match c.resume(&id, Default::default()) {
             Ok(_) => break,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(error) if error.code == "conflict" => {
                 assert!(Instant::now() < deadline);
                 std::thread::sleep(Duration::from_millis(5));
             }

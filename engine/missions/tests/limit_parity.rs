@@ -11,7 +11,6 @@ use run_support::Scratch;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, HashMap},
-    io::ErrorKind,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -232,14 +231,11 @@ impl Run {
         }
     }
     /// Resume once the worker that blocked the run has let go of it.
-    fn resume(&self, request: ResumeRequest) -> std::io::Result<RunProjection> {
+    fn resume(&self, request: ResumeRequest) -> Result<RunProjection, parvi_missions::Error> {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             match self.c.resume(&self.id, request.clone()) {
-                Err(e)
-                    if e.kind() == ErrorKind::AlreadyExists
-                        && e.to_string() == "run is working" =>
-                {
+                Err(e) if e.code == "conflict" && e.message == "run is working" => {
                     assert!(Instant::now() < deadline, "the run's worker never stopped");
                     std::thread::sleep(Duration::from_millis(5));
                 }
@@ -278,9 +274,9 @@ fn resume_with(grant: bool, pick_best: bool) -> ResumeRequest {
     }
 }
 
-fn refused(result: std::io::Result<RunProjection>, words: &str) {
+fn refused(result: Result<RunProjection, parvi_missions::Error>, words: &str) {
     match result {
-        Err(e) if e.kind() == ErrorKind::InvalidInput && e.to_string().contains(words) => {}
+        Err(e) if e.code == "invalid_input" && e.to_string().contains(words) => {}
         other => panic!("expected a refusal naming {words:?}, got {other:?}"),
     }
 }
@@ -621,7 +617,7 @@ fn a_best_card_picks_the_best_judged_attempt_and_goes_on() {
     assert_eq!(only.steps.len(), 1);
     assert_eq!(only.steps[0].attempts[0].status, "done");
     let missing = run.c.attempts(&run.id, Some("fmn_nowhere")).unwrap_err();
-    assert_eq!(missing.kind(), ErrorKind::NotFound);
+    assert_eq!(missing.code, "not_found");
 }
 
 /// A waiting human gate quotes the output that feeds it, and the attempts

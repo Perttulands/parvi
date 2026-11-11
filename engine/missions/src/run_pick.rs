@@ -844,7 +844,13 @@ impl Coordinator {
     /// Record the operator's pick on a gate's pending pick. Like a verdict it
     /// routes nothing: the run's worker routes it, so a pick is accepted
     /// while other seats work, and on a blocked run it waits for the resume.
-    pub fn record_pick(&self, run: &str, gate: &str, pick: HumanPick) -> io::Result<RunProjection> {
+    pub fn record_pick(
+        &self,
+        run: &str,
+        gate: &str,
+        pick: HumanPick,
+    ) -> Result<RunProjection, crate::Error> {
+        (|| -> io::Result<RunProjection> {
         let relay = pick.relayed_by.as_bytes();
         if pick.requested_seq == 0
             || (!relay.is_empty()
@@ -928,7 +934,8 @@ impl Coordinator {
         {
             let _ = wake.send(());
         }
-        self.run(run)
+        self.run(run).map_err(crate::error::to_io)
+     })().map_err(crate::error::io)
     }
 }
 

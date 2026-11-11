@@ -178,9 +178,7 @@ fn completed_dispatch_without_evidence_requires_reattach_or_redispatch() {
             },
         ) {
             Ok(_) => break,
-            Err(e)
-                if e.kind() == std::io::ErrorKind::AlreadyExists && Instant::now() < deadline =>
-            {
+            Err(e) if e.code == "conflict" && Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(5))
             }
             Err(e) => panic!("redispatch: {e}"),
@@ -312,8 +310,8 @@ fn shutdown_deadline_covers_a_stalled_git_publication() {
         assert_eq!(
             c.shutdown(begin + Duration::from_millis(100))
                 .unwrap_err()
-                .kind(),
-            std::io::ErrorKind::TimedOut
+                .code,
+            "timed_out"
         );
         assert!(begin.elapsed() < Duration::from_secs(2));
         drop(c);
@@ -473,9 +471,7 @@ fn missing_evidence_blocks_until_explicit_redispatch() {
             },
         ) {
             Ok(_) => break,
-            Err(e)
-                if e.kind() == std::io::ErrorKind::AlreadyExists && Instant::now() < deadline =>
-            {
+            Err(e) if e.code == "conflict" && Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(5))
             }
             Err(e) => panic!("resume: {e}"),
@@ -560,8 +556,8 @@ fn shutdown_timeout_keeps_the_writer_lock_until_worker_exits() {
     assert_eq!(
         c.shutdown(Instant::now() + Duration::from_millis(50))
             .unwrap_err()
-            .kind(),
-        std::io::ErrorKind::TimedOut
+            .code,
+        "timed_out"
     );
     drop(c);
     assert!(Coordinator::open(&dir.0, RunSettings::default(), Box::new(LabExecutor)).is_err());
@@ -871,7 +867,7 @@ fn restart_at_each_ledger_cut_reaches_the_same_output() {
                     },
                 ) {
                     Ok(_) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(e) if e.code == "conflict" => {}
                     Err(e) => panic!("resume: {e}"),
                 }
             }

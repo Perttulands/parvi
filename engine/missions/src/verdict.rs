@@ -21,7 +21,8 @@ impl Coordinator {
         run: &str,
         gate: &str,
         request: HumanVerdict,
-    ) -> io::Result<RunProjection> {
+    ) -> Result<RunProjection, crate::Error> {
+        (|| -> io::Result<RunProjection> {
         let relay = request.relayed_by.as_bytes();
         if request.requested_seq == 0
             || !["pass", "fail"].contains(&request.verdict.as_str())
@@ -89,6 +90,7 @@ impl Coordinator {
         {
             let _ = wake.send(());
         }
-        self.run(run)
+        self.run(run).map_err(crate::error::to_io)
+     })().map_err(crate::error::io)
     }
 }

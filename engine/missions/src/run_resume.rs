@@ -4,7 +4,8 @@ use crate::{BindingsSnapshot, Coordinator, ResumeRequest, RunEvent, RunProjectio
 use std::{io, path::PathBuf, sync::Arc};
 
 impl Coordinator {
-    pub fn resume(&self, id: &str, request: ResumeRequest) -> io::Result<RunProjection> {
+    pub fn resume(&self, id: &str, request: ResumeRequest) -> Result<RunProjection, crate::Error> {
+        (|| -> io::Result<RunProjection> {
         let _admission = self.inner.admission.lock().unwrap();
         if self
             .inner
@@ -192,6 +193,7 @@ impl Coordinator {
             drop(done);
             owner.inner.controls.lock().unwrap().remove(&run_id);
         });
-        self.run(id)
+        self.run(id).map_err(crate::error::to_io)
+     })().map_err(crate::error::io)
     }
 }

@@ -52,41 +52,44 @@ fn wait(control: &Control, deadline: Instant) -> io::Result<bool> {
 }
 
 impl Coordinator {
-    pub fn shutdown(&self, deadline: Instant) -> io::Result<()> {
-        self.inner.shutting_down.store(true, Ordering::Release);
-        let controls = {
-            let _admission = lock_until(&self.inner.admission, deadline)?;
-            let controls: Vec<_> = lock_until(&self.inner.controls, deadline)?
-                .values()
-                .cloned()
-                .collect();
+    pub fn shutdown(&self, deadline: Instant) -> Result<(), crate::Error> {
+        (|| -> io::Result<()> {
+            self.inner.shutting_down.store(true, Ordering::Release);
+            let controls = {
+                let _admission = lock_until(&self.inner.admission, deadline)?;
+                let controls: Vec<_> = lock_until(&self.inner.controls, deadline)?
+                    .values()
+                    .cloned()
+                    .collect();
+                for control in &controls {
+                    control.stopping.store(true, Ordering::Release);
+                }
+                controls
+            };
             for control in &controls {
-                control.stopping.store(true, Ordering::Release);
-            }
-            controls
-        };
-        for control in &controls {
-            wake(control, deadline)?;
-        }
-        let grace = (Instant::now() + Duration::from_secs(5)).min(deadline);
-        for control in &controls {
-            let _ = wait(control, grace);
-        }
-        for control in &controls {
-            if !*lock_until(&control.done, deadline)? {
-                control.canceled.store(true, Ordering::Release);
                 wake(control, deadline)?;
             }
-        }
-        for control in &controls {
-            if !wait(control, deadline)? {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "mission workers did not stop before shutdown deadline",
-                ));
+            let grace = (Instant::now() + Duration::from_secs(5)).min(deadline);
+            for control in &controls {
+                let _ = wait(control, grace);
             }
-        }
-        Ok(())
+            for control in &controls {
+                if !*lock_until(&control.done, deadline)? {
+                    control.canceled.store(true, Ordering::Release);
+                    wake(control, deadline)?;
+                }
+            }
+            for control in &controls {
+                if !wait(control, deadline)? {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "mission workers did not stop before shutdown deadline",
+                    ));
+                }
+            }
+            Ok(())
+        })()
+        .map_err(crate::error::io)
     }
 }
 

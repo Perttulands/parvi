@@ -229,7 +229,7 @@ fn failed_publication_does_not_request_a_human_verdict() {
     loop {
         match c.resume(&id, Default::default()) {
             Ok(_) => break,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(e) if e.code == "conflict" => {
                 assert!(Instant::now() < deadline);
                 std::thread::sleep(Duration::from_millis(5));
             }

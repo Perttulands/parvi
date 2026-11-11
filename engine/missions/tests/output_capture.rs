@@ -164,9 +164,7 @@ fn failed_capture_after_reattach_remains_redispatchable() {
             },
         ) {
             Ok(_) => break,
-            Err(e)
-                if e.kind() == std::io::ErrorKind::AlreadyExists && Instant::now() < deadline =>
-            {
+            Err(e) if e.code == "conflict" && Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(5))
             }
             Err(e) => panic!("resume: {e}"),
@@ -254,7 +252,7 @@ fn over_budget_blocks_then_resume_keeps_without_dispatching_again() {
     loop {
         match c.resume(&id, ResumeRequest::default()) {
             Ok(_) => break,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && Instant::now() < until => {
+            Err(e) if e.code == "conflict" && Instant::now() < until => {
                 std::thread::sleep(Duration::from_millis(10))
             }
             Err(e) => panic!("resume: {e}"),
@@ -312,7 +310,7 @@ fn redispatch_runs_a_new_attempt_instead_of_keeping_the_pending_one() {
             },
         ) {
             Ok(_) => break,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && Instant::now() < until => {
+            Err(e) if e.code == "conflict" && Instant::now() < until => {
                 std::thread::sleep(Duration::from_millis(10))
             }
             Err(e) => panic!("resume: {e}"),
@@ -442,7 +440,7 @@ fn invalid_reference_can_resume_by_running_the_step_again() {
     loop {
         match c.resume(&id, ResumeRequest::default()) {
             Ok(_) => break,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && Instant::now() < until => {
+            Err(e) if e.code == "conflict" && Instant::now() < until => {
                 std::thread::sleep(Duration::from_millis(10))
             }
             Err(e) => panic!("resume: {e}"),
