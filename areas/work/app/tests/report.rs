@@ -8,10 +8,11 @@ use parvi_node_kit::{Built, Listing, Setup};
 use parvi_testkit::node::Node;
 use std::sync::{OnceLock, mpsc};
 static GH: OnceLock<String> = OnceLock::new();
+static BD: OnceLock<String> = OnceLock::new();
 fn build_work(setup: &Setup) -> anyhow::Result<Built> {
     parvi_work::build_with(
         setup,
-        parvi_work::Bd::default(),
+        parvi_work::Bd::new(BD.get().unwrap()),
         parvi_work::Gh::new(GH.get().unwrap()),
     )
 }
@@ -51,36 +52,20 @@ fn until(
     }
 }
 
-fn bd(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
-    std::process::Command::new("bd")
-        .args(args)
-        .current_dir(dir)
-        .env_remove("BEADS_DIR")
-        .env_remove("BEADS_DB")
-        .env_remove("BD_DB")
-        .output()
-        .unwrap()
-}
-
 #[gpui::test]
 fn reports_file_to_beads_and_github_with_context_and_escape_discards(cx: &mut TestAppContext) {
     let dir = parvi_testkit::fresh_dir("parvi-report-store");
-    let init = bd(
-        &dir,
-        &[
-            "init",
-            "--prefix",
-            "reporttest",
-            "--skip-agents",
-            "--skip-hooks",
-            "--non-interactive",
-        ],
-    );
-    assert!(
-        init.status.success(),
-        "{}",
-        String::from_utf8_lossy(&init.stderr)
-    );
+    std::fs::create_dir(dir.join(".beads")).unwrap();
+    std::fs::write(dir.join(".beads/prefix"), "reporttest").unwrap();
+    let bd = dir.join("fake-bd");
+    std::fs::write(
+        &bd,
+        include_str!("../../node/tests/fixtures/work/fake-bd.sh"),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&bd, std::fs::Permissions::from_mode(0o755)).unwrap();
+    BD.set(bd.display().to_string()).unwrap();
     let gh = dir.join("fake-gh");
     let args = dir.join("gh-args");
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -88,7 +73,6 @@ fn reports_file_to_beads_and_github_with_context_and_escape_discards(cx: &mut Te
     let item = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../node/tests/fixtures/work/item.json");
     std::fs::write(&gh, format!("#!/bin/sh\nif [ \"$1\" = issue ]; then printf '%s\\n' \"$@\" > '{}'; echo https://github.com/o/r/issues/51; else case \"$*\" in *number=51*) cat '{}';; *) cat '{}';; esac; fi\n", args.display(), item.display(), fixture.display())).unwrap();
-    use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
     GH.set(gh.display().to_string()).unwrap();
     let (ready, wait) = mpsc::channel();
@@ -187,16 +171,16 @@ fn reports_file_to_beads_and_github_with_context_and_escape_discards(cx: &mut Te
         })
     });
     assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy"));
-    let list = bd(&dir, &["--json", "list", "--limit", "0"]);
-    assert!(
-        list.status.success(),
-        "{}",
-        String::from_utf8_lossy(&list.stderr)
+    let filed = dir.join(".beads/reporttest-1");
+    assert_eq!(
+        std::fs::read_to_string(filed.join("title")).unwrap(),
+        "Title"
     );
-    let items: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
-    assert_eq!(items.as_array().unwrap().len(), 1);
-    assert_eq!(items[0]["title"], "Title");
-    assert_eq!(items[0]["description"], "Body\n\nContext: alpha");
+    assert_eq!(
+        std::fs::read_to_string(filed.join("description")).unwrap(),
+        "Body\n\nContext: alpha"
+    );
+    assert_eq!(std::fs::read_to_string(filed.join("type")).unwrap(), "bug");
     cx.simulate_keystrokes("alt-r");
     until(cx, "GitHub project", |cx| {
         cx.debug_bounds("report-project-1").is_some()
@@ -232,9 +216,10 @@ fn reports_file_to_beads_and_github_with_context_and_escape_discards(cx: &mut Te
     until(cx, "report closed", |cx| {
         cx.debug_bounds("report-box").is_none()
     });
-    let list = bd(&dir, &["--json", "list", "--limit", "0"]);
-    let items: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
-    assert_eq!(items.as_array().unwrap().len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(dir.join(".beads/count")).unwrap(),
+        "1"
+    );
     stop.send(()).unwrap();
     thread.join().unwrap();
     std::fs::remove_dir_all(dir).unwrap();
