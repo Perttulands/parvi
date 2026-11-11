@@ -66,38 +66,43 @@ fn decode(text: &str) -> Result<BTreeMap<String, OutputPayload>, String> {
 
 /// Return display text and the routed payloads. Port validation and ref
 /// materialization are performed by the caller against its formation.
-pub fn parse_outputs(text: &str) -> Result<(String, BTreeMap<String, OutputPayload>), String> {
-    let marker = format!("```{}", crate::contract_names::OUTPUTS);
-    if let Some(start) = text.rfind(&marker) {
-        let body = text[start..]
-            .find('\n')
-            .map(|n| start + n + 1)
-            .ok_or_else(|| "output fence is missing JSON body".to_string())?;
-        let end = text[body..]
-            .find("```")
-            .map(|n| body + n)
-            .ok_or_else(|| "output fence is missing closing fence".to_string())?;
-        let outputs = decode(text[body..end].trim())?;
-        if outputs.is_empty() {
-            return Err("output block must contain at least one payload".into());
+pub fn parse_outputs(
+    text: &str,
+) -> Result<(String, BTreeMap<String, OutputPayload>), crate::Error> {
+    (|| -> Result<(String, BTreeMap<String, OutputPayload>), String> {
+        let marker = format!("```{}", crate::contract_names::OUTPUTS);
+        if let Some(start) = text.rfind(&marker) {
+            let body = text[start..]
+                .find('\n')
+                .map(|n| start + n + 1)
+                .ok_or_else(|| "output fence is missing JSON body".to_string())?;
+            let end = text[body..]
+                .find("```")
+                .map(|n| body + n)
+                .ok_or_else(|| "output fence is missing closing fence".to_string())?;
+            let outputs = decode(text[body..end].trim())?;
+            if outputs.is_empty() {
+                return Err("output block must contain at least one payload".into());
+            }
+            return Ok((
+                format!("{}{}", &text[..start], &text[end + 3..])
+                    .trim()
+                    .into(),
+                outputs,
+            ));
         }
-        return Ok((
-            format!("{}{}", &text[..start], &text[end + 3..])
-                .trim()
-                .into(),
-            outputs,
-        ));
-    }
-    let trimmed = text.trim();
-    for (start, _) in trimmed.match_indices('{') {
-        if let Ok(outputs) = decode(&trimmed[start..])
-            && outputs.keys().any(|key| key.starts_with("port_"))
-            && !outputs.is_empty()
-        {
-            return Ok((trimmed[..start].trim().into(), outputs));
+        let trimmed = text.trim();
+        for (start, _) in trimmed.match_indices('{') {
+            if let Ok(outputs) = decode(&trimmed[start..])
+                && outputs.keys().any(|key| key.starts_with("port_"))
+                && !outputs.is_empty()
+            {
+                return Ok((trimmed[..start].trim().into(), outputs));
+            }
         }
-    }
-    Ok((trimmed.into(), BTreeMap::new()))
+        Ok((trimmed.into(), BTreeMap::new()))
+    })()
+    .map_err(|message| crate::Error::new("invalid_contract", message))
 }
 
 #[cfg(test)]

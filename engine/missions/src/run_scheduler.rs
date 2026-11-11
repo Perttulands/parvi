@@ -41,10 +41,11 @@ pub(crate) fn schedule(
     use std::collections::HashSet;
     let inputs = resolve_run_inputs(mission, &req.inputs);
     let input = render_run_inputs(mission, &inputs);
-    let mut noted = c.ledger(id)?.read()?.len() as u64;
+    let mut noted = c.ledger(id)?.read().map_err(crate::error::to_io)?.len() as u64;
     if !c
         .ledger(id)?
-        .read()?
+        .read()
+        .map_err(crate::error::to_io)?
         .iter()
         .any(|e| e.kind == "node_output" && e.node_id == req.input_card_id)
     {
@@ -75,7 +76,7 @@ pub(crate) fn schedule(
     *control.wake.lock().unwrap() = Some(wake_tx.clone());
     let (done_tx, done_rx) = mpsc::channel::<Finished>();
     let mut running = HashSet::new();
-    let events = c.ledger(id)?.read()?;
+    let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
     // Steps run at once and the mission's tokens card covers them all.
     *control.tokens.lock().unwrap() = crate::limits::mission_tokens(mission, &events)
         .map(|use_| Arc::new(crate::attempt_limits::TokenPool::new(use_.max, use_.used)));
@@ -274,7 +275,7 @@ pub(crate) fn schedule(
             wake_rx.recv().map_err(io::Error::other)?;
             continue;
         }
-        let events = c.ledger(id)?.read()?;
+        let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
         if let Err(error) = crate::gate_replay::validate(&events)
             .and_then(|()| crate::human_replay::validate(&events))
             .and_then(|()| crate::code_binding::validate_run(c, id, &events))
@@ -372,7 +373,8 @@ pub(crate) fn schedule(
                     Stop::Limit(limit) => Ok(Outcome::Limit(limit)),
                 };
             }
-            let projection = crate::RunProjection::from_events(&events, id)?;
+            let projection =
+                crate::RunProjection::from_events(&events, id).map_err(crate::error::to_io)?;
             if !replay.unfinished.is_empty() {
                 return Ok(Outcome::Unfinished(replay.unfinished.into_iter().collect()));
             }
@@ -473,7 +475,7 @@ fn record_error(
     let detail = error.to_string();
     let code = crate::run_worker::error_code(&detail);
     if code == "invalid_judge_result" || code == crate::run_pick::INVALID_JUDGE_PICK {
-        let events = c.ledger(id)?.read()?;
+        let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
         let terminal = events
             .iter()
             .rev()

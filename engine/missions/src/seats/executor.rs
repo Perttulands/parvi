@@ -61,10 +61,10 @@ impl SeatExecutor {
         };
         let (seat, result) = self.runtime.block_on(async {
             self.reach(request, &slot.id, sink, self.seats.dispatch(dispatch)).await?;
-            let mut events = self.seats.events(&id, 0)?;
+            let mut events = self.seats.events(&id, 0).map_err(|error| error.message)?;
             let mut created = None;
             let (seat, path) = loop {
-                let event = events.recv().await.ok_or("seat event stream ended")??;
+                let event = events.recv().await.ok_or("seat event stream ended")?.map_err(|error| error.message)?;
                 if event.kind == "seat_created" { created = Some(event); continue; }
                 if event.kind == "seat_prepared" {
                     let seat: SeatId = serde_json::from_value(event.data.get("seat").cloned().ok_or("seat identity missing")?).map_err(|e| e.to_string())?;
@@ -78,7 +78,7 @@ impl SeatExecutor {
                 if request.stopping.load(Ordering::Acquire) { self.detach(original.unwrap_or(&id), &seat, &slot.id, sink).await?; }
                 return Err(error);
             }
-            self.seats.stage(&id, &prompt).await?;
+            self.seats.stage(&id, &prompt).await.map_err(|error| error.message)?;
             let mut terminal_event = false;
             let mut warned = vec![false; request.limits.warnings.len()];
             let mut counted = 0;
@@ -99,7 +99,7 @@ impl SeatExecutor {
                 }
                 if request.limits.counts_tokens()
                     && metered.is_none_or(|at| at.elapsed() >= Duration::from_secs(5))
-                    && let Some(tokens) = { metered = Some(std::time::Instant::now()); self.seats.tokens(&id)? }
+                    && let Some(tokens) = { metered = Some(std::time::Instant::now()); self.seats.tokens(&id).map_err(|error| error.message)? }
                 {
                     counted = tokens;
                     request.limits.count_tokens(&id, tokens);
@@ -110,7 +110,7 @@ impl SeatExecutor {
                 self.warn(&request.limits, &mut warned, &id, &slot.id, sink).await;
                 tokio::select! {
                     incoming = events.recv() => {
-                        let event = incoming.ok_or("seat event stream ended")??;
+                        let event = incoming.ok_or("seat event stream ended")?.map_err(|error| error.message)?;
                         terminal_event |= matches!(event.kind.as_str(), "slot_result" | "seat_failed");
                         match event.kind.as_str() {
                             "adapter_send" | "seat_prompt_consumed" | "slot_result" | "seat_state" | "seat_idle_recovery" => report_event(sink, &slot.id, event)?,
@@ -120,13 +120,13 @@ impl SeatExecutor {
                     }
                     _ = tokio::time::sleep(Duration::from_millis(250)) => (),
                 }
-                if terminal_event && let Some(result) = self.seats.result(&id)? { break Ok(result); }
+                if terminal_event && let Some(result) = self.seats.result(&id).map_err(|error| error.message)? { break Ok(result); }
             };
             // What the dispatch spent, so later attempts and the mission's
             // card read the ledger, never transcripts. A seat side that
             // cannot count tokens records none.
             if request.limits.counts_tokens()
-                && let Some(tokens) = self.seats.tokens(&id)?.or((counted > 0).then_some(counted))
+                && let Some(tokens) = self.seats.tokens(&id).map_err(|error| error.message)?.or((counted > 0).then_some(counted))
             {
                 sink.emit(ExecutionEvent { kind: "token_usage".into(), slot_id: slot.id.clone(), data: json!({"dispatchId":id,"tokens":tokens}).as_object().cloned().unwrap_or_default() })
                     .map_err(|e| format!("seat_ledger_unavailable: {e}"))?;
@@ -164,7 +164,7 @@ impl SeatExecutor {
                     if waiting && answer.is_ok() {
                         place_state(sink, slot, "working", &format!("{place} answers again"))?;
                     }
-                    return answer;
+                    return answer.map_err(|error| error.message);
                 }
                 () = tokio::time::sleep(Duration::from_millis(250)) => {}
             }
@@ -212,8 +212,11 @@ impl SeatExecutor {
     /// Reattach to a dispatch and wait for its result, metering its tokens
     /// as a live dispatch is metered until its step's Limit card is spent.
     async fn wait(&self, request: &OpenDispatch, id: &str) -> Result<DispatchResult, String> {
-        self.seats.stage(id, "").await?;
-        let mut events = self.seats.events(id, 0)?;
+        self.seats
+            .stage(id, "")
+            .await
+            .map_err(|error| error.message)?;
+        let mut events = self.seats.events(id, 0).map_err(|error| error.message)?;
         let limits = &request.limits;
         let mut metered: Option<std::time::Instant> = None;
         loop {
@@ -224,9 +227,9 @@ impl SeatExecutor {
             {
                 return Err("canceled".into());
             }
-            if let Some(result) = self.seats.result(id)? {
+            if let Some(result) = self.seats.result(id).map_err(|error| error.message)? {
                 if limits.counts_tokens()
-                    && let Some(tokens) = self.seats.tokens(id)?
+                    && let Some(tokens) = self.seats.tokens(id).map_err(|error| error.message)?
                 {
                     limits.settle_tokens(id, tokens);
                 }
@@ -236,7 +239,7 @@ impl SeatExecutor {
                 && metered.is_none_or(|at| at.elapsed() >= Duration::from_secs(5))
                 && let Some(tokens) = {
                     metered = Some(std::time::Instant::now());
-                    self.seats.tokens(id)?
+                    self.seats.tokens(id).map_err(|error| error.message)?
                 }
             {
                 limits.count_tokens(id, tokens);
@@ -245,7 +248,7 @@ impl SeatExecutor {
                 return Err("the step's Limit card is spent".into());
             }
             tokio::select! {
-                event = events.recv() => { event.ok_or("seat event stream ended")??; }
+                event = events.recv() => { event.ok_or("seat event stream ended")?.map_err(|error| error.message)?; }
                 _ = tokio::time::sleep(Duration::from_millis(250)) => (),
             }
         }
@@ -262,7 +265,10 @@ impl SeatExecutor {
             let correction = match self.seats.dispatch_info(&id) {
                 Ok(correction) => correction,
                 Err(_) => {
-                    let original = self.seats.dispatch_info(&request.dispatch_id)?;
+                    let original = self
+                        .seats
+                        .dispatch_info(&request.dispatch_id)
+                        .map_err(|error| error.message)?;
                     Dispatch {
                         id: id.clone(),
                         brief: correction_prompt(&original.brief, &error),
@@ -271,22 +277,28 @@ impl SeatExecutor {
                     }
                 }
             };
-            self.seats.dispatch(correction).await?;
+            self.seats
+                .dispatch(correction)
+                .await
+                .map_err(|error| error.message)?;
         }
         let corrected = self.wait(request, &id).await?;
         let result = recovered_result(request, corrected);
         if result.is_err()
             && let (_, Some((seat, _))) = self.replay(request, &request.dispatch_id).await?
         {
-            self.seats.end_seat(&seat, "run_final").await?;
+            self.seats
+                .end_seat(&seat, "run_final")
+                .await
+                .map_err(|error| error.message)?;
         }
         result
     }
     /// The seat a dispatch was prepared on, from the seat's own events.
     async fn seat_of(&self, id: &str) -> Result<Option<SeatId>, String> {
-        let mut events = self.seats.events(id, 0)?;
+        let mut events = self.seats.events(id, 0).map_err(|error| error.message)?;
         while let Some(event) = events.recv().await {
-            let event = event?;
+            let event = event.map_err(|error| error.message)?;
             if event.kind == "seat_prepared" {
                 let seat = event
                     .data
@@ -309,11 +321,15 @@ impl SeatExecutor {
         request: &OpenDispatch,
         id: &str,
     ) -> Result<(Vec<ExecutionEvent>, Option<(SeatId, String)>), String> {
-        let mut events = self.seats.events(id, 0)?;
+        let mut events = self.seats.events(id, 0).map_err(|error| error.message)?;
         let mut replay = Vec::new();
         let mut prepared = None;
         loop {
-            let event = events.recv().await.ok_or("seat event stream ended")??;
+            let event = events
+                .recv()
+                .await
+                .ok_or("seat event stream ended")?
+                .map_err(|error| error.message)?;
             if event.kind == "seat_prepared" {
                 let seat = serde_json::from_value::<SeatId>(
                     event
@@ -361,10 +377,13 @@ impl SeatExecutor {
         slot: &str,
         sink: &ExecutionSink,
     ) -> Result<(), String> {
-        self.seats.end_seat(seat, "shutdown").await?;
-        let mut events = self.seats.events(id, 0)?;
+        self.seats
+            .end_seat(seat, "shutdown")
+            .await
+            .map_err(|error| error.message)?;
+        let mut events = self.seats.events(id, 0).map_err(|error| error.message)?;
         while let Some(event) = events.recv().await {
-            let event = event?;
+            let event = event.map_err(|error| error.message)?;
             if event.kind == "seat_cleanup"
                 && event.data.get("outcome").and_then(Value::as_str) == Some("left_shutdown")
             {
@@ -382,10 +401,18 @@ impl SeatExecutor {
         sink: &ExecutionSink,
     ) -> Result<(), String> {
         self.runtime.block_on(async {
-            let outcome = self.seats.end_seat(seat, "run_final").await?;
-            let mut events = self.seats.events(id, 0)?;
+            let outcome = self
+                .seats
+                .end_seat(seat, "run_final")
+                .await
+                .map_err(|error| error.message)?;
+            let mut events = self.seats.events(id, 0).map_err(|error| error.message)?;
             loop {
-                let event = events.recv().await.ok_or("seat event stream ended")??;
+                let event = events
+                    .recv()
+                    .await
+                    .ok_or("seat event stream ended")?
+                    .map_err(|error| error.message)?;
                 if event.kind == "seat_cleanup" {
                     report_event(sink, slot, event)?;
                     break;
@@ -437,7 +464,7 @@ impl SeatExecutor {
     }
 }
 impl Executor for SeatExecutor {
-    fn seats(&self, run_id: &str) -> std::io::Result<Vec<AgentSeat>> {
+    fn seats(&self, run_id: &str) -> Result<Vec<AgentSeat>, crate::Error> {
         self.seats.seats(run_id)
     }
     fn recover_completed(&self, request: OpenDispatch) -> Option<FormationResult> {
@@ -447,39 +474,48 @@ impl Executor for SeatExecutor {
             None => recovered_result(&request, result).ok(),
         }
     }
-    fn reattach(&self, request: OpenDispatch) -> Result<FormationResult, String> {
-        let result = self.runtime.block_on(self.reattach_seat(&request));
-        if request.limits.is_spent() {
-            // A live attempt the limit cut off ends its seat the same way.
-            self.runtime.block_on(async {
-                if let Some(seat) = self.seat_of(&request.dispatch_id).await? {
-                    self.seats.end_seat(&seat, "run_final").await?;
-                }
-                Ok::<_, String>(())
-            })?;
-        }
-        result
+    fn reattach(&self, request: OpenDispatch) -> Result<FormationResult, crate::Error> {
+        (|| -> Result<FormationResult, String> {
+            let result = self.runtime.block_on(self.reattach_seat(&request));
+            if request.limits.is_spent() {
+                // A live attempt the limit cut off ends its seat the same way.
+                self.runtime.block_on(async {
+                    if let Some(seat) = self.seat_of(&request.dispatch_id).await? {
+                        self.seats
+                            .end_seat(&seat, "run_final")
+                            .await
+                            .map_err(|error| error.message)?;
+                    }
+                    Ok::<_, String>(())
+                })?;
+            }
+            result
+        })()
+        .map_err(|message: String| crate::Error::new("executor_error", message))
     }
-    fn completed_events(&self, request: &OpenDispatch) -> Result<Vec<ExecutionEvent>, String> {
+    fn completed_events(
+        &self,
+        request: &OpenDispatch,
+    ) -> Result<Vec<ExecutionEvent>, crate::Error> {
         self.runtime.block_on(async {
             let (mut replay, prepared) = self.replay(request, &request.dispatch_id).await?;
             let mut answer = request.dispatch_id.clone();
-            if let Some(result) = self.seats.result(&request.dispatch_id)?
+            if let Some(result) = self.seats.result(&request.dispatch_id).map_err(|error| error.message)?
                 && let Some((id, _)) = owed_correction(request, &result)
                 && matches!(self.seats.result(&id), Ok(Some(_)))
             {
                 let (events, corrected) = self.replay(request, &id).await?;
                 let (seat, path) = corrected.ok_or("correction seat missing")?;
                 let slot = request.formation.slots.iter().find(|slot| slot.id == request.slot_id).ok_or("slot missing")?;
-                let brief = self.seats.dispatch_info(&id)?.brief;
+                let brief = self.seats.dispatch_info(&id).map_err(|error| error.message)?.brief;
                 let data = dispatch_data(&id, &request.node_id, slot, &seat, &path, &brief, "output-correction", false);
                 replay.push(ExecutionEvent { kind: "slot_dispatch".into(), slot_id: request.slot_id.clone(), data });
                 replay.extend(events);
                 answer = id;
             }
             if let Some((seat, _)) = prepared {
-                let persisted = self.seats.dispatch_info(&request.dispatch_id)?;
-                let invalid_judge = request.final_judge && self.seats.result(&answer)?.is_some_and(|result| parse_verdict(&result.text).is_err());
+                let persisted = self.seats.dispatch_info(&request.dispatch_id).map_err(|error| error.message)?;
+                let invalid_judge = request.final_judge && self.seats.result(&answer).map_err(|error| error.message)?.is_some_and(|result| parse_verdict(&result.text).is_err());
                 if invalid_judge {
                     let slot = request.formation.slots.iter().find(|slot| slot.id == request.slot_id).cloned().ok_or("slot missing")?;
                     let execution = FormationExecution {
@@ -491,7 +527,7 @@ impl Executor for SeatExecutor {
                     self.judges.lock().map_err(|e| e.to_string())?.insert((request.run_id.clone(), request.node_id.clone(), request.attempt), HeldJudge { request: execution, slot, original: persisted.reuse_dispatch.unwrap_or_else(|| request.dispatch_id.clone()), seat, prompt: persisted.brief });
                     return Ok(replay);
                 }
-                let outcome = self.seats.end_seat(&seat, "run_final").await?;
+                let outcome = self.seats.end_seat(&seat, "run_final").await.map_err(|error| error.message)?;
                 if outcome != "ended" && outcome != "gone" {
                     return Err(format!("seat_cleanup: {outcome}"));
                 }
@@ -500,119 +536,129 @@ impl Executor for SeatExecutor {
             }
             // A placed turn is published once its seat has ended, also when
             // the coordinator restarted in between; publishing is idempotent.
-            let original = self.seats.dispatch_info(&request.dispatch_id)?;
+            let original = self.seats.dispatch_info(&request.dispatch_id).map_err(|error| error.message)?;
             if let Some(turn) = &original.turn {
                 replay.push(published_turn(&*self.seats, &request.dispatch_id, &original.place, turn, &request.slot_id).await?);
             }
             Ok(replay)
-        })
+        }).map_err(|message: String| crate::Error::new("executor_error", message))
     }
-    fn end_left_seat(&self, left: LeftSeat) -> Result<String, String> {
-        let data = &left.identity;
-        let get = |key: &str| {
-            data.get(key)
-                .cloned()
-                .ok_or_else(|| format!("missing {key}"))
-        };
-        let seat = SeatId {
-            node: serde_json::from_value(get("node")?).map_err(|e| e.to_string())?,
-            session_name: serde_json::from_value(get("sessionName")?).map_err(|e| e.to_string())?,
-            session: parvi_term::SessionRef {
-                session_id: serde_json::from_value(get("sessionId")?).map_err(|e| e.to_string())?,
-                pane_id: serde_json::from_value(get("paneId")?).map_err(|e| e.to_string())?,
-                generation: serde_json::from_value(get("generation")?)
+    fn end_left_seat(&self, left: LeftSeat) -> Result<String, crate::Error> {
+        (|| -> Result<String, String> {
+            let data = &left.identity;
+            let get = |key: &str| {
+                data.get(key)
+                    .cloned()
+                    .ok_or_else(|| format!("missing {key}"))
+            };
+            let seat = SeatId {
+                node: serde_json::from_value(get("node")?).map_err(|e| e.to_string())?,
+                session_name: serde_json::from_value(get("sessionName")?)
                     .map_err(|e| e.to_string())?,
-            },
-        };
-        self.runtime
-            .block_on(self.seats.end_seat(&seat, &left.cause))
+                session: parvi_term::SessionRef {
+                    session_id: serde_json::from_value(get("sessionId")?)
+                        .map_err(|e| e.to_string())?,
+                    pane_id: serde_json::from_value(get("paneId")?).map_err(|e| e.to_string())?,
+                    generation: serde_json::from_value(get("generation")?)
+                        .map_err(|e| e.to_string())?,
+                },
+            };
+            self.runtime
+                .block_on(self.seats.end_seat(&seat, &left.cause))
+                .map_err(|error| error.message)
+        })()
+        .map_err(|message: String| crate::Error::new("executor_error", message))
     }
     fn execute_formation(
         &self,
         request: FormationExecution,
         sink: ExecutionSink,
-    ) -> Result<FormationResult, String> {
-        if request.formation.kind != "solo" || request.formation.slots.len() != 1 {
-            return Err("seat executor currently supports solo formations".into());
-        }
-        let slot = request.formation.slots[0].clone();
-        let mut request = request;
-        if let Some(turn) = &request.turn {
-            let place = &request.formation.device;
-            let cwd = self.runtime.block_on(self.reach(
-                &request,
-                &slot.id,
-                &sink,
-                self.seats.prepare_turn(place, turn),
-            ))?;
-            let data = json!({"place":place,"commit":turn.commit,"cwd":cwd});
-            sink.emit(ExecutionEvent {
-                kind: "workspace_fetch".into(),
-                slot_id: slot.id.clone(),
-                data: data.as_object().cloned().unwrap_or_default(),
-            })
-            .map_err(|e| format!("seat_ledger_unavailable: {e}"))?;
-            request.cwd = cwd;
-        }
-        let prompt = brief::render(&request, &slot);
-        let (original, mut text, seat) =
-            self.turn(&request, &slot, "initial", prompt.clone(), None, &sink)?;
-        let outputs = match outputs(&request, &text) {
-            Ok(outputs) => outputs,
-            Err(error) => {
-                let prompt = correction_prompt(&prompt, &error);
-                match self.turn(
+    ) -> Result<FormationResult, crate::Error> {
+        (|| -> Result<FormationResult, String> {
+            if request.formation.kind != "solo" || request.formation.slots.len() != 1 {
+                return Err("seat executor currently supports solo formations".into());
+            }
+            let slot = request.formation.slots[0].clone();
+            let mut request = request;
+            if let Some(turn) = &request.turn {
+                let place = &request.formation.device;
+                let cwd = self.runtime.block_on(self.reach(
                     &request,
-                    &slot,
-                    "output-correction",
-                    prompt,
-                    Some(&original),
+                    &slot.id,
                     &sink,
-                ) {
-                    Ok((_, corrected, _)) => {
-                        text = corrected;
-                        match outputs(&request, &text) {
-                            Ok(outputs) => outputs,
-                            Err(e) => {
-                                self.cleanup(&original, &seat, &slot.id, &sink)?;
-                                return Err(e);
+                    self.seats.prepare_turn(place, turn),
+                ))?;
+                let data = json!({"place":place,"commit":turn.commit,"cwd":cwd});
+                sink.emit(ExecutionEvent {
+                    kind: "workspace_fetch".into(),
+                    slot_id: slot.id.clone(),
+                    data: data.as_object().cloned().unwrap_or_default(),
+                })
+                .map_err(|e| format!("seat_ledger_unavailable: {e}"))?;
+                request.cwd = cwd;
+            }
+            let prompt = brief::render(&request, &slot);
+            let (original, mut text, seat) =
+                self.turn(&request, &slot, "initial", prompt.clone(), None, &sink)?;
+            let outputs = match outputs(&request, &text) {
+                Ok(outputs) => outputs,
+                Err(error) => {
+                    let prompt = correction_prompt(&prompt, &error);
+                    match self.turn(
+                        &request,
+                        &slot,
+                        "output-correction",
+                        prompt,
+                        Some(&original),
+                        &sink,
+                    ) {
+                        Ok((_, corrected, _)) => {
+                            text = corrected;
+                            match outputs(&request, &text) {
+                                Ok(outputs) => outputs,
+                                Err(e) => {
+                                    self.cleanup(&original, &seat, &slot.id, &sink)?;
+                                    return Err(e);
+                                }
                             }
                         }
+                        Err(error) => return Err(error),
                     }
-                    Err(error) => return Err(error),
                 }
+            };
+            if request.judge && request.pick_attempts.is_empty() && parse_verdict(&text).is_err() {
+                self.judges.lock().map_err(|e| e.to_string())?.insert(
+                    (
+                        request.run_id.clone(),
+                        request.formation.id.clone(),
+                        request.attempt,
+                    ),
+                    HeldJudge {
+                        request: request.clone(),
+                        slot: slot.clone(),
+                        original,
+                        seat,
+                        prompt: brief::render(&request, &slot),
+                    },
+                );
+            } else {
+                self.cleanup(&original, &seat, &slot.id, &sink)?;
+                self.publish(&original, &request, &slot, &sink)?;
             }
-        };
-        if request.judge && request.pick_attempts.is_empty() && parse_verdict(&text).is_err() {
-            self.judges.lock().map_err(|e| e.to_string())?.insert(
-                (
-                    request.run_id.clone(),
-                    request.formation.id.clone(),
-                    request.attempt,
-                ),
-                HeldJudge {
-                    request: request.clone(),
-                    slot: slot.clone(),
-                    original,
-                    seat,
-                    prompt: brief::render(&request, &slot),
-                },
-            );
-        } else {
-            self.cleanup(&original, &seat, &slot.id, &sink)?;
-            self.publish(&original, &request, &slot, &sink)?;
-        }
-        Ok(FormationResult {
-            status: "done".into(),
-            text,
-            outputs,
-        })
+            Ok(FormationResult {
+                status: "done".into(),
+                text,
+                outputs,
+            })
+        })()
+        .map_err(|message: String| crate::Error::new("executor_error", message))
     }
     fn correct_judge(
         &self,
         correction: JudgeCorrection,
         sink: ExecutionSink,
-    ) -> Result<Option<String>, String> {
+    ) -> Result<Option<String>, crate::Error> {
+        (|| -> Result<Option<String>, String> {
         let held = self.judges.lock().map_err(|e| e.to_string())?.remove(&(
             correction.run_id,
             correction.node_id,
@@ -641,6 +687,7 @@ impl Executor for SeatExecutor {
             }
             Err(error) => Err(error),
         }
+     })().map_err(|message: String| crate::Error::new("executor_error", message))
     }
 }
 /// A seat state the coordinator observes about the step's place.
@@ -683,7 +730,8 @@ fn formation_outputs(
     formation: &crate::Formation,
     text: &str,
 ) -> Result<Map<String, Value>, String> {
-    let (_, payloads) = parse_outputs(text).map_err(|e| format!("invalid_output_payloads: {e}"))?;
+    let (_, payloads) =
+        parse_outputs(text).map_err(|e| format!("invalid_output_payloads: {}", e.message))?;
     if payloads.len() != formation.outputs.len()
         || formation
             .outputs
@@ -761,7 +809,10 @@ async fn published_turn(
     turn: &crate::TurnWorkspace,
     slot: &str,
 ) -> Result<ExecutionEvent, String> {
-    let published = seats.publish_turn(place, turn).await?;
+    let published = seats
+        .publish_turn(place, turn)
+        .await
+        .map_err(|error| error.message)?;
     let data = json!({"dispatchId":dispatch,"place":place,"commit":published.commit,"reference":published.reference});
     Ok(ExecutionEvent {
         kind: "workspace_turn".into(),

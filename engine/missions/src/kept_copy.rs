@@ -12,7 +12,7 @@ pub struct Budget {
     pub remaining: u64,
 }
 #[derive(Debug)]
-pub struct NotKept(pub io::Error);
+pub(crate) struct NotKept(pub io::Error);
 pub struct KeptCopy;
 
 impl KeptCopy {
@@ -22,8 +22,9 @@ impl KeptCopy {
         kind: &str,
         parent: &Path,
         budget: &mut Budget,
-    ) -> Result<PathBuf, NotKept> {
+    ) -> Result<PathBuf, crate::Error> {
         Self::keep_cancelable(path, kind, parent, budget, &AtomicBool::new(false), &[])
+            .map_err(|error| crate::error::io(error.0))
     }
     pub(crate) fn keep_cancelable(
         path: &Path,

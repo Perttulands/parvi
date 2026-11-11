@@ -32,7 +32,8 @@ impl TurnWatch<'_> {
         pointer: &mut Pointer,
         mut consumed: impl FnMut(&Pointer, &Turn) -> Result<(), String>,
         mut state_event: impl FnMut(&str, &str, String) -> Result<(), String>,
-    ) -> Result<String, String> {
+    ) -> Result<String, crate::Error> {
+        (async {
         let Self {
             engine,
             pane,
@@ -151,7 +152,7 @@ impl TurnWatch<'_> {
                         &instruction,
                         canceled,
                     )
-                    .await?;
+                    .await.map_err(|error| error.message)?;
                     continued = true;
                     quiet_since = None;
                 }
@@ -160,5 +161,6 @@ impl TurnWatch<'_> {
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
+     }).await.map_err(|message: String| crate::Error::new("seat_error", message))
     }
 }

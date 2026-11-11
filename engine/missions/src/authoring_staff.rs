@@ -143,7 +143,7 @@ pub(crate) fn apply(doc: &mut DocumentMut, mission: &Mission, patch: Patch) -> R
             {
                 crate::Harnesses::from_host()
                     .check("slot", harness, model, effort)
-                    .map_err(|e| Error::new("invalid_slot_settings", e))?;
+                    .map_err(|e| Error::new("invalid_slot_settings", e.message))?;
             }
             if (
                 slot.agent_id.as_str(),

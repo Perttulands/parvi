@@ -132,7 +132,8 @@ impl parvi_missions::Executor for ScriptedLab {
         &self,
         request: parvi_missions::FormationExecution,
         events: parvi_missions::ExecutionSink,
-    ) -> Result<parvi_missions::FormationResult, String> {
+    ) -> Result<parvi_missions::FormationResult, parvi_missions::Error> {
+        (|| -> Result<parvi_missions::FormationResult, String> {
         let node = request.formation.id.clone();
         let attempt = request.attempt;
         self.0
@@ -140,7 +141,7 @@ impl parvi_missions::Executor for ScriptedLab {
             .unwrap()
             .push((node.clone(), attempt, request.input_text.clone()));
         let mut result =
-            parvi_missions::Executor::execute_formation(&LabExecutor, request, events)?;
+            parvi_missions::Executor::execute_formation(&LabExecutor, request, events).map_err(|error| error.message)?;
         let text = if node == "fmn_judge2" {
             if attempt == 1 {
                 "```parvi-verdict\n{invalid}\n```"
@@ -165,6 +166,7 @@ impl parvi_missions::Executor for ScriptedLab {
             output["text"] = text.into();
         }
         Ok(result)
+     })().map_err(|message: String| parvi_missions::Error::new("executor_error", message))
     }
 }
 
@@ -174,20 +176,24 @@ impl parvi_missions::Executor for CorrectingLab {
         &self,
         request: parvi_missions::FormationExecution,
         events: parvi_missions::ExecutionSink,
-    ) -> Result<parvi_missions::FormationResult, String> {
+    ) -> Result<parvi_missions::FormationResult, parvi_missions::Error> {
         parvi_missions::Executor::execute_formation(&LabExecutor, request, events)
+            .map_err(|error| error.message)
+            .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
     }
     fn correct_judge(
         &self,
         request: parvi_missions::JudgeCorrection,
         _: parvi_missions::ExecutionSink,
-    ) -> Result<Option<String>, String> {
+    ) -> Result<Option<String>, parvi_missions::Error> {
+        {
         self.0
             .lock()
             .unwrap()
             .push((request.node_id, request.attempt));
         assert!(request.error.contains("missing"));
         Ok(Some("```parvi-verdict\n{\"verdict\":\"pass\",\"reason\":\"corrected\",\"evidence\":[]}\n```\n```parvi-outputs\n{\"port_out\":{\"text\":\"corrected\"}}\n```".into()))
+     }.map_err(|message: String| parvi_missions::Error::new("executor_error", message))
     }
 }
 
@@ -452,26 +458,31 @@ fn concurrent_judge_and_step_publish_only_their_own_files() {
             &self,
             req: FormationExecution,
             sink: ExecutionSink,
-        ) -> Result<FormationResult, String> {
-            let node = req.formation.id.clone();
-            if node == "fmn_other" || node == "fmn_judge" {
-                std::fs::write(req.cwd.join(&node), format!("{node} partial"))
-                    .map_err(|e| e.to_string())?;
-                self.0.fetch_add(1, Ordering::SeqCst);
-                let deadline = Instant::now() + Duration::from_secs(5);
-                while self.0.load(Ordering::SeqCst) < 2 {
-                    if Instant::now() > deadline {
-                        return Err("parallel turns did not overlap".into());
+        ) -> Result<FormationResult, parvi_missions::Error> {
+            (|| -> Result<FormationResult, String> {
+                let node = req.formation.id.clone();
+                if node == "fmn_other" || node == "fmn_judge" {
+                    std::fs::write(req.cwd.join(&node), format!("{node} partial"))
+                        .map_err(|e| e.to_string())?;
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                    let deadline = Instant::now() + Duration::from_secs(5);
+                    while self.0.load(Ordering::SeqCst) < 2 {
+                        if Instant::now() > deadline {
+                            return Err("parallel turns did not overlap".into());
+                        }
+                        std::thread::sleep(Duration::from_millis(5));
                     }
-                    std::thread::sleep(Duration::from_millis(5));
+                    if node == "fmn_other" {
+                        std::thread::sleep(Duration::from_millis(300));
+                    }
+                    std::fs::write(req.cwd.join(&node), format!("{node} final"))
+                        .map_err(|e| e.to_string())?;
                 }
-                if node == "fmn_other" {
-                    std::thread::sleep(Duration::from_millis(300));
-                }
-                std::fs::write(req.cwd.join(&node), format!("{node} final"))
-                    .map_err(|e| e.to_string())?;
-            }
-            LabExecutor.execute_formation(req, sink)
+                LabExecutor
+                    .execute_formation(req, sink)
+                    .map_err(|error| error.message)
+            })()
+            .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
         }
     }
     fn git(dir: &std::path::Path, args: &[&str]) -> String {

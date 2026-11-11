@@ -186,8 +186,8 @@ pub struct RunSessionSummary {
 impl Coordinator {
     pub fn seats(&self, id: &str) -> Result<Vec<crate::AgentSeat>, crate::Error> {
         (|| -> io::Result<Vec<crate::AgentSeat>> {
-            let events = self.ledger(id)?.read()?;
-            let mut seats = self.inner.executor.seats(id)?;
+            let events = self.ledger(id)?.read().map_err(crate::error::to_io)?;
+            let mut seats = self.inner.executor.seats(id).map_err(crate::error::to_io)?;
             for seat in &mut seats {
                 if let Some(waiting) = &mut seat.waiting {
                     if let Some(event) = events.iter().rev().find(|event| {
@@ -272,7 +272,10 @@ impl Coordinator {
         if self.inner.subscribers.receiver_count() == 0 {
             return;
         }
-        if let Ok(mut events) = self.ledger(id).and_then(|ledger| ledger.read()) {
+        if let Ok(mut events) = self
+            .ledger(id)
+            .and_then(|ledger| ledger.read().map_err(crate::error::to_io))
+        {
             events.truncate(seq as usize);
             if let Ok(projection) = RunProjection::from_events(&events, id) {
                 let _ = self.inner.subscribers.send(projection);
@@ -296,7 +299,8 @@ impl Coordinator {
     }
     pub fn run(&self, id: &str) -> Result<RunProjection, crate::Error> {
         (|| -> io::Result<RunProjection> {
-            RunProjection::from_events(&self.ledger(id)?.read()?, id)
+            RunProjection::from_events(&self.ledger(id)?.read().map_err(crate::error::to_io)?, id)
+                .map_err(crate::error::to_io)
         })()
         .map_err(crate::error::io)
     }
@@ -340,7 +344,9 @@ impl Coordinator {
     }
     pub fn escalations(&self, id: &str) -> Result<Vec<crate::Escalation>, crate::Error> {
         (|| -> io::Result<Vec<crate::Escalation>> {
-            Ok(crate::project_escalations(&self.ledger(id)?.read()?))
+            Ok(crate::project_escalations(
+                &self.ledger(id)?.read().map_err(crate::error::to_io)?,
+            ))
         })()
         .map_err(crate::error::io)
     }
@@ -623,7 +629,7 @@ impl Coordinator {
         let id = crate::run_storage::run_id()?;
         let bindings =
             BindingsSnapshot::capture(&id, &mission, &request.input_card_id, &store.roles())
-                .map_err(AdmissionFailure::Invalid)?;
+                .map_err(|error| AdmissionFailure::Invalid(error.message))?;
         let workspace =
             crate::run_storage::create(self, &id, &slug, &mission, &bindings, &request)?;
         let control = Arc::new(Control::default());
@@ -654,7 +660,7 @@ impl Coordinator {
                     "run is not final",
                 ));
             }
-            let events = self.ledger(id)?.read()?;
+            let events = self.ledger(id)?.read().map_err(crate::error::to_io)?;
             let first = &events[0];
             let get = |key: &str| {
                 first
@@ -691,6 +697,7 @@ impl Coordinator {
                 self.inner.settings.repositories.clone(),
             )
             .remove(&tree, force, &published)
+            .map_err(crate::error::to_io)
         })()
         .map_err(crate::error::io)
     }
@@ -759,7 +766,10 @@ impl Coordinator {
         .map_err(crate::error::io)
     }
     pub(crate) fn append(&self, id: &str, event: RunEvent) -> io::Result<()> {
-        let event = self.ledger(id)?.append(event)?;
+        let event = self
+            .ledger(id)?
+            .append(event)
+            .map_err(crate::error::to_io)?;
         self.changed(id, event.seq);
         if event.kind == "run_blocked"
             && let Some(OnBlock(tell)) = &self.inner.settings.on_block

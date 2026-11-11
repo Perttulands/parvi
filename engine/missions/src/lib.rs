@@ -108,7 +108,7 @@ pub use harness::{
     Claude, Codex, HarnessAdapter, Harnesses, Keys, Launch, Pi, Pointer, Shell, SlotBinding,
     TokenUsage, TranscriptRoots, Turn, TurnState, codex_threads,
 };
-pub use kept_copy::{Budget, KeptCopy, NotKept};
+pub use kept_copy::{Budget, KeptCopy};
 pub use layout::{Layout, LayoutEdge, LayoutNode};
 pub use layout_authoring::{LayoutEdit, LayoutPatch};
 pub use layout_placement::free_layout_position;

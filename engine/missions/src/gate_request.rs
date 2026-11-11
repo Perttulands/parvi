@@ -50,7 +50,7 @@ pub fn pending_request(
     events: &[RunEvent],
     criterion: &str,
 ) -> Result<GateRequest, crate::Error> {
-    let status = RunProjection::from_events(events, run).map_err(request_io)?;
+    let status = RunProjection::from_events(events, run)?;
     let request = (events.iter().rev())
         .find(|e| e.kind == "human_input_requested" && e.gate_id == gate)
         .ok_or_else(|| crate::Error::new("not_found", "human gate request not found"))?;
@@ -92,11 +92,7 @@ pub fn pending_request(
 impl Coordinator {
     /// A pending human gate's request on run `id`.
     pub fn gate_request(&self, id: &str, gate: &str) -> Result<GateRequest, crate::Error> {
-        let events = self
-            .ledger(id)
-            .map_err(request_io)?
-            .read()
-            .map_err(request_io)?;
+        let events = self.ledger(id).map_err(request_io)?.read()?;
         let mission = self.frozen_mission(id)?;
         let criterion = (mission.gates.iter())
             .find(|g| g.id == gate)

@@ -505,7 +505,7 @@ pub fn project_attempts(
     only: Option<&str>,
 ) -> Result<RunAttempts, crate::Error> {
     (|| -> std::io::Result<RunAttempts> {
-        let status = RunProjection::from_events(events, run_id)?;
+        let status = RunProjection::from_events(events, run_id).map_err(crate::error::to_io)?;
         let mut walk = Walk {
             mission,
             steps: Vec::new(),
@@ -594,7 +594,7 @@ impl crate::Coordinator {
         only: Option<&str>,
     ) -> Result<crate::RunAttempts, crate::Error> {
         (|| -> std::io::Result<crate::RunAttempts> {
-            let events = self.ledger(id)?.read()?;
+            let events = self.ledger(id)?.read().map_err(crate::error::to_io)?;
             let mission = self.frozen_mission(id).map_err(crate::error::to_io)?;
             if let Some(step) = only
                 && mission.formation(step).is_none()

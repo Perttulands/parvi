@@ -29,7 +29,8 @@ pub struct CodeGateBinding {
     pub result_encoding: String,
 }
 impl CodeGateBinding {
-    pub fn new(run: &str, gate: &Gate) -> Result<Self, String> {
+    pub fn new(run: &str, gate: &Gate) -> Result<Self, crate::Error> {
+        (|| -> Result<Self, String> {
         let profile = gate.check.trim();
         let version = gate.check_version.trim();
         let operation = match (profile, version) {
@@ -67,15 +68,19 @@ impl CodeGateBinding {
             max_operations: 512 * 1024,
             result_encoding: ENCODING.into(),
         })
+     })().map_err(|message| crate::Error::new("invalid_contract", message))
     }
-    pub fn validate(&self, run: &str, gate: &Gate) -> Result<(), String> {
-        if *self != Self::new(run, gate)? {
-            return Err(format!(
-                "gate {:?} frozen evaluator binding mismatch",
-                gate.id
-            ));
-        }
-        Ok(())
+    pub fn validate(&self, run: &str, gate: &Gate) -> Result<(), crate::Error> {
+        (|| -> Result<(), String> {
+            if *self != Self::new(run, gate).map_err(|error| error.message)? {
+                return Err(format!(
+                    "gate {:?} frozen evaluator binding mismatch",
+                    gate.id
+                ));
+            }
+            Ok(())
+        })()
+        .map_err(|message| crate::Error::new("invalid_contract", message))
     }
     pub(crate) fn result_data(
         &self,
@@ -111,7 +116,9 @@ pub(crate) fn validate_results(
         let gate = mission
             .gate(&event.gate_id)
             .ok_or_else(|| "code result names an unknown gate".to_string())?;
-        let binding = bindings.gate_binding(run, mission, gate)?;
+        let binding = bindings
+            .gate_binding(run, mission, gate)
+            .map_err(|error| error.message)?;
         let evaluation = events
             .iter()
             .rev()
@@ -127,7 +134,8 @@ pub(crate) fn validate_results(
         let input: crate::RoutedInput =
             serde_json::from_value(event.data.get("inputRef").cloned().unwrap_or_default())
                 .map_err(|e| e.to_string())?;
-        let result = crate::evaluate_code_check(gate, &input.text)?;
+        let result =
+            crate::evaluate_code_check(gate, &input.text).map_err(|error| error.message)?;
         let expected = binding.result_data(&input.text, &result)?;
         for (key, value) in expected.as_object().expect("result data is an object") {
             if event.data.get(key) != Some(value) {

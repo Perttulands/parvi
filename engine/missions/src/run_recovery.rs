@@ -25,7 +25,7 @@ impl Coordinator {
                 // A blocked epoch cannot accept completion events. Leave the
                 // evidence staged for explicit resume to reconcile.
                 if projection.resume_allowed {
-                    let events = self.ledger(id)?.read()?;
+                    let events = self.ledger(id)?.read().map_err(crate::error::to_io)?;
                     let open = crate::run_open_dispatch::unresolved(&events);
                     let block = events.iter().rev().find(|e| e.kind == "run_blocked");
                     if let [dispatch] = open.as_slice()
@@ -46,7 +46,7 @@ impl Coordinator {
                 }
                 continue;
             }
-            let events = self.ledger(id)?.read()?;
+            let events = self.ledger(id)?.read().map_err(crate::error::to_io)?;
             if let Some(pending) = events.iter().rev().find(|pending| {
                 pending.kind == "output_capture_pending"
                     && !crate::run_capture::discarded(&events, pending)
@@ -72,7 +72,7 @@ impl Coordinator {
                 runs.join(format!("{id}.bindings.toml")),
             )?)
             .map_err(io::Error::other)?;
-            let events = self.ledger(id)?.read()?;
+            let events = self.ledger(id)?.read().map_err(crate::error::to_io)?;
             let formation_id = events[0]
                 .data
                 .get("formationId")
@@ -122,7 +122,7 @@ impl Coordinator {
             {
                 recovery_error = Some(error.to_string());
             }
-            let events = self.ledger(id)?.read()?;
+            let events = self.ledger(id)?.read().map_err(crate::error::to_io)?;
             let projection = self.run(id).map_err(crate::error::to_io)?;
             if finalizing || !only_waiting(&mission, &events, &projection) {
                 let open: Vec<_> = crate::run_open_dispatch::unresolved(&events)

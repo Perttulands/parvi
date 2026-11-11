@@ -62,7 +62,7 @@ impl Coordinator {
             crate::gate_replay::validate(events)?;
             crate::human_replay::validate(events)?;
             crate::code_binding::validate_run(self, run, events)?;
-            let projection = RunProjection::from_events(events, run)?;
+            let projection = RunProjection::from_events(events, run).map_err(crate::error::to_io)?;
             if projection.r#final
                 || !projection.waiting_gates.iter().any(|pending| {
                     pending.gate_id == gate && pending.requested_seq == request.requested_seq

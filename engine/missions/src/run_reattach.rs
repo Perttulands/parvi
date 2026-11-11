@@ -106,7 +106,7 @@ fn keep(
         .and_then(|v| v.as_str())
         .unwrap_or("");
     let request = request(c, id, mission, dispatch, Some(control)).map_err(io::Error::other)?;
-    let prior = c.ledger(id)?.read()?;
+    let prior = c.ledger(id)?.read().map_err(crate::error::to_io)?;
     for replay in c
         .inner
         .executor
@@ -142,13 +142,19 @@ fn keep(
         json!({"dispatchId":dispatch_id,"status":"ok","sentinel":{"runId":id,"status":"ok"}}),
     );
     slot.slot_id = dispatch.slot_id.clone();
-    if !c.ledger(id)?.read()?.iter().any(|e| {
-        e.kind == "slot_result"
-            && e.data.get("dispatchId").and_then(|v| v.as_str()) == Some(dispatch_id)
-    }) {
+    if !c
+        .ledger(id)?
+        .read()
+        .map_err(crate::error::to_io)?
+        .iter()
+        .any(|e| {
+            e.kind == "slot_result"
+                && e.data.get("dispatchId").and_then(|v| v.as_str()) == Some(dispatch_id)
+        })
+    {
         c.append(id, slot)?;
     }
-    let events = c.ledger(id)?.read()?;
+    let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
     let reason = events
         .iter()
         .rev()
@@ -244,7 +250,7 @@ pub(crate) fn resolve(
     resume: ResumeDispatches<'_>,
 ) -> io::Result<bool> {
     let ResumeDispatches { blocked, mode } = resume;
-    let events = c.ledger(id)?.read()?;
+    let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
     let named: Vec<_> = blocked
         .data
         .get("openDispatches")
@@ -262,9 +268,11 @@ pub(crate) fn resolve(
             return Ok(true);
         }
         // Keeping a corrected answer also resolves its correction dispatch.
-        if !crate::run_open_dispatch::unresolved(&c.ledger(id)?.read()?)
-            .iter()
-            .any(|open| open.seq == dispatch.seq)
+        if !crate::run_open_dispatch::unresolved(
+            &c.ledger(id)?.read().map_err(crate::error::to_io)?,
+        )
+        .iter()
+        .any(|open| open.seq == dispatch.seq)
         {
             continue;
         }
@@ -309,7 +317,10 @@ pub(crate) fn resolve(
                             .map_err(|e| e.to_string())?;
                     request.limits = held.clone();
                     limits = Some(held);
-                    c.inner.executor.reattach(request.clone())?
+                    c.inner
+                        .executor
+                        .reattach(request.clone())
+                        .map_err(|error| error.message)?
                 }
             };
             if !valid(&request.formation, &result) {

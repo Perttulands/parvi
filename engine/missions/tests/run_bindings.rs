@@ -31,14 +31,16 @@ fn frozen_bindings_reject_mutated_settings_and_roles() {
     assert_eq!(
         frozen
             .binding(&mission, "run_a", "input", "step", &changed)
-            .unwrap_err(),
+            .unwrap_err()
+            .code,
         "persona_snapshot_invalid"
     );
     frozen.bindings[0].card_toml.push_str("bad");
     assert_eq!(
         frozen
             .binding(&mission, "run_a", "input", "step", &slot)
-            .unwrap_err(),
+            .unwrap_err()
+            .code,
         "persona_snapshot_invalid"
     );
     frozen.schema = 2;

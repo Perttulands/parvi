@@ -27,14 +27,15 @@ fn reattach_keeps_other_completed_dispatches_when_one_fails() {
             &self,
             req: FormationExecution,
             sink: ExecutionSink,
-        ) -> Result<FormationResult, String> {
+        ) -> Result<FormationResult, parvi_missions::Error> {
+            (|| -> Result<FormationResult, String> {
             let slot = &req.formation.slots[0];
             let dispatch = format!("dsp_{}_{}", req.formation.id, req.attempt);
-            sink.emit(ExecutionEvent { kind:"slot_dispatch".into(), slot_id:slot.id.clone(), data:serde_json::json!({"dispatchId":dispatch,"nodeId":req.formation.id,"slotId":slot.id}).as_object().unwrap().clone() })?;
+            sink.emit(ExecutionEvent { kind:"slot_dispatch".into(), slot_id:slot.id.clone(), data:serde_json::json!({"dispatchId":dispatch,"nodeId":req.formation.id,"slotId":slot.id}).as_object().unwrap().clone() }).map_err(|error| error.message)?;
             while !self.release.load(Ordering::Acquire) {
                 std::thread::sleep(Duration::from_millis(5));
             }
-            sink.emit(ExecutionEvent { kind:"slot_result".into(), slot_id:slot.id.clone(), data:serde_json::json!({"dispatchId":dispatch,"status":"ok","sentinel":{"runId":req.run_id}}).as_object().unwrap().clone() })?;
+            sink.emit(ExecutionEvent { kind:"slot_result".into(), slot_id:slot.id.clone(), data:serde_json::json!({"dispatchId":dispatch,"status":"ok","sentinel":{"runId":req.run_id}}).as_object().unwrap().clone() }).map_err(|error| error.message)?;
             Ok(FormationResult {
                 status: "done".into(),
                 text: "done".into(),
@@ -45,21 +46,25 @@ fn reattach_keeps_other_completed_dispatches_when_one_fails() {
                     .map(|p| (p.id.clone(), serde_json::json!({"text":"done"})))
                     .collect(),
             })
+         })().map_err(|message: String| parvi_missions::Error::new("executor_error", message))
         }
-        fn reattach(&self, req: OpenDispatch) -> Result<FormationResult, String> {
-            if self.fail && req.node_id == "fmn_other" {
-                return Err("capture unavailable".into());
-            }
-            Ok(FormationResult {
-                status: "done".into(),
-                text: "done".into(),
-                outputs: req
-                    .formation
-                    .outputs
-                    .iter()
-                    .map(|p| (p.id.clone(), serde_json::json!({"text":"done"})))
-                    .collect(),
-            })
+        fn reattach(&self, req: OpenDispatch) -> Result<FormationResult, parvi_missions::Error> {
+            (|| -> Result<FormationResult, String> {
+                if self.fail && req.node_id == "fmn_other" {
+                    return Err("capture unavailable".into());
+                }
+                Ok(FormationResult {
+                    status: "done".into(),
+                    text: "done".into(),
+                    outputs: req
+                        .formation
+                        .outputs
+                        .iter()
+                        .map(|p| (p.id.clone(), serde_json::json!({"text":"done"})))
+                        .collect(),
+                })
+            })()
+            .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
         }
     }
     let root = Scratch::new();
@@ -196,11 +201,12 @@ fn restart_cuts_preserve_branch_and_human_gate_outcomes() {
             &self,
             request: parvi_missions::FormationExecution,
             sink: parvi_missions::ExecutionSink,
-        ) -> Result<parvi_missions::FormationResult, String> {
+        ) -> Result<parvi_missions::FormationResult, parvi_missions::Error> {
+            (|| -> Result<parvi_missions::FormationResult, String> {
             let judge = request.formation.id == "fmn_judge";
             let pass = request.input_text.contains("needs work");
             let mut result =
-                parvi_missions::Executor::execute_formation(&LabExecutor, request, sink)?;
+                parvi_missions::Executor::execute_formation(&LabExecutor, request, sink).map_err(|error| error.message)?;
             if judge {
                 result.text = if pass { "```parvi-verdict\n{\"verdict\":\"pass\",\"reason\":\"fixed\",\"evidence\":[]}\n```" } else { "```parvi-verdict\n{\"verdict\":\"fail\",\"reason\":\"needs work\",\"evidence\":[]}\n```" }.into();
                 for output in result.outputs.values_mut() {
@@ -208,6 +214,7 @@ fn restart_cuts_preserve_branch_and_human_gate_outcomes() {
                 }
             }
             Ok(result)
+         })().map_err(|message: String| parvi_missions::Error::new("executor_error", message))
         }
     }
     fn drive(c: &Coordinator, id: &str, retry: bool) -> parvi_missions::RunProjection {
@@ -1143,14 +1150,18 @@ impl parvi_missions::Executor for FailingLab {
         &self,
         request: parvi_missions::FormationExecution,
         events: parvi_missions::ExecutionSink,
-    ) -> Result<parvi_missions::FormationResult, String> {
-        let fail = request.formation.id == "fmn_work" && request.attempt == 1;
-        let result = parvi_missions::Executor::execute_formation(&LabExecutor, request, events)?;
-        if fail {
-            Err("deliberate step error".into())
-        } else {
-            Ok(result)
-        }
+    ) -> Result<parvi_missions::FormationResult, parvi_missions::Error> {
+        (|| -> Result<parvi_missions::FormationResult, String> {
+            let fail = request.formation.id == "fmn_work" && request.attempt == 1;
+            let result = parvi_missions::Executor::execute_formation(&LabExecutor, request, events)
+                .map_err(|error| error.message)?;
+            if fail {
+                Err("deliberate step error".into())
+            } else {
+                Ok(result)
+            }
+        })()
+        .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
     }
 }
 

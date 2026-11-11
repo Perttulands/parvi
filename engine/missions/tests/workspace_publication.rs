@@ -79,18 +79,23 @@ impl Executor for Committer {
         &self,
         req: FormationExecution,
         sink: ExecutionSink,
-    ) -> Result<FormationResult, String> {
-        std::fs::write(req.cwd.join("agent-file"), "committed by agent").unwrap();
-        git(&req.cwd, &["add", "agent-file"]);
-        git(&req.cwd, &["commit", "-m", "agent commit"]);
-        git(
-            &req.cwd,
-            &["commit", "--allow-empty", "-m", "agent checkpoint"],
-        );
-        if self.dirty {
-            std::fs::write(req.cwd.join("dirty-file"), "uncommitted").unwrap();
+    ) -> Result<FormationResult, parvi_missions::Error> {
+        {
+            std::fs::write(req.cwd.join("agent-file"), "committed by agent").unwrap();
+            git(&req.cwd, &["add", "agent-file"]);
+            git(&req.cwd, &["commit", "-m", "agent commit"]);
+            git(
+                &req.cwd,
+                &["commit", "--allow-empty", "-m", "agent checkpoint"],
+            );
+            if self.dirty {
+                std::fs::write(req.cwd.join("dirty-file"), "uncommitted").unwrap();
+            }
+            LabExecutor
+                .execute_formation(req, sink)
+                .map_err(|error| error.message)
         }
-        LabExecutor.execute_formation(req, sink)
+        .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
     }
 }
 #[test]
@@ -135,22 +140,27 @@ impl Executor for Failure {
         &self,
         req: FormationExecution,
         sink: ExecutionSink,
-    ) -> Result<FormationResult, String> {
-        std::fs::write(req.cwd.join("unfinished"), "partial").unwrap();
-        self.started.store(true, Ordering::Release);
-        if self.mode == "error" {
-            return Err("executor failed".into());
-        }
-        if self.mode == "cancel" {
-            while !req.canceled.load(Ordering::Acquire) {
-                std::thread::sleep(Duration::from_millis(5));
+    ) -> Result<FormationResult, parvi_missions::Error> {
+        (|| -> Result<FormationResult, String> {
+            std::fs::write(req.cwd.join("unfinished"), "partial").unwrap();
+            self.started.store(true, Ordering::Release);
+            if self.mode == "error" {
+                return Err("executor failed".into());
             }
-            return Err("canceled".into());
-        }
-        let id = req.run_id.clone();
-        let mut result = LabExecutor.execute_formation(req, sink)?;
-        result.text = format!("<<<PARVI-ESCALATE run-id={id} severity=stop reason=blocked>>>");
-        Ok(result)
+            if self.mode == "cancel" {
+                while !req.canceled.load(Ordering::Acquire) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                return Err("canceled".into());
+            }
+            let id = req.run_id.clone();
+            let mut result = LabExecutor
+                .execute_formation(req, sink)
+                .map_err(|error| error.message)?;
+            result.text = format!("<<<PARVI-ESCALATE run-id={id} severity=stop reason=blocked>>>");
+            Ok(result)
+        })()
+        .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
     }
 }
 #[test]
@@ -199,12 +209,17 @@ impl Executor for Locking {
         &self,
         req: FormationExecution,
         sink: ExecutionSink,
-    ) -> Result<FormationResult, String> {
-        std::fs::write(req.cwd.join("changed"), "value").unwrap();
-        let primary = req.cwd.parent().unwrap().join(&req.run_id);
-        let lock = git(&primary, &["rev-parse", "--git-path", "index.lock"]);
-        std::fs::write(lock, "locked").unwrap();
-        LabExecutor.execute_formation(req, sink)
+    ) -> Result<FormationResult, parvi_missions::Error> {
+        {
+            std::fs::write(req.cwd.join("changed"), "value").unwrap();
+            let primary = req.cwd.parent().unwrap().join(&req.run_id);
+            let lock = git(&primary, &["rev-parse", "--git-path", "index.lock"]);
+            std::fs::write(lock, "locked").unwrap();
+            LabExecutor
+                .execute_formation(req, sink)
+                .map_err(|error| error.message)
+        }
+        .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
     }
 }
 #[test]

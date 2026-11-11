@@ -55,77 +55,81 @@ impl LocalSeats {
         &self.roots
     }
     /// Create once, or verify the identity of the existing owned seat.
-    pub async fn dispatch(&self, request: Dispatch) -> Result<String, String> {
-        let _creation = self.creation.lock().await;
-        self.records.create(&request).map_err(|e| e.to_string())?;
-        let _guard = self.creation_guard(&request.id).await?;
-        if let Some(seat) = self.records.seat(&request.id).map_err(|e| e.to_string())? {
-            let ended = self
-                .records
-                .events(&request.id, 0)
-                .map_err(|e| e.to_string())?
-                .iter()
-                .any(|event| event.key == "seat-cleanup");
-            let completed = self
-                .records
-                .result(&request.id)
-                .map_err(|e| e.to_string())?
-                .is_some();
-            if !ended && !completed {
-                self.engine
-                    .verify(&seat.session)
-                    .await
-                    .map_err(|e| e.to_string())?;
+    pub async fn dispatch(&self, request: Dispatch) -> Result<String, crate::Error> {
+        (async {
+            let _creation = self.creation.lock().await;
+            self.records.create(&request).map_err(|e| e.to_string())?;
+            let _guard = self.creation_guard(&request.id).await?;
+            if let Some(seat) = self.records.seat(&request.id).map_err(|e| e.to_string())? {
+                let ended = self
+                    .records
+                    .events(&request.id, 0)
+                    .map_err(|e| e.to_string())?
+                    .iter()
+                    .any(|event| event.key == "seat-cleanup");
+                let completed = self
+                    .records
+                    .result(&request.id)
+                    .map_err(|e| e.to_string())?
+                    .is_some();
+                if !ended && !completed {
+                    self.engine
+                        .verify(&seat.session)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
+                self.record_created(&request.id, &seat)?;
+                return Ok(request.id);
             }
-            self.record_created(&request.id, &seat)?;
-            return Ok(request.id);
-        }
-        let (_, adapter) = adapter(&request.harness)?;
-        let shell = if cfg!(windows) {
-            Shell::PowerShell
-        } else {
-            Shell::Posix
-        };
-        let binding = SlotBinding {
-            model: request.model.clone(),
-            effort: request.effort.clone(),
-        };
-        let launch = adapter
-            .launch(&binding, &request.cwd, shell, &self.roots)
-            .map_err(|e| e.to_string())?;
-        // The name is derived from the dispatch, so a session found under it
-        // was created by an earlier attempt that crashed before binding it.
-        let name = format!(
-            "parvi-{}-{}-{}",
-            component(&request.run_id),
-            component(&request.slot_id),
-            &format!("{:x}", Sha256::digest(request.id.as_bytes()))[..8]
-        );
-        if let Some(session) = self.engine.find(&name).await.map_err(|e| e.to_string())? {
-            return self.bind_created(&request.id, name, session).await;
-        }
-        let mut env = BTreeMap::new();
-        if request.harness == "claude-code" {
-            // Claude's unstyled ghost text is indistinguishable from an
-            // operator's unsent input on a terminal screen.
-            env.insert(
-                "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION".into(),
-                "false".into(),
+            let (_, adapter) = adapter(&request.harness)?;
+            let shell = if cfg!(windows) {
+                Shell::PowerShell
+            } else {
+                Shell::Posix
+            };
+            let binding = SlotBinding {
+                model: request.model.clone(),
+                effort: request.effort.clone(),
+            };
+            let launch = adapter
+                .launch(&binding, &request.cwd, shell, &self.roots)
+                .map_err(|e| e.to_string())?;
+            // The name is derived from the dispatch, so a session found under it
+            // was created by an earlier attempt that crashed before binding it.
+            let name = format!(
+                "parvi-{}-{}-{}",
+                component(&request.run_id),
+                component(&request.slot_id),
+                &format!("{:x}", Sha256::digest(request.id.as_bytes()))[..8]
             );
-        }
-        let session = self
-            .engine
-            .create(SessionSpec {
-                name: name.clone(),
-                cwd: request.cwd.clone(),
-                env,
-                command: command(launch),
-                cols: 160,
-                rows: 48,
-            })
-            .await
-            .map_err(|e| e.to_string())?;
-        self.bind_created(&request.id, name, session).await
+            if let Some(session) = self.engine.find(&name).await.map_err(|e| e.to_string())? {
+                return self.bind_created(&request.id, name, session).await;
+            }
+            let mut env = BTreeMap::new();
+            if request.harness == "claude-code" {
+                // Claude's unstyled ghost text is indistinguishable from an
+                // operator's unsent input on a terminal screen.
+                env.insert(
+                    "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION".into(),
+                    "false".into(),
+                );
+            }
+            let session = self
+                .engine
+                .create(SessionSpec {
+                    name: name.clone(),
+                    cwd: request.cwd.clone(),
+                    env,
+                    command: command(launch),
+                    cols: 160,
+                    rows: 48,
+                })
+                .await
+                .map_err(|e| e.to_string())?;
+            self.bind_created(&request.id, name, session).await
+        })
+        .await
+        .map_err(|message: String| crate::Error::new("seat_error", message))
     }
     async fn bind_created(
         &self,
@@ -161,25 +165,30 @@ impl LocalSeats {
         Ok(())
     }
     /// Bind a correction dispatch to the same live seat.
-    pub async fn reuse(&self, request: &Dispatch, original: &str) -> Result<(), String> {
-        let _creation = self.creation.lock().await;
-        self.records.create(request).map_err(|e| e.to_string())?;
-        let _guard = self.creation_guard(&request.id).await?;
-        let seat = self
-            .records
-            .seat(original)
-            .map_err(|e| e.to_string())?
-            .ok_or("original dispatch has no seat")?;
-        self.engine
-            .verify(&seat.session)
-            .await
-            .map_err(|e| e.to_string())?;
-        self.records
-            .bind_seat(&request.id, seat)
-            .map_err(|e| e.to_string())
+    pub async fn reuse(&self, request: &Dispatch, original: &str) -> Result<(), crate::Error> {
+        (async {
+            let _creation = self.creation.lock().await;
+            self.records.create(request).map_err(|e| e.to_string())?;
+            let _guard = self.creation_guard(&request.id).await?;
+            let seat = self
+                .records
+                .seat(original)
+                .map_err(|e| e.to_string())?
+                .ok_or("original dispatch has no seat")?;
+            self.engine
+                .verify(&seat.session)
+                .await
+                .map_err(|e| e.to_string())?;
+            self.records
+                .bind_seat(&request.id, seat)
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|message: String| crate::Error::new("seat_error", message))
     }
     /// End only the recorded server generation; retries return the first outcome.
-    pub async fn end_seat(&self, dispatch_id: &str, cause: &str) -> Result<String, String> {
+    pub async fn end_seat(&self, dispatch_id: &str, cause: &str) -> Result<String, crate::Error> {
+        (async {
         let _creation = self.creation.lock().await;
         let _guard = self.creation_guard(dispatch_id).await?;
         if let Some(event) = self
@@ -219,6 +228,7 @@ impl LocalSeats {
             )
             .map_err(|e| e.to_string())?;
         Ok(outcome.into())
+     }).await.map_err(|message: String| crate::Error::new("seat_error", message))
     }
     pub(super) fn detach(&self, dispatch_id: &str) -> Result<String, String> {
         let seat = self
