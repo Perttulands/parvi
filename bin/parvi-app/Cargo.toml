@@ -31,6 +31,7 @@ parvi-files-app = { path = "../../areas/files/app" }
 parvi-host-app = { path = "../../areas/host/app" }
 parvi-work-app = { path = "../../areas/work/app" }
 parvi-brain-app = { path = "../../areas/brain/app" }
+parvi-missions-app = { path = "../../areas/missions/app" }
 
 # Linux builds are for testing on an invisible X display; the product is Windows.
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -1,0 +1,54 @@
+schema = 1
+id = "msn_gated"
+slug = "gated"
+title = "Gated"
+rev = 1
+[[inputCard]]
+id = "inp_start"
+title = "Input"
+goal = "Deliver the brief"
+[[formation]]
+id = "fmn_work"
+type = "solo"
+title = "Work"
+[formation.brief]
+goal = "Do the work"
+[[formation.input]]
+id = "port_in"
+label = "Input"
+[[formation.output]]
+id = "port_out"
+label = "Result"
+[[formation.slot]]
+id = "slot_work"
+label = "Worker"
+harness = "openai-codex"
+effort = "medium"
+[[gate]]
+id = "gate_review"
+title = "Review"
+kinds = ["human"]
+[[end]]
+id = "end_done"
+title = "Done"
+outcome = "done"
+[[end]]
+id = "end_rejected"
+title = "Rejected"
+outcome = "rejected"
+[[connection]]
+id = "edge_start"
+from = "inp_start:out"
+to = "fmn_work:port_in"
+[[connection]]
+id = "edge_review"
+from = "fmn_work:port_out"
+to = "gate_review:in"
+[[connection]]
+id = "edge_pass"
+from = "gate_review:pass"
+to = "end_done:in"
+[[connection]]
+id = "edge_fail"
+from = "gate_review:fail"
+to = "end_rejected:in"
