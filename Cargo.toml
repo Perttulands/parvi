@@ -23,3 +23,11 @@ single_range_in_vec_init = "allow"
 [profile.app]
 inherits = "release"
 panic = "unwind"
+
+# Many agents build from their own worktrees into one target folder. Full
+# debug info and incremental caches for each filled the disk (262 GB), so a
+# debug build keeps only what a backtrace needs and rebuilds a changed crate
+# whole.
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
