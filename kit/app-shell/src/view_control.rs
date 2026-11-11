@@ -77,6 +77,7 @@ pub fn command(json: &[u8]) -> Result<Open, String> {
             id,
             node: node.map(NodeId),
             part,
+            beside: false,
         }),
         (Some((what, _)), None) => return Err(format!("{what} is not text")),
         (Some(_), Some(_)) => return Err("open shows one thing at a time".into()),
@@ -228,6 +229,7 @@ mod tests {
                     id: "r1".into(),
                     node: Some("n".into()),
                     part: Some("build".into()),
+                    beside: false,
                 })
             })
         );

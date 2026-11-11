@@ -134,7 +134,8 @@ reserves, or whose `everywhere` chords share a key, naming both;
   a path, reveal a thing, launch a session in a folder on a node) is plain data that goes to the page declaring it
   answers it; when none does, the asker gets an `unanswered` error and the
   status line says so. View control's `open` reaches pages the same way. A
-  beside ask (open a path beside) leaves the asker shown: the answering page
+  beside ask (open a path beside, or a reveal marked `beside`, as a work item
+  named in a terminal opens its card) leaves the asker shown: the answering page
   hands it a view (`Host::show_beside`), which the asker draws where its
   layout has room (`Host::beside`), as the terminals draw a file a link
   named.

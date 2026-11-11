@@ -434,6 +434,7 @@ fn reveal_selects_the_named_nodes_copy(cx: &mut TestAppContext) {
                     id: "bead:n:/srv/data/context#library-zvi".into(),
                     node: Some(parvi_core::NodeId("other".into())),
                     part: None,
+                    beside: false,
                 },
                 "test",
                 window,

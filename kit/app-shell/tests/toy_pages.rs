@@ -261,18 +261,24 @@ impl Page for Beta {
     const ID: &'static str = "toy-b";
     const TITLE: &'static str = "Beta";
     const KINDS: parvi_core::frame::Kinds = &[BETA_KIND..=BETA_KIND];
-    const ANSWERS: &'static [Answers] = &[Answers::OpenPath];
+    const ANSWERS: &'static [Answers] = &[Answers::OpenPath, Answers::Reveal("item")];
 
     fn frame(&mut self, _: &NodeId, _: u8, body: &[u8], _: &mut Window, cx: &mut Context<Self>) {
         self.frames.push(String::from_utf8_lossy(body).into());
         cx.notify();
     }
 
-    /// Opens the path beside the page that asked.
+    /// Opens the path, or the item, beside the page that asked when it
+    /// asks so, and on itself otherwise.
     fn answer(&mut self, ask: Ask, from: &'static str, _: &mut Window, cx: &mut Context<Self>) {
-        if let Ask::OpenPath { path, beside, .. } = ask {
-            assert!(beside, "Alpha asks to open beside it");
-            self.opened = Some((path, from));
+        let beside = ask.beside();
+        let opened = match ask {
+            Ask::OpenPath { path, .. } => path,
+            Ask::Reveal { id, .. } => id,
+            _ => return,
+        };
+        self.opened = Some((opened, from));
+        if beside {
             self.host.show_beside(from, cx.new(|_| Note).into(), cx);
         }
     }
@@ -297,6 +303,7 @@ impl Render for Beta {
                             id: "42".into(),
                             node: None,
                             part: None,
+                            beside: false,
                         };
                         host.ask(ask, cx).expect("Alpha answers it");
                     }),
@@ -767,5 +774,51 @@ fn an_agents_edit_to_app_json_reaches_the_page_and_the_apps_own_writes_do_not(
         Some(&serde_json::json!(false))
     );
     assert_eq!(a.read_with(cx, |a, _| a.changed), 2);
+    let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
+}
+
+#[gpui::test]
+fn a_reveal_marked_beside_is_answered_beside_the_asker(cx: &mut TestAppContext) {
+    let node = fake_node(Arc::new(Mutex::new(vec![])));
+    let settings = settings_path("reveal-beside");
+    // The fake node and the link run on their own threads.
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let path = settings.clone();
+    let (shell, cx) = cx.add_window_view(move |window, cx| {
+        parvi_app_shell::start(PAGES, Some(node), Some(path), window, cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy-a"));
+    let alpha_host = shell.read_with(cx, |s, _| Host::new(s.hub()).for_page("toy-a", &[]));
+    let item = |beside| Ask::Reveal {
+        what: "item".into(),
+        id: "parvi-7".into(),
+        node: None,
+        part: None,
+        beside,
+    };
+    let b = BETA.with(|b| b.borrow().clone()).expect("Beta was made");
+
+    // Beside: Alpha stays shown and draws what Beta handed it.
+    cx.update(|_, cx| alpha_host.ask(item(true), cx))
+        .expect("Beta answers items");
+    cx.run_until_parked();
+    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy-a"));
+    assert_eq!(
+        b.read_with(cx, |b, _| b.opened.clone()),
+        Some(("parvi-7".into(), "toy-a"))
+    );
+    assert!(cx.update(|_, cx| alpha_host.beside(cx)).is_some());
+    assert!(
+        cx.debug_bounds("toy-beside").is_some(),
+        "drawn beside Alpha"
+    );
+
+    // Not beside: Beta comes forward.
+    cx.update(|_, cx| alpha_host.ask(item(false), cx))
+        .expect("Beta answers items");
+    cx.run_until_parked();
+    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy-b"));
     let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
 }
