@@ -14,6 +14,7 @@ pub mod hook;
 pub mod identity;
 pub mod listing;
 pub mod mcp;
+pub mod own;
 mod ring;
 pub mod serve;
 mod setup;

@@ -6,7 +6,7 @@
 use parvi_core::Error;
 use parvi_core::frame::{self, Kinds, RESERVED};
 
-use crate::Build;
+use crate::{Build, own};
 
 #[derive(Clone, Copy)]
 pub struct Listing {
@@ -22,7 +22,8 @@ pub struct Listing {
 }
 
 /// Refuses areas that share a name, a frame kind or a command, naming
-/// both, any that takes a reserved kind, and commands not named `noun_verb`.
+/// both, any that takes a reserved kind or one of the node's own commands
+/// ([`crate::own::COMMANDS`]), and commands not named `noun_verb`.
 pub fn check(areas: &[Listing]) -> Result<(), Error> {
     let conflict = |message: String| Error::new("area_conflict", message);
     for (i, area) in areas.iter().enumerate() {
@@ -35,6 +36,12 @@ pub fn check(areas: &[Listing]) -> Result<(), Error> {
         if let Some(command) = area.commands.iter().find(|c| !well_named(c)) {
             return Err(conflict(format!(
                 "area {}: command {command} is not named noun_verb",
+                area.name
+            )));
+        }
+        if let Some(command) = area.commands.iter().find(|c| own::COMMANDS.contains(c)) {
+            return Err(conflict(format!(
+                "area {} has the command {command}, which is the node's own",
                 area.name
             )));
         }
@@ -129,6 +136,11 @@ mod tests {
         assert_eq!(
             message(&[hello]),
             "area c owns frame kinds of the node's hello"
+        );
+        let own = listing("c", &[], &["config_show"]);
+        assert_eq!(
+            message(&[own]),
+            "area c has the command config_show, which is the node's own"
         );
         let named = listing("c", &[], &["list"]);
         assert_eq!(

@@ -14,8 +14,8 @@ use parvi_core::Error;
 use parvi_core::Hello;
 use parvi_core::frame::Kinds;
 use parvi_node_kit::{
-    Area, BoxFuture, Build, Built, Channel, Client, Command, Config, Listing, NodeClient, Options,
-    Running, Setup,
+    Area, BoxFuture, Build, Built, Channel, Client, Command, Config, Listing, NodeClient,
+    NodeError, Options, Running, Setup,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -523,4 +523,79 @@ async fn status(
         .nth(1)
         .and_then(|s| s.parse().ok())
         .unwrap_or_else(|| panic!("status line {line:?}"))
+}
+
+/// An area that reads its section and does nothing else.
+fn files(_: &Setup) -> anyhow::Result<Built> {
+    struct Files;
+    impl Area for Files {}
+    Built::now(Files)
+}
+
+/// `parvi <noun> <args>` against the node at `url`: its exit code and what
+/// it printed.
+async fn parvi(noun: &str, args: &[&str], url: &str) -> (i32, Value) {
+    let mut args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+    args.extend(["--json".into(), "--node".into(), url.into()]);
+    let mut out = Vec::new();
+    let code = parvi_node_kit::cli::run(noun, &args, &mut out)
+        .await
+        .unwrap();
+    (code, serde_json::from_slice(&out).unwrap_or(Value::Null))
+}
+
+/// The node's own command and route show its config file as it loaded it.
+#[tokio::test(flavor = "multi_thread")]
+async fn config_show_answers_the_file_and_each_section() {
+    let node = start(
+        &[listed("files", &[], &[], files), LIGHTS_LISTED],
+        "[files]\nroots = [\"/srv/notes\"]\n[lights]\nenabled = true\n",
+    )
+    .await
+    .unwrap();
+    let url = format!("http://{}/", node.address);
+    let (code, all) = parvi("config", &["show"], &url).await;
+    assert_eq!(code, 0);
+    let path = all["path"].as_str().unwrap();
+    assert!(path.ends_with("config.toml"), "{path}");
+    assert_eq!(all["sections"]["files"]["roots"], json!(["/srv/notes"]));
+    assert_eq!(all["sections"]["lights"]["enabled"], json!(true));
+
+    let (code, files) = parvi("config", &["show", "--section", "files"], &url).await;
+    assert_eq!(code, 0);
+    assert_eq!(
+        files["sections"],
+        json!({"files": {"roots": ["/srv/notes"]}})
+    );
+    let (code, _) = parvi("config", &["show", "--section", "nope"], &url).await;
+    assert_eq!(code, 1);
+
+    let client = NodeClient::new(Some(&url)).unwrap();
+    let (answer, _) = client
+        .request(Method::GET, "/api/config?section=files", None, None)
+        .await
+        .unwrap();
+    assert_eq!(answer, files);
+    let refused = client
+        .request(Method::GET, "/api/config?section=nope", None, None)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.downcast_ref::<NodeError>().unwrap().code,
+        "unknown_section"
+    );
+
+    let list = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
+    let (tools, _) = client
+        .request(Method::POST, "/mcp", Some(list), None)
+        .await
+        .unwrap();
+    let names: Vec<&str> = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert!(names.contains(&"config_show"), "{names:?}");
+    node.stop().await.unwrap();
 }

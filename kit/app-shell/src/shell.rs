@@ -59,9 +59,12 @@ pub fn mount(
         .collect();
     let declaring: Vec<Meta> = pages.iter().map(|p| p.meta).collect();
     let settings_hub = hub.clone();
-    pages.push(mount_page(Host::new(hub), window, cx, |_, window, cx| {
-        SettingsPage::new(settings_hub, declaring, window, cx)
-    }));
+    pages.push(mount_page(
+        Host::new(hub),
+        window,
+        cx,
+        |host, window, cx| SettingsPage::new(settings_hub, host, declaring, window, cx),
+    ));
     let metas: Vec<Meta> = pages.iter().map(|p| p.meta).collect();
     check(&metas)?;
     let chords: Vec<_> = pages.iter().map(|p| (p.meta.id, p.chords(cx))).collect();

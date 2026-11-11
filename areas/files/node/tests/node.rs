@@ -224,6 +224,7 @@ async fn exact_commands_are_exposed_to_mcp_and_cli_and_operate_on_files() {
         .unwrap()
         .iter()
         .map(|v| v["name"].as_str().unwrap())
+        .filter(|name| !parvi_node_kit::own::COMMANDS.contains(name))
         .collect();
     actual.sort();
     let mut expected = vec![
