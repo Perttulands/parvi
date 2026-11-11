@@ -5,8 +5,8 @@
 //! sends them into its own sessions, so the cards stand in their device's
 //! room and a task's sessions are all on one node.
 //!
-//! Read when shown, after each change, once for a node that comes into
-//! reach, and on Refresh, as CHROTE's (no timer reads the store);
+//! Read when shown, after a node's change event, once for a node that comes
+//! into reach, and on Refresh (no timer reads the store);
 //! countdowns tick every 30 s. Nothing ticks while the page is not shown.
 //!
 //! The sessions to send to come from the terminals page's published read model.

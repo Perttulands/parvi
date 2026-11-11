@@ -119,6 +119,22 @@ fn until(
     }
 }
 
+fn cli_call(url: &str, args: &[&str]) -> serde_json::Value {
+    let mut args: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
+    args.extend(["--node".into(), url.into(), "--json".into()]);
+    std::thread::spawn(move || {
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let mut output = Vec::new();
+                assert_eq!(cli::run("scheduled", &args, &mut output).await.unwrap(), 0);
+                serde_json::from_slice(&output).unwrap()
+            })
+    })
+    .join()
+    .unwrap()
+}
+
 #[gpui::test]
 fn the_page_lists_a_task_made_through_the_cli(cx: &mut TestAppContext) {
     let Some(running) = start() else {
@@ -168,6 +184,29 @@ fn the_page_lists_a_task_made_through_the_cli(cx: &mut TestAppContext) {
     cx.simulate_click(at, Modifiers::none());
     until(cx, "the detail to open", |cx| {
         cx.debug_bounds("task-run").is_some()
+    });
+
+    let pause = cx.debug_bounds("task-pause-false").unwrap().center();
+    cx.simulate_click(pause, Modifiers::none());
+    until(cx, "paused notice", |cx| {
+        cx.debug_bounds("scheduled-banner-Task paused.").is_some()
+            && cx.debug_bounds("task-pause-true").is_some()
+    });
+    cli_call(&running.url, &["resume", task]);
+    until(cx, "CLI resume on the open page", |cx| {
+        cx.debug_bounds("task-pause-false").is_some()
+            && cx.debug_bounds("scheduled-banner-Task paused.").is_none()
+    });
+    cli_call(&running.url, &["edit", task, "--name", "CLI edited task"]);
+    until(cx, "CLI edit on the open page", |cx| {
+        cx.debug_bounds("scheduled-task-name-CLI edited task")
+            .is_some()
+    });
+    let copied = cli_call(&running.url, &["copy", task]);
+    let copy = format!("task-{node}-{}", copied["task"]["id"].as_str().unwrap());
+    until(cx, "CLI copy on the open page", |cx| {
+        cx.debug_bounds(Box::leak(copy.clone().into_boxed_str()))
+            .is_some()
     });
 
     // Publish the two scratch tmux sessions as the terminals page does.
@@ -319,6 +358,8 @@ fn the_page_lists_a_task_made_through_the_cli(cx: &mut TestAppContext) {
     until(cx, "delete confirmation", |cx| {
         cx.debug_bounds("task-delete-true").is_some()
     });
+    // A visible confirmation still works after the old three-second expiry.
+    std::thread::sleep(Duration::from_millis(3200));
     click(cx, "task-delete-true");
     until(cx, "task deleted", |cx| {
         cx.debug_bounds("scheduled-banner-Task deleted.").is_some()

@@ -33,7 +33,7 @@ use parvi_scheduled_contract::{
     normalize_targets,
 };
 use parvi_term::Sessions;
-use tokio::sync::{Notify, Semaphore};
+use tokio::sync::{Notify, Semaphore, watch};
 
 use crate::schedule;
 use crate::store::{self, Store};
@@ -169,6 +169,7 @@ pub struct Scheduled {
     /// Tasks held back, and why: out of `due` until saved again.
     held: Mutex<HashMap<String, String>>,
     changed: Notify,
+    updates: watch::Sender<u64>,
 }
 
 /// A task's claim, given back when dropped.
@@ -203,6 +204,7 @@ impl Scheduled {
             due: Mutex::default(),
             held: Mutex::default(),
             changed: Notify::new(),
+            updates: watch::Sender::new(0),
         }
     }
 
@@ -232,7 +234,16 @@ impl Scheduled {
         self.store.save(task)?;
         self.held.lock().unwrap().remove(&task.id);
         self.track(task);
+        self.announce();
         Ok(())
+    }
+
+    fn announce(&self) {
+        self.updates.send_modify(|n| *n = n.wrapping_add(1));
+    }
+
+    pub(crate) fn updates(&self) -> watch::Receiver<u64> {
+        self.updates.subscribe()
     }
 
     /// Holds a task back: it will not fire until saved again, and the
@@ -243,6 +254,7 @@ impl Scheduled {
             .record(EVENT, true, format!("Scheduled task {id} held back: {why}"));
         eprintln!("parvi: scheduled task {id} held back: {why}");
         self.held.lock().unwrap().insert(id.to_string(), why);
+        self.announce();
         self.changed.notify_one();
     }
 
@@ -436,6 +448,7 @@ impl Scheduled {
         }
         self.due.lock().unwrap().remove(id);
         self.changed.notify_one();
+        self.announce();
         Ok(())
     }
 
