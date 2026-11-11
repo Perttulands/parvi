@@ -1,4 +1,5 @@
-use parvi_missions::{Coordinator, HumanVerdict, LabExecutor, Ledger, RunEvent, RunSettings};
+use parvi_mission_model::HumanVerdict;
+use parvi_missions::{Coordinator, LabExecutor, Ledger, RunEvent, RunSettings};
 use std::sync::{Arc, Barrier};
 
 #[test]

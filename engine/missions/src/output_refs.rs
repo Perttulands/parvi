@@ -1,5 +1,5 @@
 //! Materialize text-port refs without blocking on a special file.
-use crate::Formation;
+use parvi_mission_model::Formation;
 use serde_json::{Map, Value};
 use std::{
     fs::OpenOptions,
@@ -68,7 +68,7 @@ pub(crate) fn materialize(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Port;
+    use parvi_mission_model::Port;
     use serde_json::json;
     #[test]
     fn text_refs_are_bounded_and_materialized_exactly() {

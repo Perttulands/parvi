@@ -1,17 +1,7 @@
 //! Revision-associated canvas positions and wire lanes.
-use crate::{Error, Layout, LayoutEdge, LayoutNode, Store};
+use crate::{Error, Store};
+use parvi_mission_model::{Layout, LayoutEdit, LayoutPatch};
 use toml_edit::{DocumentMut, value};
-
-#[derive(Clone, Debug)]
-pub enum LayoutPatch {
-    Nodes(Vec<LayoutNode>),
-    Edges(Vec<LayoutEdge>),
-}
-#[derive(Clone, Debug)]
-pub struct LayoutEdit {
-    pub layout: Layout,
-    pub etag: String,
-}
 
 impl Store {
     pub fn layout_edit(&self, selector: &str) -> Result<LayoutEdit, Error> {

@@ -14,10 +14,9 @@ mod outputs;
 mod staffing;
 mod wiring;
 
-use crate::finding::Report;
 use crate::harness::Harnesses;
-use crate::mission::Mission;
 use crate::roles::RoleStore;
+use parvi_mission_model::{Mission, Report};
 
 /// Validates a whole mission. Role cards come from `roles`, and what each
 /// harness model accepts from `harnesses`.

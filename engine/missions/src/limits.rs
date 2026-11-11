@@ -8,7 +8,8 @@
 //! the executor recorded for the step, or for every step. A grant, recorded
 //! on the `run_resumed` that gives it, adds one more allowance: a round, or
 //! the card's time or tokens again.
-use crate::{Limit, Mission, RunEvent};
+use crate::RunEvent;
+use parvi_mission_model::{Limit, Mission};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::time::{Duration, SystemTime};

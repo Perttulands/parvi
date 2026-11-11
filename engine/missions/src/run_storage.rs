@@ -1,8 +1,6 @@
 //! Admission-time snapshots and private workspaces.
-use crate::{
-    AdmissionFailure, BindingsSnapshot, Coordinator, Mission, RunEvent, RunStart,
-    resolve_run_inputs,
-};
+use crate::{AdmissionFailure, BindingsSnapshot, Coordinator, RunEvent, resolve_run_inputs};
+use parvi_mission_model::{Mission, RunStart};
 const RUN_RECORD_MAX_BYTES: usize = 1 << 20;
 use serde_json::json;
 use std::{

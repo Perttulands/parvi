@@ -1,6 +1,7 @@
 #[allow(dead_code)]
 mod run_support;
-use parvi_missions::{Coordinator, LabExecutor, RunSettings, RunStart};
+use parvi_mission_model::RunStart;
+use parvi_missions::{Coordinator, LabExecutor, RunSettings};
 use run_support::{Scratch, gated_mission, normalized_ledger};
 use serde_json::Value;
 use std::{
@@ -89,7 +90,7 @@ fn lab_judge_routes_a_synthetic_verdict() {
     loop {
         match c.resume(
             &id,
-            parvi_missions::ResumeRequest {
+            parvi_mission_model::ResumeRequest {
                 take_fail: true,
                 actor: "human:operator".into(),
                 ..Default::default()

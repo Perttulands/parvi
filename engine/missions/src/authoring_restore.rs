@@ -1,18 +1,9 @@
 //! Restore a deleted node, its wires and its canvas position in one edit.
-use crate::{
-    Connection, End, Error, Formation, Gate, InputCard, LayoutNode, Limit, Mission, Patch,
-};
+use crate::Error;
+use parvi_mission_model::{Connection, LayoutNode, Mission, Patch, RestoredNode};
 use serde::Serialize;
 use std::collections::HashSet;
 use toml_edit::{ArrayOfTables, DocumentMut, Item};
-#[derive(Clone, Debug)]
-pub enum RestoredNode {
-    InputCard(InputCard),
-    Formation(Formation),
-    Gate(Gate),
-    End(End),
-    Limit(Limit),
-}
 fn invalid(message: &str) -> Error {
     Error::new("invalid_node_restore", message)
 }
@@ -75,7 +66,7 @@ pub(crate) fn apply(
             crate::authoring_input::apply(
                 doc,
                 &current,
-                crate::InputCardUpdate {
+                parvi_mission_model::InputCardUpdate {
                     id: n.id.clone(),
                     human_channel: Some(n.human_channel.clone()),
                     inputs: Some(n.inputs.clone()),

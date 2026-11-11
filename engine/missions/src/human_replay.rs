@@ -105,7 +105,7 @@ pub(crate) fn route(
     c: &crate::Coordinator,
     id: &str,
     control: &crate::coordinator::Control,
-    mission: &crate::Mission,
+    mission: &parvi_mission_model::Mission,
     events: &[RunEvent],
 ) -> io::Result<bool> {
     use crate::run_worker::event;

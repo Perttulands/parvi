@@ -1,9 +1,7 @@
 //! Formation types, their slot shapes, and slot ids.
 
 use super::possessive;
-use crate::finding::{Code, Finding};
-use crate::mission::Mission;
-use crate::nodes::{Formation, ORCHESTRATED, PEER, SOLO};
+use parvi_mission_model::{Code, Finding, Formation, Mission, ORCHESTRATED, PEER, SOLO};
 
 /// What a slot id may be, for messages: its seat's session is named after
 /// it, and a relayed verdict names it.

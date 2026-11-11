@@ -6,7 +6,8 @@
 use crate::coordinator::Control;
 use crate::limits::{self, LIMIT_REACHED, LimitUse, WHEN_SPENT_BEST, WHEN_SPENT_FAIL};
 use crate::run_worker::event;
-use crate::{Coordinator, Mission, RunEvent};
+use crate::{Coordinator, RunEvent};
+use parvi_mission_model::Mission;
 use serde_json::json;
 use std::io;
 

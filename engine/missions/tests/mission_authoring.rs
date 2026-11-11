@@ -1,4 +1,5 @@
-use parvi_missions::{Patch, Precondition, Store};
+use parvi_mission_model::{Patch, Precondition};
+use parvi_missions::Store;
 use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Scratch(std::path::PathBuf);
@@ -18,7 +19,7 @@ impl Drop for Scratch {
         std::fs::remove_dir_all(&self.0).unwrap();
     }
 }
-fn pre(edit: &parvi_missions::Edit) -> Precondition {
+fn pre(edit: &parvi_mission_model::Edit) -> Precondition {
     Precondition {
         rev: edit.mission.rev,
         etag: edit.etag.clone(),
@@ -329,7 +330,7 @@ fn join_creates_a_new_input_and_refusals_do_not_edit() {
 
 #[test]
 fn notes_are_author_owned_and_noops_keep_the_etag() {
-    use parvi_missions::NotePatch;
+    use parvi_mission_model::NotePatch;
     let dir = Scratch::new();
     let store = Store::new(&dir.0);
     store.create_mission("work", "Work", "").unwrap();
@@ -399,7 +400,7 @@ fn notes_are_author_owned_and_noops_keep_the_etag() {
 
 #[test]
 fn layout_changes_are_etag_checked_and_keep_other_layers() {
-    use parvi_missions::{LayoutEdge, LayoutNode, LayoutPatch};
+    use parvi_mission_model::{LayoutEdge, LayoutNode, LayoutPatch};
     let dir = Scratch::new();
     let store = Store::new(&dir.0);
     store.create_mission("work", "Work", "").unwrap();
@@ -607,7 +608,7 @@ fn arrange_follows_delivery_and_puts_the_judge_under_its_gate() {
 
 #[test]
 fn input_card_updates_validate_declarations_and_preserve_identity() {
-    use parvi_missions::{InputCardUpdate, MissionInput, MissionOutput};
+    use parvi_mission_model::{InputCardUpdate, MissionInput, MissionOutput};
     let dir = Scratch::new();
     let store = Store::new(&dir.0);
     let edit = store.create_mission("work", "Work", "").unwrap();
@@ -680,7 +681,7 @@ fn input_card_updates_validate_declarations_and_preserve_identity() {
 
 #[test]
 fn deleted_node_and_port_restore_their_identities_and_wires() {
-    use parvi_missions::RestoredNode;
+    use parvi_mission_model::RestoredNode;
     let dir = Scratch::new();
     let store = Store::new(&dir.0);
     let mut edit = store.create_mission("work", "Work", "").unwrap();
@@ -774,7 +775,7 @@ fn deleted_node_and_port_restore_their_identities_and_wires() {
 
 #[test]
 fn judge_and_limit_edits_use_the_same_revision_path() {
-    use parvi_missions::{GateUpdate, Limit, LimitUpdate};
+    use parvi_mission_model::{GateUpdate, Limit, LimitUpdate};
     let dir = Scratch::new();
     let store = Store::new(&dir.0);
     let mut edit = store.create_mission("work", "Work", "").unwrap();
@@ -955,7 +956,7 @@ fn node_create_does_not_publish_mission_if_layout_cannot_be_staged() {
 
 #[test]
 fn removing_code_kind_clears_check_and_relative_files_are_refused() {
-    use parvi_missions::GateUpdate;
+    use parvi_mission_model::GateUpdate;
     let dir = Scratch::new();
     let store = Store::new(&dir.0);
     let edit = store.create_mission("work", "Work", "").unwrap();
@@ -1115,7 +1116,7 @@ fn rewire_join_undo_removes_only_its_extra_port_and_keeps_wire_id() {
 
 #[test]
 fn restored_node_allocates_new_wire_id_when_original_is_taken() {
-    use parvi_missions::RestoredNode;
+    use parvi_mission_model::RestoredNode;
     let dir = Scratch::new();
     let store = Store::new(&dir.0);
     let mut edit = store.create_mission("work", "Work", "").unwrap();
@@ -1209,7 +1210,8 @@ fn restored_node_allocates_new_wire_id_when_original_is_taken() {
 
 #[test]
 fn placement_refuses_a_full_bounded_search_and_a_foreign_layout() {
-    use parvi_missions::{Formation, Layout, LayoutNode, Mission, free_layout_position};
+    use parvi_mission_model::{Formation, Layout, LayoutNode, Mission};
+    use parvi_missions::free_layout_position;
     let mut mission = Mission {
         id: "msn_work".into(),
         ..Default::default()
@@ -1252,7 +1254,7 @@ fn placement_refuses_a_full_bounded_search_and_a_foreign_layout() {
 
 #[test]
 fn each_node_kind_round_trips_through_delete_and_restore() {
-    use parvi_missions::{Limit, RestoredNode};
+    use parvi_mission_model::{Limit, RestoredNode};
     let dir = Scratch::new();
     let store = Store::new(&dir.0);
     let mut edit = store.create_mission("work", "Work", "").unwrap();
@@ -1358,7 +1360,7 @@ fn each_node_kind_round_trips_through_delete_and_restore() {
 
 #[test]
 fn invalid_restore_leaves_mission_and_layout_untouched() {
-    use parvi_missions::{Formation, RestoredNode, Slot};
+    use parvi_mission_model::{Formation, RestoredNode, Slot};
     let dir = Scratch::new();
     let store = Store::new(&dir.0);
     let edit = store.create_mission("work", "Work", "").unwrap();
@@ -1507,7 +1509,7 @@ fn gate_fail_feedback_can_share_an_occupied_input_without_a_join() {
 
 #[test]
 fn repeated_brief_gate_and_controller_edits_save_nothing() {
-    use parvi_missions::{Brief, GateUpdate};
+    use parvi_mission_model::{Brief, GateUpdate};
     let dir = Scratch::new();
     let store = Store::new(&dir.0);
     let mut edit = store.create_mission("work", "Work", "").unwrap();
@@ -1578,7 +1580,7 @@ fn repeated_brief_gate_and_controller_edits_save_nothing() {
 
 #[test]
 fn notes_refuse_missing_targets_large_entries_and_old_mission_ids() {
-    use parvi_missions::NotePatch;
+    use parvi_mission_model::NotePatch;
     let dir = Scratch::new();
     let store = Store::new(&dir.0);
     let original = store.create_mission("work", "First", "").unwrap();
@@ -1695,7 +1697,7 @@ fn formation_title_and_brief_commit_atomically() {
         )
         .unwrap();
     let id = created.mission.formations[0].id.clone();
-    let bad = parvi_missions::Brief {
+    let bad = parvi_mission_model::Brief {
         goal: "Goal".into(),
         files: vec!["relative".into()],
         ..Default::default()
@@ -1715,7 +1717,7 @@ fn formation_title_and_brief_commit_atomically() {
             .is_err()
     );
     assert_eq!(store.mission_edit("work").unwrap().etag, created.etag);
-    let brief = parvi_missions::Brief {
+    let brief = parvi_mission_model::Brief {
         goal: "Goal".into(),
         ..Default::default()
     };

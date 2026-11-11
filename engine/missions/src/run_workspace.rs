@@ -1,7 +1,8 @@
 //! Isolated turn worktrees and their durable publication to the run branch.
 use crate::coordinator::Control;
 use crate::run_worker::{append_live, event};
-use crate::{Coordinator, RunEvent, RunStart, Workspaces, Worktree};
+use crate::{Coordinator, RunEvent, Workspaces, Worktree};
+use parvi_mission_model::RunStart;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{

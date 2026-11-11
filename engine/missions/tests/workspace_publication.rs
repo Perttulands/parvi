@@ -1,8 +1,9 @@
 #[allow(dead_code)]
 mod run_support;
+use parvi_mission_model::RunStart;
 use parvi_missions::{
     Coordinator, ExecutionSink, Executor, FormationExecution, FormationResult, LabExecutor,
-    RunSettings, RunStart,
+    RunSettings,
 };
 use run_support::{Scratch, gated_mission};
 use std::{
@@ -52,7 +53,7 @@ fn request() -> RunStart {
         ..Default::default()
     }
 }
-fn wait(c: &Coordinator, id: &str) -> parvi_missions::RunProjection {
+fn wait(c: &Coordinator, id: &str) -> parvi_mission_model::RunProjection {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         let p = c.run(id).unwrap();

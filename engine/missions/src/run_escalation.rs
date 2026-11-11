@@ -1,21 +1,6 @@
 //! Escalation evidence projected separately from the sanitized run view.
 use crate::RunEvent;
-use serde::Serialize;
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Escalation {
-    pub run_id: String,
-    pub seq: u64,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub node_id: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub gate_id: String,
-    pub severity: String,
-    pub reason: String,
-    pub source: String,
-    pub trigger: String,
-    pub blocks: bool,
-}
+use parvi_mission_model::Escalation;
 pub fn project_escalations(events: &[RunEvent]) -> Vec<Escalation> {
     events
         .iter()

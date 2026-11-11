@@ -4,11 +4,9 @@
 
 use std::collections::HashMap;
 
-use crate::finding::{Code, Finding};
 use crate::graph;
 use crate::limits::duration_words;
-use crate::mission::Mission;
-use crate::nodes::Limit;
+use parvi_mission_model::{Code, Finding, Limit, Mission};
 
 const DEFAULT_TITLE: &str = "Limit";
 

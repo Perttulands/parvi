@@ -1,6 +1,7 @@
 #[allow(dead_code)]
 mod run_support;
-use parvi_missions::{Coordinator, LabExecutor, RunSettings, RunStart};
+use parvi_mission_model::RunStart;
+use parvi_missions::{Coordinator, LabExecutor, RunSettings};
 use run_support::{Scratch, gated_mission, normalized_ledger};
 use serde_json::Value;
 use std::{
@@ -116,9 +117,9 @@ fn wait_for(c: &Coordinator, id: &str, kind: &str, node: &str, deadline: Instant
 
 #[test]
 fn reattach_keeps_other_completed_dispatches_when_one_fails() {
+    use parvi_mission_model::{ResumeMode, ResumeRequest};
     use parvi_missions::{
         ExecutionEvent, ExecutionSink, Executor, FormationExecution, FormationResult, OpenDispatch,
-        ResumeMode, ResumeRequest,
     };
     use std::sync::{
         Arc,
@@ -323,7 +324,7 @@ fn restart_cuts_preserve_branch_and_human_gate_outcomes() {
          })().map_err(|message: String| parvi_missions::Error::new("executor_error", message))
         }
     }
-    fn drive(c: &Coordinator, id: &str, retry: bool) -> parvi_missions::RunProjection {
+    fn drive(c: &Coordinator, id: &str, retry: bool) -> parvi_mission_model::RunProjection {
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
             let p = c.run(id).unwrap();
@@ -334,8 +335,8 @@ fn restart_cuts_preserve_branch_and_human_gate_outcomes() {
                 assert!(p.resume_allowed, "{}", p.block_code);
                 match c.resume(
                     id,
-                    parvi_missions::ResumeRequest {
-                        mode: parvi_missions::ResumeMode::Redispatch,
+                    parvi_mission_model::ResumeRequest {
+                        mode: parvi_mission_model::ResumeMode::Redispatch,
                         ..Default::default()
                     },
                 ) {
@@ -347,7 +348,7 @@ fn restart_cuts_preserve_branch_and_human_gate_outcomes() {
                 match c.record_verdict(
                     id,
                     &gate.gate_id,
-                    parvi_missions::HumanVerdict {
+                    parvi_mission_model::HumanVerdict {
                         requested_seq: gate.requested_seq,
                         verdict: if retry
                             && !p.events.iter().any(|event| {
@@ -372,7 +373,7 @@ fn restart_cuts_preserve_branch_and_human_gate_outcomes() {
         }
     }
     fn outcome(
-        p: &parvi_missions::RunProjection,
+        p: &parvi_mission_model::RunProjection,
     ) -> (String, Vec<String>, BTreeMap<String, usize>) {
         let mut counts = BTreeMap::new();
         for event in &p.events {
@@ -588,7 +589,7 @@ fn fan_out_runs_concurrently_and_join_waits_for_both() {
 
 #[test]
 fn human_gate_records_and_routes_the_exact_request() {
-    use parvi_missions::HumanVerdict;
+    use parvi_mission_model::HumanVerdict;
     let root = Scratch::new();
     let solo = include_str!("parity/runs/missions/solo-lab.mission.toml");
     let mission = solo.replace("to = \"end_done:in\"", "to = \"gate_review:in\"");
@@ -653,7 +654,7 @@ fn human_gate_records_and_routes_the_exact_request() {
 
 #[test]
 fn human_answer_routes_while_another_branch_runs_and_rejection_waits() {
-    use parvi_missions::HumanVerdict;
+    use parvi_mission_model::HumanVerdict;
     for verdict in ["fail", "pass"] {
         for dispatch_before in [false, true] {
             let root = Scratch::new();
@@ -842,7 +843,7 @@ fn a_newer_human_request_makes_the_old_sequence_stale() {
         .record_verdict(
             &id,
             "gate_review",
-            parvi_missions::HumanVerdict {
+            parvi_mission_model::HumanVerdict {
                 requested_seq: first,
                 verdict: "pass".into(),
                 ..Default::default()
@@ -853,7 +854,7 @@ fn a_newer_human_request_makes_the_old_sequence_stale() {
     c.record_verdict(
         &id,
         "gate_review",
-        parvi_missions::HumanVerdict {
+        parvi_mission_model::HumanVerdict {
             requested_seq: second,
             verdict: "pass".into(),
             ..Default::default()
@@ -922,7 +923,7 @@ fn separate_human_gates_can_be_answered_in_either_order() {
         c.record_verdict(
             &id,
             &gate.gate_id,
-            parvi_missions::HumanVerdict {
+            parvi_mission_model::HumanVerdict {
                 requested_seq: gate.requested_seq,
                 verdict: "pass".into(),
                 ..Default::default()
@@ -1001,7 +1002,7 @@ fn a_blocked_run_accepts_another_gates_verdict_and_routes_it_on_resume() {
         .record_verdict(
             &id,
             "gate_human",
-            parvi_missions::HumanVerdict {
+            parvi_mission_model::HumanVerdict {
                 requested_seq: requested,
                 verdict: "pass".into(),
                 response: "approved while blocked".into(),
@@ -1013,7 +1014,7 @@ fn a_blocked_run_accepts_another_gates_verdict_and_routes_it_on_resume() {
     loop {
         match c.resume(
             &id,
-            parvi_missions::ResumeRequest {
+            parvi_mission_model::ResumeRequest {
                 take_fail: true,
                 actor: "human:operator".into(),
                 ..Default::default()
@@ -1064,7 +1065,7 @@ fn a_blocked_run_accepts_another_gates_verdict_and_routes_it_on_resume() {
     loop {
         match c.resume(
             &id,
-            parvi_missions::ResumeRequest {
+            parvi_mission_model::ResumeRequest {
                 take_fail: true,
                 actor: "human:operator".into(),
                 ..Default::default()
@@ -1091,7 +1092,7 @@ fn a_blocked_run_accepts_another_gates_verdict_and_routes_it_on_resume() {
     c.record_verdict(
         &id,
         "gate_human",
-        parvi_missions::HumanVerdict {
+        parvi_mission_model::HumanVerdict {
             requested_seq: requested,
             verdict: "pass".into(),
             ..Default::default()
@@ -1487,7 +1488,7 @@ fn human_response_is_delivered_with_its_original_input_like_archon() {
     c.record_verdict(
         &id,
         "gate_review",
-        parvi_missions::HumanVerdict {
+        parvi_mission_model::HumanVerdict {
             requested_seq: seq,
             verdict: "pass".into(),
             response: "yes".into(),

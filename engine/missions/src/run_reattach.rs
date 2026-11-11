@@ -1,6 +1,7 @@
 //! Resolve dispatches named by a block before scheduling new work.
 use crate::coordinator::Control;
-use crate::{Coordinator, Mission, OpenDispatch, ResumeMode, RunEvent, RunStart};
+use crate::{Coordinator, OpenDispatch, RunEvent};
+use parvi_mission_model::{Mission, ResumeMode, RunStart};
 use serde_json::json;
 use std::{io, path::Path};
 
@@ -77,7 +78,7 @@ pub(crate) fn recover_completed(
     Ok(true)
 }
 
-fn valid(formation: &crate::Formation, result: &crate::FormationResult) -> bool {
+fn valid(formation: &parvi_mission_model::Formation, result: &crate::FormationResult) -> bool {
     result.status == "done"
         && formation
             .outputs

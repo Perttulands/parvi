@@ -1,6 +1,7 @@
 #[allow(dead_code)]
 mod run_support;
-use parvi_missions::{Coordinator, LabExecutor, RunSettings, RunStart};
+use parvi_mission_model::RunStart;
+use parvi_missions::{Coordinator, LabExecutor, RunSettings};
 use run_support::{Scratch, gated_mission, normalized_ledger};
 use serde_json::Value;
 use std::{
@@ -92,7 +93,7 @@ fn a_tampered_code_result_cannot_accept_a_human_verdict() {
     let result = c.record_verdict(
         &id,
         "gate_review",
-        parvi_missions::HumanVerdict {
+        parvi_mission_model::HumanVerdict {
             requested_seq: seq,
             verdict: "pass".into(),
             ..Default::default()
@@ -137,7 +138,7 @@ fn mixed_code_and_human_gate_preserves_its_durable_code_result() {
     c.record_verdict(
         &id,
         "gate_review",
-        parvi_missions::HumanVerdict {
+        parvi_mission_model::HumanVerdict {
             requested_seq: requested,
             verdict: "pass".into(),
             response: "approved".into(),

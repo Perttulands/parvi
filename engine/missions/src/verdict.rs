@@ -1,19 +1,8 @@
 //! Atomic decisions on pending human gate requests.
-use crate::{Coordinator, RunEvent, RunProjection, run_storage::now};
-use serde::Deserialize;
+use crate::{Coordinator, RunEvent, run_storage::now};
+use parvi_mission_model::{HumanVerdict, RunProjection};
 use serde_json::json;
 use std::io;
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
-pub struct HumanVerdict {
-    pub requested_seq: u64,
-    pub verdict: String,
-    #[serde(rename = "reason")]
-    pub response: String,
-    pub relayed_by: String,
-    pub actor: String,
-}
 
 impl Coordinator {
     pub fn record_verdict(
@@ -62,7 +51,7 @@ impl Coordinator {
             crate::gate_replay::validate(events)?;
             crate::human_replay::validate(events)?;
             crate::code_binding::validate_run(self, run, events)?;
-            let projection = RunProjection::from_events(events, run).map_err(crate::error::to_io)?;
+            let projection = crate::project_run(events, run).map_err(crate::error::to_io)?;
             if projection.r#final
                 || !projection.waiting_gates.iter().any(|pending| {
                     pending.gate_id == gate && pending.requested_seq == request.requested_seq

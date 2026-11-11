@@ -1,6 +1,7 @@
 //! Formation-level execution boundary. Executors report events; they never
 //! write a run ledger, so this boundary can later be placed on another node.
-use crate::{BindingsSnapshot, Formation, RunInput};
+use crate::BindingsSnapshot;
+use parvi_mission_model::{Formation, RunInput};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;

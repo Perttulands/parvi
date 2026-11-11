@@ -1,31 +1,7 @@
 //! Author-owned note threads, protected by a notes ETag.
-use crate::{Error, NoteEntry, Notes, Store};
+use crate::{Error, Store};
+use parvi_mission_model::{NoteEntry, NotePatch, Notes, NotesEdit};
 use toml_edit::{DocumentMut, Item, value};
-
-#[derive(Clone, Debug)]
-pub enum NotePatch {
-    Append {
-        target: String,
-        author: String,
-        text: String,
-    },
-    Edit {
-        target: String,
-        author: String,
-        id: String,
-        text: String,
-    },
-    Delete {
-        target: String,
-        author: String,
-        id: String,
-    },
-}
-#[derive(Clone, Debug)]
-pub struct NotesEdit {
-    pub notes: Notes,
-    pub etag: String,
-}
 
 impl Store {
     pub fn notes_edit(&self, selector: &str) -> Result<NotesEdit, Error> {
@@ -99,7 +75,7 @@ impl Store {
             target.trim()
         };
         let author = author.trim();
-        if !crate::notes::valid_author(author) || text.is_some_and(|s| s.trim().is_empty()) {
+        if !parvi_mission_model::valid_author(author) || text.is_some_and(|s| s.trim().is_empty()) {
             return Err(Error::new(
                 "invalid_note_patch",
                 "invalid author or empty text",

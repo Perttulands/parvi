@@ -1,5 +1,6 @@
 //! Render the complete, private instructions a seat reads by pointer.
-use crate::{FormationExecution, Slot};
+use crate::FormationExecution;
+use parvi_mission_model::Slot;
 use std::fmt::Write;
 
 pub(super) fn render(request: &FormationExecution, slot: &Slot) -> String {
@@ -98,7 +99,8 @@ pub(super) fn render(request: &FormationExecution, slot: &Slot) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BindingsSnapshot, Formation, nodes::Brief};
+    use crate::BindingsSnapshot;
+    use parvi_mission_model::{Brief, Formation};
 
     fn execution(run_work: &str, brief_work: &str) -> FormationExecution {
         FormationExecution {

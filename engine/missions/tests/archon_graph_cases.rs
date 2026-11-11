@@ -1,4 +1,5 @@
-use parvi_missions::{Patch, Precondition, Store};
+use parvi_mission_model::{Patch, Precondition};
+use parvi_missions::Store;
 use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Scratch(std::path::PathBuf);
@@ -18,7 +19,7 @@ impl Drop for Scratch {
         std::fs::remove_dir_all(&self.0).unwrap();
     }
 }
-fn pre(edit: &parvi_missions::Edit) -> Precondition {
+fn pre(edit: &parvi_mission_model::Edit) -> Precondition {
     Precondition {
         rev: edit.mission.rev,
         etag: edit.etag.clone(),
@@ -29,7 +30,7 @@ fn pre(edit: &parvi_missions::Edit) -> Precondition {
 // reject every invalid shape before touching either file.
 #[test]
 fn invalid_formation_shapes_are_refused_by_both_restore_paths() {
-    use parvi_missions::{Formation, RestoredNode, Slot};
+    use parvi_mission_model::{Formation, RestoredNode, Slot};
     let dir = Scratch::new();
     let store = Store::new(&dir.0);
     let edit = store.create_mission("shape", "Shape", "").unwrap();
@@ -426,7 +427,7 @@ fn changing_gate_kinds_detaches_judge_without_touching_layout() {
         .patch(
             "judge",
             pre(&edit),
-            Patch::UpdateGate(parvi_missions::GateUpdate {
+            Patch::UpdateGate(parvi_mission_model::GateUpdate {
                 id: gate.clone(),
                 kinds: Some(vec!["code".into(), "human".into()]),
                 ..Default::default()
@@ -444,7 +445,7 @@ fn changing_gate_kinds_detaches_judge_without_touching_layout() {
         .patch(
             "judge",
             pre(&edit),
-            Patch::UpdateGate(parvi_missions::GateUpdate {
+            Patch::UpdateGate(parvi_mission_model::GateUpdate {
                 id: gate,
                 kinds: Some(vec!["human".into(), "formation".into()]),
                 ..Default::default()
@@ -684,7 +685,7 @@ fn feedback_rewire_and_join_undo_preserve_pushback_exception() {
 // Ported from node_restore_test.go: failed undo does not publish either file.
 #[test]
 fn restore_refuses_missing_foreign_and_occupied_connections_and_bad_nodes() {
-    use parvi_missions::{Connection, Formation, Gate, RestoredNode};
+    use parvi_mission_model::{Connection, Formation, Gate, RestoredNode};
     let dir = Scratch::new();
     let store = Store::new(&dir.0);
     let mut edit = store.create_mission("restore", "Restore", "").unwrap();
@@ -1134,7 +1135,7 @@ fn peer_snapshot_cannot_silently_remove_a_staffed_seat() {
         .unwrap();
     // A peer must keep at least two seats; add one so a snapshot can remove one.
     let mut three = edit.mission.formations[0].slots.clone();
-    three.push(parvi_missions::Slot {
+    three.push(parvi_mission_model::Slot {
         id: "slot_third".into(),
         label: "Third".into(),
         ..Default::default()

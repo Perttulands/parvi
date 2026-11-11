@@ -1,4 +1,5 @@
-use parvi_missions::{BindingsSnapshot, Formation, Mission, RoleStore, Slot};
+use parvi_mission_model::{Formation, Mission, Slot};
+use parvi_missions::{BindingsSnapshot, RoleStore};
 #[test]
 fn frozen_bindings_reject_mutated_settings_and_roles() {
     let slot = Slot {

@@ -18,10 +18,8 @@ pub(crate) enum Outcome {
     Limit(crate::run_limit::LimitStop),
     Stopped,
 }
-use crate::{
-    BindingsSnapshot, Coordinator, Mission, RunEvent, RunStart, render_run_inputs,
-    resolve_run_inputs,
-};
+use crate::{BindingsSnapshot, Coordinator, RunEvent, render_run_inputs, resolve_run_inputs};
+use parvi_mission_model::{Mission, RunStart};
 use serde_json::json;
 use std::{
     io,
@@ -70,11 +68,9 @@ pub fn execute(
             .as_ref()
             .ok()
             .and_then(|events| {
-                crate::RunProjection::from_events(events, &id)
-                    .ok()
-                    .map(|projection| {
-                        crate::run_recovery::only_waiting(&mission, events, &projection)
-                    })
+                crate::project_run(events, &id).ok().map(|projection| {
+                    crate::run_recovery::only_waiting(&mission, events, &projection)
+                })
             })
             .unwrap_or(false);
         if !waiting {

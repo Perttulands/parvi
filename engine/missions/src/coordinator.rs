@@ -1,9 +1,6 @@
 //! Owns the mission state directory and its concurrent runs.
-use crate::{
-    BindingsSnapshot, Executor, Finding, Harnesses, Ledger, RunEvent, RunProjection, Store,
-    run_admission,
-};
-use serde::{Deserialize, Serialize};
+use crate::{BindingsSnapshot, Executor, Harnesses, Ledger, RunEvent, Store, run_admission};
+use parvi_mission_model::{Finding, RunProjection, RunSessionSummary, RunStart, RunSummary};
 use std::{
     collections::BTreeMap,
     fs::{File, OpenOptions},
@@ -39,56 +36,6 @@ impl std::fmt::Debug for OnBlock {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("OnBlock")
     }
-}
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct RunStart {
-    pub mission: String,
-    pub input_card_id: String,
-    pub formation_id: String,
-    pub expected_rev: i64,
-    pub expected_etag: String,
-    pub cwd: String,
-    pub repository: String,
-    pub base: String,
-    pub context_paths: Vec<String>,
-    /// The run's work item as a canonical reference (`docs/work.md`), or
-    /// empty. The node resolves what was written before admission.
-    pub work: String,
-    pub actor: String,
-    pub inputs: BTreeMap<String, String>,
-    /// The client's key for this start. A start repeated with a key that
-    /// already made a run answers with that run instead of making another,
-    /// so a client that lost the answer can safely send it again.
-    pub request_id: String,
-    /// Every device of the fleet, online or not, filled in by the node only
-    /// when it knows them all. A step placed on another device is refused;
-    /// with `None` it is admitted and waits for its device. Names compare
-    /// exactly, as placement finds the step's node.
-    #[serde(skip)]
-    pub known_devices: Option<Vec<String>>,
-}
-/// A resume. A field the node does not know is refused, not dropped, so a
-/// client never believes it asked for something the node ignored.
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
-pub struct ResumeRequest {
-    pub mode: ResumeMode,
-    pub take_fail: bool,
-    /// Give the Limit card a spent limit stopped one more allowance: a
-    /// round, or the card's time or tokens again.
-    pub grant: bool,
-    /// Pick the best attempt the spent step's gate judged, and go on.
-    pub pick_best: bool,
-    pub reason: String,
-    pub actor: String,
-}
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum ResumeMode {
-    #[default]
-    Reattach,
-    Redispatch,
 }
 #[derive(Debug)]
 pub enum AdmissionFailure {
@@ -150,38 +97,6 @@ pub(crate) struct Inner {
 #[derive(Clone)]
 pub struct Coordinator {
     pub(crate) inner: Arc<Inner>,
-}
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RunSummary {
-    pub run_id: String,
-    pub number: usize,
-    pub status: String,
-    pub r#final: bool,
-    pub mission_slug: String,
-    pub mission_id: String,
-    pub mission_rev: i64,
-    pub input_card_id: String,
-    pub work: String,
-    pub event_count: usize,
-    pub resume_allowed: bool,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub resume_policy: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub block_code: String,
-    pub started_by: String,
-    pub started_at: String,
-    pub updated_at: String,
-    pub input_excerpt: String,
-    pub outputs: Vec<crate::outputs::RunOutput>,
-    pub sessions: Vec<RunSessionSummary>,
-}
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RunSessionSummary {
-    pub session_name: String,
-    pub node_id: String,
-    pub slot_id: String,
 }
 impl Coordinator {
     pub fn seats(&self, id: &str) -> Result<Vec<crate::AgentSeat>, crate::Error> {
@@ -277,7 +192,7 @@ impl Coordinator {
             .and_then(|ledger| ledger.read().map_err(crate::error::to_io))
         {
             events.truncate(seq as usize);
-            if let Ok(projection) = RunProjection::from_events(&events, id) {
+            if let Ok(projection) = crate::project_run(&events, id) {
                 let _ = self.inner.subscribers.send(projection);
             }
         }
@@ -299,15 +214,15 @@ impl Coordinator {
     }
     pub fn run(&self, id: &str) -> Result<RunProjection, crate::Error> {
         (|| -> io::Result<RunProjection> {
-            RunProjection::from_events(&self.ledger(id)?.read().map_err(crate::error::to_io)?, id)
+            crate::project_run(&self.ledger(id)?.read().map_err(crate::error::to_io)?, id)
                 .map_err(crate::error::to_io)
         })()
         .map_err(crate::error::io)
     }
     /// The mission as the run froze it when it started: what the run
     /// executes, whatever the editable mission has become since.
-    pub fn frozen_mission(&self, id: &str) -> Result<crate::Mission, crate::Error> {
-        (|| -> io::Result<crate::Mission> {
+    pub fn frozen_mission(&self, id: &str) -> Result<parvi_mission_model::Mission, crate::Error> {
+        (|| -> io::Result<parvi_mission_model::Mission> {
             let ledger = self.ledger(id)?;
             if !ledger.path().exists() {
                 return Err(io::Error::new(io::ErrorKind::NotFound, "run not found"));
@@ -317,7 +232,7 @@ impl Coordinator {
                 .root
                 .join("runs")
                 .join(format!("{id}.snapshot.toml"));
-            crate::Mission::parse(&std::fs::read_to_string(path)?)
+            parvi_mission_model::Mission::parse(&std::fs::read_to_string(path)?)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
         })()
         .map_err(crate::error::io)
@@ -336,14 +251,17 @@ impl Coordinator {
         }
         Ok(None)
     }
-    pub fn events(&self, id: &str) -> Result<Vec<crate::PublicEvent>, crate::Error> {
-        (|| -> io::Result<Vec<crate::PublicEvent>> {
+    pub fn events(&self, id: &str) -> Result<Vec<parvi_mission_model::PublicEvent>, crate::Error> {
+        (|| -> io::Result<Vec<parvi_mission_model::PublicEvent>> {
             Ok(self.run(id).map_err(crate::error::to_io)?.events)
         })()
         .map_err(crate::error::io)
     }
-    pub fn escalations(&self, id: &str) -> Result<Vec<crate::Escalation>, crate::Error> {
-        (|| -> io::Result<Vec<crate::Escalation>> {
+    pub fn escalations(
+        &self,
+        id: &str,
+    ) -> Result<Vec<parvi_mission_model::Escalation>, crate::Error> {
+        (|| -> io::Result<Vec<parvi_mission_model::Escalation>> {
             Ok(crate::project_escalations(
                 &self.ledger(id)?.read().map_err(crate::error::to_io)?,
             ))
@@ -552,7 +470,7 @@ impl Coordinator {
             })
             .map(|repo| {
                 Finding::new(
-                    crate::Code::NoCheckout,
+                    parvi_mission_model::Code::NoCheckout,
                     "",
                     format!("no checkout for {repo}"),
                 )
@@ -582,7 +500,7 @@ impl Coordinator {
             })
             .map(|f| {
                 Finding::new(
-                    crate::Code::UnknownDevice,
+                    parvi_mission_model::Code::UnknownDevice,
                     &f.id,
                     format!(
                         "formation {:?} runs on {}, a device this node does not know; name one of the fleet's devices or clear it",
@@ -604,7 +522,7 @@ impl Coordinator {
             .filter(|_| request.repository.is_empty())
             .map(|f| {
                 Finding::new(
-                    crate::Code::PlacementWithoutRepository,
+                    parvi_mission_model::Code::PlacementWithoutRepository,
                     &f.id,
                     format!(
                         "formation {:?} runs on {}, which reaches the run's work only through a repository; give the run a repository or clear the device",

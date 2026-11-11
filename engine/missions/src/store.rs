@@ -11,16 +11,12 @@
 //! mission kept in a repository. One file that cannot be read never hides the
 //! rest: it is listed as broken, with the reason.
 
+use parvi_mission_model::{Layout, Mission, MissionListing, Notes};
 use std::path::{Path, PathBuf};
-
-use serde::Serialize;
 
 use crate::Error;
 use crate::characters::{Character, read_characters};
-use crate::layout::Layout;
 use crate::links::{list_names, read_definition};
-use crate::mission::Mission;
-use crate::notes::Notes;
 use crate::roles::RoleStore;
 
 const MISSION_SUFFIX: &str = ".mission.toml";
@@ -28,22 +24,6 @@ const MISSION_SUFFIX: &str = ".mission.toml";
 #[derive(Clone, Debug)]
 pub struct Store {
     root: PathBuf,
-}
-
-/// One mission file as the listing shows it.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct MissionListing {
-    pub slug: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub id: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub title: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rev: Option<i64>,
-    /// Why the file cannot be read, such as a symlink whose target moved;
-    /// the other fields are then empty but the slug.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub broken: Option<String>,
 }
 
 impl Store {

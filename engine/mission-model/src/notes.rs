@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::Error;
+use parvi_core::Error;
 
 pub const NOTES_SCHEMA: i64 = 2;
 /// The target of the mission's own thread.
@@ -116,7 +116,7 @@ impl Notes {
 }
 
 /// `human:` or `agent:`, then a letter or digit and letters, digits or `._@-`.
-pub(crate) fn valid_author(author: &str) -> bool {
+pub fn valid_author(author: &str) -> bool {
     let Some(name) = author
         .strip_prefix("human:")
         .or_else(|| author.strip_prefix("agent:"))

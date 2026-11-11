@@ -69,8 +69,7 @@ fn projection_sanitizes_private_data_and_tracks_human_requests() {
     request.gate_id = "gate_review".into();
     request.data.insert("briefPath".into(), "/private".into());
     ledger.append(request).unwrap();
-    let projected =
-        parvi_missions::RunProjection::from_events(&ledger.read().unwrap(), "run_test").unwrap();
+    let projected = parvi_missions::project_run(&ledger.read().unwrap(), "run_test").unwrap();
     assert_eq!(projected.status, "waiting_human");
     assert_eq!(projected.waiting_gates[0].requested_seq, 2);
     let json = serde_json::to_string(&projected).unwrap();
@@ -78,8 +77,7 @@ fn projection_sanitizes_private_data_and_tracks_human_requests() {
     assert!(!json.contains("/private"));
     assert!(json.contains("/work"));
     ledger.append(event("run_canceled")).unwrap();
-    let projected =
-        parvi_missions::RunProjection::from_events(&ledger.read().unwrap(), "run_test").unwrap();
+    let projected = parvi_missions::project_run(&ledger.read().unwrap(), "run_test").unwrap();
     assert!(projected.r#final);
     assert_eq!(projected.status, "canceled");
     assert!(projected.waiting_gates.is_empty());
@@ -115,7 +113,7 @@ fn escalation_evidence_keeps_reason_out_of_the_public_event() {
     escalation.data.insert("blocks".into(), true.into());
     ledger.append(escalation).unwrap();
     let events = ledger.read().unwrap();
-    let view = parvi_missions::RunProjection::from_events(&events, "run_test").unwrap();
+    let view = parvi_missions::project_run(&events, "run_test").unwrap();
     assert!(
         !serde_json::to_string(&view)
             .unwrap()
@@ -140,8 +138,7 @@ fn a_verdict_for_an_old_request_does_not_close_the_new_one() {
     stale.gate_id = "review".into();
     stale.data.insert("requestedSeq".into(), 2.into());
     ledger.append(stale).unwrap();
-    let projection =
-        parvi_missions::RunProjection::from_events(&ledger.read().unwrap(), "run_test").unwrap();
+    let projection = parvi_missions::project_run(&ledger.read().unwrap(), "run_test").unwrap();
     assert_eq!(projection.waiting_gates[0].requested_seq, latest.seq);
     assert_eq!(projection.status, "waiting_human");
     std::fs::remove_file(path).unwrap();
@@ -158,8 +155,7 @@ fn a_new_evaluation_supersedes_an_older_human_request_immediately() {
     let mut evaluation = event("gate_evaluating");
     evaluation.gate_id = "review".into();
     ledger.append(evaluation).unwrap();
-    let projection =
-        parvi_missions::RunProjection::from_events(&ledger.read().unwrap(), "run_test").unwrap();
+    let projection = parvi_missions::project_run(&ledger.read().unwrap(), "run_test").unwrap();
     assert!(projection.waiting_gates.is_empty());
     std::fs::remove_file(path).unwrap();
 }

@@ -1,18 +1,8 @@
 //! Admission and rendering of values supplied to a mission run.
 
+use parvi_mission_model::{Code, Finding, Mission, MissionInput, RunInput};
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
-
-use serde::{Deserialize, Serialize};
-
-use crate::{Code, Finding, Mission, MissionInput};
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RunInput {
-    pub name: String,
-    pub kind: String,
-    pub value: String,
-}
 
 pub fn mission_run_inputs(mission: &Mission) -> Vec<MissionInput> {
     if let Some(card) = mission.input_card()

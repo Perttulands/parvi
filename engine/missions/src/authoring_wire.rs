@@ -1,5 +1,6 @@
 //! Wiring checks and the join-on-wire operation.
-use crate::{Connection, Error, Mission, Patch, Port};
+use crate::Error;
+use parvi_mission_model::{Connection, Mission, Patch, Port};
 use toml_edit::{DocumentMut, Item};
 
 fn endpoint<'a>(mission: &Mission, endpoint: &'a str, output: bool) -> Option<&'a str> {

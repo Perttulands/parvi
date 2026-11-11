@@ -1,20 +1,10 @@
 //! Partial Input card edits and declaration normalization.
-use crate::{Error, Mission, MissionInput, MissionOutput};
+use crate::Error;
+use parvi_mission_model::{InputCardUpdate, Mission};
 use serde::Serialize;
 use std::collections::HashSet;
 use toml_edit::{DocumentMut, Item, value};
 
-#[derive(Clone, Debug, Default)]
-pub struct InputCardUpdate {
-    pub id: String,
-    pub title: Option<String>,
-    pub goal: Option<String>,
-    pub files: Option<Vec<String>>,
-    pub input_hint: Option<String>,
-    pub human_channel: Option<String>,
-    pub inputs: Option<Vec<MissionInput>>,
-    pub outputs: Option<Vec<MissionOutput>>,
-}
 fn normalize_name(
     name: &mut String,
     kind: &mut String,

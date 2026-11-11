@@ -3,7 +3,8 @@
 
 use std::path::PathBuf;
 
-use parvi_missions::{Error, Mission, Store};
+use parvi_mission_model::Mission;
+use parvi_missions::{Error, Store};
 
 const HELLO: &str = r#"schema = 1
 id = "msn_hello"

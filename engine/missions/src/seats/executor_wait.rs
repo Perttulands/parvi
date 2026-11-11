@@ -3,9 +3,10 @@
 //! exists and while it works.
 use crate::{
     AgentSeat, BindingsSnapshot, Dispatch, DispatchResult, ExecutionEvent, ExecutionSink, Executor,
-    Formation, FormationExecution, PublishedTurn, SeatEvent, SeatExecutor, SeatFuture, SeatId,
-    SeatSide, Slot, TurnWorkspace, executor::PendingEvent,
+    FormationExecution, PublishedTurn, SeatEvent, SeatExecutor, SeatFuture, SeatId, SeatSide,
+    TurnWorkspace, executor::PendingEvent,
 };
+use parvi_mission_model::{Formation, Slot};
 use serde_json::json;
 use std::{
     path::PathBuf,

@@ -1,4 +1,5 @@
-use parvi_missions::{AdmissionFailure, Coordinator, LabExecutor, RunSettings, RunStart};
+use parvi_mission_model::RunStart;
+use parvi_missions::{AdmissionFailure, Coordinator, LabExecutor, RunSettings};
 use serde_json::{Map, Value};
 use std::{
     collections::BTreeMap,

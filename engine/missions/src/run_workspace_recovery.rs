@@ -2,7 +2,8 @@
 use crate::coordinator::Control;
 use crate::run_worker::append_live;
 use crate::run_workspace::{commit_turn, remove, turn_path};
-use crate::{Coordinator, RunEvent, RunStart};
+use crate::{Coordinator, RunEvent};
+use parvi_mission_model::RunStart;
 use std::{io, path::Path};
 
 /// Retire unaccepted attempts after executors have stopped, preserving pending
