@@ -21,6 +21,8 @@ pub mod error {
     pub const NOT_PENDING: &str = "not_pending";
     pub const PRECONDITION_REQUIRED: &str = "precondition_required";
     pub const MISSION_EXISTS: &str = "mission_exists";
+    pub const CHARACTER_EXISTS: &str = "character_exists";
+    pub const INVALID_CHARACTER: &str = "invalid_character";
     pub const ALREADY_EXISTS: &str = "already_exists";
     pub const DUPLICATE_CONNECTION: &str = "duplicate_connection";
     pub const INPUT_OCCUPIED: &str = "input_occupied";
@@ -223,4 +225,57 @@ pub struct AttemptsQuery {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub error: parvi_core::Error,
+}
+
+/// Describes the built-in, deterministic checks offered when authoring a gate.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GateProfiles {
+    pub profiles: Vec<GateProfile>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GateProfile {
+    pub profile_id: String,
+    pub profile_version: String,
+    pub display_name: String,
+    pub parameter_name: String,
+    pub parameter_label: String,
+    pub execution_class: String,
+    pub effect_policy: String,
+    pub deterministic: bool,
+    pub certified_total: bool,
+    pub max_input_bytes: u64,
+    pub max_result_bytes: u64,
+    pub max_operations: u64,
+    pub result_encoding: String,
+    pub profile_sha256: String,
+    pub evaluator_bundle_sha256: String,
+    pub policy_sha256: String,
+    pub determinism_policy_sha256: String,
+}
+
+/// A saved staffing stamp; the engine's persisted character is mapped at the node boundary.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct Character {
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub picture: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub agent_id: String,
+    pub harness: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub model: String,
+    pub effort: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Characters {
+    pub characters: Vec<Character>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Deleted {
+    pub deleted: String,
 }
