@@ -14,7 +14,7 @@ use crate::term::screen::Screen;
 use crate::theme::size;
 use gpui::{
     AnyElement, App, AppContext, Bounds, Context, Entity, FocusHandle, Focusable, IntoElement,
-    Pixels, Point, Render, Task, WeakEntity, Window, px,
+    Pixels, Point, Render, ScrollHandle, Task, WeakEntity, Window, px,
 };
 use parking_lot::Mutex;
 use parvi_app_kit::Host;
@@ -27,7 +27,7 @@ use parvi_app_kit::{Answers, Ask, Page, Setting};
 use parvi_core::NodeId;
 use parvi_core::frame::Kinds;
 use parvi_terminals_contract::{Launch, SessionList, decode_down};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -256,6 +256,9 @@ pub struct Terminals {
     pub find_cursor: usize,
     pub rename_field: Entity<TextField>,
     pub overview_cursor: usize,
+    /// Number of overview cards fitting in the last painted row.
+    pub overview_columns: Rc<Cell<usize>>,
+    pub overview_scroll: ScrollHandle,
     pub hover_row: Option<String>,
     /// Launches asked of a node, by node and request: the recipe, the window
     /// it goes to and that window's tab.
@@ -372,6 +375,8 @@ impl Terminals {
             find_cursor: 0,
             rename_field,
             overview_cursor: 0,
+            overview_columns: Rc::new(Cell::new(1)),
+            overview_scroll: ScrollHandle::new(),
             hover_row: None,
             launches: HashMap::new(),
             status_revision: 0,
@@ -912,6 +917,7 @@ impl Terminals {
                 self.host
                     .channel(parvi_terminals_contract::OVERVIEW, true, cx);
                 self.overview_cursor = 0;
+                self.overview_scroll.scroll_to_item(1);
                 self.focus.clone()
             }
             Surface::Find => {

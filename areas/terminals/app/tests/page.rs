@@ -1525,6 +1525,81 @@ fn leader_and_escape_route_around_an_attached_terminal(cx: &mut TestAppContext) 
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }
 
+#[gpui::test]
+fn overview_keyboard_dismisses_selects_and_routes_leader(cx: &mut TestAppContext) {
+    let Some(running) = start("terminals-overview-keys") else {
+        return;
+    };
+    let (_shell, cx, settings) = open_with_alpha(&running, "overview-keys", cx);
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    until(cx, "both sessions in the overview", |cx| {
+        page.read_with(cx, |p, _| p.fleet.all.len() == 2)
+    });
+
+    cx.simulate_keystrokes("alt-v");
+    until(cx, "overview open", |cx| {
+        cx.debug_bounds("overview-grid").is_some()
+    });
+    cx.simulate_keystrokes("escape");
+    until(cx, "Escape closes overview", |cx| {
+        cx.debug_bounds("overview-grid").is_none()
+    });
+
+    cx.simulate_keystrokes("alt-v");
+    until(cx, "overview reopened", |cx| {
+        cx.debug_bounds("overview-grid").is_some()
+    });
+    cx.simulate_keystrokes("ctrl-shift-space v");
+    until(cx, "leader closes overview", |cx| {
+        cx.debug_bounds("overview-grid").is_none()
+    });
+
+    cx.simulate_keystrokes("alt-v");
+    until(cx, "overview reopened for selection", |cx| {
+        cx.debug_bounds("overview-grid").is_some()
+    });
+    let (index, wanted) = page.read_with(cx, |p, _| {
+        let index = p.fleet.all.iter().position(|s| s.name == "beta").unwrap();
+        (index, Key::of(&p.fleet.all[index]))
+    });
+    cx.simulate_keystrokes("right");
+    until(cx, "arrow selects second session", |cx| {
+        page.read_with(cx, |p, _| p.overview_cursor == 1)
+    });
+    cx.simulate_keystrokes("left");
+    until(cx, "left selects the first session", |cx| {
+        page.read_with(cx, |p, _| p.overview_cursor == 0)
+    });
+    cx.simulate_keystrokes("down");
+    until(cx, "down selects the next row", |cx| {
+        page.read_with(cx, |p, _| p.overview_cursor == 1)
+    });
+    cx.simulate_keystrokes("up");
+    until(cx, "up selects the previous row", |cx| {
+        page.read_with(cx, |p, _| p.overview_cursor == 0)
+    });
+    if index == 1 {
+        cx.simulate_keystrokes("right");
+    }
+    cx.simulate_keystrokes("enter");
+    until(cx, "Enter opens selected session", |cx| {
+        cx.debug_bounds("overview-grid").is_none()
+            && page.read_with(cx, |p, _| p.settings.workspace.bound(&wanted).is_some())
+    });
+    until(cx, "selected session is ready", |cx| {
+        page.read_with(cx, |p, _| {
+            p.window_text(p.settings.workspace.focus)
+                .is_some_and(|text| text.contains('$'))
+        })
+    });
+    cx.simulate_input("echo overview-keyboard-restored");
+    cx.simulate_keystrokes("enter");
+    until(cx, "typing reaches selected session", |_| {
+        tmux(&running, &["capture-pane", "-p", "-t", "beta"]).contains("overview-keyboard-restored")
+    });
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
 /// A clipboard image travels through Send to the target node before its path
 /// and the originating reference are delivered to the session.
 #[gpui::test]

@@ -10,8 +10,8 @@ use crate::store::sessions::{self, Key};
 use crate::store::workspace::{MAX_WINDOWS, Workspace, tab_label};
 use crate::theme::{alpha, size, theme};
 use gpui::{
-    AnyElement, Context, FontWeight, MouseButton, MouseDownEvent, Window, anchored, deferred, div,
-    point, prelude::*, px,
+    AnyElement, Context, FontWeight, KeyDownEvent, MouseButton, MouseDownEvent, Window, anchored,
+    canvas, deferred, div, point, prelude::*, px,
 };
 use parvi_app_kit::widgets::kit::{self, Kind};
 
@@ -241,16 +241,31 @@ impl Terminals {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = theme(cx).clone();
+        let columns = self.overview_columns.clone();
+        let measure = canvas(
+            |_, _, _| (),
+            move |bounds, _, _, _| {
+                let width = f32::from(bounds.size.width);
+                columns.set((((width - 24. + 10.) / (size::THUMB_W + 10.)) as usize).max(1));
+            },
+        )
+        .absolute()
+        .inset_0();
         let mut grid = div()
             .id("overview-grid")
+            .debug_selector(|| "overview-grid".into())
+            .relative()
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
+            .track_scroll(&self.overview_scroll)
             .p(px(12.))
             .flex()
             .flex_wrap()
-            .gap(px(10.));
+            .gap(px(10.))
+            .child(measure);
         let list = self.fleet.all.clone();
+        self.overview_cursor = self.overview_cursor.min(list.len().saturating_sub(1));
         if list.is_empty() {
             grid = grid.child(kit::note(&t, "No sessions.", None));
         }
@@ -273,7 +288,7 @@ impl Terminals {
                     .flex_col()
                     .bg(t.surface)
                     .border_1()
-                    .border_color(if waiting.is_some() {
+                    .border_color(if i == self.overview_cursor || waiting.is_some() {
                         t.accent
                     } else {
                         t.divider
@@ -293,6 +308,9 @@ impl Terminals {
                                     .map(|p| super::place::passport(&t, &p.device, &p.environment)),
                             )
                             .when(waiting.is_some(), |d| d.child(kit::waiting_dot(&t)))
+                            .when(i == self.overview_cursor, |d| {
+                                d.child(div().text_color(t.accent).child("›"))
+                            })
                             .child(
                                 div()
                                     .flex_1()
@@ -336,6 +354,8 @@ impl Terminals {
         div()
             .absolute()
             .inset_0()
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(Self::overview_key))
             .flex()
             .flex_col()
             .bg(t.bg)
@@ -355,8 +375,7 @@ impl Terminals {
                             .child(format!("OVERVIEW · {} SESSIONS", list.len())),
                     )
                     .child(
-                        kit::note(&t, "A click puts the session in a window", Some(t.dim))
-                            .mr(px(12.)),
+                        kit::note(&t, "Arrow keys choose · Enter opens", Some(t.dim)).mr(px(12.)),
                     )
                     .child(
                         kit::button(&t, "ov-close", "Close  Esc", Kind::Quiet)
@@ -365,6 +384,38 @@ impl Terminals {
             )
             .child(grid)
             .into_any_element()
+    }
+
+    /// The shell handles Escape and leader chords before they reach this layer.
+    fn overview_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if event.keystroke.modifiers.modified() {
+            return;
+        }
+        let len = self.fleet.all.len();
+        if len == 0 {
+            return;
+        }
+        let cursor = self.overview_cursor.min(len - 1);
+        let columns = self.overview_columns.get();
+        self.overview_cursor = match event.keystroke.key.as_str() {
+            "left" => cursor.saturating_sub(1),
+            "right" => (cursor + 1).min(len - 1),
+            "up" => cursor.saturating_sub(columns),
+            "down" => cursor.saturating_add(columns).min(len - 1),
+            "enter" => {
+                let key = Key::of(&self.fleet.all[cursor]);
+                self.close(surface::OVERVIEW, cx);
+                self.place(key, window, cx);
+                cx.stop_propagation();
+                return;
+            }
+            _ => return,
+        };
+        // The first grid child is its measurement canvas.
+        self.overview_scroll
+            .scroll_to_item(self.overview_cursor + 1);
+        cx.stop_propagation();
+        cx.notify();
     }
 
     pub(super) fn render_find(
