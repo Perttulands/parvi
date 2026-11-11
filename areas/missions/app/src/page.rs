@@ -29,6 +29,7 @@ use parvi_missions_contract::{
 use serde_json::json;
 
 const PAD: f32 = 12.;
+const START_FORM_MAX: f32 = 680.;
 const TAB_PAD: f32 = 20.;
 const TAB_GAP: f32 = 6.;
 const EDGE: f32 = 2.;
@@ -1496,7 +1497,7 @@ impl Render for MissionsPage {
             empty
         };
         let form = self.mission_form(&t, cx);
-        let start_form = self.run_start_form(&t, cx);
+        let start_form = self.run_start_form(&t, window, cx);
         let attempts_form = self.attempts_form(&t, cx);
         let stop_form = self.stop_form(&t, cx);
         div()
