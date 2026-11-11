@@ -1,4 +1,5 @@
-//! Work's tracker readers, commands and watched snapshot channel.
+//! Work's tracker readers, commands and watched snapshot channel, and
+//! reference resolution for other areas ([`parvi_work_contract::Resolver`]).
 #[cfg(test)]
 mod test_support;
 mod work;
@@ -8,8 +9,10 @@ use axum::Router;
 use parvi_core::{Error, NodeId};
 use parvi_node_kit::args::{object, text};
 use parvi_node_kit::{Area, BoxFuture, Built, Channel, Client, Command, Listing, Setup};
+use parvi_work_contract::{Resolver, Resolving};
 use serde::Deserialize;
 use serde_json::json;
+use std::sync::Arc;
 use std::time::Duration;
 pub use work::{Bd, Gh};
 use work::{Config, Work};
@@ -36,10 +39,28 @@ pub fn build(setup: &Setup) -> Result<Built> {
 pub fn build_with(setup: &Setup, bd: Bd, gh: Gh) -> Result<Built> {
     let section: Section = setup.config.section("work")?;
     let config = Config::parse(&section.projects.join("\n"))?;
+    let work = Work::new(config, setup.node.id.as_str(), gh, bd);
+    setup
+        .provided
+        .provide::<dyn Resolver>(Arc::new(Provided(work.clone())))?;
     Built::now(WorkArea {
-        work: Work::new(config, setup.node.id.as_str(), gh, bd),
+        work,
         node: setup.node.id.clone(),
     })
+}
+
+/// Work as other areas reach it ([`parvi_work_contract::Resolver`]).
+struct Provided(Work);
+
+impl Resolver for Provided {
+    fn resolve<'a>(&'a self, written: &'a str) -> Resolving<'a> {
+        Box::pin(async move {
+            self.0
+                .resolve(written)
+                .await
+                .map_err(|error| Error::new(parvi_work_contract::BAD_REQUEST, format!("{error:#}")))
+        })
+    }
 }
 
 struct WorkArea {
