@@ -42,6 +42,37 @@ mod tests {
         assert_eq!(error.message, "peer is offline");
         task.abort();
     }
+    #[tokio::test]
+    async fn a_rejection_keeps_the_findings_beside_its_error() {
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::get(|| async {
+                (
+                    axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                    axum::Json(serde_json::json!({
+                        "error": {"code": "not_admitted", "message": "two findings"},
+                        "findings": [{"code": "no_seat"}, {"code": "no_role"}],
+                    })),
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let error = NodeClient::new(Some(&format!("http://{address}")))
+            .unwrap()
+            .request(Method::GET, "/", None, None)
+            .await
+            .unwrap_err();
+        let error = error.downcast_ref::<NodeError>().unwrap();
+        assert_eq!(error.code, "not_admitted");
+        assert_eq!(error.message, "two findings");
+        assert_eq!(
+            error.findings,
+            Some(serde_json::json!([{"code": "no_seat"}, {"code": "no_role"}]))
+        );
+        task.abort();
+    }
 }
 impl std::fmt::Display for NodeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -175,7 +206,7 @@ impl NodeClient {
                         plain.trim()
                     })
                     .into(),
-                findings: value["error"].get("findings").cloned(),
+                findings: value.get("findings").cloned(),
             }
             .into());
         }

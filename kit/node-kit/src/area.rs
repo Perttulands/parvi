@@ -93,7 +93,8 @@ type Call = dyn Fn(Value) -> BoxFuture<'static, Result<Value, Error>> + Send + S
 /// `parvi noun verb`.
 #[derive(Clone)]
 pub struct Command {
-    /// `noun_verb`: one underscore, words on both sides of it.
+    /// `noun_verb`: a noun, then a verb of one or more words, joined by
+    /// single underscores.
     pub name: &'static str,
     pub description: &'static str,
     /// The arguments' JSON Schema, asked for each time the tools are listed,

@@ -140,10 +140,7 @@ async fn next_kind(
 #[tokio::test(flavor = "multi_thread")]
 async fn role_routes_and_commands_keep_versions_and_usage() {
     let root = fresh_dir("parvi-roles-node");
-    let config = format!(
-        "[agents]\nhome = {:?}\npath = []\nmissions_dir = {:?}\n",
-        root, root
-    );
+    let config = format!("[agents]\nhome = {:?}\npath = []\n", root);
     let node = Node::start(&[sessions::LISTING, parvi_agents::LISTING], &config)
         .await
         .unwrap();

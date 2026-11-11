@@ -67,7 +67,7 @@ real list, and `parvi kinds` prints who owns which kinds.
 
 - **Frames.** The first byte of a `/ws` frame is its kind. A client's frame
   goes to the channel of the area owning its kind; each channel pushes its own.
-- **Commands.** A command is a `noun_verb` name, a description, an input
+- **Commands.** A command is a `noun_verb` name (the verb may be several words: `formation_set_type` is `parvi formation set-type`), a description, an input
   schema and a call answering JSON or the error shape. `node-kit` serves it as
   an MCP tool on `/mcp` and as the CLI verb `parvi noun verb`. A `node`
   argument names where it runs.

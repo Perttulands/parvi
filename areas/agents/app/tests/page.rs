@@ -27,16 +27,13 @@ fn start() -> Running {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             let home = fresh_dir("parvi-agents-page-home");
-            let role_file = home.join("roles/fixture-writer.toml");
-            std::fs::create_dir_all(role_file.parent().unwrap()).unwrap();
-            std::fs::write(&role_file, "schema = 1\n[card]\nid = \"fixture-writer\"\ndisplay_name = \"Fixture writer\"\nkind = \"specialist\"\nsummary = \"Before edit\"\nstatus = \"active\"\n").unwrap();
-            let config = format!(
-                "[agents]\nhome = {:?}\npath = []\nmissions_dir = {:?}\n",
-                home, home
-            );
+            let config = format!("[agents]\nhome = {:?}\npath = []\n", home);
             let node = Node::start(&[sessions::LISTING, parvi_agents::LISTING], &config)
                 .await
                 .unwrap();
+            let role_file = node.dir().join("missions/roles/fixture-writer.toml");
+            std::fs::create_dir_all(role_file.parent().unwrap()).unwrap();
+            std::fs::write(&role_file, "schema = 1\n[card]\nid = \"fixture-writer\"\ndisplay_name = \"Fixture writer\"\nkind = \"specialist\"\nsummary = \"Before edit\"\nstatus = \"active\"\n").unwrap();
             ready.send((node.url(), role_file)).unwrap();
             while stopped.try_recv().is_err() {
                 tokio::time::sleep(Duration::from_millis(50)).await;

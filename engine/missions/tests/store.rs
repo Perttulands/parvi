@@ -233,29 +233,3 @@ fn archons_delivery_notes_load() {
     assert_eq!(notes.entries.len(), 8);
     assert_eq!(notes.thread("fmn_beads").count(), 1);
 }
-
-#[cfg(windows)]
-#[test]
-fn windows_default_root_prefers_localappdata_over_userprofile() {
-    const MARKER: &str = "PARVI_86_ROOT_TEST";
-    if std::env::var_os(MARKER).is_some() {
-        assert_eq!(
-            Store::default_root().unwrap(),
-            PathBuf::from(r"C:\parvi-local\parvi\missions")
-        );
-    } else {
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "windows_default_root_prefers_localappdata_over_userprofile",
-            ])
-            .env(MARKER, "1")
-            .env("LOCALAPPDATA", r"C:\parvi-local")
-            .env("USERPROFILE", r"C:\parvi-user")
-            .env("HOME", r"C:\parvi-home")
-            .env("XDG_DATA_HOME", r"C:\parvi-xdg")
-            .status()
-            .unwrap();
-        assert!(status.success());
-    }
-}

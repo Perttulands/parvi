@@ -59,7 +59,6 @@ struct AgentsArea {
 struct Section {
     home: Option<PathBuf>,
     path: Option<Vec<PathBuf>>,
-    missions_dir: Option<PathBuf>,
 }
 
 pub fn build(setup: &Setup) -> Result<Built> {
@@ -78,11 +77,7 @@ pub fn build(setup: &Setup) -> Result<Built> {
     if let (Some(home), Some(path)) = (&mut home, section.path) {
         home.path = path.iter().map(|p| setup.config.path(p)).collect();
     }
-    let root = section
-        .missions_dir
-        .map(|p| setup.config.path(&p))
-        .or_else(parvi_mission_engine::Store::default_root)
-        .context("agents roles need a missions directory")?;
+    let root = parvi_mission_engine::Store::root_in(&setup.dir);
     let roles = Arc::new(roles::Service::new(root, fixture_codex));
     let node = setup.node.id.to_string();
     Built::then(move |provided| {
