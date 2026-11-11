@@ -13,6 +13,7 @@ pub const PAGES: &[Build] = &[
     parvi_scheduled_app::build,
     parvi_host_app::build_host,
     parvi_host_app::build_services,
+    parvi_work_app::build,
 ];
 
 fn fonts() -> Vec<Cow<'static, [u8]>> {

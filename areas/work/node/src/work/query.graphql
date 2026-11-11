@@ -1,0 +1,34 @@
+# What the Work tab reads of one repository (src/work/github.rs). Kept small
+# enough that GitHub answers for a busy repository in a few seconds; checks
+# are counted by GitHub rather than listed.
+query($owner: String!, $name: String!, $oi: String, $ci: String, $op: String, $cp: String) {
+  repository(owner: $owner, name: $name) {
+    url
+    openIssues: issues(first: 100, after: $oi, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) { totalCount pageInfo { hasNextPage endCursor } nodes { ...issue } }
+    closedIssues: issues(first: 100, after: $ci, states: CLOSED, orderBy: {field: UPDATED_AT, direction: DESC}) { totalCount pageInfo { hasNextPage endCursor } nodes { ...issue } }
+    openPulls: pullRequests(first: 100, after: $op, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) { totalCount pageInfo { hasNextPage endCursor } nodes { ...pull } }
+    closedPulls: pullRequests(first: 100, after: $cp, states: [MERGED, CLOSED], orderBy: {field: UPDATED_AT, direction: DESC}) { totalCount pageInfo { hasNextPage endCursor } nodes { ...pull } }
+  }
+}
+
+fragment issue on Issue {
+  number title url state createdAt updatedAt body
+  author { login }
+  labels(first: 20) { nodes { name } }
+  assignees(first: 10) { nodes { login } }
+  linkedBranches(first: 5) { nodes { ref { name } } }
+  closedByPullRequestsReferences(first: 5, includeClosedPrs: true) { nodes { number } }
+}
+
+fragment pull on PullRequest {
+  number title url state isDraft createdAt updatedAt body
+  author { login }
+  headRefName baseRefName additions deletions
+  labels(first: 20) { nodes { name } }
+  assignees(first: 10) { nodes { login } }
+  closingIssuesReferences(first: 10) { nodes { number } }
+  commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 0) {
+    checkRunCountsByState { state count }
+    statusContextCountsByState { state count }
+  } } } } }
+}

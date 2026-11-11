@@ -1,0 +1,4 @@
+bin/parvi/Cargo.toml merge=union
+bin/parvi/src/lib.rs merge=union
+bin/parvi-app/Cargo.toml merge=union
+bin/parvi-app/src/lib.rs merge=union

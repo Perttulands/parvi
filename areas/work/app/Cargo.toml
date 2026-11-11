@@ -1,0 +1,30 @@
+[package]
+name = "parvi-work-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+parvi-app-kit = { path = "../../../kit/app-kit" }
+parvi-core = { path = "../../../kit/core" }
+parvi-work-contract = { path = "../contract" }
+parvi-terminals-contract = { path = "../../terminals/contract" }
+gpui = { package = "gpui-pre", version = "=0.3.11" }
+serde_json = "1"
+time = { version = "0.3", features = ["local-offset", "parsing"] }
+
+[dev-dependencies]
+parvi-app-shell = { path = "../../../kit/app-shell" }
+parvi-work = { path = "../node" }
+parvi-testkit = { path = "../../../kit/testkit" }
+parvi-node-kit = { path = "../../../kit/node-kit" }
+gpui = { package = "gpui-pre", version = "=0.3.11", features = ["test-support"] }
+tokio = { version = "1", features = ["full"] }
+parvi-terminals = { path = "../../terminals/node" }
+parvi-terminals-app = { path = "../../terminals/app" }
+anyhow = "1"
+async-channel = "2"

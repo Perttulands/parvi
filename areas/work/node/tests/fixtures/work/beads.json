@@ -1,0 +1,108 @@
+[
+  {
+    "id": "tst-qq9.1",
+    "title": "Read stores through bd",
+    "description": "Run bd list in the store folder.",
+    "status": "in_progress",
+    "priority": 1,
+    "issue_type": "task",
+    "assignee": "agent-one",
+    "owner": "operator@example.invalid",
+    "created_at": "2026-11-08T17:31:40Z",
+    "created_by": "Operator",
+    "updated_at": "2026-11-08T17:31:42Z",
+    "started_at": "2026-11-08T17:31:42Z",
+    "labels": [
+      "beads",
+      "work"
+    ],
+    "dependencies": [
+      {
+        "issue_id": "tst-qq9.1",
+        "depends_on_id": "tst-qq9",
+        "type": "parent-child",
+        "created_at": "2026-11-08T19:31:39Z",
+        "created_by": "Operator",
+        "metadata": "{}"
+      }
+    ],
+    "dependency_count": 0,
+    "dependent_count": 1,
+    "comment_count": 0,
+    "parent": "tst-qq9"
+  },
+  {
+    "id": "tst-qq9.2",
+    "title": "Show a failed store as failed",
+    "status": "open",
+    "priority": 2,
+    "issue_type": "task",
+    "owner": "operator@example.invalid",
+    "created_at": "2026-11-08T17:31:41Z",
+    "created_by": "Operator",
+    "updated_at": "2026-11-08T17:31:41Z",
+    "dependencies": [
+      {
+        "issue_id": "tst-qq9.2",
+        "depends_on_id": "tst-qq9.1",
+        "type": "blocks",
+        "created_at": "2026-11-08T19:31:41Z",
+        "created_by": "Operator",
+        "metadata": "{}"
+      },
+      {
+        "issue_id": "tst-qq9.2",
+        "depends_on_id": "ctx-5t7",
+        "type": "blocks",
+        "created_at": "2026-11-08T17:31:41Z",
+        "created_by": "Operator",
+        "metadata": "{}"
+      },
+      {
+        "issue_id": "tst-qq9.2",
+        "depends_on_id": "tst-qq9",
+        "type": "parent-child",
+        "created_at": "2026-11-08T19:31:40Z",
+        "created_by": "Operator",
+        "metadata": "{}"
+      }
+    ],
+    "dependency_count": 1,
+    "dependent_count": 0,
+    "comment_count": 0,
+    "parent": "tst-qq9"
+  },
+  {
+    "id": "tst-1mt",
+    "title": "Old idea",
+    "status": "closed",
+    "priority": 2,
+    "issue_type": "task",
+    "created_at": "2026-11-08T17:31:31Z",
+    "updated_at": "2026-11-08T17:31:32Z",
+    "closed_at": "2026-11-08T17:31:32Z",
+    "close_reason": "Superseded by the seam",
+    "dependency_count": 0,
+    "dependent_count": 0,
+    "comment_count": 0,
+    "owner": "operator@example.invalid",
+    "created_by": "Operator"
+  },
+  {
+    "id": "tst-qq9",
+    "title": "Parent epic",
+    "description": "Run bd list in the store folder.",
+    "status": "open",
+    "priority": 2,
+    "issue_type": "epic",
+    "assignee": "agent-one",
+    "owner": "operator@example.invalid",
+    "created_at": "2026-11-08T17:31:18Z",
+    "created_by": "Operator",
+    "updated_at": "2026-11-08T17:31:43Z",
+    "started_at": "2026-11-08T17:31:31Z",
+    "dependency_count": 0,
+    "dependent_count": 0,
+    "comment_count": 0
+  }
+]
