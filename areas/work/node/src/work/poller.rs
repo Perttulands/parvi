@@ -104,6 +104,54 @@ impl Work {
         }))
     }
 
+    /// File an item and return its canonical reference.
+    pub async fn create(
+        &self,
+        request: &parvi_work_contract::Create,
+    ) -> Result<String, parvi_core::Error> {
+        use parvi_core::Error;
+        if !["bug", "task", "feature"].contains(&request.kind.as_str()) {
+            return Err(Error::new(
+                "bad_request",
+                "type must be bug, task or feature",
+            ));
+        }
+        let project = self
+            .0
+            .config
+            .projects
+            .iter()
+            .find(|p| p.name() == request.project)
+            .ok_or_else(|| {
+                Error::new(
+                    "unknown_project",
+                    format!("unknown project: {}", request.project),
+                )
+            })?;
+        let reference = match project {
+            Project::Beads(store) => self
+                .0
+                .bd
+                .create(
+                    &store.folder,
+                    &request.title,
+                    &request.description,
+                    &request.kind,
+                )
+                .await
+                .map(|id| format!("bead:{}:{}#{id}", self.0.node, store.folder)),
+            Project::GitHub(repo) => {
+                self.0
+                    .gh
+                    .create(repo, &request.title, &request.description)
+                    .await
+            }
+        }
+        .map_err(|e| Error::new("tracker_error", format!("{e:#}")))?;
+        self.refresh();
+        Ok(reference)
+    }
+
     /// Reads every project again now, GitHub too, for the watchers: what a
     /// Refresh press asks. Only while some watcher keeps the poller running.
     pub fn refresh(&self) {
@@ -600,5 +648,51 @@ pub(super) mod tests {
         let mut watching = work.subscribe();
         assert!(watching.next().await.projects.is_empty());
         assert!(work.0.poll.lock().unwrap().task.is_none());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod create_tests {
+    use super::super::config::Repo;
+    use super::tests::Fake;
+    use super::*;
+    use parvi_work_contract::Create;
+
+    #[tokio::test]
+    async fn creates_github_and_reports_tracker_and_project_errors() {
+        let fake = Fake::new(
+            "create",
+            "printf '%s\\n' \"$@\" > \"$(dirname \"$0\")/args\"; echo https://github.com/o/r/issues/42",
+            "echo database-broken >&2; exit 1",
+        );
+        let work = fake.work(vec![
+            Project::GitHub(Repo {
+                name: "o/r".into(),
+                checkout: None,
+            }),
+            Project::Beads(super::super::config::Store {
+                folder: fake.store(),
+            }),
+        ]);
+        let mut request = Create {
+            project: "o/r".into(),
+            title: "T".into(),
+            description: "D".into(),
+            kind: "task".into(),
+        };
+        assert_eq!(work.create(&request).await.unwrap(), "gh:o/r#42");
+        assert_eq!(
+            std::fs::read_to_string(fake.dir.join("args")).unwrap(),
+            "issue\ncreate\n--repo\no/r\n--title\nT\n--body\nD\n"
+        );
+        request.project = "missing".into();
+        assert_eq!(
+            work.create(&request).await.unwrap_err().code,
+            "unknown_project"
+        );
+        request.project = fake.store();
+        let error = work.create(&request).await.unwrap_err();
+        assert_eq!(error.code, "tracker_error");
+        assert!(error.message.contains("database-broken"));
     }
 }
