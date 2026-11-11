@@ -452,6 +452,7 @@ fn projects_landing_groups_repositories_sessions_and_scopes_find(cx: &mut TestAp
         host.publish(
             parvi_terminals_contract::SessionList {
                 sessions: vec![session],
+                ..Default::default()
             },
             cx,
         )
