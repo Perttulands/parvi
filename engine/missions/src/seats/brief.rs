@@ -10,7 +10,11 @@ pub(super) fn render(request: &FormationExecution, slot: &Slot) -> String {
 /// A worker has the same context, but the controller owns the final output.
 pub(super) fn render_worker(request: &FormationExecution, slot: &Slot) -> String {
     let mut brief = render_for(request, slot, false);
-    brief.push_str("You are a worker on this team. Work on the controller's assigned task, and report your findings to the controller. The controller owns the formation's final output.\n");
+    let _ = writeln!(
+        brief,
+        "You are a worker on this team. Work on the controller's assigned task, save your output in the attempt directory as worker-{}.md, and report its path and findings to the controller. The controller owns the formation's final output.",
+        slot.id
+    );
     brief
 }
 

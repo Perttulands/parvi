@@ -27,6 +27,9 @@ struct Entry {
     path: PathBuf,
     events: Vec<SeatEvent>,
     staged: bool,
+    result: Option<DispatchResult>,
+    alive: bool,
+    notifications: Vec<String>,
 }
 impl SeatSide for LabSeats {
     fn dispatch(&self, request: Dispatch) -> SeatFuture<'_, String> {
@@ -86,6 +89,9 @@ impl SeatSide for LabSeats {
                     path,
                     events,
                     staged: false,
+                    result: None,
+                    alive: true,
+                    notifications: Vec::new(),
                 },
             );
             Ok(dispatch_id)
@@ -138,8 +144,29 @@ impl SeatSide for LabSeats {
             .dispatch
             .clone())
     }
-    fn result(&self, _: &str) -> Result<Option<DispatchResult>, parvi_mission_engine::Error> {
-        Ok(None)
+    fn result(&self, id: &str) -> Result<Option<DispatchResult>, parvi_mission_engine::Error> {
+        Ok(self.entries.lock().unwrap().get(id).unwrap().result.clone())
+    }
+    fn seat_alive(&self, seat: &SeatId) -> SeatFuture<'_, bool> {
+        let alive = self
+            .entries
+            .lock()
+            .unwrap()
+            .values()
+            .find(|e| e.seat == *seat)
+            .unwrap()
+            .alive;
+        Box::pin(async move { Ok(alive) })
+    }
+    fn notify(&self, id: &str, text: &str) -> SeatFuture<'_, ()> {
+        self.entries
+            .lock()
+            .unwrap()
+            .get_mut(id)
+            .unwrap()
+            .notifications
+            .push(text.into());
+        Box::pin(async { Ok(()) })
     }
     fn end_seat(&self, seat: &SeatId, cause: &str) -> SeatFuture<'_, String> {
         let seat = seat.clone();
@@ -151,9 +178,10 @@ impl SeatSide for LabSeats {
                 .find(|entry| entry.seat == seat)
                 .unwrap();
             let data = json!({"sessionName":seat.session_name,"outcome":if cause == "shutdown" {"left_shutdown"} else {"ended"},"cause":cause});
+            entry.alive = false;
             entry.events.push(SeatEvent {
                 key: "cleanup".into(),
-                seq: 3,
+                seq: entry.events.len() as u64 + 1,
                 kind: "seat_cleanup".into(),
                 data: data.as_object().unwrap().clone(),
             });
@@ -172,7 +200,7 @@ impl SeatSide for LabSeats {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn controller_receives_worker_sessions_and_team_is_recorded() {
+async fn controller_output_reaches_gate_and_lost_workers_are_reported() {
     let node = Node::start(&[sessions::LISTING], "").await.unwrap();
     let root = parvi_testkit::fresh_dir("orchestrated-seats");
     std::fs::create_dir_all(root.join("missions")).unwrap();
@@ -180,6 +208,10 @@ async fn controller_receives_worker_sessions_and_team_is_recorded() {
         .replace("type = \"solo\"", "type = \"orchestrated\"")
         .replace("id = \"slot_work\"", "id = \"slot_lead\"\ncontroller = true")
         .replace("[[end]]", "[[formation.slot]]\nid = \"slot_a\"\nlabel = \"Worker A\"\nharness = \"openai-codex\"\neffort = \"medium\"\n[[formation.slot]]\nid = \"slot_b\"\nlabel = \"Worker B\"\nharness = \"claude-code\"\neffort = \"medium\"\n\n[[end]]");
+    let mission = mission.replace("to = \"end_done:in\"", "to = \"gate_review:in\"");
+    let mission = format!(
+        "{mission}\n[[gate]]\nid = \"gate_review\"\ntitle = \"Review\"\nkinds = [\"code\"]\ncheck = \"output_contains\"\ncheckVersion = \"1\"\ncheckValue = \"controller-result\"\n[[end]]\nid = \"end_rejected\"\ntitle = \"Rejected\"\noutcome = \"rejected\"\n[[connection]]\nid = \"edge_pass\"\nfrom = \"gate_review:pass\"\nto = \"end_done:in\"\n[[connection]]\nid = \"edge_fail\"\nfrom = \"gate_review:fail\"\nto = \"end_rejected:in\"\n"
+    );
     std::fs::write(root.join("missions/hello.mission.toml"), mission).unwrap();
     let seats = LabSeats {
         sessions: node.sessions(),
@@ -285,11 +317,105 @@ async fn controller_receives_worker_sessions_and_team_is_recorded() {
             .count(),
         2
     );
-    let c = coordinator.clone();
-    tokio::task::spawn_blocking(move || c.abort(&run, "human:test", "test ends"))
-        .await
-        .unwrap()
-        .unwrap();
+    // Simulate one worker disappearing while the controller is still working.
+    {
+        let mut entries = seats.entries.lock().unwrap();
+        entries
+            .values_mut()
+            .find(|e| e.dispatch.slot_id == "slot_a")
+            .unwrap()
+            .alive = false;
+    }
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if seats.entries.lock().unwrap().values().any(|e| {
+                e.dispatch.slot_id == "slot_lead"
+                    && e.notifications
+                        .iter()
+                        .any(|text| text.contains("slot_a") && text.contains("gone"))
+            }) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("controller notified of lost worker");
+    // The worker saves its own artifact before the controller reports its result.
+    let attempt = {
+        let entries = seats.entries.lock().unwrap();
+        let worker = entries
+            .values()
+            .find(|e| e.dispatch.slot_id == "slot_b")
+            .unwrap();
+        let brief = std::fs::read_to_string(&worker.path).unwrap();
+        PathBuf::from(
+            brief
+                .lines()
+                .find_map(|l| l.strip_prefix("Attempt directory: "))
+                .unwrap(),
+        )
+    };
+    std::fs::write(attempt.join("worker-slot_b.md"), "worker-result").unwrap();
+    {
+        let mut entries = seats.entries.lock().unwrap();
+        let lead = entries
+            .values_mut()
+            .find(|e| e.dispatch.slot_id == "slot_lead")
+            .unwrap();
+        lead.result = Some(DispatchResult {
+            status: "ok".into(),
+            text: "```parvi-outputs\n{\"port_out\":{\"text\":\"controller-result\"}}\n```".into(),
+        });
+        let data = json!({"dispatchId":lead.dispatch.id,"sentinel":{"runId":run}});
+        lead.events.push(SeatEvent {
+            key: "result".into(),
+            seq: 3,
+            kind: "slot_result".into(),
+            data: data.as_object().unwrap().clone(),
+        });
+    }
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let projection = coordinator.run(&run).unwrap();
+            if projection.r#final || projection.status == "blocked" {
+                assert_eq!(
+                    projection.status,
+                    "succeeded",
+                    "{}",
+                    std::fs::read_to_string(root.join("runs").join(format!("{run}.ndjson")))
+                        .unwrap()
+                );
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("run reaches End");
+    assert_eq!(
+        std::fs::read_to_string(attempt.join("worker-slot_b.md")).unwrap(),
+        "worker-result"
+    );
+    let ledger =
+        parvi_mission_engine::Ledger::new(root.join("runs").join(format!("{run}.ndjson")), &run)
+            .read()
+            .unwrap();
+    assert!(ledger.iter().any(|e| e.kind == "worker_observation"
+        && e.data["outcome"] == "gone"
+        && e.slot_id == "slot_a"));
+    assert!(
+        ledger
+            .iter()
+            .any(|e| e.kind == "gate_kind_result" && e.data["verdict"] == "pass")
+    );
+    for slot in ["slot_a", "slot_b"] {
+        assert!(
+            ledger
+                .iter()
+                .any(|e| e.kind == "seat_cleanup" && e.slot_id == slot)
+        );
+    }
     drop(coordinator);
     node.stop().await;
     std::fs::remove_dir_all(root).unwrap();

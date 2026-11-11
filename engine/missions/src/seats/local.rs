@@ -210,13 +210,16 @@ impl LocalSeats {
             .seat(dispatch_id)
             .map_err(|e| e.to_string())?
             .ok_or("dispatch has no seat")?;
-        let result = self.engine.kill(&seat.session).await;
-        let (outcome, detail) = match result {
-            Ok(()) => ("ended", String::new()),
-            Err(error) if error.to_string().contains("generation") => {
-                ("left_socket_changed", error.to_string())
-            }
+        let found = self.engine.find(&seat.session_name).await;
+        let (outcome, detail) = match found {
+            Ok(None) => ("gone", String::new()),
+            Ok(Some(current)) if current != seat.session => ("left_socket_changed", "seat identity changed".into()),
             Err(error) => ("left_cleanup_failed", error.to_string()),
+            Ok(Some(_)) => match self.engine.kill(&seat.session).await {
+                Ok(()) => ("ended", String::new()),
+                Err(error) if error.to_string().contains("generation") => ("left_socket_changed", error.to_string()),
+                Err(error) => ("left_cleanup_failed", error.to_string()),
+            },
         };
         let data = json!({"dispatchId":dispatch_id,"outcome":outcome,"cause":cause,"detail":detail,"sessionName":seat.session_name});
         self.records

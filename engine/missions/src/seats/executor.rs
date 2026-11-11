@@ -45,7 +45,7 @@ impl SeatExecutor {
         original: Option<&str>,
         sink: &ExecutionSink,
     ) -> Result<(String, String, SeatId), String> {
-        self.turn_prepared(request, slot, phase, prompt, original, sink, None)
+        self.turn_prepared(request, slot, phase, prompt, original, sink, None, &[])
     }
     #[allow(clippy::too_many_arguments)]
     fn turn_prepared(
@@ -57,6 +57,7 @@ impl SeatExecutor {
         original: Option<&str>,
         sink: &ExecutionSink,
         prepared: Option<(SeatId, String)>,
+        workers: &[(Slot, String, SeatId, String)],
     ) -> Result<(String, String, SeatId), String> {
         let id = dispatch_id(request, slot, phase);
         let (seat, result) = self.runtime.block_on(async {
@@ -74,6 +75,8 @@ impl SeatExecutor {
             let mut terminal_event = false;
             let mut warned = vec![false; request.limits.warnings.len()];
             let mut counted = 0;
+            let mut lost = std::collections::HashSet::new();
+            let mut checked: Option<std::time::Instant> = None;
             // Reading a transcript costs, so live counts refresh every few seconds.
             let mut metered: Option<std::time::Instant> = None;
             let result = loop {
@@ -98,6 +101,20 @@ impl SeatExecutor {
                 }
                 if request.limits.is_spent() {
                     break Err("the step's Limit card is spent".into());
+                }
+                if checked.is_none_or(|at| at.elapsed() >= Duration::from_secs(1)) {
+                    checked = Some(std::time::Instant::now());
+                    for (worker, _, worker_seat, _) in workers {
+                        if lost.contains(&worker.id) { continue; }
+                        if self.seats.away(&request.formation.device).is_some() { break; }
+                        if matches!(tokio::time::timeout(Duration::from_millis(250), self.seats.seat_alive(worker_seat)).await, Ok(Ok(false))) {
+                            let text = format!("Worker {} (session {}) is gone. Continue without that worker.", worker.id, worker_seat.session_name);
+                            let data = json!({"mode":"agentic-leader","observer":"parvi-seat","phase":"work","outcome":"gone","anomaly":true,"slotId":worker.id,"controllerSlot":slot.id,"sessionRef":format!("terminal:{}", worker_seat.session_name)});
+                            sink.emit(ExecutionEvent { kind: "worker_observation".into(), slot_id: worker.id.clone(), data: data.as_object().unwrap().clone() }).map_err(|e| format!("seat_ledger_unavailable: {e}"))?;
+                            self.seats.notify(&id, &text).await.map_err(|e| e.message)?;
+                            lost.insert(worker.id.clone());
+                        }
+                    }
                 }
                 self.warn(&request.limits, &mut warned, &id, &slot.id, sink).await;
                 tokio::select! {
@@ -483,7 +500,7 @@ impl SeatExecutor {
                     break;
                 }
             }
-            if outcome != "ended" {
+            if outcome != "ended" && outcome != "gone" {
                 return Err(format!("seat_cleanup: {outcome}"));
             }
             Ok(())
@@ -539,7 +556,7 @@ impl SeatExecutor {
                 ));
             }
             let mut prompt = brief::render(request, controller);
-            prompt.push_str("\nYou are the controller. Direct only these worker sessions. Each worker has a prepared brief with the same run context and attempt directory. Send the first task with the command shown, then coordinate and inspect the workers before finishing.\n");
+            prompt.push_str("\nYou are the controller. Direct only these worker sessions. Each worker has a prepared brief with the same run context and attempt directory. Ask each worker to save its output in that directory before reporting back. Send the first task with the command shown, then coordinate and inspect the workers before finishing.\n");
             for (slot, _, seat, path) in &workers {
                 let text = format!(
                     "Read your prepared brief at {path}, then work on the task I give you: <task>"
@@ -562,7 +579,7 @@ impl SeatExecutor {
         let (controller_seat, controller_path, prompt) = match setup {
             Ok(value) => value,
             Err(error) => {
-                self.close_workers(request, &workers, sink);
+                let _ = self.close_workers(request, &workers, sink);
                 return Err(error);
             }
         };
@@ -580,7 +597,7 @@ impl SeatExecutor {
                 &controller.id,
                 sink,
             );
-            self.close_workers(request, &workers, sink);
+            let _ = self.close_workers(request, &workers, sink);
             return Err(format!("seat_ledger_unavailable: {error}"));
         }
         for (slot, _, seat, _) in &workers {
@@ -596,7 +613,7 @@ impl SeatExecutor {
                     &controller.id,
                     sink,
                 );
-                self.close_workers(request, &workers, sink);
+                let _ = self.close_workers(request, &workers, sink);
                 return Err(format!("seat_ledger_unavailable: {error}"));
             }
         }
@@ -604,17 +621,43 @@ impl SeatExecutor {
             request,
             controller,
             "initial",
-            prompt,
+            prompt.clone(),
             None,
             sink,
             Some((controller_seat.clone(), controller_path)),
+            &workers,
         );
-        self.close_workers(request, &workers, sink);
+        let workers_closed = self.close_workers(request, &workers, sink);
         match result {
-            Ok((id, _, seat)) => {
+            Ok((id, mut text, seat)) => {
+                let result = match outputs(request, &text) {
+                    Ok(outputs) => Ok(outputs),
+                    Err(error) => {
+                        match self.turn(
+                            request,
+                            controller,
+                            "output-correction",
+                            correction_prompt(&prompt, &error),
+                            Some(&id),
+                            sink,
+                        ) {
+                            Ok((_, corrected, _)) => {
+                                text = corrected;
+                                outputs(request, &text)
+                            }
+                            Err(error) => return Err(error),
+                        }
+                    }
+                };
                 self.cleanup(&id, &seat, &controller.id, sink)?;
-                // The next slice owns accepting the controller's final output.
-                Err("orchestrated completion is not yet supported".into())
+                workers_closed?;
+                let outputs = result?;
+                self.publish(&id, request, controller, sink)?;
+                Ok(FormationResult {
+                    status: "done".into(),
+                    text,
+                    outputs,
+                })
             }
             Err(error) => {
                 if !request.stopping.load(Ordering::Acquire)
@@ -633,7 +676,8 @@ impl SeatExecutor {
         request: &FormationExecution,
         workers: &[(Slot, String, SeatId, String)],
         sink: &ExecutionSink,
-    ) {
+    ) -> Result<(), String> {
+        let mut errors = Vec::new();
         for (slot, id, seat, _) in workers {
             let result = if request.stopping.load(Ordering::Acquire) {
                 self.runtime.block_on(self.detach(id, seat, &slot.id, sink))
@@ -646,8 +690,13 @@ impl SeatExecutor {
                 self.cleanup(id, seat, &slot.id, sink)
             };
             if let Err(error) = result {
-                eprintln!("parvi: worker {} cleanup: {error}", slot.id);
+                errors.push(format!("worker {} cleanup: {error}", slot.id));
             }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
         }
     }
     fn failed(
