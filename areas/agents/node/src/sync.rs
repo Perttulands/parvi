@@ -1,6 +1,6 @@
 //! Sync: `git pull` and the checkout's setup script, typed into a new tmux
-//! session so the operator watches it run, answers it if it asks, and reads
-//! what it said.
+//! session so the operator can watch it and read what it said. Git is kept
+//! non-interactive even though the session has a terminal.
 
 use anyhow::{Context, Result};
 
@@ -45,12 +45,16 @@ pub async fn sync(home: &Home, sessions: &dyn Sessions, shown: &str) -> Result<S
 
 /// What the session types: the pull, then the setup if the pull worked.
 fn line(setup: Option<&str>) -> String {
+    #[cfg(windows)]
+    let prefix = "$env:GIT_TERMINAL_PROMPT = '0'; git pull --ff-only";
+    #[cfg(not(windows))]
+    let prefix = "export GIT_TERMINAL_PROMPT=0; git pull --ff-only";
     match setup {
         #[cfg(windows)]
-        Some(script) => format!("git pull --ff-only; if ($?) {{ .\\{script} }}"),
+        Some(script) => format!("{prefix}; if ($?) {{ .\\{script} }}"),
         #[cfg(not(windows))]
-        Some(script) => format!("git pull --ff-only && ./{script}"),
-        None => "git pull --ff-only".into(),
+        Some(script) => format!("{prefix} && ./{script}"),
+        None => prefix.into(),
     }
 }
 
@@ -101,13 +105,52 @@ mod tests {
         assert_eq!(free_name("sync-other", &taken), "sync-other");
     }
 
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     #[test]
-    fn pulls_then_runs_the_setup() {
+    fn sync_is_noninteractive_and_runs_setup_only_after_a_successful_pull() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
+        let dir = std::env::temp_dir().join(format!("parvi-sync-command-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = dir.join("git");
+        let setup = dir.join("install.sh");
+        std::fs::write(&git, "#!/bin/sh\nprintf '%s' \"$GIT_TERMINAL_PROMPT\" > git-prompt\nprintf '%s' \"$*\" > git-args\nif [ -f fail ]; then echo 'fatal: credentials unavailable' >&2; exit 1; fi\n").unwrap();
+        std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(
+            &setup,
+            "#!/bin/sh\nprintf '%s' \"$GIT_TERMINAL_PROMPT\" > setup-prompt\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&setup, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let invoke = || {
+            Command::new("/bin/sh")
+                .arg("-c")
+                .arg(line(Some("install.sh")))
+                .current_dir(&dir)
+                .env("PATH", &dir)
+                .env("GIT_TERMINAL_PROMPT", "1")
+                .output()
+                .unwrap()
+        };
+        std::fs::write(dir.join("fail"), "").unwrap();
+        let failed = invoke();
+        assert!(!failed.status.success());
+        assert!(String::from_utf8_lossy(&failed.stderr).contains("fatal: credentials unavailable"));
         assert_eq!(
-            line(Some("install.sh")),
-            "git pull --ff-only && ./install.sh"
+            std::fs::read_to_string(dir.join("git-prompt")).unwrap(),
+            "0"
         );
-        assert_eq!(line(None), "git pull --ff-only");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("git-args")).unwrap(),
+            "pull --ff-only"
+        );
+        assert!(!dir.join("setup-prompt").exists());
+        std::fs::remove_file(dir.join("fail")).unwrap();
+        assert!(invoke().status.success());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("setup-prompt")).unwrap(),
+            "0"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
