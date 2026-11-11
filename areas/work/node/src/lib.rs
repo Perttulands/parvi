@@ -7,7 +7,7 @@ mod work;
 use anyhow::Result;
 use axum::Router;
 use parvi_core::{Error, NodeId};
-use parvi_node_kit::args::{object, text};
+use parvi_node_kit::args::{flag, object, text};
 use parvi_node_kit::{Area, BoxFuture, Built, Channel, Client, Command, Listing, Setup};
 use parvi_work_contract::{Resolver, Resolving};
 use serde::Deserialize;
@@ -75,11 +75,13 @@ impl Area for WorkArea {
         let (work, node) = (self.work.clone(), self.node.clone());
         let list = Command::new(
             "work_list",
-            "The Work board, read now.",
-            || object(json!({}), &[]),
-            move |_| {
+            "List non-closed work items, including blocked and deferred; use --all to include closed and merged items.",
+            || object(json!({"all": {"type":"boolean", "default":false}}), &[]),
+            move |args| {
                 let (work, node) = (work.clone(), node.clone());
                 async move {
+                    let all = flag(&args, "all", false)
+                        .map_err(|e| Error::new("bad_request", e.to_string()))?;
                     let mut watching = work.subscribe();
                     work.refresh();
                     let read = async {
@@ -90,6 +92,9 @@ impl Area for WorkArea {
                                 p.iter()
                                     .all(|p| p.get("synced").is_some() || p.get("error").is_some())
                             }) {
+                                if !all {
+                                    omit_closed(&mut snapshot);
+                                }
                                 snapshot["items"] = json!(listed_items(&snapshot));
                                 snapshot["node"] = json!(node);
                                 return Ok(snapshot);
@@ -113,7 +118,13 @@ impl Area for WorkArea {
                     let written =
                         text(&args, "ref").map_err(|e| Error::new("bad_request", e.to_string()))?;
                     let reference = work.resolve(written).await.map_err(failed)?;
-                    let item = work.item(&reference).await.map_err(failed)?;
+                    let item = work.item(&reference).await.map_err(|error| {
+                        if error.downcast_ref::<work::MissingItem>().is_some() {
+                            Error::new("not_found", error.to_string())
+                        } else {
+                            failed(error)
+                        }
+                    })?;
                     let line = work.reference_line(&item).await;
                     Ok(json!({"node":node,"item":item,"line":line}))
                 }
@@ -143,6 +154,19 @@ impl Area for WorkArea {
     }
     fn channel(&self, _: Client) -> Option<Box<dyn Channel>> {
         Some(Box::new(Socket(work::Channel::new(self.work.clone()))))
+    }
+}
+/// Filter only the command's copy of the board; the page keeps its full history.
+fn omit_closed(snapshot: &mut serde_json::Value) {
+    for project in snapshot["projects"].as_array_mut().into_iter().flatten() {
+        for (list, status) in [("items", "status"), ("issues", "state"), ("pulls", "state")] {
+            if let Some(items) = project
+                .get_mut(list)
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                items.retain(|item| !matches!(item[status].as_str(), Some("closed" | "merged")));
+            }
+        }
     }
 }
 /// A flat index makes the board's items visible in the generic CLI renderer,
@@ -182,5 +206,22 @@ impl Channel for Socket {
     }
     fn next(&mut self) -> BoxFuture<'_, Option<Vec<u8>>> {
         Box::pin(async move { Some(self.0.next().await) })
+    }
+}
+
+#[cfg(test)]
+mod command_tests {
+    use super::*;
+
+    #[test]
+    fn command_filter_keeps_active_items_and_draft_pulls() {
+        let mut board = json!({"projects": [
+            {"tracker":"beads", "items":[{"status":"open"},{"status":"in_progress"},{"status":"blocked"},{"status":"closed"}]},
+            {"tracker":"github", "issues":[{"state":"open"},{"state":"closed"}], "pulls":[{"state":"draft"},{"state":"open"},{"state":"closed"},{"state":"merged"}]}
+        ]});
+        omit_closed(&mut board);
+        assert_eq!(board["projects"][0]["items"].as_array().unwrap().len(), 3);
+        assert_eq!(board["projects"][1]["issues"].as_array().unwrap().len(), 1);
+        assert_eq!(board["projects"][1]["pulls"].as_array().unwrap().len(), 2);
     }
 }

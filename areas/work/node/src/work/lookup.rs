@@ -64,7 +64,7 @@ impl Work {
                     .iter()
                     .find(|item| item.id == *id)
                     .cloned()
-                    .with_context(|| format!("no Bead {id} in {folder}"))
+                    .ok_or_else(|| super::MissingItem(format!("no Bead {id} in {folder}")).into())
             }
         }
     }

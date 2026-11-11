@@ -13,12 +13,25 @@ pub const QUERY: &str = include_str!("item.graphql");
 pub fn parse(json: &str, owner: &str, repo: &str) -> Result<Item> {
     let answer: Answer = serde_json::from_str(json).context("GitHub's answer is not JSON")?;
     if !answer.errors.is_empty() {
+        let missing = answer.errors.iter().all(|e| {
+            e.message
+                .starts_with("Could not resolve to an Issue with the number of ")
+                || (e.kind == "NOT_FOUND" && e.path.last().is_some_and(|p| p == "issue"))
+        });
         let messages: Vec<_> = answer.errors.into_iter().map(|e| e.message).collect();
-        bail!("{}", messages.join("; "));
+        let message = messages.join("; ");
+        if missing {
+            return Err(super::MissingItem(message).into());
+        }
+        bail!("{message}");
     }
-    let Some(raw) = answer.data.and_then(|d| d.repository).and_then(|r| r.issue) else {
-        bail!("GitHub sent no issue");
-    };
+    let repository = answer
+        .data
+        .and_then(|d| d.repository)
+        .context("GitHub sent no repository")?;
+    let raw = repository
+        .issue
+        .ok_or_else(|| super::MissingItem(format!("no issue in {owner}/{repo}")))?;
     let here = format!("{owner}/{repo}");
     let reference = |linked: &Linked| -> String {
         let (owner, repo) = linked
@@ -77,6 +90,10 @@ struct Answer {
 #[derive(Deserialize)]
 struct Message {
     message: String,
+    #[serde(default, rename = "type")]
+    kind: String,
+    #[serde(default)]
+    path: Vec<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -182,5 +199,11 @@ mod tests {
         let answer = r#"{"data":{"repository":{"issue":null}},"errors":[{"message":"Could not resolve to an Issue with the number of 99999."}]}"#;
         let error = parse(answer, "a", "b").unwrap_err().to_string();
         assert!(error.contains("99999"), "{error}");
+        let error = parse(answer, "a", "b").unwrap_err();
+        assert!(error.downcast_ref::<super::super::MissingItem>().is_some());
+        let failure =
+            r#"{"data":{"repository":null},"errors":[{"message":"rate limit exceeded"}]}"#;
+        let error = parse(failure, "a", "b").unwrap_err();
+        assert!(error.downcast_ref::<super::super::MissingItem>().is_none());
     }
 }
