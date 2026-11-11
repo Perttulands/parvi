@@ -5,6 +5,8 @@ pub mod model;
 mod resolver;
 pub use item::{Family, Item};
 pub use model::*;
+/// The syntax of a work item's reference, for pages that recognise one in text.
+pub use parvi_work_ref as work_ref;
 pub use resolver::{Resolver, Resolving};
 pub const WATCH: u8 = 0x98;
 pub const SNAPSHOT: u8 = 0x90;
