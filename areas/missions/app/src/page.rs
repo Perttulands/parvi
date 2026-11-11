@@ -1,3 +1,4 @@
+mod run;
 use crate::store::{Store, canvas as board, flow, undo};
 use gpui::{
     AppContext, Bounds, Context, Div, Entity, IntoElement, PathBuilder, Pixels, Render, Window,
@@ -26,6 +27,7 @@ const LINK_FIELD_W: f32 = 180.;
 pub struct MissionsPage {
     host: Host,
     state: Store,
+    run: run::RunUi,
     generation: u64,
     editor: Option<Editor>,
     title: Entity<TextField>,
@@ -100,6 +102,7 @@ impl MissionsPage {
         Self {
             host,
             state: Store::default(),
+            run: run::RunUi::new(cx),
             generation: 0,
             editor: None,
             title: cx.new(|cx| TextField::new(cx, "Step title")),
@@ -140,9 +143,15 @@ impl MissionsPage {
         }
     }
     fn open(&mut self, node: String, slug: String, cx: &mut Context<Self>) {
+        if self.start_uncertain() {
+            self.run.error = Some("The start outcome is unknown. Retry it before leaving.".into());
+            cx.notify();
+            return;
+        }
         if self.writing || self.editor.as_ref().is_some_and(|e| e.busy) {
             return;
         }
+        self.run = run::RunUi::new(cx);
         self.generation += 1;
         let generation = self.generation;
         self.state.selected = Some((node.clone(), slug.clone()));
@@ -1126,7 +1135,11 @@ impl Page for MissionsPage {
         cx: &mut Context<Self>,
     ) {
         self.state.frame(node.as_str(), kind, body);
+        if kind == parvi_missions_contract::RUNS_SNAPSHOT {
+            self.sync_gate(cx);
+        }
         if self.editor.is_none()
+            && !self.is_showing_run()
             && kind == parvi_missions_contract::SNAPSHOT
             && let Some((selected_node, slug)) = self.state.selected.clone()
             && selected_node == node.as_str()
@@ -1158,6 +1171,8 @@ impl Render for MissionsPage {
                         mission.title.clone()
                     };
                     let selector = format!("mission-{node}-{slug}");
+                    let run_node = node.clone();
+                    let run_slug = slug.clone();
                     list = list.child(
                         div()
                             .id(gpui::SharedString::from(selector.clone()))
@@ -1176,13 +1191,47 @@ impl Render for MissionsPage {
                         .values()
                         .filter(|r| r.mission_slug == mission.slug)
                         .collect();
-                    runs.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+                    runs.sort_by(|a, b| {
+                        let attention = |r: &parvi_missions_contract::RunProjection| {
+                            (
+                                r.r#final,
+                                match r.status.as_str() {
+                                    "waiting_human" => 0,
+                                    "running" => 1,
+                                    "blocked" => 2,
+                                    _ => 3,
+                                },
+                            )
+                        };
+                        attention(a)
+                            .cmp(&attention(b))
+                            .then_with(|| b.started_at.cmp(&a.started_at))
+                    });
                     for run in runs {
+                        let id = run.run_id.clone();
+                        let node = run_node.clone();
+                        let slug = run_slug.clone();
+                        let selector = format!("run-row-{id}");
                         list = list.child(
                             div()
+                                .id(gpui::SharedString::from(selector.clone()))
+                                .debug_selector(move || selector.clone())
                                 .px(px(PAD))
+                                .cursor_pointer()
                                 .text_color(t.text2)
-                                .child(format!("{} · {}", run.run_id, run.status)),
+                                .child(format!("{} · {}", run.run_id, run.status))
+                                .on_click(cx.listener(move |page, _, _, cx| {
+                                    if page.state.selected.as_ref()
+                                        != Some(&(node.clone(), slug.clone()))
+                                    {
+                                        page.open(node.clone(), slug.clone(), cx);
+                                    }
+                                    if page.state.selected.as_ref()
+                                        == Some(&(node.clone(), slug.clone()))
+                                    {
+                                        page.show_run(id.clone(), cx);
+                                    }
+                                })),
                         );
                     }
                 }
@@ -1237,7 +1286,9 @@ impl Render for MissionsPage {
                     )
                 });
         }
-        let content: Div = if let Some(m) = &self.state.mission {
+        let content: Div = if let Some(view) = self.run_view(&t, cx) {
+            view
+        } else if let Some(m) = &self.state.mission {
             let layout = self
                 .state
                 .layout
@@ -1354,6 +1405,7 @@ impl Render for MissionsPage {
                     .min_w_0()
                     .flex().flex_col()
                     .child(div().flex().gap(px(PAD))
+                        .child(kit::button(&t, "prepare-run", "Run", Kind::Primary).debug_selector(|| "prepare-run".into()).on_click(cx.listener(|p, _, _, cx| p.prepare_run(cx))))
                         .child(kit::button(&t, "new-input", "+ Input", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createInputCard":{"title":"Input","goal":"","x":200,"y":200}}), WriteMode::Edit, cx))))
                         .child(kit::button(&t, "new-step", "+ Step", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createFormation":{"type":"solo","title":"New step","x":200,"y":200}}), WriteMode::Edit, cx))))
                         .child(kit::button(&t, "new-gate", "+ Gate", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createGate":{"title":"New gate","kinds":["human"],"x":200,"y":200}}), WriteMode::Edit, cx))))
@@ -1388,6 +1440,7 @@ impl Render for MissionsPage {
                                 .on_click(cx.listener(|p, _, _, cx| p.save_step(cx))),
                         )
                         .child(kit::button(&t, "step-delete", if ed.deleting { "Confirm delete" } else { "Delete" }, Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.delete_card(cx))))
+                        .when(matches!(ed.kind, EditKind::Step), |d| { let id = ed.id.clone(); d.child(kit::button(&t, "run-step", "Run this step", Kind::Quiet).on_click(cx.listener(move |p, _, _, cx| p.prepare_step_run(id.clone(), cx)))) })
                         .child("Title")
                         .child(
                             div()
