@@ -1,6 +1,8 @@
 //! Brain's page entity and its requests; state and drawing stay separate.
 use crate::state::{self, Brain, SETTLE_MS};
-use gpui::{App, AppContext, Context, Entity, FocusHandle, Focusable, ScrollHandle, Window};
+use gpui::{
+    App, AppContext, Context, Entity, FocusHandle, Focusable, ScrollHandle, WeakEntity, Window,
+};
 use parvi_app_kit::widgets::select::Selectable;
 use parvi_app_kit::{
     Answers, Ask, Host, Page,
@@ -22,6 +24,8 @@ struct Settings {
 
 pub struct BrainPage {
     pub(crate) host: Host,
+    me: WeakEntity<BrainPage>,
+    dock_return_focus: Option<FocusHandle>,
     pub(crate) state: Brain,
     pub(crate) field: Entity<TextField>,
     pub(crate) editor: Entity<Code>,
@@ -40,6 +44,17 @@ impl Page for BrainPage {
     const AREA: Option<&'static str> = Some("brain");
     const ANSWERS: &'static [Answers] = &[Answers::Reveal("brain")];
 
+    fn chords(&self, _: &App) -> Vec<parvi_app_kit::chords::Chord> {
+        let me = self.me.clone();
+        vec![
+            parvi_app_kit::chords::Chord::new("l", "Brain", move |window, cx| {
+                let _ = me.update(cx, |page, cx| page.toggle_dock(window, cx));
+            })
+            .alt("l", Some(false))
+            .everywhere(),
+        ]
+    }
+
     fn focus(&self, cx: &App) -> Option<FocusHandle> {
         Some(self.field.read(cx).focus_handle(cx))
     }
@@ -56,7 +71,7 @@ impl Page for BrainPage {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.shown
+        if (self.shown || self.host.docked(cx))
             && state == Some(LinkState::Open)
             && (self.node.as_str().is_empty() || &self.node == node)
         {
@@ -114,6 +129,8 @@ impl BrainPage {
         state.hidden = settings.hidden.into_iter().collect();
         Self {
             host,
+            me: cx.weak_entity(),
+            dock_return_focus: None,
             state,
             field,
             editor,
@@ -124,6 +141,29 @@ impl BrainPage {
             reader_focus: cx.focus_handle(),
             node: NodeId(String::new()),
             shown: false,
+        }
+    }
+    pub(crate) fn close_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let in_dock = self.field.read(cx).is_focused(window)
+            || self.summary.read(cx).is_focused(window)
+            || self.editor.read(cx).is_focused(window)
+            || self.reader_focus.contains_focused(window, cx);
+        self.host.close_dock(cx);
+        if let Some(focus) = self.dock_return_focus.take()
+            && in_dock
+            && !self.shown
+        {
+            window.focus(&focus, cx);
+        }
+    }
+    fn toggle_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.host.docked(cx) {
+            self.close_dock(window, cx);
+        } else if let Some(page) = self.me.upgrade() {
+            self.dock_return_focus = window.focused(cx);
+            self.brain_read_rail(cx);
+            let dock = cx.new(|cx| crate::view::Dock::new(page, cx));
+            self.host.show_dock(dock.into(), cx);
         }
     }
     pub(crate) fn save_hidden(&self, cx: &mut Context<Self>) {

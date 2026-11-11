@@ -7,7 +7,7 @@
 //! Routes, each answering JSON or the shared coded error:
 //! - `GET /api/brain/search?q=` — Citadel's ranked results, best first.
 //! - `GET /api/brain/page?path=` — one page by corpus-relative path.
-//! - `PUT /api/brain/page` — `{ path, content, summary }`: the page's new
+//! - `PUT /api/brain/page` — `{ path, content, summary, base? }`: the page's new
 //!   text, committed alone; answers the commit.
 //! - `GET /api/brain/collections` — the top-level folders and their counts.
 //! - `GET /api/brain/collection?name=` — one collection's pages, each with
@@ -107,7 +107,13 @@ impl Brain {
 
     /// Writes the page at `path` and commits it, signed as the operator, with
     /// `summary` as its message (`Edit <path>` when empty).
-    pub async fn save(&self, path: &str, text: &str, summary: &str) -> Result<Commit, Refusal> {
+    pub async fn save(
+        &self,
+        path: &str,
+        text: &str,
+        summary: &str,
+        base: Option<&str>,
+    ) -> Result<Commit, Refusal> {
         let corpus = self.corpus()?;
         if text.len() as u64 > corpus::PAGE_LIMIT {
             let why = "A page is at most 1 MiB, which the reader reads";
@@ -120,6 +126,19 @@ impl Brain {
             given => given.to_owned(),
         };
         let _one = self.saving.lock().await;
+        if let Some(base) = base {
+            let (history, error) = history::page(corpus.root(), path).await;
+            if let Some(error) = error {
+                return Err(Refusal::new(StatusCode::INTERNAL_SERVER_ERROR, error));
+            }
+            let current = history.first().map_or("", |commit| commit.hash.as_str());
+            if current != base {
+                return Err(Refusal::new(
+                    StatusCode::CONFLICT,
+                    format!("{path} changed since the base revision; read it again before saving"),
+                ));
+            }
+        }
         history::save(corpus.root(), &file, path, text, &message, &self.author).await
     }
 

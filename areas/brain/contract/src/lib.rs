@@ -40,6 +40,8 @@ pub struct Page {
     pub body: String,
     /// Each link target the page writes, once, in order.
     pub links: Vec<Link>,
+    /// Pages one link or shared tag away.
+    pub related: Vec<PageRef>,
     /// The pages linking here, by title.
     pub backlinks: Vec<PageRef>,
     /// When the page last changed and who changed it, from its history.

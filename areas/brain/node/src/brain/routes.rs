@@ -13,6 +13,13 @@ use parvi_brain_contract::{Changes, Collections, Listing, Results, Save};
 
 use super::{Brain, Refusal};
 
+#[derive(serde::Deserialize)]
+struct SaveRequest {
+    #[serde(flatten)]
+    page: Save,
+    base: Option<String>,
+}
+
 type Params = Query<HashMap<String, String>>;
 
 /// The Brain's routes, for the server to merge with the other modules'.
@@ -48,7 +55,7 @@ async fn page(State(brain): State<Arc<Brain>>, Query(params): Params) -> Respons
 
 async fn save(
     State(brain): State<Arc<Brain>>,
-    body: Result<Json<Save>, JsonRejection>,
+    body: Result<Json<SaveRequest>, JsonRejection>,
 ) -> Response {
     let Ok(Json(save)) = body else {
         let why = "The body is not a page to save";
@@ -56,8 +63,17 @@ async fn save(
     };
     // A client can disconnect while git is writing. Keep the operation and
     // its corpus lock alive until it has committed or restored the page.
-    match tokio::spawn(async move { brain.save(&save.path, &save.content, &save.summary).await })
-        .await
+    match tokio::spawn(async move {
+        brain
+            .save(
+                &save.page.path,
+                &save.page.content,
+                &save.page.summary,
+                save.base.as_deref(),
+            )
+            .await
+    })
+    .await
     {
         Ok(result) => answer(result),
         Err(error) => Refusal::new(

@@ -2,8 +2,8 @@
 use crate::page::BrainPage;
 use crate::tokens::*;
 use gpui::{
-    Context, Div, FontWeight, HighlightStyle, KeyDownEvent, MouseButton, SharedString, StyledText,
-    Window, div, prelude::*, px,
+    Context, Div, Entity, FontWeight, HighlightStyle, KeyDownEvent, MouseButton, SharedString,
+    StyledText, Window, div, prelude::*, px,
 };
 use parvi_app_kit::Ask;
 use parvi_app_kit::theme::{alpha, board, size, theme};
@@ -11,6 +11,26 @@ use parvi_app_kit::widgets::{
     kit::{self, Kind},
     markdown, select,
 };
+
+pub(crate) struct Dock {
+    page: Entity<BrainPage>,
+}
+
+impl Dock {
+    pub(crate) fn new(page: Entity<BrainPage>, cx: &mut Context<Self>) -> Self {
+        cx.observe(&page, |_, _, cx| cx.notify()).detach();
+        Self { page }
+    }
+}
+
+impl Render for Dock {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div().w(px(DOCK_WIDTH)).h_full().child(
+            self.page
+                .update(cx, |page, cx| page.render(window, cx).into_any_element()),
+        )
+    }
+}
 
 impl Render for BrainPage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -27,9 +47,10 @@ impl Render for BrainPage {
         }
         for (i, hit) in self.state.shown().iter().enumerate() {
             let path = hit.path.clone();
+            let hit_selector = format!("brain-hit-{path}");
             let mut snippet = String::new();
             let mut highlights = Vec::new();
-            for (part, marked) in crate::state::marks(&hit.snippet) {
+            for (part, marked) in crate::state::snippet_parts(&hit.snippet) {
                 let start = snippet.len();
                 snippet.push_str(&part);
                 if marked {
@@ -43,6 +64,8 @@ impl Render for BrainPage {
                     ));
                 }
             }
+            let kind = hit.kind.clone();
+            let summary = hit.summary.clone();
             list = list.child(
                 div()
                     .id(SharedString::from(format!("brain-result-{i}")))
@@ -54,7 +77,29 @@ impl Render for BrainPage {
                         page.state.selected = i;
                         page.brain_open(&path, cx);
                     }))
-                    .child(hit.title.clone())
+                    .child(
+                        div()
+                            .debug_selector(move || hit_selector.clone())
+                            .child(hit.title.clone()),
+                    )
+                    .when(!kind.is_empty(), |d| {
+                        let selector = format!("brain-result-kind-{kind}");
+                        d.child(
+                            div()
+                                .debug_selector(move || selector.clone())
+                                .text_color(t.dim)
+                                .child(kind),
+                        )
+                    })
+                    .when(!summary.is_empty(), |d| {
+                        let selector = format!("brain-result-summary-{summary}");
+                        d.child(
+                            div()
+                                .debug_selector(move || selector.clone())
+                                .text_color(t.text2)
+                                .child(summary),
+                        )
+                    })
                     .child(StyledText::new(snippet).with_highlights(highlights)),
             );
         }
@@ -160,17 +205,19 @@ impl Render for BrainPage {
                             ),
                         )
                     })
-                    .child(kit::button(&t, "brain-send", "Send", Kind::Plain).on_click(
-                        cx.listener(move |page, _, _, cx| {
-                            let _ = page.host.ask(
-                                Ask::Send {
-                                    reference: send.clone(),
-                                    target: None,
-                                },
-                                cx,
-                            );
-                        }),
-                    ))
+                    .child(
+                        kit::button(&t, "brain-send", "Send", Kind::Plain)
+                            .debug_selector(|| "brain-send".into())
+                            .on_click(cx.listener(move |page, _, _, cx| {
+                                let _ = page.host.ask(
+                                    Ask::Send {
+                                        reference: send.clone(),
+                                        target: None,
+                                    },
+                                    cx,
+                                );
+                            })),
+                    )
                     .child(
                         kit::button(&t, "brain-close", "Close", Kind::Quiet).on_click(cx.listener(
                             |page, _, _, cx| {
@@ -180,35 +227,69 @@ impl Render for BrainPage {
                         )),
                     ),
             );
+            let subject = page.path.split('/').collect::<Vec<_>>();
+            let subject = if subject.len() > 2 {
+                subject[1]
+            } else {
+                subject.first().copied().unwrap_or("")
+            };
+            let subject = subject.replace(['-', '_'], " ");
+            let changed = if page.updated.is_empty() {
+                "never committed".to_string()
+            } else {
+                format!(
+                    "changed {} by {}",
+                    crate::state::when(&page.updated, jiff::Timestamp::now()),
+                    page.author
+                )
+            };
+            let meta = if subject.is_empty() {
+                changed
+            } else {
+                format!("{subject} · {changed}")
+            };
+            let selector = format!("brain-meta-{meta}");
             let page_selector = format!("brain-reading-{}", page.path);
             main = main.child(
                 div()
                     .debug_selector(move || page_selector.clone())
-                    .child(kit::note(&t, page.path.clone(), Some(t.dim))),
+                    .flex()
+                    .items_center()
+                    .gap(px(GAP))
+                    .child(
+                        div()
+                            .debug_selector(move || selector.clone())
+                            .text_color(t.dim)
+                            .child(meta),
+                    )
+                    .when(!page.history.is_empty(), |d| {
+                        d.child(
+                            kit::button(&t, "brain-history", "History", Kind::Quiet)
+                                .debug_selector(|| "brain-history".into())
+                                .on_click(cx.listener(|page, _, _, cx| {
+                                    page.state.history_open = !page.state.history_open;
+                                    cx.notify();
+                                })),
+                        )
+                    }),
             );
             if let Some(error) = &self.state.page_error {
                 main = main.child(kit::note(&t, error.clone(), Some(t.error)));
             }
-            if !page.history.is_empty() {
-                main = main.child(
-                    kit::button(&t, "brain-history", "History", Kind::Quiet).on_click(cx.listener(
-                        |page, _, _, cx| {
-                            page.state.history_open = !page.state.history_open;
-                            cx.notify();
-                        },
-                    )),
-                );
-                if self.state.history_open {
-                    let mut history = div().flex().flex_col().gap(px(GAP_TINY));
-                    for commit in &page.history {
-                        history = history.child(kit::note(
-                            &t,
-                            format!("{} · {} · {}", commit.time, commit.author, commit.message),
-                            Some(t.dim),
-                        ));
-                    }
-                    main = main.child(history);
+            if self.state.history_open && !page.history.is_empty() {
+                let mut history = div()
+                    .debug_selector(|| "brain-history-open".into())
+                    .flex()
+                    .flex_col()
+                    .gap(px(GAP_TINY));
+                for commit in &page.history {
+                    history = history.child(kit::note(
+                        &t,
+                        format!("{} · {} · {}", commit.time, commit.author, commit.message),
+                        Some(t.dim),
+                    ));
                 }
+                main = main.child(history);
             }
             if !page.summary.is_empty() {
                 main = main.child(kit::note(&t, page.summary.clone(), Some(t.text2)));
@@ -312,13 +393,36 @@ impl Render for BrainPage {
                     });
                 main = main.child(select::track(body, &self.select, cx.entity_id(), |_, _| {}));
             }
-            main = main.child(links_section(&page.links, cx));
-            if !page.backlinks.is_empty() {
-                main = main.child(kit::label(&t, "Linked from"));
-                for (i, backlink) in page.backlinks.iter().enumerate() {
-                    let path = backlink.path.clone();
+            if !page.related.is_empty() {
+                main =
+                    main.child(kit::label(&t, "Related").debug_selector(|| "brain-related".into()));
+                for (i, related) in page.related.iter().enumerate() {
+                    let path = related.path.clone();
+                    let selector = format!("brain-related-{}", path);
                     main = main.child(
                         div()
+                            .id(SharedString::from(format!("brain-related-{i}")))
+                            .debug_selector(move || selector.clone())
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |page, _, _, cx| page.brain_open(&path, cx)))
+                            .child(related.title.clone()),
+                    );
+                }
+            }
+            if page.links.iter().any(|link| link.page.is_some()) {
+                main = main.child(kit::label(&t, "Links").debug_selector(|| "brain-links".into()));
+                main = main.child(links_section(&page.links, cx));
+            }
+            if !page.backlinks.is_empty() {
+                main = main.child(
+                    kit::label(&t, "Linked from").debug_selector(|| "brain-backlinks".into()),
+                );
+                for (i, backlink) in page.backlinks.iter().enumerate() {
+                    let path = backlink.path.clone();
+                    let selector = format!("brain-backlink-{path}");
+                    main = main.child(
+                        div()
+                            .debug_selector(move || selector.clone())
                             .id(SharedString::from(format!("brain-backlink-{i}")))
                             .cursor_pointer()
                             .on_click(cx.listener(move |page, _, _, cx| page.brain_open(&path, cx)))
@@ -342,6 +446,7 @@ impl Render for BrainPage {
             .border_color(t.divider);
         for (i, (path, title)) in self.state.trail.iter().enumerate() {
             let path = path.clone();
+            let selector = format!("brain-trail-{path}");
             trail = trail.child(
                 kit::button(
                     &t,
@@ -349,6 +454,7 @@ impl Render for BrainPage {
                     title.clone(),
                     Kind::Quiet,
                 )
+                .debug_selector(move || selector.clone())
                 .on_click(cx.listener(move |page, _, _, cx| page.brain_open(&path, cx))),
             );
         }
@@ -365,6 +471,22 @@ impl Render for BrainPage {
         div()
             .id("brain")
             .on_key_down(cx.listener(move |page, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape"
+                    && event.keystroke.modifiers == gpui::Modifiers::none()
+                    && page.field.read(cx).is_focused(window)
+                {
+                    if !page.field.read(cx).text.is_empty() {
+                        page.field.update(cx, |field, cx| field.set("", false, cx));
+                        page.state.typed("");
+                        cx.notify();
+                    } else if page.host.docked(cx) {
+                        page.close_dock(window, cx);
+                    } else {
+                        window.focus(&page.reader_focus, cx);
+                    }
+                    cx.stop_propagation();
+                    return;
+                }
                 if can_copy
                     && !page.field.read(cx).is_focused(window)
                     && event.keystroke.modifiers.control
@@ -389,8 +511,10 @@ fn links_section(links: &[crate::state::Link], cx: &mut Context<BrainPage>) -> D
     for (i, link) in links.iter().enumerate() {
         if let Some(page) = &link.page {
             let path = page.path.clone();
+            let selector = format!("brain-link-{path}");
             out = out.child(
                 div()
+                    .debug_selector(move || selector.clone())
                     .id(SharedString::from(format!("brain-link-{i}")))
                     .cursor_pointer()
                     .on_click(cx.listener(move |page, _, _, cx| page.brain_open(&path, cx)))
