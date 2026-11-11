@@ -1,0 +1,144 @@
+# Parity fixture: a Limit card that picks the best attempt, with and
+# without a gate that can pick.
+schema = 1
+id = "msn_best"
+slug = "best"
+title = "Best"
+rev = 1
+
+[[inputCard]]
+id = "inp"
+title = "Start"
+
+[[formation]]
+id = "fmn_draft"
+type = "solo"
+title = "Draft"
+[[formation.input]]
+id = "in"
+[[formation.output]]
+id = "out"
+[[formation.slot]]
+id = "draft"
+harness = "claude-code"
+effort = "low"
+
+[[formation]]
+id = "fmn_judge"
+type = "solo"
+title = "Judge"
+[[formation.input]]
+id = "in"
+[[formation.output]]
+id = "out"
+[[formation.slot]]
+id = "judge"
+agentId = "judge"
+harness = "claude-code"
+effort = "xhigh"
+
+[[formation]]
+id = "fmn_twice"
+type = "solo"
+title = "Twice judged"
+[[formation.input]]
+id = "in"
+[[formation.output]]
+id = "out"
+[[formation.slot]]
+id = "twice"
+harness = "claude-code"
+effort = "low"
+
+[[gate]]
+id = "gate_judged"
+title = "Judged"
+kinds = ["formation"]
+
+[[gate]]
+id = "gate_one"
+title = "First"
+kinds = ["human"]
+
+[[gate]]
+id = "gate_two"
+title = "Second"
+kinds = ["human"]
+
+[[end]]
+id = "end_done"
+title = "Done"
+outcome = "done"
+
+[[limit]]
+id = "lim_ok"
+title = "Picks"
+target = "fmn_draft"
+rounds = 3
+whenSpent = "best"
+
+[[limit]]
+id = "lim_twice"
+target = "fmn_twice"
+rounds = 3
+whenSpent = "best"
+
+[[connection]]
+id = "e1"
+from = "inp:out"
+to = "fmn_draft:in"
+
+[[connection]]
+id = "e2"
+from = "fmn_draft:out"
+to = "gate_judged:in"
+
+[[connection]]
+id = "e3"
+from = "gate_judged:judge"
+to = "fmn_judge:in"
+
+[[connection]]
+id = "e4"
+from = "fmn_judge:out"
+to = "gate_judged:judge"
+
+[[connection]]
+id = "e5"
+from = "gate_judged:fail"
+to = "fmn_draft:in"
+
+[[connection]]
+id = "e6"
+from = "gate_judged:pass"
+to = "fmn_twice:in"
+
+[[connection]]
+id = "e7"
+from = "fmn_twice:out"
+to = "gate_one:in"
+
+[[connection]]
+id = "e8"
+from = "fmn_twice:out"
+to = "gate_two:in"
+
+[[connection]]
+id = "e9"
+from = "gate_one:fail"
+to = "fmn_twice:in"
+
+[[connection]]
+id = "e10"
+from = "gate_two:fail"
+to = "fmn_twice:in"
+
+[[connection]]
+id = "e11"
+from = "gate_one:pass"
+to = "end_done:in"
+
+[[connection]]
+id = "e12"
+from = "gate_two:pass"
+to = "end_done:in"

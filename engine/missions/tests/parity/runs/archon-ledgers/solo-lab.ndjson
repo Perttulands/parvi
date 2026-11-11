@@ -1,0 +1,8 @@
+{"type":"run_started"}
+{"type":"node_started","nodeId":"inp_hello"}
+{"type":"node_output","nodeId":"inp_hello","status":"done"}
+{"type":"node_started","nodeId":"fmn_work","attempt":1}
+{"type":"slot_dispatch","nodeId":"fmn_work","slotId":"slot_work","attempt":1}
+{"type":"slot_result","nodeId":"fmn_work","slotId":"slot_work","attempt":1,"status":"ok"}
+{"type":"node_output","nodeId":"fmn_work","attempt":1,"status":"done"}
+{"type":"run_succeeded"}

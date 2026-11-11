@@ -1,0 +1,13 @@
+{"type":"session_meta","payload":{"id":"codex-fixture-tokens-thread","cwd":"/work/cx2"}}
+{"type":"event_msg","payload":{"type":"task_started","turn_id":"fixture-turn-12"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Say hello in one word."}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["user.text"]}}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello"}],"phase":"final_answer","internal_chat_message_metadata_passthrough":{"content_item_kinds":["unknown"]}}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":22318,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":5}}}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"fixture-turn-12"}}
+{"type":"event_msg","payload":{"type":"task_started","turn_id":"fixture-turn-13"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Read the file /work/cx2/brief.md and execute it exactly; it is your whole brief."}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["user.text"]}}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I’ll read the brief and follow its instructions.\n"}],"phase":"commentary","internal_chat_message_metadata_passthrough":{"content_item_kinds":["unknown"]}}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":47980,"cached_input_tokens":22144,"cache_write_input_tokens":0,"output_tokens":65}}}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"PONG"}],"phase":"final_answer","internal_chat_message_metadata_passthrough":{"content_item_kinds":["unknown"]}}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":73768,"cached_input_tokens":47616,"cache_write_input_tokens":0,"output_tokens":71}}}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"fixture-turn-13"}}

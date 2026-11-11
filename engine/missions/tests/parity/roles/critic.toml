@@ -1,0 +1,9 @@
+schema = 1
+
+[card]
+id = "critic"
+display_name = "Critic"
+kind = "reviewer"
+summary = "Finds what is wrong."
+tags = ["review"]
+status = "retired"

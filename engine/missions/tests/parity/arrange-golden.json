@@ -1,0 +1,155 @@
+{
+  "board": {
+    "id": "golden",
+    "slug": "golden",
+    "title": "Arrange parity",
+    "rev": 1,
+    "etag": "",
+    "inputCards": [
+      {
+        "id": "input",
+        "title": "Input",
+        "goal": ""
+      }
+    ],
+    "formations": [
+      {
+        "id": "judge-b",
+        "title": "judge-b",
+        "type": "solo",
+        "slots": [],
+        "inputs": [],
+        "outputs": []
+      },
+      {
+        "id": "unreached",
+        "title": "unreached",
+        "type": "solo",
+        "slots": [],
+        "inputs": [],
+        "outputs": []
+      },
+      {
+        "id": "work",
+        "title": "work",
+        "type": "solo",
+        "slots": [],
+        "inputs": [],
+        "outputs": []
+      },
+      {
+        "id": "judge-a",
+        "title": "judge-a",
+        "type": "solo",
+        "slots": [],
+        "inputs": [],
+        "outputs": []
+      },
+      {
+        "id": "finish",
+        "title": "finish",
+        "type": "solo",
+        "slots": [],
+        "inputs": [],
+        "outputs": []
+      }
+    ],
+    "gates": [
+      {
+        "id": "gate",
+        "title": "Review",
+        "kinds": [
+          "formation"
+        ],
+        "criterion": ""
+      }
+    ],
+    "limits": [
+      {
+        "id": "limit",
+        "title": "Rounds",
+        "target": "work",
+        "rounds": 3
+      }
+    ],
+    "connections": [
+      {
+        "id": "0",
+        "to": "work:in",
+        "from": "input:out"
+      },
+      {
+        "id": "1",
+        "to": "gate:in",
+        "from": "work:out"
+      },
+      {
+        "id": "2",
+        "to": "judge-a:in",
+        "from": "gate:judge"
+      },
+      {
+        "id": "3",
+        "to": "judge-b:in",
+        "from": "judge-a:out"
+      },
+      {
+        "id": "4",
+        "to": "gate:judge",
+        "from": "judge-b:out"
+      },
+      {
+        "id": "5",
+        "to": "work:in",
+        "from": "gate:fail"
+      },
+      {
+        "id": "6",
+        "to": "finish:in",
+        "from": "gate:pass"
+      }
+    ]
+  },
+  "positions": [
+    {
+      "id": "input",
+      "x": 112,
+      "y": 112
+    },
+    {
+      "id": "work",
+      "x": 476,
+      "y": 112
+    },
+    {
+      "id": "limit",
+      "x": 476,
+      "y": 672
+    },
+    {
+      "id": "gate",
+      "x": 896,
+      "y": 112
+    },
+    {
+      "id": "judge-a",
+      "x": 896,
+      "y": 476
+    },
+    {
+      "id": "judge-b",
+      "x": 896,
+      "y": 1036
+    },
+    {
+      "id": "finish",
+      "x": 1316,
+      "y": 112
+    },
+    {
+      "id": "unreached",
+      "x": 112,
+      "y": 1596
+    }
+  ]
+}

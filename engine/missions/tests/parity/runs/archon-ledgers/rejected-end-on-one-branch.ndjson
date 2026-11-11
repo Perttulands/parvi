@@ -1,0 +1,16 @@
+{"type":"run_started"}
+{"type":"node_started","nodeId":"inp_hello"}
+{"type":"node_output","nodeId":"inp_hello","status":"done"}
+{"type":"node_started","nodeId":"fmn_work","attempt":1}
+{"type":"node_started","nodeId":"fmn_other","attempt":1}
+{"type":"slot_dispatch","nodeId":"fmn_work","slotId":"slot_work","attempt":1}
+{"type":"slot_result","nodeId":"fmn_work","slotId":"slot_work","attempt":1,"status":"ok"}
+{"type":"node_output","nodeId":"fmn_work","attempt":1,"status":"done"}
+{"type":"gate_evaluating","nodeId":"gate_review","gateId":"gate_review"}
+{"type":"human_input_requested","nodeId":"gate_review","gateId":"gate_review"}
+{"type":"human_verdict_recorded","nodeId":"gate_review","gateId":"gate_review","verdict":"fail"}
+{"type":"gate_verdict","nodeId":"gate_review","gateId":"gate_review","attempt":1,"verdict":"fail"}
+{"type":"slot_dispatch","nodeId":"fmn_other","slotId":"slot_other","attempt":1}
+{"type":"slot_result","nodeId":"fmn_other","slotId":"slot_other","attempt":1,"status":"ok"}
+{"type":"node_output","nodeId":"fmn_other","attempt":1,"status":"done"}
+{"type":"run_failed","nodeId":"end_rejected","gateId":"gate_review","code":"path_rejected"}

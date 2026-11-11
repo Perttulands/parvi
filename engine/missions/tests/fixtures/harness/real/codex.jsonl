@@ -1,0 +1,6 @@
+{"type":"session_meta","payload":{"id":"fixture-session","cwd":"/work","thread_source":"user"}}
+{"type":"turn_context","payload":{"turn_id":"fixture-turn","model":"gpt-6.1-sol","effort":"low"}}
+{"type":"response_item","payload":{"type":"message","role":"user","phase":null,"content":[{"type":"input_text","text":"Reply exactly: <<<PARVI-DONE run-id=run_parity status=ok artifact=none>>>"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"<<<PARVI-DONE run-id=run_parity status=ok artifact=none>>>"}]}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":14743,"cached_input_tokens":12288,"cache_write_input_tokens":0,"output_tokens":22}}}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"fixture-turn"}}

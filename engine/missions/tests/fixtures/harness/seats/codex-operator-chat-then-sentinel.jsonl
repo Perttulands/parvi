@@ -1,0 +1,21 @@
+{"type":"session_meta","payload":{"id":"codex-fixture-chat-thread","cwd":"/work","source":"cli","thread_source":"user"}}
+{"type":"event_msg","payload":{"type":"task_started","turn_id":"fixture-turn-7"}}
+{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"[memories.instructions, host_skills.instructions, permissions.instructions, collaboration_mode.instructions omitted]"}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["memories.instructions","host_skills.instructions","permissions.instructions","collaboration_mode.instructions"]}}}
+{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"[multi_agent.role_instructions omitted]"}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["multi_agent.role_instructions"]}}}
+{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"[multi_agent.mode_instructions omitted]"}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["multi_agent.mode_instructions"]}}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"[environments.environment_context omitted]"}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["environments.environment_context"]}}}
+{"type":"turn_context","payload":{"turn_id":"fixture-turn-7","cwd":"/work","model":"gpt-6-astra","effort":"low"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Read the file /work/briefs/chat.md and execute it exactly; it is your whole brief."}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["user.text"]}}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I’ll read the brief and follow its instructions.\n"}],"phase":"commentary","internal_chat_message_metadata_passthrough":{"content_item_kinds":["unknown"]}}}
+{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"[generic.turn_aborted omitted]"}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["generic.turn_aborted"]}}}
+{"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"fixture-turn-7","reason":"interrupted"}}
+{"type":"event_msg","payload":{"type":"task_started","turn_id":"fixture-turn-8"}}
+{"type":"turn_context","payload":{"turn_id":"fixture-turn-8","cwd":"/work","model":"gpt-6-astra","effort":"low"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Operator here: what were you about to do? Answer in one short sentence, then stop and wait."}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["user.text"]}}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I was about to wait for the 30-second Python sleep to finish, then return the brief’s exact completion line."}],"phase":"final_answer","internal_chat_message_metadata_passthrough":{"content_item_kinds":["unknown"]}}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"fixture-turn-8"}}
+{"type":"event_msg","payload":{"type":"task_started","turn_id":"fixture-turn-9"}}
+{"type":"turn_context","payload":{"turn_id":"fixture-turn-9","cwd":"/work","model":"gpt-6-astra","effort":"low"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Continue the brief now: reply with the exact completion line, without running the command."}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["user.text"]}}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<<<PARVI-DONE run-id=run_fixture status=ok artifact=none>>>"}],"phase":"final_answer","internal_chat_message_metadata_passthrough":{"content_item_kinds":["unknown"]}}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"fixture-turn-9"}}

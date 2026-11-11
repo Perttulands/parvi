@@ -1,0 +1,17 @@
+{"type":"run_started"}
+{"type":"node_started","nodeId":"inp_hello"}
+{"type":"node_output","nodeId":"inp_hello","status":"done"}
+{"type":"node_started","nodeId":"fmn_a","attempt":1}
+{"type":"node_started","nodeId":"fmn_b","attempt":1}
+{"type":"slot_dispatch","nodeId":"fmn_a","slotId":"slot_a","attempt":1}
+{"type":"slot_result","nodeId":"fmn_a","slotId":"slot_a","attempt":1,"status":"ok"}
+{"type":"node_output","nodeId":"fmn_a","attempt":1,"status":"done"}
+{"type":"node_waiting","nodeId":"fmn_join"}
+{"type":"slot_dispatch","nodeId":"fmn_b","slotId":"slot_b","attempt":1}
+{"type":"slot_result","nodeId":"fmn_b","slotId":"slot_b","attempt":1,"status":"ok"}
+{"type":"node_output","nodeId":"fmn_b","attempt":1,"status":"done"}
+{"type":"node_started","nodeId":"fmn_join","attempt":1}
+{"type":"slot_dispatch","nodeId":"fmn_join","slotId":"slot_join","attempt":1}
+{"type":"slot_result","nodeId":"fmn_join","slotId":"slot_join","attempt":1,"status":"ok"}
+{"type":"node_output","nodeId":"fmn_join","attempt":1,"status":"done"}
+{"type":"run_succeeded"}

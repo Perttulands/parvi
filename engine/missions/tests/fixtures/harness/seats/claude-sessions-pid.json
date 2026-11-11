@@ -1,0 +1,6 @@
+{
+ "pid": 4242,
+ "sessionId": "claude-fixture-session-after-clear",
+ "cwd": "/work",
+ "kind": "interactive"
+}

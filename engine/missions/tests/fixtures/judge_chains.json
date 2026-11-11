@@ -1,0 +1,13 @@
+[
+  {"name": "one judge", "formations": ["fmn_j1"], "connections": [["gate_g:judge", "fmn_j1:in"], ["fmn_j1:out", "gate_g:judge"]], "chain": ["fmn_j1"]},
+  {"name": "two judges", "formations": ["fmn_j1", "fmn_j2"], "connections": [["gate_g:judge", "fmn_j1:in"], ["fmn_j1:out", "fmn_j2:in"], ["fmn_j2:out", "gate_g:judge"]], "chain": ["fmn_j1", "fmn_j2"]},
+  {"name": "a Tool between judges", "formations": ["fmn_j1", "fmn_j2"], "connections": [["gate_g:judge", "fmn_j1:in"], ["fmn_j1:out", "tool_t:in"], ["tool_t:out", "fmn_j2:in"], ["fmn_j2:out", "gate_g:judge"]], "chain": []},
+  {"name": "a gate between judges", "formations": ["fmn_j1", "fmn_j2"], "connections": [["gate_g:judge", "fmn_j1:in"], ["fmn_j1:out", "gate_h:in"], ["gate_h:pass", "fmn_j2:in"], ["fmn_j2:out", "gate_g:judge"]], "chain": []},
+  {"name": "no way back", "formations": ["fmn_j1"], "connections": [["gate_g:judge", "fmn_j1:in"]], "chain": []},
+  {"name": "no judge", "formations": ["fmn_j1"], "connections": [["fmn_j1:out", "gate_g:in"]], "chain": []},
+  {"name": "the judge port sends to a Tool", "formations": ["fmn_j1"], "connections": [["gate_g:judge", "tool_t:in"], ["tool_t:out", "fmn_j1:in"], ["fmn_j1:out", "gate_g:judge"]], "chain": []},
+  {"name": "a loop between judges", "formations": ["fmn_j1", "fmn_j2"], "connections": [["gate_g:judge", "fmn_j1:in"], ["fmn_j1:out", "fmn_j2:in"], ["fmn_j2:out", "fmn_j1:in"]], "chain": []},
+  {"name": "a judge that returns and also feeds on", "formations": ["fmn_j1", "fmn_j2"], "connections": [["gate_g:judge", "fmn_j1:in"], ["fmn_j1:out", "fmn_j2:in"], ["fmn_j1:out", "gate_g:judge"], ["fmn_j2:out", "gate_g:judge"]], "chain": ["fmn_j1"]},
+  {"name": "the first step after a judge", "formations": ["fmn_j1", "fmn_j2", "fmn_j3"], "connections": [["gate_g:judge", "fmn_j1:in"], ["fmn_j1:out", "tool_t:in"], ["fmn_j1:out", "fmn_j2:in"], ["fmn_j1:out", "fmn_j3:in"], ["fmn_j2:out", "gate_g:judge"], ["fmn_j3:out", "gate_g:judge"]], "chain": ["fmn_j1", "fmn_j2"]},
+  {"name": "a judge returning to another gate", "formations": ["fmn_j1"], "connections": [["gate_g:judge", "fmn_j1:in"], ["fmn_j1:out", "gate_h:judge"]], "chain": []}
+]

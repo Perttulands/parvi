@@ -1,0 +1,178 @@
+# Parity fixture: End nodes, node ids and Limit cards.
+schema = 1
+id = "msn_limits"
+slug = "limits"
+title = "Limits"
+rev = 1
+
+[[inputCard]]
+id = "inp"
+title = "Start"
+
+[[formation]]
+id = "fmn_a"
+type = "solo"
+title = "Draft"
+[[formation.input]]
+id = "in"
+[[formation.output]]
+id = "out"
+[[formation.slot]]
+id = "a"
+harness = "claude-code"
+effort = "low"
+
+[[formation]]
+id = "fmn_b"
+type = "solo"
+title = "Build"
+[[formation.input]]
+id = "in"
+[[formation.output]]
+id = "out"
+[[formation.slot]]
+id = "b"
+harness = "claude-code"
+effort = "low"
+
+[[formation]]
+id = "fmn_c"
+type = "solo"
+title = "Check"
+[[formation.input]]
+id = "in"
+[[formation.output]]
+id = "out"
+[[formation.slot]]
+id = "c"
+harness = "claude-code"
+effort = "low"
+
+[[gate]]
+id = "gate_human"
+title = "Review"
+kinds = ["human"]
+
+[[gate]]
+id = "gate_code"
+title = "Lint"
+kinds = ["code"]
+check = "output_contains"
+checkVersion = "1"
+checkValue = "LINT OK"
+
+[[end]]
+id = "fmn_a"
+title = "Clash"
+outcome = "done"
+
+[[end]]
+id = "end_blank"
+title = "Blank"
+
+[[end]]
+id = "end_maybe"
+outcome = "maybe"
+
+[[end]]
+id = "end_spaces"
+title = "Spaces"
+outcome = "  "
+
+[[end]]
+id = "end_done"
+title = "Done"
+outcome = "done"
+
+[[limit]]
+id = "gate_human"
+title = "Limit"
+target = "fmn_a"
+rounds = 3
+
+[[limit]]
+id = "lim_nothing"
+title = "Nothing"
+
+[[limit]]
+id = "lim_gate"
+title = "Gate cap"
+target = "gate_code"
+rounds = 2
+
+[[limit]]
+id = "lim_second"
+title = "Second"
+target = "fmn_a"
+rounds = 0
+seconds = -5
+tokens = 0
+
+[[limit]]
+id = "lim_warn_zero"
+title = "Warn zero"
+target = "fmn_b"
+seconds = 600
+warnSeconds = 0
+
+[[limit]]
+id = "lim_warn_notime"
+title = "Warn no time"
+target = "inp"
+warnSeconds = 90
+whenSpent = "best"
+
+[[limit]]
+id = "lim_warn_late"
+title = "Warn late"
+target = "fmn_c"
+seconds = 300
+warnSeconds = 5400
+whenSpent = "maybe"
+
+[[limit]]
+id = "lim_best_nogate"
+title = "Best"
+target = "fmn_b"
+tokens = 50000
+whenSpent = "best"
+
+[[connection]]
+id = "e1"
+from = "inp:out"
+to = "fmn_a:in"
+
+[[connection]]
+id = "e2"
+from = "fmn_a:out"
+to = "gate_human:in"
+
+[[connection]]
+id = "e3"
+from = "gate_human:fail"
+to = "fmn_a:in"
+
+[[connection]]
+id = "e4"
+from = "gate_human:pass"
+to = "fmn_b:in"
+
+[[connection]]
+id = "e5"
+from = "fmn_b:out"
+to = "fmn_c:in"
+
+[[connection]]
+id = "e6"
+from = "fmn_c:out"
+to = "gate_code:in"
+
+[[connection]]
+id = "e7"
+from = "gate_code:fail"
+to = "fmn_c:in"
+
+[[connection]]
+id = "e8"
+from = "gate_code:pass"
+to = "end_done:in"

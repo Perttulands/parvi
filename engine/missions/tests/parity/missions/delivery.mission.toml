@@ -1,0 +1,191 @@
+# Import the companion delivery.notes.toml into .archon/notes/.
+schema = 1
+id = "brd_delivery"
+slug = "delivery"
+title = "Delivery"
+rev = 1
+
+[[inputCard]]
+id = "mis_delivery"
+title = "Deliver a change"
+goal = "Deliver a reviewed change to a repository. A run supplies the change as its input, the target repository as its cwd and the owning Bead as its Bead. Plan the change, draft Beads in that repository, review them with pushback, execute with a Claude controller and three Codex workers, then produce an independent Astra review report. The plan and report live in the run artifact directory."
+inputs = [
+  { name = "change", kind = "text", required = true, description = "The change to deliver: what it is, why it matters, and any constraints or acceptance you already know. The run's cwd is the target repository and its Bead the owning Bead." },
+]
+
+[[formation]]
+id = "fmn_plan"
+type = "solo"
+title = "Plan"
+[formation.brief]
+goal = "Use the brainstorm skill to turn the change below into a concrete plan with scope, dependencies and verifiable outcomes.\n\nThe change being delivered:\n\n{change}\n\nThe run's cwd is the target repository and its mission bead is the owning Bead; read the repository instructions and that Bead. Input port_plan_in carries the run's inputs. The mission has settled the delivery workflow; plan the change within its stated intent. Write plan.md only under the run artifact directory shown in this prompt. Return its path and a summary on port_plan_out. Do not edit repository source or the Beads store, and perform no Git operations. No tmux operations, new agents or service changes. Follow the supplied archon-outputs contract using the named output port, then emit the ARCHON-DONE sentinel for this run."
+[[formation.input]]
+id = "port_plan_in"
+label = "Input"
+[[formation.output]]
+id = "port_plan_out"
+label = "Plan"
+[[formation.slot]]
+id = "plan"
+label = "Plan"
+agentId = "planner"
+harness = "claude-code"
+controller = true
+effort = "xhigh"
+
+[[formation]]
+id = "fmn_beads"
+type = "solo"
+title = "Beads"
+[formation.brief]
+goal = "Use the beads-drafting skill to draft the smallest Bead graph that delivers the plan.\n\nThe change being delivered:\n\n{change}\n\nThe run's cwd is the target repository and its mission bead is the owning Bead; read the repository instructions and that Bead. Input port_beads_in carries the plan path and summary, or gate feedback with the previous draft. Read the plan. Run bd where in the run cwd and use the target repository's own Beads store. Draft the graph under the mission bead, with parent links, dependencies, file scopes and verifiable acceptance criteria. On retry, inspect the original draft and fix the gate reason and evidence in the existing Beads; do not create a duplicate graph. Preserve the plan path in every handoff. Output the Bead ids, their summary and the plan path on port_beads_out. You may change only those Beads in that store; no source edits and no Git operations. No tmux operations, new agents or service changes. Follow the supplied archon-outputs contract using the named output port, then emit the ARCHON-DONE sentinel for this run."
+[[formation.input]]
+id = "port_beads_in"
+label = "Input"
+[[formation.output]]
+id = "port_beads_out"
+label = "Bead graph"
+[[formation.slot]]
+id = "beads"
+label = "Beads"
+harness = "claude-code"
+controller = true
+effort = "medium"
+
+[[formation]]
+id = "fmn_beads_reviewer"
+type = "solo"
+title = "Beads reviewer"
+[formation.brief]
+goal = "Use the review-beads skill to judge whether the proposed Beads deliver the plan.\n\nThe change being delivered:\n\n{change}\n\nThe run's cwd is the target repository and its mission bead is the owning Bead; read the repository instructions and that Bead. Input port_beads_reviewer_in carries the gate criterion and Bead ids, summary and plan path. Read the plan and every proposed Bead in the target repository's store; use bd where in the run cwd and run bd lint for the proposed Beads. Check every Bead links to its parent and its required dependencies, and judge whether each goal and acceptance criterion is clear, scoped, verifiable and serves the change. Read only: write no files, modify no Beads, perform no Git or tmux operations and launch no agents. Return exactly one fenced archon-verdict JSON block with exactly verdict (pass or fail), reason (string) and evidence (array of strings). State actionable corrections on fail. Also emit the archon-outputs block with a short verdict summary on port_beads_reviewer_out, without duplicating the archon-verdict block. Follow the supplied archon-outputs contract using the named output port, then emit the ARCHON-DONE sentinel for this run."
+[[formation.input]]
+id = "port_beads_reviewer_in"
+label = "Input"
+[[formation.output]]
+id = "port_beads_reviewer_out"
+label = "Verdict"
+[[formation.slot]]
+id = "beads_reviewer"
+label = "Beads reviewer"
+agentId = "judge"
+harness = "claude-code"
+controller = true
+effort = "xhigh"
+
+[[formation]]
+id = "fmn_execution"
+type = "orchestrated"
+title = "Execution"
+[formation.brief]
+goal = "Use the beads-driven-development skill to execute the approved Beads with the three bound workers.\n\nThe change being delivered:\n\n{change}\n\nThe run's cwd is the target repository and its mission bead is the owning Bead; read the repository instructions and that Bead. Input port_execution_in carries the approved Bead ids, summary and plan path. Read the plan and approved graph in the target repository's own store. The controller alone steers the three bound openai-codex workers using native tmux on the socket and session names supplied in its prompt, per ADR-0011. Use these existing bound workers for the skill's delegation; do not launch replacement agents. Give each worker an explicit Bead, file scope, verification and handoff contract. Workers execute only their assigned Beads, use the beads skill for status and evidence, and return results to the controller; workers perform no tmux operations. The controller may prompt and inspect only its bound workers; never adopt or kill any session, and never kill-server. The runtime owns cleanup. Edit only files owned by approved Beads in the target repository and their store, plus evidence under the run artifact directory. No Git operations outside assigned scopes; commit only verified work and stage only owned files. Verify each acceptance criterion before closing its Bead; do not close the mission bead before final review. Output the commits, closed Bead ids, verification evidence, remaining findings and plan path on port_execution_out. Follow the supplied archon-outputs contract using the named output port, then emit the ARCHON-DONE sentinel for this run."
+[[formation.input]]
+id = "port_execution_in"
+label = "Input"
+[[formation.output]]
+id = "port_execution_out"
+label = "Delivery"
+[[formation.slot]]
+id = "execution"
+label = "Controller"
+agentId = "orchestrator"
+harness = "claude-code"
+controller = true
+effort = "xhigh"
+[[formation.slot]]
+id = "worker_1"
+label = "Worker 1"
+agentId = "builder"
+harness = "openai-codex"
+controller = false
+effort = "medium"
+[[formation.slot]]
+id = "worker_2"
+label = "Worker 2"
+agentId = "builder"
+harness = "openai-codex"
+controller = false
+effort = "medium"
+[[formation.slot]]
+id = "worker_3"
+label = "Worker 3"
+agentId = "builder"
+harness = "openai-codex"
+controller = false
+effort = "medium"
+
+[[formation]]
+id = "fmn_final_review"
+type = "solo"
+title = "Final review"
+[formation.brief]
+goal = "Use the code-review skill to review the delivered change independently.\n\nThe change being delivered:\n\n{change}\n\nThe run's cwd is the target repository and its mission bead is the owning Bead; read the repository instructions and that Bead. Input port_final_review_in carries delivered commits, closed Bead ids, verification evidence, findings and the plan path. Review the delivered diff, the Beads closure evidence and the plan against the change and the repository instructions. Write final-review.md only under the run artifact directory shown in this prompt. Report ranked findings with file references and evidence, or an explicit pass with the checks performed. Output the report path and summary on port_final_review_out. The target repository and Beads store are read-only; no fixes, Bead mutations or Git operations. No gate follows this report; the path ends (done) with it. No tmux operations, new agents or service changes. Follow the supplied archon-outputs contract using the named output port, then emit the ARCHON-DONE sentinel for this run."
+[[formation.input]]
+id = "port_final_review_in"
+label = "Input"
+[[formation.output]]
+id = "port_final_review_out"
+label = "Report"
+[[formation.slot]]
+id = "final_review"
+label = "Final review"
+agentId = "reviewer"
+harness = "openai-codex"
+controller = true
+model = "gpt-6-astra"
+effort = "max"
+
+[[gate]]
+id = "gate_beads_review"
+title = "Beads review"
+kinds = ["formation"]
+criterion = "The proposed Beads pass bd lint, link to their parent and required dependencies, and define clear, scoped, verifiable goals that deliver the plan."
+
+[[end]]
+id = "end_delivered"
+title = "Delivered"
+outcome = "done"
+
+[[connection]]
+id = "edge_mission_plan"
+from = "mis_delivery:out"
+to = "fmn_plan:port_plan_in"
+
+[[connection]]
+id = "edge_plan_beads"
+from = "fmn_plan:port_plan_out"
+to = "fmn_beads:port_beads_in"
+
+[[connection]]
+id = "edge_beads_gate"
+from = "fmn_beads:port_beads_out"
+to = "gate_beads_review:in"
+
+[[connection]]
+id = "edge_judge_start"
+from = "gate_beads_review:judge"
+to = "fmn_beads_reviewer:port_beads_reviewer_in"
+
+[[connection]]
+id = "edge_judge_return"
+from = "fmn_beads_reviewer:port_beads_reviewer_out"
+to = "gate_beads_review:judge"
+
+[[connection]]
+id = "edge_pushback"
+from = "gate_beads_review:fail"
+to = "fmn_beads:port_beads_in"
+
+[[connection]]
+id = "edge_approved"
+from = "gate_beads_review:pass"
+to = "fmn_execution:port_execution_in"
+
+[[connection]]
+id = "edge_delivered"
+from = "fmn_execution:port_execution_out"
+to = "fmn_final_review:port_final_review_in"
+
+[[connection]]
+id = "edge_reported"
+from = "fmn_final_review:port_final_review_out"
+to = "end_delivered:in"

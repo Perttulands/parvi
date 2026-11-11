@@ -1,0 +1,121 @@
+# Historical archon-2fb proving mission from 2026-09-06. Its briefs target that task.
+# For current Archon operation use docs/CONTRACT.md; adapt before running.
+schema = 1
+id = "brd_operations_proof"
+slug = "operations-proof"
+title = "Standalone operations proof"
+rev = 1
+
+[[inputCard]]
+id = "mis_operations"
+title = "Prove a useful operations handoff"
+goal = "Produce, independently review and integrate a usable standalone operations guide. End at a real operator gate. This is archon-2fb work."
+
+[[formation]]
+id = "fmn_producer"
+type = "solo"
+title = "Producer"
+[formation.brief]
+goal = "You are a bounded seat in the archon-2fb proving mission. The parent owns the Bead. Read the owning Bead and repository instructions. No Git operations, tmux operations, service changes, new agents, or changes outside your named file. Source documentation must be host-neutral, with no actual local paths, socket values, credentials, native session IDs, or run data. Follow the output and completion contract below. Keep your work bounded to this turn. Produce docs/standalone-operations.md, a concise operator guide for this standalone coordinator. Read docs/adr/0015-standalone-trusted-coordinator.md, docs/openapi/archon.yaml, src/cmd/archond/main.go, src/cmd/archon/remote.go and examples/operations-proof.mission.toml. Explain build, private state vs source workspace, import of this example, launch using configured host paths, mission start, status/follow, exact human approval/rejection, session ownership and current recovery limitations. Use shell variables as placeholders. Do not start a service or a mission. The guide must let an operator locate and enter the actual pending gate verdict. State any uncertainty in your routed output."
+work = "archon-2fb"
+[[formation.input]]
+id = "port_producer_in"
+label = "Input"
+[[formation.output]]
+id = "port_producer_out"
+label = "Report"
+[[formation.slot]]
+id = "producer"
+label = "Producer"
+agentId = "builder"
+harness = "openai-codex"
+controller = true
+effort = "medium"
+
+[[formation]]
+id = "fmn_reviewer"
+type = "solo"
+title = "Reviewer"
+[formation.brief]
+goal = "You are a bounded seat in the archon-2fb proving mission. The parent owns the Bead. Read the owning Bead and repository instructions. No Git operations, tmux operations, service changes, new agents, or changes outside your named file. Source documentation must be host-neutral, with no actual local paths, socket values, credentials, native session IDs, or run data. Follow the output and completion contract below. Keep your work bounded to this turn. Independently review docs/standalone-operations.md against the actual source and ADR/OpenAPI. This seat is read-only in the repository. Identify concrete errors that would prevent an operator from using it, incomplete lifecycle claims, unclear gate steps, or invented commands. Return a ranked list of corrections in your routed output. If it passes, say why with precise source evidence. Do not demand broader schema-2 work or implement changes. Judge whether a separate reviewer added useful information in this small mission."
+work = "archon-2fb"
+[[formation.input]]
+id = "port_reviewer_in"
+label = "Input"
+[[formation.output]]
+id = "port_reviewer_out"
+label = "Report"
+[[formation.slot]]
+id = "reviewer"
+label = "Reviewer"
+agentId = "reviewer"
+harness = "openai-codex"
+controller = true
+effort = "xhigh"
+
+[[formation]]
+id = "fmn_integrator"
+type = "solo"
+title = "Integrator"
+[formation.brief]
+goal = "You are a bounded seat in the archon-2fb proving mission. The parent owns the Bead. Read the owning Bead and repository instructions. No Git operations, tmux operations, service changes, new agents, or changes outside your named file. Source documentation must be host-neutral, with no actual local paths, socket values, credentials, native session IDs, or run data. Follow the output and completion contract below. Keep your work bounded to this turn. Integrate the preceding reviewer findings into docs/standalone-operations.md, the only source file you may edit. Check the final guide against the coordinator and CLI source. Fix concrete errors; preserve useful concise instructions. Do not execute example commands that create sessions or alter runtime state. In your routed output give a short file-level receipt and say which reviewer findings changed the guide, and whether this handoff earned its overhead. The parent will independently verify the file before the human gate."
+work = "archon-2fb"
+[[formation.input]]
+id = "port_integrator_in"
+label = "Input"
+[[formation.output]]
+id = "port_integrator_out"
+label = "Report"
+[[formation.slot]]
+id = "integrator"
+label = "Integrator"
+agentId = "builder"
+harness = "openai-codex"
+controller = true
+effort = "medium"
+
+[[gate]]
+id = "gate_operator"
+title = "Operator verdict"
+kinds = ["human"]
+criterion = "The operations guide is usable and this producer-reviewer-integrator handoff is worth keeping. The operator must enter pass or fail after inspecting the guide and mission evidence."
+
+[[end]]
+id = "end_kept"
+title = "Kept"
+outcome = "done"
+
+[[end]]
+id = "end_rejected"
+title = "Rejected"
+outcome = "rejected"
+
+[[connection]]
+id = "edge_0"
+from = "mis_operations:out"
+to = "fmn_producer:port_producer_in"
+
+[[connection]]
+id = "edge_1"
+from = "fmn_producer:port_producer_out"
+to = "fmn_reviewer:port_reviewer_in"
+
+[[connection]]
+id = "edge_2"
+from = "fmn_reviewer:port_reviewer_out"
+to = "fmn_integrator:port_integrator_in"
+
+[[connection]]
+id = "edge_3"
+from = "fmn_integrator:port_integrator_out"
+to = "gate_operator:in"
+
+[[connection]]
+id = "edge_4"
+from = "gate_operator:pass"
+to = "end_kept:in"
+
+[[connection]]
+id = "edge_5"
+from = "gate_operator:fail"
+to = "end_rejected:in"

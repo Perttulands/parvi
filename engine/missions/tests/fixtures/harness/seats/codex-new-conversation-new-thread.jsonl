@@ -1,0 +1,10 @@
+{"type":"session_meta","payload":{"id":"codex-fixture-new-thread","cwd":"/work","source":"cli","thread_source":"user"}}
+{"type":"event_msg","payload":{"type":"task_started","turn_id":"fixture-turn-3"}}
+{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"[memories.instructions, host_skills.instructions, permissions.instructions, collaboration_mode.instructions omitted]"}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["memories.instructions","host_skills.instructions","permissions.instructions","collaboration_mode.instructions"]}}}
+{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"[multi_agent.role_instructions omitted]"}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["multi_agent.role_instructions"]}}}
+{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"[multi_agent.mode_instructions omitted]"}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["multi_agent.mode_instructions"]}}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"[environments.environment_context omitted]"}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["environments.environment_context"]}}}
+{"type":"turn_context","payload":{"turn_id":"fixture-turn-3","cwd":"/work","model":"gpt-6-astra","effort":"low"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Synthetic check after a new conversation: reply with the single word fresh."}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["user.text"]}}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"fresh"}],"phase":"final_answer","internal_chat_message_metadata_passthrough":{"content_item_kinds":["unknown"]}}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"fixture-turn-3"}}

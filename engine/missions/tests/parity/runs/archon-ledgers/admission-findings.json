@@ -1,0 +1,47 @@
+[
+  {
+    "code": "formation_without_slots",
+    "nodeId": "empty",
+    "message": "formation \"empty\" has no slots; add a slot and staff it"
+  },
+  {
+    "code": "invalid_input",
+    "nodeId": "inp",
+    "message": "input sketch must be the absolute path of an existing file; \"relative\" is a relative path"
+  },
+  {
+    "code": "invalid_slot_settings",
+    "nodeId": "staff",
+    "message": "formation \"staff\" slot \"invalid\" harness \"wrong\" cannot start seats; use claude-code or openai-codex or pi"
+  },
+  {
+    "code": "missing_input",
+    "nodeId": "inp",
+    "message": "input topic is required"
+  },
+  {
+    "code": "orchestrated_controller",
+    "nodeId": "orchestration",
+    "message": "orchestrated formation \"orchestration\" needs exactly one controller slot; it has 0"
+  },
+  {
+    "code": "retired_persona",
+    "nodeId": "staff",
+    "message": "formation \"staff\" slot \"retired\" uses retired role \"critic\"; staff it with another role or none, or bring the role back"
+  },
+  {
+    "code": "unavailable_persona",
+    "nodeId": "staff",
+    "message": "formation \"staff\" slot \"unavailable\" names unknown role \"unknown\""
+  },
+  {
+    "code": "unknown_input",
+    "nodeId": "inp",
+    "message": "mission admission-findings has no input named \"unexpected\"; its inputs are topic, sketch"
+  },
+  {
+    "code": "unstaffed_slot",
+    "nodeId": "staff",
+    "message": "formation \"staff\" slot \"open\" needs a harness and effort, and optionally a role"
+  }
+]
