@@ -1,6 +1,7 @@
 #![cfg(unix)]
 use gpui::{Modifiers, TestAppContext, VisualTestContext};
-use parvi_app_kit::link::client::LinkState;
+use parvi_app_kit::{Ask, Host, link::client::LinkState};
+use parvi_core::NodeId;
 use parvi_mission_engine::{
     ExecutionSink, Executor, FormationExecution, FormationResult, LabExecutor,
 };
@@ -153,19 +154,106 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
             cx,
         )
     });
+    // The Agents library asks to open a mission before its list has arrived.
+    shell.update(cx, |s, cx| {
+        let host = Host::new(s.hub()).for_page("agents", &[]);
+        host.ask(
+            Ask::Reveal {
+                what: "mission".into(),
+                id: "gated".into(),
+                node: Some(NodeId(running.id.clone())),
+                part: None,
+            },
+            cx,
+        )
+        .unwrap();
+    });
     until(cx, "link", |cx| {
         shell.read_with(cx, |s, cx| {
             s.hub().read(cx).fleet.here().state == LinkState::Open
         })
     });
-    let selector = format!("mission-{}-gated", running.id);
-    until(cx, "gated mission", |cx| {
-        cx.debug_bounds(Box::leak(selector.clone().into_boxed_str()))
-            .is_some()
-    });
-    click(cx, &selector);
-    until(cx, "step", |cx| {
+    until(cx, "mission opened by role ask", |cx| {
         cx.debug_bounds("mission-card-fmn_work").is_some()
+    });
+    click(cx, "mission-card-fmn_work");
+    until(cx, "step editor", |cx| {
+        cx.debug_bounds("step-goal").is_some()
+    });
+    assert!(
+        shell
+            .read_with(cx, |s, cx| s.hub().read(cx).unsaved(cx))
+            .is_empty()
+    );
+    click(cx, "step-goal");
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("Temporary");
+    cx.run_until_parked();
+    assert!(
+        !shell
+            .read_with(cx, |s, cx| s.hub().read(cx).unsaved(cx))
+            .is_empty()
+    );
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("Do the work");
+    cx.run_until_parked();
+    assert!(
+        shell
+            .read_with(cx, |s, cx| s.hub().read(cx).unsaved(cx))
+            .is_empty()
+    );
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("Deliver reviewed work");
+    cx.run_until_parked();
+    assert!(
+        !shell
+            .read_with(cx, |s, cx| s.hub().read(cx).unsaved(cx))
+            .is_empty()
+    );
+    assert!(!cx.simulate_close());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("close-guard").is_some());
+    click(cx, "close-stay");
+    // A reveal cannot discard the draft; it is fulfilled after saving.
+    shell.update(cx, |s, cx| {
+        Host::new(s.hub())
+            .for_page("test", &[])
+            .ask(
+                Ask::Reveal {
+                    what: "mission".into(),
+                    id: "gated".into(),
+                    node: None,
+                    part: Some("fmn_work".into()),
+                },
+                cx,
+            )
+            .unwrap();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("step-goal").is_some());
+    click(cx, "step-save");
+    until(cx, "saved step", |cx| {
+        cx.debug_bounds("step-goal").is_none()
+    });
+    until(cx, "queued mission reveal", |cx| {
+        cx.debug_bounds("mission-reveal-fmn_work").is_some()
+    });
+    assert!(
+        shell
+            .read_with(cx, |s, cx| s.hub().read(cx).unsaved(cx))
+            .is_empty()
+    );
+    let client_runtime = tokio::runtime::Runtime::new().unwrap();
+    client_runtime.block_on(async {
+        let client = NodeClient::new(Some(&format!("{}/", running.url))).unwrap();
+        let (mission, _) = client
+            .request(http::Method::GET, "/api/missions/gated", None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            mission["mission"]["formations"][0]["brief"]["goal"],
+            "Deliver reviewed work"
+        );
     });
     click(cx, "prepare-run");
     until(cx, "brief field", |cx| {
@@ -173,19 +261,93 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
     });
     click(cx, "run-input-brief");
     cx.simulate_input("hello");
+    cx.run_until_parked();
+    assert!(
+        !shell
+            .read_with(cx, |s, cx| s.hub().read(cx).unsaved(cx))
+            .is_empty()
+    );
     click(cx, "run-start");
     until(cx, "active step", |cx| {
         cx.debug_bounds("run-step-fmn_work-running").is_some()
+    });
+    let run_id = client_runtime.block_on(async {
+        let client = NodeClient::new(Some(&format!("{}/", running.url))).unwrap();
+        let (runs, _) = client
+            .request(http::Method::GET, "/api/runs", None, None)
+            .await
+            .unwrap();
+        runs[0]["runId"].as_str().unwrap().to_owned()
+    });
+    shell.update(cx, |s, cx| {
+        let host = Host::new(s.hub()).for_page("test", &[]);
+        host.ask(
+            Ask::Reveal {
+                what: "run".into(),
+                id: run_id.clone(),
+                node: Some(NodeId(running.id.clone())),
+                part: Some("fmn_work".into()),
+            },
+            cx,
+        )
+        .unwrap();
+    });
+    until(cx, "revealed run step", |cx| {
+        cx.debug_bounds("run-reveal-fmn_work").is_some()
     });
     release.send(()).unwrap();
     until(cx, "human gate", |cx| cx.debug_bounds("run-gate").is_some());
     until(cx, "gate request", |cx| {
         cx.debug_bounds("gate-request-loaded").is_some()
     });
+    click(cx, "gate-response");
+    cx.simulate_input("Approved after review");
+    cx.run_until_parked();
+    assert!(
+        !shell
+            .read_with(cx, |s, cx| s.hub().read(cx).unsaved(cx))
+            .is_empty()
+    );
     click(cx, "gate-pass");
     until(cx, "run finished", |cx| {
         cx.debug_bounds("run-step-end_done-done").is_some()
             || cx.debug_bounds("run-finished-succeeded").is_some()
+    });
+    until(cx, "gate response saved", |cx| {
+        shell
+            .read_with(cx, |s, cx| s.hub().read(cx).unsaved(cx))
+            .is_empty()
+    });
+    shell.update(cx, |s, cx| {
+        Host::new(s.hub())
+            .for_page("test", &[])
+            .ask(
+                Ask::Reveal {
+                    what: "mission".into(),
+                    id: "gated".into(),
+                    node: None,
+                    part: None,
+                },
+                cx,
+            )
+            .unwrap();
+    });
+    until(cx, "mission after run", |cx| {
+        cx.debug_bounds("mission-note-draft").is_some()
+    });
+    click(cx, "mission-note-draft");
+    cx.simulate_input("A note");
+    cx.run_until_parked();
+    assert!(
+        !shell
+            .read_with(cx, |s, cx| s.hub().read(cx).unsaved(cx))
+            .is_empty()
+    );
+    click(cx, "mission-add-note");
+    until(cx, "note saved", |cx| {
+        shell
+            .read_with(cx, |s, cx| s.hub().read(cx).unsaved(cx))
+            .is_empty()
     });
     let bad = format!("mission-{}-admission-findings", running.id);
     click(cx, &bad);

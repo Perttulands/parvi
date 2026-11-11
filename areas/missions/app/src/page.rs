@@ -10,7 +10,7 @@ use parvi_app_kit::{
     theme::{board::LIST_W, size, theme},
     widgets::{
         boundary,
-        field::TextField,
+        field::{FieldEvent, TextField},
         kit::{self, Kind},
     },
 };
@@ -65,6 +65,10 @@ pub struct MissionsPage {
     limit_tokens: Entity<TextField>,
     limit_spent: Entity<TextField>,
     note_id: Option<String>,
+    note_base: String,
+    note_saving: bool,
+    wanted: Option<Wanted>,
+    reveal_card: Option<String>,
 }
 #[derive(Clone, Copy)]
 enum EditKind {
@@ -86,6 +90,23 @@ struct OutputDraft {
     required: bool,
     from: Entity<TextField>,
 }
+#[derive(Clone, Debug)]
+struct Wanted {
+    what: String,
+    id: String,
+    node: Option<NodeId>,
+    part: Option<String>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EditorSnapshot {
+    fields: Vec<String>,
+    outputs: Vec<(String, String, String, bool, String)>,
+}
+impl EditorSnapshot {
+    fn accept_fields(&mut self, submitted: &Self, range: std::ops::Range<usize>) {
+        self.fields[range.clone()].clone_from_slice(&submitted.fields[range]);
+    }
+}
 struct Editor {
     kind: EditKind,
     id: String,
@@ -95,11 +116,12 @@ struct Editor {
     error: Option<String>,
     brief: parvi_missions_contract::Brief,
     deleting: bool,
+    baseline: Option<EditorSnapshot>,
     outputs: Vec<OutputDraft>,
 }
 impl MissionsPage {
     pub fn new(host: Host, _: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self {
+        let page = Self {
             host,
             state: Store::default(),
             run: run::RunUi::new(cx),
@@ -140,9 +162,156 @@ impl MissionsPage {
             limit_tokens: cx.new(|cx| TextField::new(cx, "Tokens")),
             limit_spent: cx.new(|cx| TextField::new(cx, "stop, best, or fail")),
             note_id: None,
+            note_base: String::new(),
+            note_saving: false,
+            wanted: None,
+            reveal_card: None,
+        };
+        for field in [
+            &page.title,
+            &page.goal,
+            &page.extra,
+            &page.repository,
+            &page.work,
+            &page.files,
+            &page.links,
+            &page.check,
+            &page.check_version,
+            &page.check_value,
+            &page.role,
+            &page.harness,
+            &page.model,
+            &page.effort,
+            &page.port_label,
+            &page.port_kind,
+            &page.limit_title,
+            &page.limit_rounds,
+            &page.limit_seconds,
+            &page.limit_warn,
+            &page.limit_tokens,
+            &page.limit_spent,
+            &page.note,
+        ] {
+            Self::watch_editor_field(field, cx);
+        }
+        host_guard(&page.host, cx);
+        page
+    }
+    fn watch_editor_field(field: &Entity<TextField>, cx: &mut Context<Self>) {
+        cx.subscribe(field, |page, _, event: &FieldEvent, cx| {
+            if matches!(event, FieldEvent::Changed) && page.wanted.is_some() {
+                page.resolve_wanted(cx);
+            }
+        })
+        .detach();
+    }
+    fn unsaved(&self, cx: &gpui::App) -> Option<String> {
+        if let Some(editor) = &self.editor
+            && editor
+                .baseline
+                .as_ref()
+                .is_some_and(|base| *base != self.editor_snapshot(editor, cx))
+        {
+            return Some(format!("Mission card {}", editor.id));
+        }
+        if self.note_saving {
+            return Some("Saving mission note".into());
+        }
+        if self.note.read(cx).text != self.note_base {
+            return Some("Mission note".into());
+        }
+        self.run_unsaved(cx)
+    }
+    fn editor_snapshot(&self, editor: &Editor, cx: &gpui::App) -> EditorSnapshot {
+        let fields = [
+            &self.title,
+            &self.goal,
+            &self.extra,
+            &self.repository,
+            &self.work,
+            &self.files,
+            &self.links,
+            &self.check,
+            &self.check_version,
+            &self.check_value,
+            &self.role,
+            &self.harness,
+            &self.model,
+            &self.effort,
+            &self.port_label,
+            &self.port_kind,
+            &self.limit_title,
+            &self.limit_rounds,
+            &self.limit_seconds,
+            &self.limit_warn,
+            &self.limit_tokens,
+            &self.limit_spent,
+        ]
+        .iter()
+        .map(|field| field.read(cx).text.clone())
+        .collect();
+        let outputs = editor
+            .outputs
+            .iter()
+            .map(|o| {
+                (
+                    o.name.read(cx).text.clone(),
+                    o.description.read(cx).text.clone(),
+                    o.kind.read(cx).text.clone(),
+                    o.required,
+                    o.from.read(cx).text.clone(),
+                )
+            })
+            .collect();
+        EditorSnapshot { fields, outputs }
+    }
+    fn resolve_wanted(&mut self, cx: &mut Context<Self>) {
+        let Some(wanted) = self.wanted.clone() else {
+            return;
+        };
+        if self.writing
+            || self.editor.as_ref().is_some_and(|e| e.busy)
+            || self.unsaved(cx).is_some()
+        {
+            self.state.error =
+                Some("Save or discard the current draft before opening the requested item.".into());
+            cx.notify();
+            return;
+        }
+        let live: Vec<String> = self
+            .host
+            .nodes(cx)
+            .into_iter()
+            .map(|n| n.id.to_string())
+            .collect();
+        let Some((node, slug)) = self.state.find_reveal(
+            &wanted.what,
+            &wanted.id,
+            wanted.node.as_ref().map(NodeId::as_str),
+            &live,
+        ) else {
+            return;
+        };
+        self.wanted = None;
+        self.open(node.clone(), slug.clone(), cx);
+        if self.state.selected.as_ref() != Some(&(node, slug)) {
+            self.wanted = Some(wanted);
+            return;
+        }
+        if wanted.what == "run" {
+            self.reveal_run(wanted.id, wanted.part, cx);
+        } else {
+            self.reveal_card = wanted.part;
+            cx.notify();
         }
     }
     fn open(&mut self, node: String, slug: String, cx: &mut Context<Self>) {
+        if self.unsaved(cx).is_some() && !self.start_uncertain() {
+            self.state.error =
+                Some("Save or discard the current draft before opening another mission.".into());
+            cx.notify();
+            return;
+        }
         if self.start_uncertain() {
             self.run.error = Some("The start outcome is unknown. Retry it before leaving.".into());
             cx.notify();
@@ -152,6 +321,7 @@ impl MissionsPage {
             return;
         }
         self.run = run::RunUi::new(cx);
+        self.reveal_card = None;
         self.generation += 1;
         let generation = self.generation;
         self.state.selected = Some((node.clone(), slug.clone()));
@@ -164,6 +334,7 @@ impl MissionsPage {
         self.state.layout = None;
         self.notes = None;
         self.note_id = None;
+        self.note_base.clear();
         self.note.update(cx, |field, cx| field.set("", false, cx));
         self.state.error = None;
         // Encode a path segment, including non-ASCII bytes.
@@ -331,7 +502,12 @@ impl MissionsPage {
         cx.notify();
     }
     fn edit_step(&mut self, id: &str, cx: &mut Context<Self>) {
-        if self.editor.as_ref().is_some_and(|e| e.busy) {
+        if self.writing || self.editor.as_ref().is_some_and(|e| e.busy) {
+            return;
+        }
+        if self.unsaved(cx).is_some() {
+            self.state.error = Some("Save or discard the current draft first.".into());
+            cx.notify();
             return;
         }
         let Some(m) = &self.state.mission else {
@@ -429,6 +605,9 @@ impl MissionsPage {
                             f.set(&o.from, false, cx);
                             f
                         });
+                        for field in [&name, &description, &kind, &from] {
+                            Self::watch_editor_field(field, cx);
+                        }
                         OutputDraft {
                             name,
                             description,
@@ -449,6 +628,7 @@ impl MissionsPage {
             busy: false,
             error: None,
             deleting: false,
+            baseline: None,
             outputs,
         });
         self.slot = m
@@ -494,6 +674,13 @@ impl MissionsPage {
             })
             .detach();
         }
+        let snapshot = self
+            .editor
+            .as_ref()
+            .map(|editor| self.editor_snapshot(editor, cx));
+        if let Some(editor) = &mut self.editor {
+            editor.baseline = snapshot;
+        }
         cx.notify();
     }
     fn write_board(&mut self, patch: serde_json::Value, mode: WriteMode, cx: &mut Context<Self>) {
@@ -536,9 +723,41 @@ impl MissionsPage {
                 return;
             }
         };
-        let deleted = patch
-            .as_object()
-            .is_some_and(|p| p.keys().any(|k| k.starts_with("delete")));
+        let submitted = self.editor.as_ref().map(|ed| self.editor_snapshot(ed, cx));
+        let saved_fields = if patch.get("assignSlot").is_some() {
+            Some(10..14)
+        } else if patch
+            .get("updateFormation")
+            .is_some_and(|v| v.get("device").is_some())
+        {
+            Some(2..3)
+        } else if ["addPort", "updatePort", "removePort"]
+            .iter()
+            .any(|op| patch.get(*op).is_some())
+        {
+            Some(14..16)
+        } else if ["updateLimit", "deleteLimit"]
+            .iter()
+            .any(|op| patch.get(*op).is_some())
+        {
+            Some(16..22)
+        } else {
+            None
+        };
+        let deleted_card = [
+            "deleteFormation",
+            "deleteInputCard",
+            "deleteGate",
+            "deleteEnd",
+        ]
+        .iter()
+        .find_map(|key| {
+            patch
+                .get(*key)
+                .and_then(|v| v.get("id"))
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+        });
         let mut body = patch.clone();
         body["expectedRev"] = json!(mission.rev);
         body["updatedBy"] = json!("user:parvi-app");
@@ -588,9 +807,16 @@ impl MissionsPage {
                                     WriteMode::Undo => page.history.undone(entry),
                                     WriteMode::Redo => page.history.redone(entry),
                                 }
-                                if deleted {
+                                if page.editor.as_ref().is_some_and(|ed| {
+                                    deleted_card.as_deref() == Some(ed.id.as_str())
+                                }) {
                                     page.editor = None;
                                 } else if let Some(ed) = &mut page.editor {
+                                    if let (Some(base), Some(sent), Some(range)) =
+                                        (&mut ed.baseline, &submitted, &saved_fields)
+                                    {
+                                        base.accept_fields(sent, range.clone());
+                                    }
                                     ed.rev = v.mission.mission.rev;
                                     if let Some(etag) = &v.mission.etag {
                                         ed.etag = etag.clone();
@@ -668,7 +894,31 @@ impl MissionsPage {
             }
         }
     }
+    fn select_note(&mut self, id: &str, text: &str, cx: &mut Context<Self>) {
+        if self.note_saving || self.note.read(cx).text != self.note_base {
+            self.state.error = Some("Save or discard the current note draft first.".into());
+            cx.notify();
+            return;
+        }
+        self.note_id = Some(id.to_owned());
+        self.note_base = text.to_owned();
+        self.note.update(cx, |f, cx| f.set(text, false, cx));
+        cx.notify();
+    }
+    fn discard_note(&mut self, cx: &mut Context<Self>) {
+        if self.note_saving {
+            return;
+        }
+        self.note_id = None;
+        self.note_base.clear();
+        self.note.update(cx, |f, cx| f.set("", false, cx));
+        self.resolve_wanted(cx);
+        cx.notify();
+    }
     fn add_note(&mut self, delete: bool, cx: &mut Context<Self>) {
+        if self.note_saving {
+            return;
+        }
         let (Some((node, slug)), Some(notes)) = (self.state.selected.clone(), self.notes.as_ref())
         else {
             return;
@@ -682,6 +932,8 @@ impl MissionsPage {
             .as_ref()
             .map(|e| e.id.as_str())
             .unwrap_or("mission");
+        let sent_text = text.clone();
+        let sent_id = self.note_id.clone();
         let request = Request::new(
             "PATCH",
             NodeId(node),
@@ -689,6 +941,7 @@ impl MissionsPage {
         )
         .header("If-Match", notes.etag.clone())
         .json(&json!({"target":target, "text":text,"author":"human:ui", "action":if delete {"delete"} else if self.note_id.is_some() {"edit"} else {"append"}, "entryId":self.note_id}));
+        self.note_saving = true;
         let asked = self.host.request(request, cx);
         let generation = self.generation;
         cx.spawn(async move |this, cx| {
@@ -697,6 +950,7 @@ impl MissionsPage {
                 if generation != page.generation {
                     return;
                 }
+                page.note_saving = false;
                 match result {
                     Ok(a) if a.ok() => match serde_json::from_slice::<
                         parvi_missions_contract::NotesResponse,
@@ -704,8 +958,18 @@ impl MissionsPage {
                     {
                         Ok(n) => {
                             page.notes = Some(n.notes);
-                            page.note_id = None;
-                            page.note.update(cx, |f, cx| f.set("", false, cx));
+                            if page.note.read(cx).text == sent_text {
+                                page.note_id = None;
+                                page.note_base.clear();
+                                page.note.update(cx, |f, cx| f.set("", false, cx));
+                            } else if sent_id.is_some() && !delete {
+                                page.note_id = sent_id;
+                                page.note_base = sent_text;
+                            } else {
+                                page.note_id = None;
+                                page.note_base.clear();
+                            }
+                            page.resolve_wanted(cx);
                         }
                         Err(e) => page.state.error = Some(e.to_string()),
                     },
@@ -723,7 +987,46 @@ impl MissionsPage {
         })
         .detach();
     }
+    fn group_is_dirty(&self, range: std::ops::Range<usize>, cx: &gpui::App) -> bool {
+        let Some(ed) = &self.editor else {
+            return false;
+        };
+        let Some(base) = &ed.baseline else {
+            return false;
+        };
+        let now = self.editor_snapshot(ed, cx);
+        range.into_iter().any(|i| base.fields[i] != now.fields[i])
+    }
+    fn accept_group(&mut self, range: std::ops::Range<usize>, cx: &gpui::App) {
+        let current = self.editor.as_ref().map(|ed| self.editor_snapshot(ed, cx));
+        if let (Some(ed), Some(current)) = (&mut self.editor, current)
+            && let Some(base) = &mut ed.baseline
+        {
+            base.accept_fields(&current, range);
+        }
+    }
+    fn select_port(&mut self, id: &str, label: &str, kind: &str, cx: &mut Context<Self>) {
+        if self.group_is_dirty(14..16, cx) {
+            if let Some(ed) = &mut self.editor {
+                ed.error = Some("Save the port draft before selecting another port.".into());
+            }
+            cx.notify();
+            return;
+        }
+        self.port = Some(id.to_owned());
+        self.port_label.update(cx, |f, cx| f.set(label, false, cx));
+        self.port_kind.update(cx, |f, cx| f.set(kind, false, cx));
+        self.accept_group(14..16, cx);
+        cx.notify();
+    }
     fn select_slot(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.group_is_dirty(10..14, cx) {
+            if let Some(ed) = &mut self.editor {
+                ed.error = Some("Save the staffing draft before selecting another slot.".into());
+            }
+            cx.notify();
+            return;
+        }
         let Some(ed) = &self.editor else {
             return;
         };
@@ -745,6 +1048,7 @@ impl MissionsPage {
             field.update(cx, |field, cx| field.set(text, false, cx));
         }
         self.slot = Some(id.to_owned());
+        self.accept_group(10..14, cx);
         cx.notify();
     }
     fn port_edit(&mut self, op: &str, cx: &mut Context<Self>) {
@@ -767,6 +1071,13 @@ impl MissionsPage {
         self.write_board(patch, WriteMode::Edit, cx);
     }
     fn select_limit(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.group_is_dirty(16..22, cx) {
+            if let Some(ed) = &mut self.editor {
+                ed.error = Some("Save the limit draft before selecting another limit.".into());
+            }
+            cx.notify();
+            return;
+        }
         let Some(limit) = self
             .state
             .mission
@@ -787,6 +1098,7 @@ impl MissionsPage {
             field.update(cx, |f, cx| f.set(&text, false, cx));
         }
         self.limit = Some(id.to_owned());
+        self.accept_group(16..22, cx);
         cx.notify();
     }
     fn limit_action(&mut self, action: &str, cx: &mut Context<Self>) {
@@ -834,6 +1146,9 @@ impl MissionsPage {
             f
         });
         let from = cx.new(|cx| TextField::new(cx, "Source step:port"));
+        for field in [&name, &description, &kind, &from] {
+            Self::watch_editor_field(field, cx);
+        }
         if let Some(ed) = &mut self.editor {
             ed.outputs.push(OutputDraft {
                 name,
@@ -1079,6 +1394,7 @@ impl MissionsPage {
                                 page.state.layout_etag = Some(v.layout.etag);
                                 page.state.layout = Some(v.layout.layout);
                                 page.editor = None;
+                                page.resolve_wanted(cx);
                             }
                             Err(e) => {
                                 if let Some(ed) = &mut page.editor {
@@ -1107,6 +1423,9 @@ impl MissionsPage {
         cx.notify();
     }
 }
+fn host_guard(host: &Host, cx: &mut Context<MissionsPage>) {
+    host.guard_close(&cx.entity(), |page: &MissionsPage, cx| page.unsaved(cx), cx);
+}
 fn mission_path(slug: &str) -> String {
     let encoded: String = slug
         .bytes()
@@ -1126,6 +1445,35 @@ impl Page for MissionsPage {
     const AREA: Option<&'static str> = Some("missions");
     const KINDS: parvi_core::frame::Kinds = parvi_missions_contract::KINDS;
     const CHANNELS: &'static [u8] = &[WATCH, WATCH_RUNS];
+    const ANSWERS: &'static [parvi_app_kit::ask::Answers] = &[
+        parvi_app_kit::ask::Answers::Reveal("mission"),
+        parvi_app_kit::ask::Answers::Reveal("run"),
+    ];
+    fn answer(
+        &mut self,
+        ask: parvi_app_kit::Ask,
+        _: &'static str,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let parvi_app_kit::Ask::Reveal {
+            what,
+            id,
+            node,
+            part,
+        } = ask
+            && (what == "mission" || what == "run")
+        {
+            self.wanted = Some(Wanted {
+                what,
+                id,
+                node,
+                part,
+            });
+            self.resolve_wanted(cx);
+        }
+    }
+
     fn frame(
         &mut self,
         node: &NodeId,
@@ -1135,6 +1483,7 @@ impl Page for MissionsPage {
         cx: &mut Context<Self>,
     ) {
         self.state.frame(node.as_str(), kind, body);
+        self.resolve_wanted(cx);
         if kind == parvi_missions_contract::RUNS_SNAPSHOT {
             self.sync_gate(cx);
         }
@@ -1255,9 +1604,7 @@ impl Render for MissionsPage {
                             Kind::Quiet,
                         )
                         .on_click(cx.listener(move |p, _, _, cx| {
-                            p.note_id = Some(selected.clone());
-                            p.note.update(cx, |f, cx| f.set(&text, false, cx));
-                            cx.notify();
+                            p.select_note(&selected, &text, cx);
                         })),
                     );
                 } else {
@@ -1265,7 +1612,11 @@ impl Render for MissionsPage {
                 }
             }
             list = list
-                .child(div().child(self.note.clone()))
+                .child(
+                    div()
+                        .debug_selector(|| "mission-note-draft".into())
+                        .child(self.note.clone()),
+                )
                 .child(
                     kit::button(
                         &t,
@@ -1277,7 +1628,22 @@ impl Render for MissionsPage {
                         },
                         Kind::Quiet,
                     )
+                    .debug_selector(|| "mission-add-note".into())
                     .on_click(cx.listener(|p, _, _, cx| p.add_note(false, cx))),
+                )
+                .when(
+                    self.note_id.is_some() || self.note.read(cx).text != self.note_base,
+                    |d| {
+                        d.child(
+                            kit::button(
+                                &t,
+                                "mission-note-cancel",
+                                "Discard note draft",
+                                Kind::Quiet,
+                            )
+                            .on_click(cx.listener(|p, _, _, cx| p.discard_note(cx))),
+                        )
+                    },
                 )
                 .when(self.note_id.is_some(), |d| {
                     d.child(
@@ -1366,7 +1732,11 @@ impl Render for MissionsPage {
                         .p(px(PAD))
                         .bg(t.bg)
                         .border_1()
-                        .border_color(t.divider)
+                        .border_color(if self.reveal_card.as_deref() == Some(card.id.as_str()) {
+                            t.accent
+                        } else {
+                            t.divider
+                        })
                         .rounded(px(size::RADIUS))
                         .debug_selector(move || selector.clone())
                         .child(m.node_name(&card.id).to_owned())
@@ -1374,7 +1744,20 @@ impl Render for MissionsPage {
                         .on_click(cx.listener(move |page, _, _, cx| page.edit_step(&card_id, cx))),
                 );
             }
-            drawing
+            if let Some(id) = &self.reveal_card {
+                let selector = format!("mission-reveal-{id}");
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .debug_selector(move || selector.clone())
+                            .child(format!("Card: {}", m.node_name(id))),
+                    )
+                    .child(drawing)
+            } else {
+                drawing
+            }
         } else {
             div().p(px(PAD)).child(
                 self.state
@@ -1482,7 +1865,7 @@ impl Render for MissionsPage {
                                 d = d.child("Ports");
                                 for port in f.inputs.iter().chain(&f.outputs) {
                                     let id = port.id.clone(); let selected = id.clone(); let label = port.label.clone(); let kind = port.kind.clone();
-                                    d = d.child(kit::button(&t, gpui::SharedString::from(format!("port-{id}")), format!("{} ({})", port.label, id), Kind::Quiet).on_click(cx.listener(move |p, _, _, cx| { p.port = Some(selected.clone()); p.port_label.update(cx, |f, cx| f.set(&label, false, cx)); p.port_kind.update(cx, |f, cx| f.set(&kind, false, cx)); cx.notify(); })));
+                                    d = d.child(kit::button(&t, gpui::SharedString::from(format!("port-{id}")), format!("{} ({})", port.label, id), Kind::Quiet).on_click(cx.listener(move |p, _, _, cx| { p.select_port(&selected, &label, &kind, cx); })));
                                 }
                                 d = d.child(div().child(self.port_label.clone())).child(div().child(self.port_kind.clone()))
                                     .child(kit::button(&t, "port-add-in", "+ Input port", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.port_edit("input", cx))))
@@ -1501,7 +1884,7 @@ impl Render for MissionsPage {
                             if let Some(catalog) = &self.roles {
                                 for role in catalog.roles.iter().filter(|r| r.status != "retired") {
                                     let id = role.id.clone(); let selected = id.clone();
-                                    d = d.child(kit::button(&t, gpui::SharedString::from(format!("role-{id}")), role.display_name.clone(), Kind::Quiet).on_click(cx.listener(move |p, _, _, cx| { p.role.update(cx, |f, cx| f.set(&selected, false, cx)); })));
+                                    d = d.child(kit::button(&t, gpui::SharedString::from(format!("role-{id}")), role.display_name.clone(), Kind::Quiet).on_click(cx.listener(move |p, _, _, cx| { if p.role.read(cx).text != selected { p.role.update(cx, |f, cx| f.set(&selected, false, cx)); cx.notify(); } })));
                                 }
                                 for harness in &catalog.harnesses {
                                     let id = harness.id.clone(); let selected = id.clone();
@@ -1525,7 +1908,7 @@ impl Render for MissionsPage {
                             d = d.child("Outputs");
                             for (i, output) in ed.outputs.iter().enumerate() {
                                 d = d.child(div().child(output.name.clone())).child(div().child(output.description.clone()))
-                                    .child(kit::button(&t, ("required", i), if output.required { "Required" } else { "Optional" }, Kind::Quiet).on_click(cx.listener(move |p, _, _, cx| { if let Some(o) = p.editor.as_mut().and_then(|e| e.outputs.get_mut(i)) { o.required = !o.required; } cx.notify(); })))
+                                    .child(kit::button(&t, ("required", i), if output.required { "Required" } else { "Optional" }, Kind::Quiet).on_click(cx.listener(move |p, _, _, cx| { if let Some(e) = &mut p.editor && let Some(o) = e.outputs.get_mut(i) { o.required = !o.required; } cx.notify(); })))
                                     .child(kit::button(&t, ("remove-output", i), "Remove output", Kind::Quiet).on_click(cx.listener(move |p, _, _, cx| { if let Some(e) = &mut p.editor && i < e.outputs.len() { e.outputs.remove(i); } cx.notify(); })))
                                      .child(div().child(output.kind.clone())).child(div().child(output.from.clone()));
                             }
@@ -1538,12 +1921,13 @@ impl Render for MissionsPage {
                                 for note in &thread.entries {
                                     let id = note.id.clone(); let selected = id.clone(); let text = note.text.clone();
                                     if note.author == "human:ui" {
-                                        d = d.child(kit::button(&t, gpui::SharedString::from(format!("note-{id}")), note.text.clone(), Kind::Quiet).on_click(cx.listener(move |p, _, _, cx| { p.note_id = Some(selected.clone()); p.note.update(cx, |f, cx| f.set(&text, false, cx)); cx.notify(); })));
+                                        d = d.child(kit::button(&t, gpui::SharedString::from(format!("note-{id}")), note.text.clone(), Kind::Quiet).on_click(cx.listener(move |p, _, _, cx| { p.select_note(&selected, &text, cx); })));
                                     } else { d = d.child(div().child(note.text.clone())); }
                                 }
                             }
                             d.child(div().child(self.note.clone()))
                                 .child(kit::button(&t, "add-note", if self.note_id.is_some() { "Save note" } else { "Add note" }, Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.add_note(false, cx))))
+                                .when(self.note_id.is_some() || self.note.read(cx).text != self.note_base, |d| d.child(kit::button(&t, "note-cancel", "Discard note draft", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.discard_note(cx)))))
                                 .when(self.note_id.is_some(), |d| d.child(kit::button(&t, "delete-note", "Delete note", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.add_note(true, cx)))))
                         })
                         .when_some(ed.error.clone(), |d, error| {
@@ -1557,12 +1941,40 @@ impl Render for MissionsPage {
                         .child(
                             kit::button(&t, "step-cancel", "Cancel", Kind::Quiet).on_click(
                                 cx.listener(|p, _, _, cx| {
-                                    if !p.editor.as_ref().is_some_and(|e| e.busy) { p.editor = None; }
+                                    if !p.editor.as_ref().is_some_and(|e| e.busy) && !p.note_saving && p.note.read(cx).text == p.note_base { p.note_id = None; p.note_base.clear(); p.note.update(cx, |f, cx| f.set("", false, cx)); p.editor = None; p.resolve_wanted(cx); }
                                     cx.notify();
                                 }),
                             ),
                         ),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn saving_staffing_keeps_other_and_later_drafts_unsaved() {
+        let mut baseline = super::EditorSnapshot {
+            fields: vec![String::new(); 22],
+            outputs: vec![],
+        };
+        let mut submitted = baseline.clone();
+        submitted.fields[1] = "unsaved brief".into();
+        submitted.fields[11] = "saved harness".into();
+        let mut now = submitted.clone();
+        now.fields[11] = "newer harness".into();
+        baseline.accept_fields(&submitted, 10..14);
+        assert_eq!(baseline.fields[11], "saved harness");
+        assert_ne!(baseline.fields[11], now.fields[11]);
+        assert_ne!(baseline.fields[1], now.fields[1]);
+    }
+    #[test]
+    fn a_mission_path_encodes_its_slug() {
+        assert_eq!(super::mission_path("daily"), "/api/missions/daily");
+        assert_eq!(
+            super::mission_path("my plan #2?"),
+            "/api/missions/my%20plan%20%232%3F"
+        );
     }
 }

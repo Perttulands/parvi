@@ -5,6 +5,26 @@ use parvi_missions_contract::{RunOutput, RunProjection as Run, Slot};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+/// A run reference names what the CLI can address and where it runs.
+pub fn run_reference(run: &Run, device: &str) -> String {
+    format!(
+        "run {} (mission {}, {}) on {device}",
+        run.run_id, run.mission_slug, run.status
+    )
+}
+/// A gate reference includes the request sequence that makes the answer exact.
+pub fn gate_reference(
+    run: &Run,
+    gate: &parvi_missions_contract::WaitingGate,
+    device: &str,
+) -> String {
+    let what = if gate.pick.is_some() { "pick" } else { "gate" };
+    format!(
+        "{what} {} of run {} (mission {}, requested-seq {}) on {device}",
+        gate.gate_id, run.run_id, run.mission_slug, gate.requested_seq
+    )
+}
+
 /// A run state in the navigator: a word, never a dot.
 pub fn state_word(status: &str) -> &str {
     match status {
@@ -271,6 +291,24 @@ pub fn run_branch(run: &Run) -> Option<String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_run_and_its_gate_are_handed_over_by_what_answers_them() {
+        let run: Run = serde_json::from_value(serde_json::json!({"runId":"r-7","status":"waiting_human","final":false,"resumeAllowed":false,"epoch":1,"missionSlug":"daily","missionId":"m","missionRev":1,"inputCardId":"i","work":"","cwd":"","repository":"","base":"","contextPaths":[],"inputs":[],"outputs":[],"eventCount":1,"startedBy":"","startedAt":"","updatedAt":"","waitingGates":[],"events":[]})).unwrap();
+        let gate = parvi_missions_contract::WaitingGate {
+            gate_id: "gate_review".into(),
+            requested_seq: 12,
+            requested_at: String::new(),
+            pick: None,
+        };
+        assert_eq!(
+            run_reference(&run, "rig"),
+            "run r-7 (mission daily, waiting_human) on rig"
+        );
+        assert_eq!(
+            gate_reference(&run, &gate, "rig"),
+            "gate gate_review of run r-7 (mission daily, requested-seq 12) on rig"
+        );
+    }
     #[test]
     fn an_output_chip_shows_a_path_name_or_the_start_of_its_text() {
         let out = |kind: &str, value: &str| RunOutput {

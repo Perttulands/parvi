@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 
 pub(super) struct RunUi {
     selected: Option<String>,
+    reveal_step: Option<String>,
     frozen: Option<Mission>,
     starting: bool,
     target: Option<String>,
@@ -35,6 +36,7 @@ impl RunUi {
     pub fn new(cx: &mut Context<MissionsPage>) -> Self {
         Self {
             selected: None,
+            reveal_step: None,
             frozen: None,
             starting: false,
             target: None,
@@ -59,6 +61,43 @@ impl RunUi {
     }
 }
 impl MissionsPage {
+    pub(super) fn run_unsaved(&self, cx: &gpui::App) -> Option<String> {
+        if self.run.uncertain.is_some() {
+            return Some("Unconfirmed run start".into());
+        }
+        if self.run.starting
+            && (self
+                .run
+                .fields
+                .values()
+                .any(|f| !f.read(cx).text.is_empty())
+                || [
+                    &self.run.cwd,
+                    &self.run.repository,
+                    &self.run.base,
+                    &self.run.work,
+                    &self.run.paths,
+                ]
+                .iter()
+                .any(|f| !f.read(cx).text.is_empty()))
+        {
+            return Some("Run input".into());
+        }
+        if self
+            .run
+            .responses
+            .values()
+            .any(|f| !f.read(cx).text.is_empty())
+        {
+            return Some("Gate response".into());
+        }
+        None
+    }
+    pub(super) fn reveal_run(&mut self, id: String, part: Option<String>, cx: &mut Context<Self>) {
+        self.show_run(id, cx);
+        self.run.reveal_step = part;
+        cx.notify();
+    }
     pub(super) fn start_uncertain(&self) -> bool {
         self.run.uncertain.is_some()
     }
@@ -74,8 +113,9 @@ impl MissionsPage {
             .get(self.run.selected.as_ref()?)
     }
     pub(super) fn show_run(&mut self, run: String, cx: &mut Context<Self>) {
-        if self.start_uncertain() {
-            self.run.error = Some("The start outcome is unknown. Retry it before leaving.".into());
+        if self.run_unsaved(cx).is_some() {
+            self.run.error =
+                Some("Save or send the current run draft before opening another run.".into());
             cx.notify();
             return;
         }
@@ -83,6 +123,7 @@ impl MissionsPage {
             return;
         };
         self.run.selected = Some(run.clone());
+        self.run.reveal_step = None;
         self.run.abort_armed = false;
         self.run.starting = false;
         self.run.frozen = None;
@@ -201,7 +242,7 @@ impl MissionsPage {
         }
     }
     pub(super) fn prepare_run(&mut self, cx: &mut Context<Self>) {
-        if self.start_uncertain() {
+        if self.run_unsaved(cx).is_some() {
             return;
         }
         let Some(m) = &self.state.mission else {
@@ -235,6 +276,11 @@ impl MissionsPage {
     }
     pub(super) fn prepare_step_run(&mut self, id: String, cx: &mut Context<Self>) {
         if self.start_uncertain() {
+            return;
+        }
+        if self.unsaved(cx).is_some() {
+            self.state.error = Some("Save or discard the current draft first.".into());
+            cx.notify();
             return;
         }
         self.run.target = Some(id);
@@ -328,6 +374,7 @@ impl MissionsPage {
                 match start_answer(result) {
                     StartAnswer::Started(id) => {
                         page.run.uncertain = None;
+                        page.run.starting = false;
                         page.show_run(id, cx);
                     }
                     StartAnswer::Refused(a) => {
@@ -534,6 +581,23 @@ impl MissionsPage {
         let Some(run) = self.selected_run().cloned() else {
             return Some(view.child("Waiting for run state…"));
         };
+        if let Some(part) = &self.run.reveal_step {
+            let name = self
+                .run
+                .frozen
+                .as_ref()
+                .map(|m| m.node_name(part))
+                .unwrap_or(part.as_str());
+            let selector = format!("run-reveal-{part}");
+            view = view.child(
+                div()
+                    .debug_selector(move || selector.clone())
+                    .p(px(PAD))
+                    .border_1()
+                    .border_color(t.accent)
+                    .child(format!("Step: {name}")),
+            );
+        }
         let status_selector = format!("run-finished-{}", run.status);
         view = view.child(
             div()
@@ -577,10 +641,7 @@ impl MissionsPage {
                     )
                     .child(request.input.text.clone());
             }
-            let gate_reference = format!(
-                "gate {} of run {} (mission {}, requested-seq {}) on {}",
-                gate_id, run.run_id, run.mission_slug, seq, place
-            );
+            let gate_reference = crate::store::words::gate_reference(&run, gate, &place);
             row = row.child(
                 kit::button(
                     t,
@@ -602,7 +663,11 @@ impl MissionsPage {
                 })),
             );
             if let Some(response) = self.run.responses.get(&gate_id) {
-                row = row.child(div().child(response.clone()));
+                row = row.child(
+                    div()
+                        .debug_selector(|| "gate-response".into())
+                        .child(response.clone()),
+                );
             }
             if let Some(mission) = self.run.frozen.as_ref().or(self.state.mission.as_ref()) {
                 let flow = flow::build(mission);
@@ -666,10 +731,7 @@ impl MissionsPage {
             }
             view = view.child(row);
         }
-        let reference = format!(
-            "run {} (mission {}, {}) on {}",
-            run.run_id, run.mission_slug, run.status, place
-        );
+        let reference = crate::store::words::run_reference(&run, &place);
         view = view.child(
             kit::button(t, "run-send", "Send", Kind::Quiet).on_click(cx.listener(
                 move |p, _, _, cx| {
@@ -817,7 +879,13 @@ impl MissionsPage {
                     let mut card = div()
                         .debug_selector(move || selector.clone())
                         .border_1()
-                        .border_color(t.divider)
+                        .border_color(
+                            if self.run.reveal_step.as_deref() == Some(step.id.as_str()) {
+                                t.accent
+                            } else {
+                                t.divider
+                            },
+                        )
                         .p(px(PAD))
                         .child(label);
                     if let Some(formation) = mission.formations.iter().find(|f| f.id == step.id) {
