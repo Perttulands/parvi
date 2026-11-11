@@ -24,6 +24,8 @@ Commands use `parvi <noun> <verb>`. Required arguments can be positional or name
 | `view` | Inspect connected apps with `show` and open a page or item with `open`. |
 | `config` | Read the node configuration with `show`. |
 
+The app’s own settings are in `app.json` on the app’s device: `PARVI_APP_CONFIG` overrides its path; otherwise it is `$XDG_CONFIG_HOME/parvi/app.json` (default `~/.config/parvi/app.json`) or `%APPDATA%\Parvi\app.json` on Windows. Read and preserve the rest of the JSON when editing it; the running app reloads changes. `parvi config show` reads the separate node configuration.
+
 ## Sessions and scheduled prompts
 
 Read a session before sending into it; the operator may be working there. `session send` pastes text and normally presses Enter; `--no-enter` leaves it unsubmitted. A receipt says tmux took the input, not that the agent consumed it or finished. If delivery is uncertain, inspect the pane before retrying. Kill only sessions you launched.
