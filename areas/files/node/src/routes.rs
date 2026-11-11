@@ -23,6 +23,7 @@ pub const MAX_BYTES: u64 = 64 << 20;
 pub fn routes(files: Arc<Files>, drops: Arc<Drops>) -> Router {
     Router::new()
         .route("/api/files/roots", get(roots))
+        .route("/api/files/projects", get(projects))
         .route("/api/files/find", get(find))
         .route("/api/files/diff", get(diff))
         .route("/api/files/search", get(search))
@@ -48,6 +49,21 @@ async fn roots(State(files): Shared) -> Json<NodeRoots> {
         node: files.node.clone(),
         roots: files.roots.list(),
     })
+}
+
+#[derive(serde::Deserialize)]
+struct NodeQuery {
+    #[serde(default)]
+    node: String,
+}
+
+async fn projects(
+    State(files): Shared,
+    Query(at): Query<NodeQuery>,
+) -> Result<Json<parvi_files_contract::Projects>, FilesError> {
+    Ok(Json(
+        blocking(&files, &at.node, |f| disk::projects(&f.roots)).await?,
+    ))
 }
 
 async fn bridge_start(

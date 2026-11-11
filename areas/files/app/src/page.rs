@@ -16,7 +16,7 @@ use parvi_app_kit::{
 };
 use parvi_core::NodeId;
 use parvi_files_contract::{Listing, Matches, NodeRoots};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 
 struct Upload {
@@ -65,6 +65,9 @@ pub struct FilesPage {
     dock_view: Option<Entity<FilesPage>>,
     pub(crate) dock: bool,
     dock_previous_focus: Option<FocusHandle>,
+    pub(crate) landing: bool,
+    pub(crate) projects: BTreeMap<String, parvi_files_contract::Projects>,
+    pub(crate) sessions: Option<Entity<parvi_terminals_contract::SessionList>>,
     uploads: VecDeque<Upload>,
     uploading: bool,
     upload_conflict: Option<UploadConflict>,
@@ -128,6 +131,7 @@ impl Page for FilesPage {
         cx: &mut Context<Self>,
     ) {
         if state != Some(LinkState::Open) {
+            self.projects.remove(node.as_str());
             for side in &mut self.sides {
                 if side.pane.node == node.as_str() {
                     side.pane.away = true;
@@ -182,6 +186,7 @@ impl Page for FilesPage {
                 if beside {
                     self.open_beside(from, node, path, window, cx);
                 } else {
+                    self.landing = false;
                     let i = self.active;
                     self.sides[i].pane.node = node.to_string();
                     self.list(
@@ -194,6 +199,7 @@ impl Page for FilesPage {
                 }
             }
             Ask::Reveal { what, id, node, .. } if what == "path" => {
+                self.landing = false;
                 if let Some(n) = node {
                     self.sides[self.active].pane.node = n.to_string();
                 }
@@ -215,6 +221,10 @@ impl FilesPage {
     }
     fn create(host: Host, window: &mut Window, cx: &mut Context<Self>, guard: bool) -> Self {
         let kept: store::Kept = host.setting(cx).unwrap_or_default();
+        let sessions = host.model::<parvi_terminals_contract::SessionList>(cx);
+        if let Some(sessions) = &sessions {
+            cx.observe(sessions, |_, _, cx| cx.notify()).detach();
+        }
         let sides = std::array::from_fn(|i| {
             let code = cx.new(Code::new);
             let search = cx.new(|cx| TextField::new(cx, "Find files"));
@@ -345,6 +355,9 @@ impl FilesPage {
             dock_view: None,
             dock: false,
             dock_previous_focus: None,
+            landing: kept.panes[0].path.is_none(),
+            projects: BTreeMap::new(),
+            sessions,
             uploads: VecDeque::new(),
             uploading: false,
             upload_conflict: None,
@@ -371,6 +384,7 @@ impl FilesPage {
                 let view = cx.new(|cx| FilesPage::create(host, window, cx, false));
                 view.update(cx, |page, cx| {
                     page.dock = true;
+                    page.landing = false;
                     page.sides[0].pane = Pane::from_kept(&kept.dock);
                     page.start(cx);
                     if let Some(path) = kept.dock_file {
@@ -480,12 +494,81 @@ impl FilesPage {
             }
             self.roots(i, cx);
         }
+        if self.landing && !self.beside && !self.dock {
+            self.refresh_projects(cx);
+        }
+    }
+    pub(crate) fn show_projects(&mut self, cx: &mut Context<Self>) {
+        self.landing = true;
+        self.refresh_projects(cx);
+        cx.notify();
+    }
+    fn refresh_projects(&mut self, cx: &mut Context<Self>) {
+        for node in self.host.nodes(cx) {
+            let id = node.id.clone();
+            self.request(
+                Request::get(node.id, "/api/files/projects"),
+                move |page, status, body, cx| {
+                    if status == 200 {
+                        match serde_json::from_slice(&body) {
+                            Ok(projects) => {
+                                page.projects.insert(id.to_string(), projects);
+                            }
+                            Err(error) => page.error = Some(error.to_string()),
+                        }
+                    } else {
+                        page.fail(status, &body);
+                    }
+                    cx.notify();
+                },
+                cx,
+            );
+        }
+    }
+    pub(crate) fn browse_project(
+        &mut self,
+        node: String,
+        folder: String,
+        document: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.landing = false;
+        self.active = 0;
+        self.sides[0]
+            .search
+            .update(cx, |field, cx| field.set("", false, cx));
+        let changed = self.sides[0].pane.node != node;
+        self.sides[0].pane.choose_node(&node);
+        if self.sides[0].pane.path.as_deref() != Some(folder.as_str()) {
+            self.sides[0].pane.entries.clear();
+            self.sides[0].pane.find = None;
+            self.sides[0].pane.filter.clear();
+        }
+        self.sides[0].pane.path = Some(folder.clone());
+        self.sides[0].pane.selected = document.clone();
+        self.sides[0].opened = None;
+        if changed {
+            self.roots(0, cx);
+        } else {
+            self.list(0, folder.clone(), document.clone(), cx);
+        }
+        if self.sides[1].pane.path.is_none() {
+            self.roots(1, cx);
+        }
+        if let Some(name) = document {
+            self.open(0, paths::join(&folder, &name), window, cx);
+        }
+        cx.notify();
     }
     fn roots(&mut self, i: usize, cx: &mut Context<Self>) {
         let node = self.sides[i].pane.node.clone();
         self.request(
-            Request::get(NodeId(node), "/api/files/roots"),
+            Request::get(NodeId(node.clone()), "/api/files/roots"),
             move |p, s, b, cx| {
+                if p.sides[i].pane.node != node {
+                    return;
+                }
                 if s != 200 {
                     p.fail(s, &b);
                     p.sides[i].pane.away = true;
@@ -496,7 +579,9 @@ impl FilesPage {
                 match serde_json::from_slice::<NodeRoots>(&b) {
                     Ok(r) => {
                         p.sides[i].pane.roots = r.roots;
-                        if let Some(path) = p.sides[i].pane.start_path(i) {
+                        if (!p.landing || p.beside || p.dock)
+                            && let Some(path) = p.sides[i].pane.start_path(i)
+                        {
                             p.list(i, path, None, cx)
                         }
                     }
@@ -512,9 +597,9 @@ impl FilesPage {
         self.sides[i].pane.asked += 1;
         let id = self.sides[i].pane.asked;
         self.request(
-            Request::get(NodeId(node), route("folder", &path)),
+            Request::get(NodeId(node.clone()), route("folder", &path)),
             move |p, s, b, cx| {
-                if p.sides[i].pane.asked != id {
+                if p.sides[i].pane.node != node || p.sides[i].pane.asked != id {
                     return;
                 }
                 if s != 200 {

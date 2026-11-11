@@ -45,6 +45,48 @@ pub fn list(roots: &Roots, path: &str) -> Result<Listing, FilesError> {
     })
 }
 
+/// Git repositories immediately below each configured root, with their key documents.
+pub fn projects(roots: &Roots) -> Result<parvi_files_contract::Projects, FilesError> {
+    use parvi_files_contract::{Project, ProjectGroup, Projects};
+    let mut groups = Vec::new();
+    for root in roots.list() {
+        let listing = list(roots, &root.path)?;
+        let mut projects = Vec::new();
+        for entry in listing.entries.into_iter().filter(|e| e.folder) {
+            let path = Path::new(&listing.path).join(&entry.name);
+            let Some(text) = path.to_str() else { continue };
+            let Ok(contents) = list(roots, text) else {
+                continue;
+            };
+            if !contents.entries.iter().any(|e| e.name == ".git") {
+                continue;
+            }
+            let documents = ["README.md", "AGENTS.md", "VISION.md"]
+                .into_iter()
+                .filter(|name| {
+                    contents
+                        .entries
+                        .iter()
+                        .any(|e| !e.folder && e.name == *name)
+                })
+                .map(str::to_owned)
+                .collect();
+            projects.push(Project {
+                name: entry.name,
+                path: contents.path,
+                documents,
+            });
+        }
+        if !projects.is_empty() {
+            groups.push(ProjectGroup {
+                parent: listing.path,
+                projects,
+            });
+        }
+    }
+    Ok(Projects { groups })
+}
+
 /// What a listing shows for an entry: its own metadata, or for a link that
 /// of its target while the target is under a root.
 fn shown(roots: &Roots, path: &Path) -> Option<fs::Metadata> {
@@ -285,6 +327,29 @@ mod tests {
 
     fn s(path: &Path) -> &str {
         path.to_str().unwrap()
+    }
+
+    #[test]
+    fn projects_are_grouped_by_configured_root_and_only_one_level_deep() {
+        let scratch = Scratch::new();
+        let first = scratch.dir("first");
+        let second = scratch.dir("second");
+        fs::create_dir_all(first.join("repo/.git")).unwrap();
+        fs::write(first.join("repo/README.md"), "readme").unwrap();
+        fs::create_dir_all(first.join("plain/nested/.git")).unwrap();
+        fs::create_dir_all(second.join("worktree")).unwrap();
+        fs::write(second.join("worktree/.git"), "gitdir: elsewhere").unwrap();
+        fs::write(second.join("worktree/VISION.md"), "vision").unwrap();
+        let roots = Roots::new(&[first.clone(), second.clone()], None).unwrap();
+        let result = projects(&roots).unwrap();
+        assert_eq!(result.groups.len(), 2);
+        assert_eq!(result.groups[0].parent, s(&first));
+        assert_eq!(result.groups[0].projects.len(), 1);
+        assert_eq!(result.groups[0].projects[0].name, "repo");
+        assert_eq!(result.groups[0].projects[0].documents, ["README.md"]);
+        assert_eq!(result.groups[1].parent, s(&second));
+        assert_eq!(result.groups[1].projects[0].name, "worktree");
+        assert_eq!(result.groups[1].projects[0].documents, ["VISION.md"]);
     }
 
     #[test]

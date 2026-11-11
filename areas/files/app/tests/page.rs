@@ -212,6 +212,7 @@ fn browse_find_edit_save_and_send_to_a_session(cx: &mut TestAppContext) {
     });
     click(cx, "peek-attach");
     click(cx, "tab-files");
+    browse_root(cx);
     until(cx, "folder", |cx| {
         cx.debug_bounds("file-row-0-folder").is_some()
     });
@@ -272,6 +273,96 @@ fn click(cx: &mut VisualTestContext, id: &'static str) {
     cx.simulate_click(point, Modifiers::none());
 }
 
+fn browse_root(cx: &mut VisualTestContext) {
+    until(cx, "root browser", |cx| {
+        cx.debug_bounds("files-browse-root-0").is_some()
+            || cx.debug_bounds("files-search-0").is_some()
+    });
+    if cx.debug_bounds("files-browse-root-0").is_some() {
+        click(cx, "files-browse-root-0");
+    }
+}
+
+#[gpui::test]
+fn projects_landing_groups_repositories_sessions_and_scopes_find(cx: &mut TestAppContext) {
+    let root = parvi_testkit::fresh_dir("files-projects-landing");
+    for dir in ["one", "two", "plain"] {
+        std::fs::create_dir(root.join(dir)).unwrap();
+    }
+    std::fs::create_dir(root.join("one/.git")).unwrap();
+    std::fs::write(root.join("two/.git"), "gitdir: elsewhere").unwrap();
+    std::fs::write(root.join("one/README.md"), "readme").unwrap();
+    std::fs::write(root.join("one/AGENTS.md"), "agents").unwrap();
+    std::fs::write(root.join("one/VISION.md"), "vision").unwrap();
+    std::fs::write(root.join("one/needle-inside.txt"), "inside").unwrap();
+    std::fs::write(root.join("two/needle-outside.txt"), "outside").unwrap();
+    let running = start(root.clone());
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let url = running.url.clone();
+    let (shell, cx) = cx.add_window_view(move |w, cx| {
+        parvi_app_shell::start(&[parvi_files_app::build], Some(url), None, w, cx)
+    });
+    let host = shell.read_with(cx, |s, _| {
+        parvi_app_kit::Host::new(s.hub()).for_page("test-sessions", &[])
+    });
+    let session = parvi_terminals_contract::Session {
+        node: running.node.clone(),
+        name: "working".into(),
+        cwd: Some(root.join("one/src").to_string_lossy().into_owned()),
+        ..Default::default()
+    };
+    cx.update(|_, cx| {
+        host.publish(
+            parvi_terminals_contract::SessionList {
+                sessions: vec![session],
+            },
+            cx,
+        )
+        .unwrap()
+    });
+    until(cx, "project cards", |cx| {
+        cx.debug_bounds("files-project-one").is_some()
+            && cx.debug_bounds("files-project-two").is_some()
+            && cx
+                .debug_bounds("files-project-session-one-working")
+                .is_some()
+    });
+    assert!(cx.debug_bounds("files-project-plain").is_none());
+    for doc in [
+        "files-project-doc-one-README.md",
+        "files-project-doc-one-AGENTS.md",
+        "files-project-doc-one-VISION.md",
+    ] {
+        assert!(cx.debug_bounds(doc).is_some());
+    }
+    click(cx, "files-project-doc-one-README.md");
+    until(cx, "document opened", |cx| {
+        cx.debug_bounds("file-view-README.md").is_some()
+    });
+    click(cx, "files-projects");
+    until(cx, "projects again", |cx| {
+        cx.debug_bounds("files-project-one").is_some()
+    });
+    click(cx, "files-project-one");
+    until(cx, "project browser", |cx| {
+        cx.debug_bounds("file-row-0-needle-inside.txt").is_some()
+    });
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("needle");
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(300));
+    until(cx, "scoped find", |cx| {
+        cx.debug_bounds("find-result-0-needle-inside.txt").is_some()
+    });
+    assert!(
+        cx.debug_bounds("find-result-0-needle-outside.txt")
+            .is_none()
+    );
+    drop(running);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 fn menu_on(cx: &mut VisualTestContext, row: &'static str) {
     let at = cx.debug_bounds(row).expect("file row").center();
     cx.simulate_mouse_down(at, gpui::MouseButton::Right, Modifiers::none());
@@ -309,6 +400,7 @@ fn upload_drop_conflicts_picker_and_node_error(cx: &mut TestAppContext) {
     let (_, cx) = cx.add_window_view(move |w, cx| {
         parvi_app_shell::start(&[parvi_files_app::build], Some(url), None, w, cx)
     });
+    browse_root(cx);
     until(cx, "folder rows", |cx| {
         cx.debug_bounds("file-row-0-target").is_some()
             && cx.debug_bounds("file-row-0-locked").is_some()
@@ -389,6 +481,7 @@ fn file_menu_paths_pins_download_and_refresh(cx: &mut TestAppContext) {
     let (_, cx) = test_cx.add_window_view(move |w, cx| {
         parvi_app_shell::start(&[parvi_files_app::build], Some(url), Some(saved), w, cx)
     });
+    browse_root(cx);
     until(cx, "folder", |cx| {
         cx.debug_bounds("file-row-0-folder").is_some()
     });
@@ -491,6 +584,7 @@ fn page_renders_node_data(cx: &mut TestAppContext) {
     until(cx, "Files page", |cx| {
         shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
     });
+    browse_root(cx);
     until(cx, "node listing", |cx| {
         cx.debug_bounds("file-row-0-note.txt").is_some()
     });
@@ -527,6 +621,7 @@ fn editing_by_keyboard_keeps_the_work_and_discard_restores_it(cx: &mut TestAppCo
     until(cx, "Files", |cx| {
         shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
     });
+    browse_root(cx);
     until(cx, "listing", |cx| {
         cx.debug_bounds("file-row-0-draft.txt").is_some()
     });
@@ -577,6 +672,7 @@ fn opening_a_folder_keeps_the_previous_files_draft(cx: &mut TestAppContext) {
     until(cx, "Files", |cx| {
         shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
     });
+    browse_root(cx);
     until(cx, "listing", |cx| {
         cx.debug_bounds("file-row-0-draft.txt").is_some()
     });
@@ -621,6 +717,7 @@ fn sound_video_and_pdf_open_to_play_without_reading(cx: &mut TestAppContext) {
     until(cx, "Files", |cx| {
         shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
     });
+    browse_root(cx);
     for name in ["clip.mp4", "voice.mp3", "paper.pdf"] {
         let id = format!("file-row-0-{name}");
         until(cx, "media row", |cx| {
@@ -653,6 +750,7 @@ fn a_finished_copy_is_selected_where_it_landed(cx: &mut TestAppContext) {
     until(cx, "Files", |cx| {
         shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
     });
+    browse_root(cx);
     until(cx, "destination", |cx| {
         cx.debug_bounds("file-row-1-destination").is_some()
     });
@@ -694,6 +792,7 @@ fn the_table_takes_the_key_map(cx: &mut TestAppContext) {
     until(cx, "Files", |cx| {
         shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
     });
+    browse_root(cx);
     until(cx, "rows", |cx| {
         cx.debug_bounds("file-row-0-z.txt").is_some()
     });
@@ -725,6 +824,7 @@ fn a_key_that_acts_closes_the_menu(cx: &mut TestAppContext) {
     until(cx, "Files", |cx| {
         shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
     });
+    browse_root(cx);
     until(cx, "row", |cx| {
         cx.debug_bounds("file-row-0-note.txt").is_some()
     });
@@ -768,6 +868,7 @@ fn a_reload_keeps_both_panes_on_their_devices(cx: &mut TestAppContext) {
     until(cx, "Files", |cx| {
         shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
     });
+    browse_root(cx);
     until(cx, "away pane", |cx| {
         cx.debug_bounds("pane-away-1").is_some()
     });
@@ -906,6 +1007,7 @@ fn find_updates_as_typed_shows_paths_lines_and_truncation(cx: &mut TestAppContex
     let (_, cx) = cx.add_window_view(move |w, cx| {
         parvi_app_shell::start(&[observed_files], Some(url), None, w, cx)
     });
+    browse_root(cx);
     until(cx, "folder", |cx| {
         cx.debug_bounds("file-row-0-sub").is_some()
     });
@@ -979,6 +1081,7 @@ fn find_opens_a_file_below_the_current_folder(cx: &mut TestAppContext) {
     until(cx, "Files", |cx| {
         shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
     });
+    browse_root(cx);
     until(cx, "folder", |cx| {
         cx.debug_bounds("file-row-0-nested").is_some()
     });
@@ -1015,6 +1118,7 @@ fn conflicting_save_can_write_a_separate_copy(cx: &mut TestAppContext) {
     until(cx, "Files", |cx| {
         shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
     });
+    browse_root(cx);
     until(cx, "file", |cx| {
         cx.debug_bounds("file-row-0-note.txt").is_some()
     });
@@ -1052,6 +1156,7 @@ fn unsaved_file_holds_the_window_until_the_operator_decides(cx: &mut TestAppCont
     until(cx, "Files", |cx| {
         shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
     });
+    browse_root(cx);
     until(cx, "row", |cx| {
         cx.debug_bounds("file-row-0-note.txt").is_some()
     });
@@ -1086,6 +1191,7 @@ fn picture_zoom_can_switch_between_fit_and_actual_size(cx: &mut TestAppContext) 
     until(cx, "Files", |cx| {
         shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
     });
+    browse_root(cx);
     until(cx, "picture", |cx| {
         cx.debug_bounds("file-row-0-pixel.png").is_some()
     });

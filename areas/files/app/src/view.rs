@@ -12,6 +12,117 @@ use parvi_app_kit::theme::{
 use parvi_app_kit::widgets::kit::{self, Kind};
 
 impl FilesPage {
+    fn projects_landing(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = theme(cx).clone();
+        let mut body = div()
+            .id("files-projects-list")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap(px(GAP));
+        for (node, result) in &self.projects {
+            for group in &result.groups {
+                body = body.child(kit::label(&t, group.parent.clone()));
+                for project in &group.projects {
+                    let node_id = node.clone();
+                    let folder = project.path.clone();
+                    let selector = format!("files-project-{}", project.name);
+                    let mut card = div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(GAP))
+                        .border_1()
+                        .border_color(t.divider)
+                        .p(px(PAD))
+                        .child(
+                            kit::button(
+                                &t,
+                                gpui::SharedString::from(format!("project-{node}-{folder}")),
+                                project.name.clone(),
+                                Kind::Quiet,
+                            )
+                            .debug_selector(move || selector.clone())
+                            .on_click(cx.listener(
+                                move |p, _, w, cx| {
+                                    p.browse_project(node_id.clone(), folder.clone(), None, w, cx)
+                                },
+                            )),
+                        );
+                    if let Some(sessions) = &self.sessions {
+                        for session in &sessions.read(cx).sessions {
+                            if session.node == *node
+                                && session
+                                    .cwd
+                                    .as_deref()
+                                    .is_some_and(|cwd| paths::inside(&project.path, cwd))
+                            {
+                                let label = format!("Session: {}", session.name);
+                                let selector = format!(
+                                    "files-project-session-{}-{}",
+                                    project.name, session.name
+                                );
+                                card = card.child(
+                                    div()
+                                        .debug_selector(move || selector.clone())
+                                        .child(kit::note(&t, label, None)),
+                                );
+                            }
+                        }
+                    }
+                    for doc in &project.documents {
+                        let node_id = node.clone();
+                        let folder = project.path.clone();
+                        let name = doc.clone();
+                        let selector = format!("files-project-doc-{}-{doc}", project.name);
+                        card = card.child(
+                            kit::button(
+                                &t,
+                                gpui::SharedString::from(format!("document-{node}-{folder}-{doc}")),
+                                doc.clone(),
+                                Kind::Quiet,
+                            )
+                            .debug_selector(move || selector.clone())
+                            .on_click(cx.listener(
+                                move |p, _, w, cx| {
+                                    p.browse_project(
+                                        node_id.clone(),
+                                        folder.clone(),
+                                        Some(name.clone()),
+                                        w,
+                                        cx,
+                                    )
+                                },
+                            )),
+                        );
+                    }
+                    body = body.child(card);
+                }
+            }
+        }
+        let node = self.sides[0].pane.node.clone();
+        for (index, root) in self.sides[0].pane.roots.iter().enumerate() {
+            let folder = root.path.clone();
+            let node = node.clone();
+            body = body.child(
+                kit::button(
+                    &t,
+                    ("browse-root", index),
+                    format!("Browse {}", root.name),
+                    Kind::Quiet,
+                )
+                .debug_selector({
+                    let id = format!("files-browse-root-{index}");
+                    move || id.clone()
+                })
+                .on_click(cx.listener(move |p, _, w, cx| {
+                    p.browse_project(node.clone(), folder.clone(), None, w, cx)
+                })),
+            );
+        }
+        body
+    }
     fn pane(&self, i: usize, cx: &mut Context<Self>) -> Div {
         let t = theme(cx).clone();
         let side = &self.sides[i];
@@ -918,7 +1029,17 @@ impl Render for FilesPage {
                 .child(self.pane(0, cx))
                 .child(self.viewer(0, cx));
         }
-        page.child(div().child("FILES")).child(
+        page = page.child(
+            div().flex().gap(px(GAP)).child("FILES").child(
+                kit::button(&t, "files-projects", "Projects", Kind::Quiet)
+                    .debug_selector(|| "files-projects".into())
+                    .on_click(cx.listener(|p, _, _, cx| p.show_projects(cx))),
+            ),
+        );
+        if self.landing {
+            return page.child(self.projects_landing(cx));
+        }
+        page.child(
             div()
                 .flex_1()
                 .min_h_0()
