@@ -4498,7 +4498,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "vt100 0.16.2",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
