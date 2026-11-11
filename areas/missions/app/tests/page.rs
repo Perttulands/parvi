@@ -101,12 +101,11 @@ fn opens_a_fixture_mission_on_the_canvas(cx: &mut TestAppContext) {
     });
     let at = cx.debug_bounds(selector).unwrap().center();
     cx.simulate_click(at, Modifiers::none());
-    until(cx, "step on canvas", |cx| {
-        cx.debug_bounds("mission-card-fmn_work").is_some()
+    until(cx, "step in flow", |cx| {
+        cx.debug_bounds("flow-step-fmn_work").is_some()
     });
-    assert!(cx.debug_bounds("mission-card-inp_hello").is_some());
-    let card = cx.debug_bounds("mission-card-fmn_work").unwrap().center();
-    cx.simulate_click(card, Modifiers::none());
+    let edit = cx.debug_bounds("flow-edit-fmn_work").unwrap().center();
+    cx.simulate_click(edit, Modifiers::none());
     until(cx, "step editor", |cx| {
         cx.debug_bounds("step-goal").is_some()
     });
@@ -129,6 +128,12 @@ fn opens_a_fixture_mission_on_the_canvas(cx: &mut TestAppContext) {
             "Deliver the result"
         );
     });
+    let mode = cx.debug_bounds("mission-mode-canvas").unwrap().center();
+    cx.simulate_click(mode, Modifiers::none());
+    until(cx, "step on canvas", |cx| {
+        cx.debug_bounds("mission-card-fmn_work").is_some()
+    });
+    assert!(cx.debug_bounds("mission-card-inp_hello").is_some());
     let card = cx.debug_bounds("mission-card-fmn_work").unwrap().center();
     cx.simulate_click(card, Modifiers::none());
     until(cx, "editor reopened", |cx| {
@@ -156,18 +161,23 @@ fn opens_a_fixture_mission_on_the_canvas(cx: &mut TestAppContext) {
     });
     let save = cx.debug_bounds("step-save").unwrap().center();
     cx.simulate_click(save, Modifiers::none());
-    until(cx, "conflict", |cx| {
-        cx.debug_bounds("step-error-conflict: mission changed")
-            .is_some()
+    until(cx, "merged save", |cx| {
+        cx.debug_bounds("step-goal").is_none()
     });
-    let goal = cx.debug_bounds("step-goal").unwrap().center();
-    cx.simulate_click(goal, Modifiers::none());
-    cx.simulate_keystrokes("ctrl-a ctrl-c");
-    assert_eq!(
-        cx.read_from_clipboard()
-            .and_then(|item| item.text())
-            .as_deref(),
-        Some("Keep this draft")
-    );
+    rt.block_on(async {
+        let client = NodeClient::new(Some(&format!("{}/", running.url))).unwrap();
+        let (doc, _) = client
+            .request(http::Method::GET, "/api/missions/hello", None, None)
+            .await
+            .unwrap();
+        assert_eq!(doc["mission"]["title"], "Changed elsewhere");
+        let formation = doc["mission"]["formations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["id"] == "fmn_work")
+            .unwrap();
+        assert_eq!(formation["brief"]["goal"], "Keep this draft");
+    });
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }
