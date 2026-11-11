@@ -29,6 +29,7 @@ mod error;
 mod executor;
 mod gate_replay;
 mod gate_request;
+mod gate_views;
 mod graph;
 mod harness;
 mod human_replay;

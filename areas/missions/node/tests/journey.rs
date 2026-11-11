@@ -126,7 +126,19 @@ async fn cli_authors_two_steps_answers_gate_and_finishes_with_fake_sessions() {
             id,
         ));
     }
-    let gate = cli(&node, "gate", &["create", "relay", "--title", "Review"]).await["gate"]["id"]
+    let gate = cli(
+        &node,
+        "gate",
+        &[
+            "create",
+            "relay",
+            "--title",
+            "Review",
+            "--criterion",
+            "Is this ready?",
+        ],
+    )
+    .await["gate"]["id"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -163,6 +175,17 @@ async fn cli_authors_two_steps_answers_gate_and_finishes_with_fake_sessions() {
     let waiting = cli(&node, "run", &["wait", run, "--timeout", "10"]).await;
     assert_eq!(waiting["outcome"], "needs-you", "{waiting}");
     assert_eq!(waiting["asks"][0]["gate"], gate);
+    let gates = cli(&node, "run", &["gates", run]).await;
+    assert_eq!(gates["gates"][0]["state"], "waiting");
+    let request = cli(&node, "gate", &["request", run, &gate]).await;
+    assert_eq!(request["criterion"], "Is this ready?");
+    assert_eq!(request["inputs"][0]["fromNodeId"], steps[0].2);
+    assert_eq!(request["routes"][0]["targets"][0]["nodeId"], steps[1].2);
+    assert_eq!(request["routes"][0]["endsRun"], false);
+    assert_eq!(request["routes"][1]["targets"][0]["nodeId"], rejected);
+    assert_eq!(request["routes"][1]["endsRun"], true);
+    assert_eq!(request["endsRun"], true);
+    assert_eq!(request["picksBest"], false);
     let cursor = waiting["cursor"].as_u64().unwrap();
     let status = cli(&node, "run", &["status", run]).await;
     let seq = status["waitingGates"][0]["requestedSeq"].as_u64().unwrap();
@@ -218,6 +241,30 @@ async fn cli_authors_two_steps_answers_gate_and_finishes_with_fake_sessions() {
         ],
     )
     .await;
+    let gates = cli(&node, "run", &["gates", run]).await;
+    assert_eq!(gates["gates"][0]["state"], "answered");
+    assert_eq!(gates["gates"][0]["verdict"], "pass");
+    assert_eq!(gates["gates"][0]["by"], "human:operator");
+    let error = node
+        .call("gate_request", serde_json::json!({"run":run,"gate":gate}))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "gate_not_waiting");
+    let mut output = Vec::new();
+    let args = vec![
+        "request".into(),
+        run.into(),
+        gate.clone(),
+        "--node".into(),
+        format!("{}/", node.url()),
+        "--json".into(),
+    ];
+    assert_eq!(
+        parvi_node_kit::cli::run("gate", &args, &mut output)
+            .await
+            .unwrap(),
+        1
+    );
     let finished = cli(
         &node,
         "run",
