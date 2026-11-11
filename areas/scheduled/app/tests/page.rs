@@ -48,6 +48,7 @@ fn start() -> Option<Running> {
                 return;
             };
             tmux.new_session("alpha", 100, 30);
+            tmux.new_session("beta", 100, 30);
             let config = format!("[terminals]\nsocket = {:?}\n", tmux.socket_path());
             let node = Node::start(AREAS, &config).await.expect("a node");
             let sessions = node.sessions();
@@ -169,28 +170,81 @@ fn the_page_lists_a_task_made_through_the_cli(cx: &mut TestAppContext) {
         cx.debug_bounds("task-run").is_some()
     });
 
-    // The sessions a new task may send to are those the terminals page
-    // publishes: a session only that list names is offered.
+    // Publish the two scratch tmux sessions as the terminals page does.
     shell.update(cx, |s, cx| {
         let list = SessionList {
-            sessions: vec![Session {
-                node: node.to_string(),
-                name: "listed-only".into(),
-                ..Session::default()
-            }],
+            sessions: ["alpha", "beta"]
+                .into_iter()
+                .map(|name| Session {
+                    node: node.to_string(),
+                    name: name.into(),
+                    ..Session::default()
+                })
+                .collect(),
         };
         let terminals = Host::new(s.hub()).for_page("terminals", &[]);
         terminals.publish(list, cx).expect("one publisher");
     });
-    let at = cx
-        .debug_bounds("scheduled-new")
-        .expect("the New task button")
-        .center();
-    cx.simulate_click(at, Modifiers::none());
-    let pick = format!("pick-{node}-:listed-only");
-    until(cx, "the published session to be offered", |cx| {
-        cx.debug_bounds(Box::leak(pick.clone().into_boxed_str()))
-            .is_some()
+    let new_button = cx.debug_bounds("scheduled-new").unwrap().center();
+    cx.simulate_click(new_button, Modifiers::none());
+    let alpha: &'static str = Box::leak(format!("session-rail-{node}-:alpha").into_boxed_str());
+    let beta: &'static str = Box::leak(format!("session-rail-{node}-:beta").into_boxed_str());
+    until(cx, "both sessions beside the form", |cx| {
+        cx.debug_bounds(alpha).is_some() && cx.debug_bounds(beta).is_some()
     });
+    let at = cx.debug_bounds(alpha).unwrap().center();
+    cx.simulate_click(at, Modifiers::none());
+    until(cx, "alpha selected", |cx| {
+        cx.debug_bounds("chosen-:alpha").is_some()
+    });
+    let from = cx.debug_bounds(beta).unwrap().center();
+    let to = cx.debug_bounds("scheduled-targets").unwrap().center();
+    cx.simulate_mouse_down(from, gpui::MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(
+        from + gpui::point(gpui::px(8.), gpui::px(0.)),
+        Some(gpui::MouseButton::Left),
+        Modifiers::none(),
+    );
+    cx.simulate_mouse_move(to, Some(gpui::MouseButton::Left), Modifiers::none());
+    cx.simulate_mouse_up(to, gpui::MouseButton::Left, Modifiers::none());
+    until(cx, "beta dropped", |cx| {
+        cx.debug_bounds("chosen-:beta").is_some()
+    });
+    let prompt = cx.debug_bounds("scheduled-prompt").unwrap().center();
+    cx.simulate_click(prompt, Modifiers::none());
+    cx.simulate_input("Keep going");
+    let save = cx.debug_bounds("form-save").unwrap().center();
+    cx.simulate_click(save, Modifiers::none());
+    until(cx, "the created task notice", |cx| {
+        cx.debug_bounds("scheduled-banner-Task created.").is_some()
+    });
+    let url = running.url.clone();
+    let saved = std::thread::spawn(move || {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let args = ["list", "--node", &url, "--json"].map(String::from);
+            let mut output = Vec::new();
+            assert_eq!(cli::run("scheduled", &args, &mut output).await.unwrap(), 0);
+            let list: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            let task = list["tasks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|task| task["name"] == "Keep going")
+                .expect("created task");
+            let id = task["id"].as_str().unwrap();
+            let args = ["show", id, "--node", &url, "--json"].map(String::from);
+            let mut output = Vec::new();
+            assert_eq!(cli::run("scheduled", &args, &mut output).await.unwrap(), 0);
+            serde_json::from_slice::<serde_json::Value>(&output).unwrap()
+        })
+    })
+    .join()
+    .unwrap();
+    let created = &saved["task"];
+    assert_eq!(created["prompt"], "Keep going");
+    let targets = created["targets"].as_array().unwrap();
+    assert_eq!(targets.len(), 2);
+    assert!(targets.iter().any(|t| t["sessionName"] == "alpha"));
+    assert!(targets.iter().any(|t| t["sessionName"] == "beta"));
     let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
 }

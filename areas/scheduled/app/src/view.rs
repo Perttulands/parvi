@@ -12,8 +12,26 @@ use parvi_app_kit::widgets::kit::{self, Kind};
 use parvi_scheduled_contract::{Target, Task};
 
 use crate::form::{self, MODES, Mode, ScheduleForm, TaskForm, WEEKDAYS};
-use crate::page::ScheduledPage;
+use crate::page::{ScheduledPage, Session};
 use crate::tokens::*;
+
+#[derive(Clone)]
+struct SessionDrag {
+    node: String,
+    session: Session,
+}
+
+struct SessionPreview(String);
+impl Render for SessionPreview {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = theme(cx);
+        kit::panel(t)
+            .px(px(PAD))
+            .py(px(4.))
+            .text_color(t.text)
+            .child(self.0.clone())
+    }
+}
 
 impl Render for ScheduledPage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -90,7 +108,8 @@ impl Render for ScheduledPage {
                             .min_w_0()
                             .overflow_y_scroll()
                             .child(detail),
-                    ),
+                    )
+                    .when(sc.form.is_some(), |d| d.child(self.session_rail(&t, cx))),
             ),
         )
     }
@@ -491,6 +510,7 @@ impl ScheduledPage {
                     },
                     Kind::Primary,
                 )
+                .debug_selector(|| "form-save".into())
                 .when(busy, |b| b.opacity(BUSY))
                 .on_click(cx.listener(|page, _, _, cx| {
                     if !page.state.busy {
@@ -500,7 +520,14 @@ impl ScheduledPage {
             );
         card(t)
             .child(head)
-            .child(field(t, "Prompt", None, div().child(fields.prompt.clone())))
+            .child(field(
+                t,
+                "Prompt",
+                None,
+                div()
+                    .debug_selector(|| "scheduled-prompt".into())
+                    .child(fields.prompt.clone()),
+            ))
             .child(self.targets(t, form, cx))
             .child(self.when(t, &form.schedule, cx))
             .child(field(
@@ -512,6 +539,81 @@ impl ScheduledPage {
             .into_any_element()
     }
 
+    fn session_rail(&self, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let form = self
+            .state
+            .form
+            .as_ref()
+            .expect("rail is shown with the form");
+        let mut rail = div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(section(t, "Sessions"))
+            .child(kit::note(
+                t,
+                "Click or drag a session to Send to",
+                Some(t.dim),
+            ));
+        let mut any = false;
+        for node in self.host.nodes(cx) {
+            let id = node.id.as_str();
+            if form.id.is_some() && id != form.node {
+                continue;
+            }
+            let sessions = self.sessions_on(id, cx);
+            if sessions.is_empty() {
+                continue;
+            }
+            any = true;
+            rail = rail.child(kit::device_label(t, &node.device, &node.environment));
+            for session in sessions {
+                let selected = form.node == id && form.targets.contains(&session.target());
+                let selector = format!("session-rail-{id}-{}", target_key(&session.target()));
+                let drag = SessionDrag {
+                    node: id.to_string(),
+                    session: session.clone(),
+                };
+                let click = drag.clone();
+                let name = session.name.clone();
+                rail = rail.child(
+                    div()
+                        .id(SharedString::from(selector.clone()))
+                        .debug_selector(move || selector)
+                        .flex()
+                        .items_center()
+                        .gap(px(4.))
+                        .px(px(8.))
+                        .py(px(6.))
+                        .rounded(px(size::RADIUS))
+                        .cursor_pointer()
+                        .when(selected, |d| d.bg(alpha(t.accent, PICKED)))
+                        .hover(|d| d.bg(alpha(t.accent, HOVER)))
+                        .when_some(session.user.clone(), |d, u| {
+                            d.child(kit::user_square(t, &u))
+                        })
+                        .child(session.name)
+                        .on_click(cx.listener(move |page, _, _, cx| {
+                            page.pick(&click.node, &click.session, cx)
+                        }))
+                        .on_drag(drag, move |_, _, _, cx| {
+                            cx.new(|_| SessionPreview(name.clone()))
+                        }),
+                );
+            }
+        }
+        if !any {
+            rail = rail.child(kit::note(t, "No sessions available", Some(t.dim)));
+        }
+        panel(t)
+            .id("scheduled-session-rail")
+            .w(px(SESSION_RAIL_W))
+            .flex_none()
+            .overflow_y_scroll()
+            .child(rail)
+            .into_any_element()
+    }
+
     fn targets(&self, t: &Theme, form: &TaskForm, cx: &mut Context<Self>) -> AnyElement {
         let mut chosen = div().flex().flex_wrap().gap(px(6.));
         if form.targets.is_empty() {
@@ -519,8 +621,9 @@ impl ScheduledPage {
         }
         for target in &form.targets {
             let gone = target.clone();
+            let selector = format!("chosen-{}", target_key(target));
             chosen = chosen.child(
-                chip(t, target).child(
+                chip(t, target).debug_selector(move || selector).child(
                     div()
                         .id(SharedString::from(format!("unpick-{}", target_key(target))))
                         .px(px(2.))
@@ -584,6 +687,16 @@ impl ScheduledPage {
         }
         div()
             .id("scheduled-targets")
+            .debug_selector(|| "scheduled-targets".into())
+            .drag_over::<SessionDrag>(|d, _, _, cx| d.bg(alpha(theme(cx).accent, PICKED)))
+            .on_drop(cx.listener(|page, drag: &SessionDrag, _, cx| {
+                let selected = page.state.form.as_ref().is_some_and(|f| {
+                    f.node == drag.node && f.targets.contains(&drag.session.target())
+                });
+                if !selected {
+                    page.pick(&drag.node, &drag.session, cx);
+                }
+            }))
             .flex()
             .flex_col()
             .gap(px(8.))
@@ -722,7 +835,9 @@ fn zone_label(zone: &str) -> &str {
 }
 
 fn banner(text: String, c: gpui::Hsla) -> Div {
+    let selector = format!("scheduled-banner-{text}");
     div()
+        .debug_selector(move || selector)
         .mx(px(PAD))
         .mt(px(PAD))
         .px(px(PAD))
