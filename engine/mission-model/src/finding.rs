@@ -2,8 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-/// The code of a finding. Codes are Archon's, so its tools and skills read
-/// Parvi's reports unchanged.
+/// Stable codes for validation findings. Most follow Archon; unsupported
+/// capabilities use Parvi-specific codes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Code {
@@ -41,6 +41,8 @@ pub enum Code {
     UnknownDevice,
     UnknownInputReference,
     UnknownInput,
+    UnsupportedFormation,
+    UnsupportedHumanChannel,
     InvalidInput,
     UnreachableNode,
     UnstaffedSlot,
@@ -83,6 +85,8 @@ impl Code {
             Code::UnknownDevice => "unknown_device",
             Code::UnknownInputReference => "unknown_input_reference",
             Code::UnknownInput => "unknown_input",
+            Code::UnsupportedFormation => "unsupported_formation",
+            Code::UnsupportedHumanChannel => "unsupported_human_channel",
             Code::InvalidInput => "invalid_input",
             Code::UnreachableNode => "unreachable_node",
             Code::UnstaffedSlot => "unstaffed_slot",

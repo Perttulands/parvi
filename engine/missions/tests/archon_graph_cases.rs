@@ -1100,7 +1100,7 @@ fn removing_a_dynamic_port_prunes_only_its_connections() {
 
 // Port of TestPeerSnapshotCanRemoveOnlyEmptySeats.
 #[test]
-fn peer_snapshot_cannot_silently_remove_a_staffed_seat() {
+fn orchestrated_snapshot_cannot_silently_remove_a_staffed_seat() {
     let dir = Scratch::new();
     let store = Store::new(&dir.0);
     let edit = store.create_mission("peer", "Peer", "").unwrap();
@@ -1109,7 +1109,7 @@ fn peer_snapshot_cannot_silently_remove_a_staffed_seat() {
             "peer",
             pre(&edit),
             Patch::CreateFormation {
-                kind: "peer".into(),
+                kind: "orchestrated".into(),
                 title: "Team".into(),
                 x: 0,
                 y: 0,
@@ -1124,7 +1124,7 @@ fn peer_snapshot_cannot_silently_remove_a_staffed_seat() {
             pre(&edit),
             Patch::AssignSlot {
                 formation_id: team.id.clone(),
-                slot_id: team.slots[0].id.clone(),
+                slot_id: team.slots[1].id.clone(),
                 agent_id: "builder".into(),
                 harness: "claude-code".into(),
                 model: "".into(),
@@ -1133,7 +1133,7 @@ fn peer_snapshot_cannot_silently_remove_a_staffed_seat() {
             "",
         )
         .unwrap();
-    // A peer must keep at least two seats; add one so a snapshot can remove one.
+    // Keep a controller and enough workers when removing the staffed slot.
     let mut three = edit.mission.formations[0].slots.clone();
     three.push(parvi_mission_model::Slot {
         id: "slot_third".into(),
@@ -1146,21 +1146,26 @@ fn peer_snapshot_cannot_silently_remove_a_staffed_seat() {
             pre(&edit),
             Patch::SetFormationType {
                 id: team.id.clone(),
-                kind: "peer".into(),
+                kind: "orchestrated".into(),
                 keep_slot_id: "".into(),
                 slots: Some(three.clone()),
             },
             "",
         )
         .unwrap();
-    let remaining = three[1..].to_vec();
+    let remaining: Vec<_> = three
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != 1)
+        .map(|(_, slot)| slot.clone())
+        .collect();
     let refused = store
         .patch(
             "peer",
             pre(&edit),
             Patch::SetFormationType {
                 id: team.id.clone(),
-                kind: "peer".into(),
+                kind: "orchestrated".into(),
                 keep_slot_id: "".into(),
                 slots: Some(remaining.clone()),
             },
@@ -1175,7 +1180,7 @@ fn peer_snapshot_cannot_silently_remove_a_staffed_seat() {
             pre(&edit),
             Patch::AssignSlot {
                 formation_id: team.id.clone(),
-                slot_id: team.slots[0].id.clone(),
+                slot_id: team.slots[1].id.clone(),
                 agent_id: "".into(),
                 harness: "".into(),
                 model: "".into(),
@@ -1190,7 +1195,7 @@ fn peer_snapshot_cannot_silently_remove_a_staffed_seat() {
             pre(&edit),
             Patch::SetFormationType {
                 id: team.id,
-                kind: "peer".into(),
+                kind: "orchestrated".into(),
                 keep_slot_id: "".into(),
                 slots: Some(remaining.clone()),
             },

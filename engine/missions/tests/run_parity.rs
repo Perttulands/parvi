@@ -97,7 +97,14 @@ fn solo_lab_ledger_and_admission_findings_match_archon() {
     let Err(AdmissionFailure::Findings(findings)) = coordinator.start_mission(request) else {
         panic!("admission did not reject")
     };
-    let actual = serde_json::to_value(findings).unwrap();
+    assert!(findings.iter().any(|finding| finding.code
+        == parvi_mission_model::Code::UnsupportedFormation
+        && finding.node_id == "staff"));
+    let comparable: Vec<_> = findings
+        .into_iter()
+        .filter(|finding| finding.code != parvi_mission_model::Code::UnsupportedFormation)
+        .collect();
+    let actual = serde_json::to_value(comparable).unwrap();
     let expected: Value = serde_json::from_str(include_str!(
         "parity/runs/archon-ledgers/admission-findings.json"
     ))

@@ -81,7 +81,24 @@ fn findings_match_archons_on_every_parity_mission() {
         let report = validate(&mission, &store.roles(), &harnesses);
         let mut sorted = archon.errors.clone();
         sorted.sort();
-        assert_eq!(located(&report.errors), sorted, "{slug} errors");
+        // Parvi deliberately refuses peer formations that Archon accepts.
+        let (unsupported, comparable): (Vec<_>, Vec<_>) = report
+            .errors
+            .iter()
+            .cloned()
+            .partition(|f| f.code == parvi_mission_model::Code::UnsupportedFormation);
+        if slug == "formations" {
+            assert_eq!(
+                located(&unsupported),
+                [
+                    ("unsupported_formation".into(), "fmn_peer".into()),
+                    ("unsupported_formation".into(), "fmn_staff".into())
+                ]
+            );
+        } else {
+            assert!(unsupported.is_empty(), "{slug}");
+        }
+        assert_eq!(located(&comparable), sorted, "{slug} errors");
         let mut sorted = archon.warnings.clone();
         sorted.sort();
         assert_eq!(located(&report.warnings), sorted, "{slug} warnings");
