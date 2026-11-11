@@ -16,18 +16,6 @@ use parvi_app_kit::theme::{self, Theme, alpha, motion, size, theme};
 use parvi_app_kit::widgets::{boundary, kit};
 use std::time::Duration;
 
-/// A tab's title, spaced out in capitals as CHROTE's tabs read.
-fn spaced(s: &str) -> String {
-    let mut out = String::new();
-    for (i, c) in s.to_uppercase().chars().enumerate() {
-        if i > 0 {
-            out.push(' ');
-        }
-        out.push(c);
-    }
-    out
-}
-
 impl Shell {
     fn render_tab_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
@@ -66,7 +54,7 @@ impl Shell {
                     .text_color(if active { t.text } else { t.text2 })
                     .when(active, |d| d.border_b_2().border_color(t.accent))
                     .hover(|d| d.text_color(t.text))
-                    .child(spaced(page.meta.title))
+                    .child(kit::tab_label(page.meta.title))
                     .on_click(cx.listener(move |s, _, window, cx| s.show(i, window, cx))),
             );
         }

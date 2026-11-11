@@ -496,6 +496,7 @@ fn two_toy_pages_plug_in_through_their_host(cx: &mut TestAppContext) {
     // The tab bar: both toy pages, not the one whose area is off.
     cx.run_until_parked();
     assert!(cx.debug_bounds("tab-toy-a").is_some());
+    assert!(cx.debug_bounds("tab-label-A L P H A").is_some());
     assert!(cx.debug_bounds("tab-toy-b").is_some());
     assert!(cx.debug_bounds("tab-toy-c").is_none(), "its area is off");
     assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy-a"));

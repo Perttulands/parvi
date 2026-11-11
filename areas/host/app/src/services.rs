@@ -282,10 +282,19 @@ impl Render for ServicesPage {
                                 window.focus(&s.focus, cx);
                                 cx.notify();
                             }))
-                            .child(div().w(px(tokens::COL)).child(service.name.clone()))
                             .child(
                                 div()
                                     .w(px(tokens::COL))
+                                    .flex_none()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
+                                    .child(service.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .w(px(tokens::COL))
+                                    .flex_none()
                                     .flex()
                                     .items_center()
                                     .gap(px(tokens::SMALL_GAP))
@@ -299,6 +308,7 @@ impl Render for ServicesPage {
                             .child(
                                 div()
                                     .flex_1()
+                                    .min_w_0()
                                     .when_some(failure_selector, |d, selector| {
                                         d.debug_selector(move || selector)
                                     })
@@ -310,11 +320,13 @@ impl Render for ServicesPage {
                                             .unwrap_or_else(|| service.description.clone()),
                                     ),
                             );
+                        let mut primary = div().w(px(tokens::ACTION_COL)).flex_none();
+                        let mut restart = div().w(px(tokens::ACTION_COL)).flex_none();
                         if service.controllable && !n.changing.contains_key(&service.id) {
                             if let Some(change) = services_store::primary(&service.state) {
                                 let (node, row_id) = (node_id.clone(), service_id.clone());
                                 let selector = format!("svc-{}-{id}-{}", change.verb(), service.id);
-                                row = row.child(
+                                primary = primary.child(
                                     kit::button(
                                         &t,
                                         gpui::SharedString::from(format!(
@@ -337,7 +349,7 @@ impl Render for ServicesPage {
                             }
                             let (node, row_id) = (node_id.clone(), service_id.clone());
                             let selector = format!("svc-restart-{id}-{}", service.id);
-                            row = row.child(
+                            restart = restart.child(
                                 kit::button(
                                     &t,
                                     gpui::SharedString::from(selector.clone()),
@@ -350,11 +362,14 @@ impl Render for ServicesPage {
                                 )),
                             );
                         } else if !service.controllable {
-                            row = row.child(kit::note(&t, "read-only", Some(t.dim)));
+                            primary = primary.child(kit::note(&t, "read-only", Some(t.dim)));
                         }
+                        row = row.child(primary).child(restart);
+                        let mut link_column =
+                            div().w(px(tokens::LINK_COL)).flex_none().overflow_hidden();
                         if let Some(label) = services_store::link_label(&service.link) {
                             let link = service.link.clone();
-                            row = row.child(
+                            link_column = link_column.child(
                                 kit::button(
                                     &t,
                                     gpui::SharedString::from(format!(
@@ -364,28 +379,40 @@ impl Render for ServicesPage {
                                     label,
                                     kit::Kind::Quiet,
                                 )
+                                .w_full()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
                                 .on_click(move |_, _, cx| cx.open_url(&link)),
                             );
                         }
+                        row = row.child(link_column);
                         let reference = services_store::reference(service);
+                        let send_selector = format!("svc-send-{id}-{}", service.id);
                         row = row.child(
-                            kit::button(
-                                &t,
-                                gpui::SharedString::from(format!("svc-send-{id}-{}", service.id)),
-                                "Send",
-                                kit::Kind::Quiet,
-                            )
-                            .on_click(cx.listener(
-                                move |s, _, _, cx| {
-                                    let _ = s.host.ask(
-                                        Ask::Send {
-                                            reference: reference.clone(),
-                                            target: None,
-                                        },
-                                        cx,
-                                    );
-                                },
-                            )),
+                            div().w(px(tokens::SEND_COL)).flex_none().child(
+                                kit::button(
+                                    &t,
+                                    gpui::SharedString::from(format!(
+                                        "svc-send-{id}-{}",
+                                        service.id
+                                    )),
+                                    "Send",
+                                    kit::Kind::Quiet,
+                                )
+                                .debug_selector(move || send_selector)
+                                .on_click(cx.listener(
+                                    move |s, _, _, cx| {
+                                        let _ = s.host.ask(
+                                            Ask::Send {
+                                                reference: reference.clone(),
+                                                target: None,
+                                            },
+                                            cx,
+                                        );
+                                    },
+                                )),
+                            ),
                         );
                         room = room.child(row);
                     }

@@ -63,7 +63,7 @@ impl Terminals {
                     .text_color(if active { t.text } else { t.text2 })
                     .when(active, |d| d.border_b_2().border_color(t.accent))
                     .hover(|d| d.text_color(t.text))
-                    .child(spaced(&tab_label(tb, i)))
+                    .child(kit::tab_label(&tab_label(tb, i)))
                     .when(marked, |d| d.child(kit::waiting_dot(&t)))
                     .on_click(
                         cx.listener(move |s, _, window, cx| s.run(Action::Tab(i), window, cx)),
@@ -510,19 +510,6 @@ impl Terminals {
             .child(drawer)
             .into_any_element()
     }
-}
-
-/// CHROTE's tab labels are letter-spaced capitals; the font has no tracking
-/// control, so a thin space stands between letters.
-fn spaced(s: &str) -> String {
-    let mut out = String::new();
-    for (i, c) in s.chars().enumerate() {
-        if i > 0 && c != ' ' {
-            out.push('\u{2009}');
-        }
-        out.push(c);
-    }
-    out
 }
 
 #[cfg(test)]
