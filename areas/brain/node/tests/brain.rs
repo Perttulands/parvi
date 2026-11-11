@@ -163,6 +163,32 @@ async fn reads_a_page_with_its_links_and_backlinks() {
 }
 
 #[tokio::test]
+async fn related_pages_include_links_and_selective_shared_tags() {
+    let corpus = Corpus::new("related");
+    corpus.write(
+        "notes/a.md",
+        "---\ntags: [Shared, common]\n---\n# A\n\n[[b]]\n",
+    );
+    corpus.write("notes/b.md", "---\ntags: [common]\n---\n# B\n");
+    corpus.write(
+        "notes/c.md",
+        "---\ntags:\n  - shared\n  - common\n---\n# C\n",
+    );
+    corpus.write("notes/d.md", "# D\n\n[[a]]\n");
+    for i in 0..4 {
+        corpus.write(&format!("notes/filler{i}.md"), "# Filler\n");
+    }
+    let addr = serve_brain(Some(&corpus.0), None).await;
+    let (_, page) = get(addr, "/api/brain/page?path=notes/a.md").await;
+    assert_eq!(
+        paths(&page["related"]),
+        ["notes/b.md", "notes/c.md", "notes/d.md"]
+    );
+    let (_, unrelated) = get(addr, "/api/brain/page?path=notes/b.md").await;
+    assert_eq!(paths(&unrelated["related"]), ["notes/a.md"]);
+}
+
+#[tokio::test]
 async fn refuses_paths_outside_the_corpus() {
     let corpus = Corpus::new("refuse");
     corpus.write("knowledge/a.md", "# A\n");

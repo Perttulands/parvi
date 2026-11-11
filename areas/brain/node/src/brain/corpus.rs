@@ -30,6 +30,7 @@ pub struct Corpus {
 struct Entry {
     page: PageRef,
     references: Vec<Reference>,
+    tags: Vec<String>,
 }
 
 impl Corpus {
@@ -83,6 +84,34 @@ impl Corpus {
             .map(|e| e.page.clone())
             .collect();
         backlinks.sort_by_key(|p| p.title.to_lowercase());
+        let selective_tags: Vec<&String> = parsed
+            .tags
+            .iter()
+            .filter(|tag| {
+                entries
+                    .iter()
+                    .filter(|entry| entry.tags.contains(tag))
+                    .count()
+                    * 4
+                    <= entries.len()
+            })
+            .collect();
+        let mut related: Vec<PageRef> = entries
+            .iter()
+            .filter(|entry| {
+                if entry.page.path == path {
+                    return false;
+                }
+                let linked = links.iter().any(|link| {
+                    link.page
+                        .as_ref()
+                        .is_some_and(|p| p.path == entry.page.path)
+                }) || backlinks.iter().any(|p| p.path == entry.page.path);
+                linked || selective_tags.iter().any(|tag| entry.tags.contains(tag))
+            })
+            .map(|entry| entry.page.clone())
+            .collect();
+        related.sort_by_key(|p| p.title.to_lowercase());
         Ok(Page {
             path: path.to_owned(),
             title: parsed.title,
@@ -91,6 +120,7 @@ impl Corpus {
             front: text[..text.len() - parsed.body.len()].to_owned(),
             body: parsed.body.to_owned(),
             links,
+            related,
             backlinks,
             updated: String::new(),
             author: String::new(),
@@ -191,6 +221,7 @@ impl Corpus {
                 let parsed = page::parse(&path, &text);
                 Some(Entry {
                     references: references(&path, parsed.body),
+                    tags: parsed.tags,
                     page: PageRef {
                         title: parsed.title,
                         kind: parsed.kind,

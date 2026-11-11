@@ -8,6 +8,7 @@ pub struct Parsed<'a> {
     pub kind: String,
     pub summary: String,
     pub title: String,
+    pub tags: Vec<String>,
     /// The text after the front matter.
     pub body: &'a str,
 }
@@ -21,13 +22,37 @@ pub fn parse<'a>(path: &str, text: &'a str) -> Parsed<'a> {
         body,
         ..Parsed::default()
     };
+    let mut tag_list = false;
     for line in front.lines() {
+        if tag_list && (line.starts_with(' ') || line.starts_with('\t')) {
+            if let Some(item) = line.trim().strip_prefix("- ") {
+                add_tag(&mut parsed.tags, item);
+            }
+            continue;
+        }
+        tag_list = false;
         let Some((key, value)) = line.split_once(':') else {
             continue;
         };
         match key.trim() {
             "kind" => parsed.kind = scalar(value),
             "summary" => parsed.summary = scalar(value),
+            "tags" => {
+                let value = value.trim();
+                tag_list = value.is_empty();
+                if let Ok(values) = serde_json::from_str::<Vec<String>>(value) {
+                    for value in values {
+                        add_tag(&mut parsed.tags, &value);
+                    }
+                } else if let Some(list) = value.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
+                {
+                    for value in list.split(',') {
+                        add_tag(&mut parsed.tags, value);
+                    }
+                } else if !value.is_empty() {
+                    add_tag(&mut parsed.tags, value);
+                }
+            }
             _ => {}
         }
     }
@@ -36,6 +61,13 @@ pub fn parse<'a>(path: &str, text: &'a str) -> Parsed<'a> {
     }
     parsed.title = title(body).unwrap_or_else(|| slug_of_path(path)).to_owned();
     parsed
+}
+
+fn add_tag(tags: &mut Vec<String>, value: &str) {
+    let tag = scalar(value).trim().to_lowercase();
+    if !tag.is_empty() && !tags.contains(&tag) {
+        tags.push(tag);
+    }
 }
 
 fn split_front_matter(text: &str) -> (&str, &str) {
