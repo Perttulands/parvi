@@ -3,7 +3,10 @@ use super::Missions;
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{Path, State, rejection::JsonRejection},
+    extract::{
+        Path, State,
+        rejection::{BytesRejection, JsonRejection},
+    },
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
@@ -206,8 +209,9 @@ async fn edit(
     State(m): State<Missions>,
     Path(id): Path<String>,
     h: HeaderMap,
-    input: Bytes,
+    input: Result<Bytes, BytesRejection>,
 ) -> ResultResponse {
+    let input = input.map_err(|e| bad(e.body_text()))?;
     let patch::UniquePatch(v) = serde_json::from_slice(&input).map_err(|e| bad(format!("{e}")))?;
     let patch = patch::decode(&v).map_err(bad)?;
     let nested = v.as_object().and_then(|body| {

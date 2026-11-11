@@ -1,0 +1,77 @@
+schema = 1
+id = "msn_bad"
+slug = "admission-findings"
+title = "Admission findings"
+rev = 1
+
+[[inputCard]]
+id = "inp"
+title = "Start"
+inputs = [{ name = "topic", kind = "text", required = true }, { name = "sketch", kind = "file" }]
+
+[[formation]]
+id = "empty"
+type = "solo"
+title = "Empty"
+[[formation.input]]
+id = "in"
+[[formation.output]]
+id = "out"
+
+[[formation]]
+id = "staff"
+type = "peer"
+title = "Staff"
+[[formation.input]]
+id = "in"
+[[formation.output]]
+id = "out"
+[[formation.slot]]
+id = "open"
+[[formation.slot]]
+id = "invalid"
+harness = "wrong"
+effort = "low"
+[[formation.slot]]
+id = "unavailable"
+harness = "claude-code"
+effort = "low"
+agentId = "unknown"
+[[formation.slot]]
+id = "retired"
+harness = "claude-code"
+effort = "low"
+agentId = "critic"
+
+[[formation]]
+id = "orchestration"
+type = "orchestrated"
+title = "Orchestration"
+[[formation.input]]
+id = "in"
+[[formation.output]]
+id = "out"
+[[formation.slot]]
+id = "worker"
+harness = "claude-code"
+effort = "low"
+
+[[end]]
+id = "end"
+outcome = "done"
+[[connection]]
+id = "a"
+from = "inp:out"
+to = "empty:in"
+[[connection]]
+id = "b"
+from = "empty:out"
+to = "staff:in"
+[[connection]]
+id = "c"
+from = "staff:out"
+to = "orchestration:in"
+[[connection]]
+id = "d"
+from = "orchestration:out"
+to = "end:in"
