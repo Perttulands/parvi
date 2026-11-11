@@ -108,6 +108,7 @@ struct Running {
     url: String,
     node: String,
     socket: std::path::PathBuf,
+    fixture: std::path::PathBuf,
     stop: mpsc::Sender<()>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -127,6 +128,10 @@ fn start(label: &str) -> Option<Running> {
 }
 
 fn start_with_harness(label: &str, harness: bool) -> Option<Running> {
+    start_with_restart_harness(label, harness, false)
+}
+
+fn start_with_restart_harness(label: &str, harness: bool, restart: bool) -> Option<Running> {
     let label = label.to_string();
     let (ready, wait) = mpsc::channel();
     let (stop, stopped) = mpsc::channel();
@@ -145,9 +150,14 @@ fn start_with_harness(label: &str, harness: bool) -> Option<Running> {
             if harness {
                 parvi_testkit::tmux::write_script(
                     &binary,
-                    "#!/bin/sh\nprintf 'Options:\\n  -v, --verbose  Verbose output\\n'\n",
+                    format!("#!/bin/sh\nif [ \"$1\" = --help ]; then printf 'Options:\\n  -v, --verbose  Verbose output\\n'; exit; fi\nprintf '%s|%s\\n' \"$PWD\" \"$*\" >> '{}'\nwhile :; do sleep 1; done\n", dir.join("runs").display()),
                 );
-                std::fs::write(&launch, format!("harness fake {}\n", binary.display())).unwrap();
+                let config = if restart {
+                    format!("harness fake {} --marker\nfolder {}\n", binary.display(), dir.display())
+                } else {
+                    format!("harness fake {}\n", binary.display())
+                };
+                std::fs::write(&launch, config).unwrap();
             }
             let config = format!(
                 "[terminals]\nsocket = {:?}\nlaunch = {:?}\n",
@@ -155,7 +165,7 @@ fn start_with_harness(label: &str, harness: bool) -> Option<Running> {
                 launch
             );
             let node = Node::start(AREAS, &config).await.expect("a node");
-            let _ = ready.send(Some((node.url(), node.id(), tmux.socket_path())));
+            let _ = ready.send(Some((node.url(), node.id(), tmux.socket_path(), dir.clone())));
             while stopped.try_recv().is_err() {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
@@ -164,10 +174,11 @@ fn start_with_harness(label: &str, harness: bool) -> Option<Running> {
         });
     });
     match wait.recv().expect("the node thread") {
-        Some((url, node, socket)) => Some(Running {
+        Some((url, node, socket, fixture)) => Some(Running {
             url,
             node,
             socket,
+            fixture,
             stop,
             thread: Some(thread),
         }),
@@ -471,9 +482,12 @@ fn launches_use_each_tile_grid(cx: &mut TestAppContext) {
     });
     for i in 0..4 {
         let grid = page.read_with(cx, |p, _| p.launch_grids.borrow()[i].unwrap());
-        scroll_to_launch(cx, &format!("launcher-scroll-{i}"));
         let button = format!("launch-{i}");
         let selector: &'static str = Box::leak(button.clone().into_boxed_str());
+        until(cx, &format!("launcher ready in tile {i}"), |cx| {
+            cx.debug_bounds(selector).is_some()
+        });
+        scroll_to_launch(cx, &format!("launcher-scroll-{i}"));
         let viewport: &'static str = Box::leak(format!("launcher-scroll-{i}").into_boxed_str());
         until(cx, &format!("visible launch button in tile {i}"), |cx| {
             cx.debug_bounds(selector)
@@ -622,7 +636,20 @@ fn launcher_browses_and_selects_node_flags(cx: &mut TestAppContext) {
         cx.debug_bounds("harness-0-fake").is_some()
     });
     click(cx, "harness-0-fake".into());
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    until(cx, "fake harness selected", |cx| {
+        page.read_with(cx, |p, cx| {
+            p.launchers[0].read(cx).harness.as_deref() == Some("fake")
+        })
+    });
+    until(cx, "visible Browse control", |cx| {
+        cx.debug_bounds("flags-browse-0")
+            .zip(cx.debug_bounds("launcher-scroll-0"))
+            .is_some_and(|(button, viewport)| viewport.contains(&button.center()))
+    });
     click(cx, "flags-browse-0".into());
+    cx.run_until_parked();
+    scroll_to_launch(cx, "launcher-scroll-0");
     until(cx, "verbose flag", |cx| {
         cx.debug_bounds("flag-0---verbose").is_some()
     });
@@ -630,5 +657,161 @@ fn launcher_browses_and_selects_node_flags(cx: &mut TestAppContext) {
     until(cx, "flag in preview", |cx| {
         cx.debug_bounds("flag-line-0---verbose").is_some()
     });
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+#[gpui::test]
+fn restart_recovers_the_launched_harness_and_folder(cx: &mut TestAppContext) {
+    let Some(running) = start_with_restart_harness("terminals-restart-harness", true, true) else {
+        return;
+    };
+    let settings = parvi_testkit::fresh_dir("restart-harness-settings").join("app.json");
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let url = running.url.clone();
+    let path = settings.clone();
+    let (_shell, cx) = cx.add_window_view(move |window, cx| {
+        parvi_app_shell::start(&[terminals], Some(url), Some(path), window, cx)
+    });
+    until(cx, "fake harness", |cx| {
+        cx.debug_bounds("harness-0-fake").is_some()
+    });
+    click(cx, "harness-0-fake".into());
+    scroll_to_launch(cx, "launcher-scroll-0");
+    until(cx, "launch button", |cx| {
+        cx.debug_bounds("launch-0").is_some()
+    });
+    click(cx, "launch-0".into());
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    until(cx, "session bound", |cx| {
+        page.read_with(cx, |p, _| p.settings.workspace.shown(0).is_some())
+    });
+    let name = page.read_with(cx, |p, _| {
+        p.settings.workspace.shown(0).unwrap().key.name.clone()
+    });
+    // The node starts its shell through a launch gate and types the harness
+    // into it: tmux's start command therefore identifies the gate, while the
+    // fake's run records below prove which harness and flags actually ran.
+    assert!(
+        tmux(
+            &running,
+            &[
+                "display-message",
+                "-p",
+                "-t",
+                &name,
+                "#{pane_start_command}"
+            ]
+        )
+        .contains("wait-for")
+    );
+    let runs = running.fixture.join("runs");
+    until(cx, "fake harness started", |_| {
+        std::fs::read_to_string(&runs).is_ok_and(|s| s.lines().count() == 1)
+    });
+    assert_eq!(
+        tmux(
+            &running,
+            &["display-message", "-p", "-t", &name, "#{pane_current_path}"]
+        ),
+        running.fixture.display().to_string()
+    );
+    tmux(&running, &["kill-session", "-t", &name]);
+    until(cx, "ended tile", |cx| {
+        cx.debug_bounds("ended-0-0").is_some()
+    });
+    click(cx, "ended-0-0".into());
+    until(cx, "fake harness restarted", |_| {
+        std::fs::read_to_string(&runs).is_ok_and(|s| s.lines().count() == 2)
+    });
+    assert_eq!(
+        tmux(
+            &running,
+            &["display-message", "-p", "-t", &name, "#{pane_current_path}"]
+        ),
+        running.fixture.display().to_string()
+    );
+    assert!(
+        tmux(
+            &running,
+            &[
+                "display-message",
+                "-p",
+                "-t",
+                &name,
+                "#{pane_start_command}"
+            ]
+        )
+        .contains("wait-for")
+    );
+    let records = std::fs::read_to_string(runs).unwrap();
+    assert!(
+        records
+            .lines()
+            .all(|line| line == format!("{}|--marker", running.fixture.display()))
+    );
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+#[gpui::test]
+fn restart_of_external_session_uses_last_folder_and_says_shell(cx: &mut TestAppContext) {
+    let Some(running) = start("terminals-restart-external") else {
+        return;
+    };
+    let (_shell, cx, settings) = open_with_alpha(&running, "restart-external", cx);
+    let folder = settings.parent().unwrap().to_path_buf();
+    tmux(
+        &running,
+        &[
+            "send-keys",
+            "-t",
+            "alpha",
+            &format!("cd '{}'", folder.display()),
+            "Enter",
+        ],
+    );
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    let key = Key {
+        node: running.node.clone(),
+        user: String::new(),
+        name: "alpha".into(),
+    };
+    until(cx, "last folder observed", |cx| {
+        page.read_with(cx, |p, _| {
+            p.settings
+                .restarts
+                .get(&key.text())
+                .is_some_and(|r| r.folder == folder.to_string_lossy())
+        })
+    });
+    tmux(&running, &["kill-session", "-t", "alpha"]);
+    until(cx, "ended tile", |cx| {
+        cx.debug_bounds("ended-0-0").is_some()
+    });
+    let note = format!(
+        "ended-note-0-alpha has ended. Restart opens a shell in {}.",
+        folder.display()
+    );
+    let selector: &'static str = Box::leak(note.into_boxed_str());
+    assert!(cx.debug_bounds(selector).is_some());
+    click(cx, "ended-0-0".into());
+    until(cx, "alpha restarted", |_| {
+        tmux(&running, &["list-sessions", "-F", "#{session_name}"])
+            .lines()
+            .any(|name| name == "alpha")
+    });
+    assert_eq!(
+        tmux(
+            &running,
+            &[
+                "display-message",
+                "-p",
+                "-t",
+                "alpha",
+                "#{pane_current_path}"
+            ]
+        ),
+        folder.display().to_string()
+    );
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }
