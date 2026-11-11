@@ -13,6 +13,7 @@ parvi-node-kit = { path = "../../kit/node-kit" }
 anyhow = "1"
 tokio = { version = "1", features = ["full"] }
 # The areas, one line each, as in AREAS.
+parvi-agents = { path = "../../areas/agents/node" }
 parvi-terminals = { path = "../../areas/terminals/node" }
 parvi-scheduled = { path = "../../areas/scheduled/node" }
 parvi-host = { path = "../../areas/host/node" }
