@@ -38,13 +38,14 @@ impl Coordinator {
                 "run is final or aborting",
             ));
         }
+        let actor = if request.actor.is_empty() { "human:operator" } else { &request.actor };
         let event = RunEvent {
             kind: "human_verdict_recorded".into(),
             gate_id: gate.into(),
             node_id: gate.into(),
             timestamp: now(),
-            actor: if request.actor.is_empty() { "human:operator".into() } else { request.actor.clone() },
-            data: json!({"requestedSeq":request.requested_seq,"verdict":request.verdict,"reason":request.response,"decidedBy":"human:operator","relayedBy":request.relayed_by}).as_object().unwrap().clone(),
+            actor: actor.into(),
+            data: json!({"requestedSeq":request.requested_seq,"verdict":request.verdict,"reason":request.response,"decidedBy":actor,"relayedBy":request.relayed_by}).as_object().unwrap().clone(),
             ..Default::default()
         };
         let appended = self.ledger(run)?.append_checked(event, |events| {

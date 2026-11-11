@@ -165,11 +165,11 @@ fn schema(name: &str) -> Value {
         "run_land" => object(json!({"run":s,"force":b}), &["run"]),
         "gate_request" => object(json!({"run":s,"gate":s}), &["run", "gate"]),
         "gate_approve" | "gate_reject" => object(
-            json!({"run":s,"gate":s,"requested_seq":i,"response":s,"relayed_by":s}),
+            json!({"run":s,"gate":s,"requested_seq":i,"response":s,"relayed_by":s,"actor":s}),
             &["run", "gate", "requested_seq"],
         ),
         "gate_pick" => object(
-            json!({"run":s,"gate":s,"requested_seq":i,"attempt":i,"reason":s,"relayed_by":s}),
+            json!({"run":s,"gate":s,"requested_seq":i,"attempt":i,"reason":s,"relayed_by":s,"actor":s}),
             &["run", "gate", "requested_seq", "attempt"],
         ),
         _ if crate::authoring::NAMES.contains(&name) => crate::authoring::schema(name),
@@ -190,6 +190,15 @@ fn required<'a>(a: &'a Value, key: &str) -> Result<&'a str, Error> {
 }
 fn optional<'a>(a: &'a Value, key: &str, default: &'a str) -> Result<&'a str, Error> {
     Ok(maybe_text(a, key).map_err(bad)?.unwrap_or(default))
+}
+fn command_actor(a: &Value) -> Result<String, Error> {
+    let actor = optional(a, "actor", "agent:parvi")?.trim();
+    Ok(if actor.is_empty() {
+        "agent:parvi"
+    } else {
+        actor
+    }
+    .into())
 }
 fn boolean(a: &Value, key: &str) -> Result<bool, Error> {
     flag(a, key, false).map_err(bad)
@@ -460,7 +469,7 @@ async fn call(m: Missions, name: &str, a: Value) -> Result<Value, Error> {
                     .into(),
                     response: optional(&a, "response", "")?.into(),
                     relayed_by: optional(&a, "relayed_by", "")?.into(),
-                    actor: "human:operator".into(),
+                    actor: command_actor(&a)?,
                 },
             )?;
             Ok(json!({"node":node,"runId":id}))
@@ -477,7 +486,7 @@ async fn call(m: Missions, name: &str, a: Value) -> Result<Value, Error> {
                     attempt,
                     reason: optional(&a, "reason", "")?.into(),
                     relayed_by: optional(&a, "relayed_by", "")?.into(),
-                    actor: "human:operator".into(),
+                    actor: command_actor(&a)?,
                 },
             )?;
             Ok(json!({"node":node,"runId":id}))
