@@ -332,7 +332,8 @@ impl Launcher {
             let id = s.fleet.launch_on(&node, l.clone())?;
             let tab = s.settings.workspace.active;
             let window = (index != SEND).then_some(index);
-            s.launches.insert((node.clone(), id), (l, window, tab));
+            s.report(&format!("Launching {name}…"), false, None);
+            s.track_launch(&node, id, l, window, tab);
             if index == SEND {
                 s.send_launching(&node, id);
             }
@@ -346,7 +347,6 @@ impl Launcher {
             } else {
                 s.settings.flags.remove(&harness);
             }
-            s.report(&format!("Launching {name}…"), false, None);
             s.save(cx);
             cx.notify();
             Some(id)
