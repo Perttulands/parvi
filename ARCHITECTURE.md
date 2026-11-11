@@ -85,7 +85,9 @@ real list, and `parvi kinds` prints who owns which kinds.
   area is built, so the order of `AREAS` never matters. A slot filled twice is
   refused, and an empty one reads as `not_provided`. `Sessions` (in
   `engine/term`: list, follow, deliver to, start, and run a mission's seats)
-  is the first; terminals provides it.
+  is the first; terminals provides it. `Resolver` (in `areas/work/contract`:
+  the canonical reference for a written one, a bare Bead id placed by the
+  node's Work configuration) is provided by work.
 - **Hooks.** `parvi hook <url> [--then command...]` is how an outside
   program's own hook reports to the node: it posts its payload to the URL an
   area gave it and runs `--then` regardless. The URL carries what the area

@@ -79,6 +79,12 @@ impl Node {
             .expect("an area provides sessions")
     }
 
+    /// What fills the node's slot for `T`, as its areas read it; an empty
+    /// slot reads as `not_provided`.
+    pub fn provided<T: ?Sized + Send + Sync + 'static>(&self) -> Result<std::sync::Arc<T>, Error> {
+        self.running().provided.get::<T>()
+    }
+
     /// The stand-in sessions, when the node lists [`crate::sessions`]'s area.
     pub fn fake_sessions(&self) -> std::sync::Arc<crate::sessions::FakeSessions> {
         crate::sessions::of(&self.id()).expect("the node lists the fake sessions area")

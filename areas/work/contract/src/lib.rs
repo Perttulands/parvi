@@ -2,8 +2,10 @@
 
 pub mod item;
 pub mod model;
+mod resolver;
 pub use item::{Family, Item};
 pub use model::*;
+pub use resolver::{Resolver, Resolving};
 pub const WATCH: u8 = 0x98;
 pub const SNAPSHOT: u8 = 0x90;
 pub const KINDS: parvi_core::frame::Kinds = &[WATCH..=WATCH];
