@@ -2,6 +2,7 @@
 mod authoring;
 mod channel;
 mod commands;
+mod notify;
 mod routes;
 mod run_routes;
 
@@ -33,6 +34,7 @@ pub const LISTING: Listing = Listing {
 struct Section {
     repositories: BTreeMap<String, PathBuf>,
     run_workspace_root: Option<PathBuf>,
+    notify_command: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -42,6 +44,7 @@ struct Missions {
     changes: broadcast::Sender<()>,
     resolver: Arc<dyn parvi_work_contract::Resolver>,
     node: String,
+    notify_task: Option<Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>>,
 }
 impl Missions {
     fn changed(&self) {
@@ -67,6 +70,10 @@ pub fn build_with_executor(
     let run_workspace_root = section
         .run_workspace_root
         .map(|path| setup.config.path(&path));
+    let notify_command = section
+        .notify_command
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(|path| setup.config.path(&path));
     let root = Store::root_in(&setup.dir);
     let node = setup.node.id.to_string();
     let environment = format!("{}/{}", setup.node.device, setup.node.environment.name());
@@ -81,17 +88,19 @@ pub fn build_with_executor(
         let seats = LocalSeats::new(sessions, &root, node.clone(), TranscriptRoots::from_host())
             .with_repositories(repositories.clone());
         let executor = SeatExecutor::new(Arc::new(seats), tokio::runtime::Handle::current());
+        let blocked_events = events.clone();
         let settings = RunSettings {
             environment,
             repositories,
             run_workspace_root,
+            notify_command: notify_command.clone(),
             on_block: Some(parvi_mission_engine::OnBlock(Arc::new(
                 move |run, reason| {
-                    events.record(
+                    blocked_events.record(
                         "mission",
                         true,
                         format!(
-                            "Run {} of {} blocked: {reason}",
+                            "run blocked: {} of {}: {reason}",
                             run.run_id, run.mission_slug
                         ),
                     )
@@ -101,12 +110,19 @@ pub fn build_with_executor(
         };
         let executor = override_executor.unwrap_or_else(|| Box::new(executor));
         let coordinator = Coordinator::open(&root, settings, executor)?;
+        let notify_task = Some(Arc::new(tokio::sync::Mutex::new(Some(notify::start(
+            coordinator.clone(),
+            root.clone(),
+            notify_command,
+            events,
+        )))));
         Ok(Arc::new(Missions {
             store: Store::new(root),
             coordinator,
             changes: broadcast::channel(32).0,
             resolver,
             node,
+            notify_task,
         }))
     })
 }
@@ -121,8 +137,15 @@ impl Area for Missions {
         Some(Box::new(channel::Connection::new(self.clone())))
     }
     fn stop(&self) -> BoxFuture<'_, ()> {
+        let task = self.notify_task.clone();
         let coordinator = self.coordinator.clone();
         Box::pin(async move {
+            if let Some(task) = task
+                && let Some(handle) = task.lock().await.take()
+            {
+                handle.abort();
+                let _ = handle.await;
+            }
             let _ = tokio::task::spawn_blocking(move || {
                 coordinator.shutdown(Instant::now() + Duration::from_secs(10))
             })
