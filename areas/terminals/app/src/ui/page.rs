@@ -1246,6 +1246,104 @@ impl Terminals {
         self.attach(k, w, window, cx);
     }
 
+    /// Bring a session and optional immutable pane id into view. Resolve the
+    /// whole request before changing the workspace, including a bad pane.
+    fn reveal_session(
+        &mut self,
+        id: &str,
+        node: Option<NodeId>,
+        part: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let node = node
+            .map(|n| n.to_string())
+            .or_else(|| self.fleet.here_id().map(str::to_owned))
+            .unwrap_or_else(|| "here".into());
+        let candidates: Vec<_> = self.fleet.all.iter().filter(|s| s.node == node).collect();
+        let by_id = candidates.iter().copied().find(|s| s.id == id);
+        let names: Vec<_> = candidates
+            .iter()
+            .copied()
+            .filter(|s| s.name == id)
+            .collect();
+        let session = by_id.or_else(|| (names.len() == 1).then(|| names[0]));
+        let Some(session) = session else {
+            let why = if names.len() > 1 {
+                format!("several sessions named {id} on {node}; use a session id")
+            } else {
+                format!("no session {id} on {node}")
+            };
+            self.report(&why, true, None);
+            self.flush(cx);
+            cx.notify();
+            return;
+        };
+        let pane = match part {
+            None => None,
+            Some(part) => match part
+                .strip_prefix('%')
+                .unwrap_or(part)
+                .parse::<u32>()
+                .ok()
+                .filter(|p| session.panes.iter().any(|pane| pane.id == *p))
+            {
+                Some(pane) => Some(pane),
+                None => {
+                    self.report(
+                        &format!("no pane {part} in session {id} on {node}"),
+                        true,
+                        None,
+                    );
+                    self.flush(cx);
+                    cx.notify();
+                    return;
+                }
+            },
+        };
+        let key = Key::of(session);
+        // Bindings in hidden windows and tabs remain the operator's intent.
+        let bound = self
+            .settings
+            .workspace
+            .tabs
+            .iter()
+            .enumerate()
+            .find_map(|(tab, t)| {
+                t.windows
+                    .iter()
+                    .enumerate()
+                    .find(|(_, w)| w.sessions.iter().any(|b| b.key == key))
+                    .map(|(w, _)| (tab, w))
+            });
+        let w = if let Some((tab, w)) = bound {
+            let ws = &mut self.settings.workspace;
+            ws.count = ws.count.max(tab + 1);
+            if ws.tabs[tab].count <= w {
+                ws.set_windows(tab, w + 1);
+            }
+            ws.show_tab(tab);
+            ws.focus = w;
+            if ws.show_tag(w, &key) {
+                self.histories.remove(&w);
+            }
+            w
+        } else {
+            let w = self.settings.workspace.focus;
+            self.attach(key, w, window, cx);
+            w
+        };
+        if let Some(pane) = pane {
+            self.settings.workspace.choose_pane(w, pane);
+            self.histories.remove(&w);
+        }
+        self.sync(cx);
+        self.save(cx);
+        self.host.show(cx);
+        window.focus(&self.term_focus, cx);
+        cx.notify();
+    }
+
     pub fn open_peek(
         &mut self,
         k: Key,
@@ -1368,7 +1466,8 @@ impl Page for Terminals {
     const TITLE: &'static str = "Terminals";
     const AREA: Option<&'static str> = Some(crate::NAME);
     const KINDS: Kinds = parvi_terminals_contract::KINDS;
-    const ANSWERS: &'static [Answers] = &[Answers::Send, Answers::Launch];
+    const ANSWERS: &'static [Answers] =
+        &[Answers::Send, Answers::Launch, Answers::Reveal("session")];
     const SETTINGS: &'static [Setting] = crate::store::settings::DECLARED;
 
     /// The Settings page changed one of ours: taken, the rest as it is.
@@ -1435,6 +1534,14 @@ impl Page for Terminals {
                     None => self.focused_key(),
                 };
                 self.handoff(Some(reference), target, window, cx);
+            }
+            Ask::Reveal {
+                what,
+                id,
+                node,
+                part,
+            } if what == "session" => {
+                self.reveal_session(&id, node, part.as_deref(), window, cx);
             }
             Ask::Launch { node, folder, name } => {
                 self.launch_asked(node.as_str(), &folder, &name);
