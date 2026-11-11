@@ -33,7 +33,7 @@ fn start() -> Running {
             std::fs::write(corpus.join("notes/first.md"), "# First\n\n[[second|Second]]\n").unwrap();
             std::fs::write(corpus.join("notes/second.md"), "# Second\n\nLinked page.\n").unwrap();
             let citadel = axum::Router::new().route("/v1/library/search", post(|Json(query): Json<Value>| async move {
-                let results = if query["query"] == "first" { json!([{ "path": "notes/first.md", "title": "First", "collection": "notes" }]) } else { json!([]) };
+                let results = if query["query"] == "first" { json!([{ "path": "notes/first.md", "title": "First", "collection": "notes", "kind": "note", "summary": "A fixture summary" }]) } else { json!([]) };
                 Json(json!({"results": results}))
             }));
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -190,6 +190,32 @@ fn dock_search_send_and_toggle_from_another_page(cx: &mut TestAppContext) {
     cx.simulate_input("first");
     cx.executor().advance_clock(Duration::from_millis(250));
     until(cx, "search result", |cx| {
+        cx.debug_bounds("brain-result-0").is_some()
+    });
+    assert!(cx.debug_bounds("brain-result-kind-note").is_some());
+    assert!(
+        cx.debug_bounds("brain-result-summary-A fixture summary")
+            .is_some()
+    );
+    cx.simulate_keystrokes("escape");
+    until(cx, "search cleared", |cx| {
+        cx.debug_bounds("brain-result-0").is_none()
+    });
+    assert!(cx.debug_bounds("dock-brain").is_some());
+    cx.simulate_keystrokes("escape");
+    until(cx, "dock closed by Escape", |cx| {
+        cx.debug_bounds("dock-brain").is_none()
+    });
+    assert!(cx.debug_bounds("toy-page").is_some());
+    cx.simulate_keystrokes("alt-l");
+    until(cx, "dock reopened", |cx| {
+        cx.debug_bounds("brain-search").is_some()
+    });
+    let search = cx.debug_bounds("brain-search").unwrap().center();
+    cx.simulate_click(search, Modifiers::none());
+    cx.simulate_input("first");
+    cx.executor().advance_clock(Duration::from_millis(250));
+    until(cx, "search result again", |cx| {
         cx.debug_bounds("brain-result-0").is_some()
     });
     let result = cx.debug_bounds("brain-result-0").unwrap().center();

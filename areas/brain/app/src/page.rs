@@ -25,6 +25,7 @@ struct Settings {
 pub struct BrainPage {
     pub(crate) host: Host,
     me: WeakEntity<BrainPage>,
+    dock_return_focus: Option<FocusHandle>,
     pub(crate) state: Brain,
     pub(crate) field: Entity<TextField>,
     pub(crate) editor: Entity<Code>,
@@ -46,8 +47,8 @@ impl Page for BrainPage {
     fn chords(&self, _: &App) -> Vec<parvi_app_kit::chords::Chord> {
         let me = self.me.clone();
         vec![
-            parvi_app_kit::chords::Chord::new("l", "Brain", move |_, cx| {
-                let _ = me.update(cx, |page, cx| page.toggle_dock(cx));
+            parvi_app_kit::chords::Chord::new("l", "Brain", move |window, cx| {
+                let _ = me.update(cx, |page, cx| page.toggle_dock(window, cx));
             })
             .alt("l", Some(false))
             .everywhere(),
@@ -129,6 +130,7 @@ impl BrainPage {
         Self {
             host,
             me: cx.weak_entity(),
+            dock_return_focus: None,
             state,
             field,
             editor,
@@ -141,10 +143,24 @@ impl BrainPage {
             shown: false,
         }
     }
-    fn toggle_dock(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn close_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let in_dock = self.field.read(cx).is_focused(window)
+            || self.summary.read(cx).is_focused(window)
+            || self.editor.read(cx).is_focused(window)
+            || self.reader_focus.contains_focused(window, cx);
+        self.host.close_dock(cx);
+        if let Some(focus) = self.dock_return_focus.take()
+            && in_dock
+            && !self.shown
+        {
+            window.focus(&focus, cx);
+        }
+    }
+    fn toggle_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.host.docked(cx) {
-            self.host.close_dock(cx);
+            self.close_dock(window, cx);
         } else if let Some(page) = self.me.upgrade() {
+            self.dock_return_focus = window.focused(cx);
             self.brain_read_rail(cx);
             let dock = cx.new(|cx| crate::view::Dock::new(page, cx));
             self.host.show_dock(dock.into(), cx);

@@ -49,7 +49,7 @@ impl Render for BrainPage {
             let path = hit.path.clone();
             let mut snippet = String::new();
             let mut highlights = Vec::new();
-            for (part, marked) in crate::state::marks(&hit.snippet) {
+            for (part, marked) in crate::state::snippet_parts(&hit.snippet) {
                 let start = snippet.len();
                 snippet.push_str(&part);
                 if marked {
@@ -63,6 +63,8 @@ impl Render for BrainPage {
                     ));
                 }
             }
+            let kind = hit.kind.clone();
+            let summary = hit.summary.clone();
             list = list.child(
                 div()
                     .id(SharedString::from(format!("brain-result-{i}")))
@@ -75,6 +77,24 @@ impl Render for BrainPage {
                         page.brain_open(&path, cx);
                     }))
                     .child(hit.title.clone())
+                    .when(!kind.is_empty(), |d| {
+                        let selector = format!("brain-result-kind-{kind}");
+                        d.child(
+                            div()
+                                .debug_selector(move || selector.clone())
+                                .text_color(t.dim)
+                                .child(kind),
+                        )
+                    })
+                    .when(!summary.is_empty(), |d| {
+                        let selector = format!("brain-result-summary-{summary}");
+                        d.child(
+                            div()
+                                .debug_selector(move || selector.clone())
+                                .text_color(t.text2)
+                                .child(summary),
+                        )
+                    })
                     .child(StyledText::new(snippet).with_highlights(highlights)),
             );
         }
@@ -387,6 +407,22 @@ impl Render for BrainPage {
         div()
             .id("brain")
             .on_key_down(cx.listener(move |page, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape"
+                    && event.keystroke.modifiers == gpui::Modifiers::none()
+                    && page.field.read(cx).is_focused(window)
+                {
+                    if !page.field.read(cx).text.is_empty() {
+                        page.field.update(cx, |field, cx| field.set("", false, cx));
+                        page.state.typed("");
+                        cx.notify();
+                    } else if page.host.docked(cx) {
+                        page.close_dock(window, cx);
+                    } else {
+                        window.focus(&page.reader_focus, cx);
+                    }
+                    cx.stop_propagation();
+                    return;
+                }
                 if can_copy
                     && !page.field.read(cx).is_focused(window)
                     && event.keystroke.modifiers.control

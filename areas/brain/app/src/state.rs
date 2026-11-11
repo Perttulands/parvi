@@ -409,6 +409,61 @@ pub fn marks(snippet: &str) -> Vec<(String, bool)> {
     out
 }
 
+/// Display a snippet without heading or wiki-link syntax, retaining match marks.
+pub fn snippet_parts(snippet: &str) -> Vec<(String, bool)> {
+    let chars: Vec<(char, bool)> = marks(snippet)
+        .into_iter()
+        .flat_map(|(text, marked)| text.chars().map(move |c| (c, marked)).collect::<Vec<_>>())
+        .collect();
+    let mut visible = Vec::new();
+    let mut i = 0;
+    let mut line_start = true;
+    while i < chars.len() {
+        if line_start {
+            let mut end = i;
+            while end < chars.len() && matches!(chars[end].0, ' ' | '\t') {
+                end += 1;
+            }
+            let hashes = end;
+            while end < chars.len() && chars[end].0 == '#' {
+                end += 1;
+            }
+            if end > hashes && end < chars.len() && chars[end].0 == ' ' {
+                i = end + 1;
+                line_start = false;
+                continue;
+            }
+        }
+        if chars[i].0 == '['
+            && chars.get(i + 1).is_some_and(|c| c.0 == '[')
+            && let Some(end) = (i + 2..chars.len().saturating_sub(1))
+                .find(|&j| chars[j].0 == ']' && chars[j + 1].0 == ']')
+        {
+            let start = (i + 2..end)
+                .find(|&j| chars[j].0 == '|')
+                .map_or(i + 2, |j| j + 1);
+            visible.extend_from_slice(&chars[start..end]);
+            i = end + 2;
+            line_start = false;
+            continue;
+        }
+        visible.push(chars[i]);
+        line_start = chars[i].0 == '\n';
+        i += 1;
+    }
+    let mut parts: Vec<(String, bool)> = Vec::new();
+    for (ch, marked) in visible {
+        if let Some((text, last)) = parts.last_mut()
+            && *last == marked
+        {
+            text.push(ch);
+        } else {
+            parts.push((ch.to_string(), marked));
+        }
+    }
+    parts
+}
+
 fn words(status: u16, body: &[u8]) -> String {
     if status == 0 {
         return String::from_utf8_lossy(body).into_owned();
@@ -735,6 +790,26 @@ mod tests {
         assert_eq!(when("", now), "never");
     }
 
+    #[test]
+    fn snippet_removes_markup_without_losing_match_marks() {
+        assert_eq!(
+            snippet_parts("## »Heading« [[Some Page|»shown«]] text"),
+            vec![
+                ("Heading".into(), true),
+                (" ".into(), false),
+                ("shown".into(), true),
+                (" text".into(), false),
+            ]
+        );
+        assert_eq!(
+            snippet_parts("# One\n## [[Page]]"),
+            vec![("One\nPage".into(), false)]
+        );
+        assert_eq!(
+            snippet_parts("»[[Page|label]]«"),
+            vec![("label".into(), true)]
+        );
+    }
     #[test]
     fn marks_the_matched_words_in_a_snippet() {
         assert_eq!(
