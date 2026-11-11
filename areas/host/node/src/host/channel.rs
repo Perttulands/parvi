@@ -146,6 +146,8 @@ fn wire_reading(reading: &Reading) -> WireReading {
         cpu: reading.cpu,
         memory: reading.memory,
         swap: reading.swap,
+        swap_activity_bps: reading.swap_activity_bps,
+        gpu_reason: reading.gpu_reason.clone(),
         load: reading.load.map(|load| [load.one, load.five, load.fifteen]),
         disk: reading.disk.map(|usage| Disk {
             mount: disk::mount(),
@@ -164,6 +166,13 @@ fn push_reading(json: &mut String, reading: &WireReading) {
     push_usage(json, reading.memory);
     json.push_str(",\"swap\":");
     push_usage(json, reading.swap);
+    json.push_str(",\"swap_activity_bps\":");
+    push_number(json, reading.swap_activity_bps);
+    json.push_str(",\"gpu_reason\":");
+    match &reading.gpu_reason {
+        Some(reason) => push_json_string(json, reason),
+        None => json.push_str("null"),
+    }
     json.push_str(",\"load\":");
     match reading.load {
         Some([one, five, fifteen]) => {
@@ -252,6 +261,8 @@ mod tests {
             cpu: Some(14.25),
             memory: Some(Usage { used: 1, total: 4 }),
             swap: Some(Usage { used: 1, total: 8 }),
+            swap_activity_bps: None,
+            gpu_reason: None,
             load: Some(Load {
                 one: 0.42,
                 five: 0.731,
@@ -296,12 +307,31 @@ mod tests {
             json(&frame),
             format!(
                 "{{\"reading\":{{\"at\":1000,\"cpu\":14.2,\"memory\":{{\"used\":1,\"total\":4}},\
-                 \"swap\":{{\"used\":1,\"total\":8}},\"load\":[0.42,0.73,0.60],\
+                 \"swap\":{{\"used\":1,\"total\":8}},\"swap_activity_bps\":null,\"gpu_reason\":null,\"load\":[0.42,0.73,0.60],\
                  \"disk\":{{\"mount\":{mount},\"used\":2,\"total\":8}},\
                  \"gpus\":[{{\"name\":\"RTX 4090\",\"util\":87.0,\"memory\":null,\"temp\":61.0}}],\
                  \"uptime\":3600}},\"point\":[1000,14.2,25.0,87.0,10.5,12.5,null]}}"
             )
         );
+    }
+
+    #[test]
+    fn state_json_keeps_gpu_failure_and_swap_activity() {
+        let mut sample = sample();
+        sample.gpus.clear();
+        sample.gpu_reason = Some("nvidia-smi exit status: 9: NVIDIA-SMI has failed".into());
+        sample.swap_activity_bps = Some(2_457_600.0);
+        let history = History::new(2, 4);
+        let frame = state(&State {
+            facts: &facts(),
+            every_ms: 5000,
+            history: &history,
+            latest: Some(&sample),
+            events: &[],
+        });
+        let parsed: serde_json::Value = serde_json::from_str(json(&frame)).unwrap();
+        assert_eq!(parsed["latest"]["gpu_reason"], sample.gpu_reason.unwrap());
+        assert_eq!(parsed["latest"]["swap_activity_bps"], 2_457_600.0);
     }
 
     #[test]

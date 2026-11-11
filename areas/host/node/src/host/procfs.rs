@@ -37,6 +37,20 @@ pub fn swap() -> Option<Usage> {
     parse_swap(&read("/proc/meminfo")?)
 }
 
+pub fn swap_pages() -> Option<(u64, u64)> {
+    parse_swap_pages(&read("/proc/vmstat")?)
+}
+
+fn parse_swap_pages(vmstat: &str) -> Option<(u64, u64)> {
+    let field = |name| {
+        vmstat.lines().find_map(|line| {
+            let (key, value) = line.split_once(char::is_whitespace)?;
+            (key == name).then(|| value.trim().parse().ok()).flatten()
+        })
+    };
+    Some((field("pswpin")?, field("pswpout")?))
+}
+
 pub fn load() -> Option<Load> {
     parse_load(&read("/proc/loadavg")?)
 }
@@ -159,6 +173,15 @@ mod tests {
         let none = "SwapTotal:  0 kB\nSwapFree:  0 kB\n";
         assert_eq!(parse_swap(none), Some(Usage { used: 0, total: 0 }));
         assert_eq!(parse_swap("MemTotal: 100 kB\n"), None);
+    }
+
+    #[test]
+    fn vmstat_requires_both_swap_counters() {
+        assert_eq!(
+            parse_swap_pages("other 9\npswpin 100\npswpout 200\n"),
+            Some((100, 200))
+        );
+        assert_eq!(parse_swap_pages("pswpin 100\n"), None);
     }
 
     #[test]
