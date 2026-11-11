@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 const ENCODING: &str = "decision-result-jcs-v1";
 const IMPLEMENTATION: &str = "c1b0017bd2707a31c35bc85c95d01f2bca9330ac592ff543867a5cc47346be11";
 fn hash(value: &str) -> String {
-    format!("{:x}", Sha256::digest(value.as_bytes()))
+    hex::encode(Sha256::digest(value.as_bytes()))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

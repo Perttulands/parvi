@@ -14,7 +14,7 @@ parvi-core = { path = "../../../kit/core" }
 parvi-scheduled-contract = { path = "../contract" }
 # The sessions a task may send to, as the terminals page publishes them.
 parvi-terminals-contract = { path = "../../terminals/contract" }
-gpui = { package = "gpui-pre", version = "=0.3.11" }
+gpui = { package = "gpui-pre", version = "=0.3.12" }
 jiff = { version = "0.2", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -28,5 +28,5 @@ parvi-scheduled = { path = "../node" }
 parvi-terminals = { path = "../../terminals/node" }
 parvi-testkit = { path = "../../../kit/testkit" }
 parvi-node-kit = { path = "../../../kit/node-kit" }
-gpui = { package = "gpui-pre", version = "=0.3.11", features = ["test-support"] }
+gpui = { package = "gpui-pre", version = "=0.3.12", features = ["test-support"] }
 tokio = { version = "1", features = ["full"] }

@@ -1706,10 +1706,10 @@ fn recovery_publishes_an_output_recorded_before_its_commit() {
     .unwrap();
     let workspace = dir.0.join("worktrees").join(&id);
     git(&workspace, &["reset", "--hard", "HEAD^"]);
-    let turn = dir
-        .0
-        .join("worktrees")
-        .join(format!(".turn-{id}-{:x}-1", Sha256::digest(b"fmn_work")));
+    let turn = dir.0.join("worktrees").join(format!(
+        ".turn-{id}-{}-1",
+        hex::encode(Sha256::digest(b"fmn_work"))
+    ));
     git(
         &workspace,
         &[

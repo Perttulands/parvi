@@ -14,8 +14,8 @@ use std::{
 
 pub(crate) fn turn_path(c: &Coordinator, id: &str, node: &str, attempt: i64) -> PathBuf {
     c.inner.root.join("worktrees").join(format!(
-        ".turn-{id}-{:x}-{attempt}",
-        Sha256::digest(node.as_bytes())
+        ".turn-{id}-{}-{attempt}",
+        hex::encode(Sha256::digest(node.as_bytes()))
     ))
 }
 

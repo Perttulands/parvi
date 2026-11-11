@@ -177,7 +177,7 @@ fn snapshot(items: &[Item]) -> Result<String, String> {
             .map_or(0, |d| d.as_nanos());
         hash.update(modified.to_le_bytes());
     }
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(hex::encode(hash.finalize()))
 }
 
 async fn transfer(
@@ -290,7 +290,7 @@ async fn transfer(
             hash.update(&data[..count]);
             left -= count as u64;
         }
-        if format!("{:x}", hash.finalize()) != staged.hash {
+        if hex::encode(hash.finalize()) != staged.hash {
             return Err("The staged file differs from the source".into());
         }
         let mut offset = staged.offset;

@@ -75,7 +75,7 @@ pub fn read(roots: &Roots, path: &str, limit: u64) -> Result<Vec<u8>, FilesError
 /// from: their SHA-256 in hex.
 pub fn version(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
-    format!("{:x}", Sha256::digest(bytes))
+    hex::encode(Sha256::digest(bytes))
 }
 
 /// Writes through a temporary sibling so a failed write leaves the original

@@ -26,4 +26,4 @@ libc = "0.2"
 parvi-testkit = { path = "../../../kit/testkit" }
 tower = { version = "0.5", features = ["util"] }
 futures-util = "0.3"
-tokio-tungstenite = "0.29"
+tokio-tungstenite = "0.30"

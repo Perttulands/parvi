@@ -19,8 +19,8 @@ path = "src/main.rs"
 [dependencies]
 parvi-app-kit = { path = "../../kit/app-kit" }
 parvi-app-shell = { path = "../../kit/app-shell" }
-gpui = { package = "gpui-pre", version = "=0.3.11" }
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11" }
+gpui = { package = "gpui-pre", version = "=0.3.12" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12" }
 async-channel = "2"
 log = "0.4"
 # The pages, one line each, as in PAGES.
@@ -34,11 +34,11 @@ parvi-brain-app = { path = "../../areas/brain/app" }
 
 # Linux builds are for testing on an invisible X display; the product is Windows.
 [target.'cfg(target_os = "linux")'.dependencies]
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", features = ["x11"] }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features = ["x11"] }
 
 [build-dependencies]
 # gpui builds the same version for its own Windows resource.
 embed-resource = "3"
 
 [dev-dependencies]
-gpui = { package = "gpui-pre", version = "=0.3.11", features = ["test-support"] }
+gpui = { package = "gpui-pre", version = "=0.3.12", features = ["test-support"] }

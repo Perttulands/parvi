@@ -193,5 +193,5 @@ impl BindingsSnapshot {
     }
 }
 fn hash(s: &str) -> String {
-    format!("{:x}", Sha256::digest(s.as_bytes()))
+    hex::encode(Sha256::digest(s.as_bytes()))
 }
