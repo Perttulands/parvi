@@ -231,6 +231,13 @@ impl Work {
         let t = theme(cx).clone();
         let shown = self.sliced.rows.len();
         let all = self.board.rows.len();
+        let projects = &self.board.projects;
+        let loading = projects.iter().any(|p| !p.read && p.error.is_none());
+        let loaded = projects
+            .iter()
+            .filter(|p| p.read && p.error.is_none())
+            .count();
+        let progress = format!("Reading projects: {loaded} of {} loaded", projects.len());
         div()
             .flex_none()
             .h(px(BAR_H))
@@ -255,6 +262,16 @@ impl Work {
                 },
                 Some(t.text2),
             ))
+            .when(loading, |d| {
+                d.child(
+                    div()
+                        .debug_selector({
+                            let progress = progress.clone();
+                            move || format!("work-loading-{progress}")
+                        })
+                        .child(kit::note(&t, progress, Some(t.text2))),
+                )
+            })
             .child(div().flex_1())
             .child(div().w(px(SEARCH_W)).child(self.search.clone()))
     }
