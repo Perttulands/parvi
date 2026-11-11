@@ -63,6 +63,10 @@ pub struct Reading {
     #[serde(default)]
     pub swap: Option<Usage>,
     #[serde(default)]
+    pub swap_activity_bps: Option<f32>,
+    #[serde(default)]
+    pub gpu_reason: Option<String>,
+    #[serde(default)]
     pub load: Option<[f32; 3]>,
     pub disk: Option<Disk>,
     #[serde(default)]

@@ -1,6 +1,8 @@
 //! One sample of the host, and the small point of it kept for history.
 
 use std::path::PathBuf;
+#[cfg(not(windows))]
+use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::cpu::CpuTimes;
@@ -28,6 +30,8 @@ pub struct Reading {
     /// Swap in use; on Windows the commit charge against the commit limit
     /// (memory plus page files).
     pub swap: Option<Usage>,
+    pub swap_activity_bps: Option<f32>,
+    pub gpu_reason: Option<String>,
     pub load: Option<Load>,
     /// The file system at [`disk::mount`].
     pub disk: Option<Usage>,
@@ -57,6 +61,8 @@ pub fn point_of(reading: &Reading, threads: usize) -> Point {
 pub struct Probe {
     cpu: Option<CpuTimes>,
     nvidia_smi: Option<PathBuf>,
+    #[cfg(not(windows))]
+    swap_sample: Option<((u64, u64), Instant)>,
 }
 
 impl Probe {
@@ -64,6 +70,8 @@ impl Probe {
         Probe {
             cpu: os::cpu_times(),
             nvidia_smi: gpu::locate(),
+            #[cfg(not(windows))]
+            swap_sample: os::swap_pages().map(|pages| (pages, Instant::now())),
         }
     }
 
@@ -73,21 +81,56 @@ impl Probe {
             .zip(self.cpu)
             .and_then(|(now, then)| now.busy_since(then));
         self.cpu = cpu.or(self.cpu);
-        let gpus = match &self.nvidia_smi {
-            Some(path) => gpu::query(path).await,
-            None => Vec::new(),
+        let result = gpu::read(self.nvidia_smi.as_deref()).await;
+        let (gpus, gpu_reason) = match result {
+            Ok(gpus) => (gpus, None),
+            Err(reason) => (Vec::new(), Some(reason)),
         };
+        #[cfg(not(windows))]
+        let swap_activity_bps = {
+            let sample = os::swap_pages().map(|pages| (pages, Instant::now()));
+            let rate = sample.zip(self.swap_sample).and_then(|(now, previous)| {
+                let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+                (page_size > 0)
+                    .then(|| swap_rate(previous, now, page_size as u64))
+                    .flatten()
+            });
+            self.swap_sample = sample;
+            rate
+        };
+        #[cfg(windows)]
+        let swap_activity_bps = None;
         Reading {
             at: now_ms(),
             cpu: busy,
             memory: os::memory(),
             swap: os::swap(),
+            swap_activity_bps,
+            gpu_reason,
             load: os::load(),
             disk: disk::usage(&disk::mount()),
             gpus,
             uptime: os::uptime(),
         }
     }
+}
+
+#[cfg(not(windows))]
+fn swap_rate(
+    previous: ((u64, u64), Instant),
+    now: ((u64, u64), Instant),
+    page_size: u64,
+) -> Option<f32> {
+    let seconds = now.1.checked_duration_since(previous.1)?.as_secs_f32();
+    if seconds == 0.0 {
+        return None;
+    }
+    let pages = now
+        .0
+        .0
+        .saturating_sub(previous.0.0)
+        .saturating_add(now.0.1.saturating_sub(previous.0.1));
+    Some(pages as f32 * page_size as f32 / seconds)
 }
 
 impl Default for Probe {
@@ -106,6 +149,21 @@ fn now_ms() -> u64 {
 mod tests {
     use super::*;
 
+    #[cfg(not(windows))]
+    #[test]
+    fn swap_rates_measure_both_counters_over_elapsed_time() {
+        let start = Instant::now();
+        let later = start + std::time::Duration::from_secs(5);
+        assert_eq!(
+            swap_rate(((100, 200), start), ((1100, 2200), later), 4096),
+            Some(2_457_600.0)
+        );
+        assert_eq!(
+            swap_rate(((100, 200), start), ((100, 200), later), 4096),
+            Some(0.0)
+        );
+    }
+
     #[test]
     fn a_point_keeps_percentages_and_the_first_gpu() {
         let reading = Reading {
@@ -113,6 +171,8 @@ mod tests {
             cpu: Some(12.5),
             memory: Some(Usage { used: 1, total: 4 }),
             swap: Some(Usage { used: 1, total: 8 }),
+            swap_activity_bps: None,
+            gpu_reason: None,
             load: Some(Load {
                 one: 4.0,
                 five: 2.0,
@@ -148,6 +208,8 @@ mod tests {
             cpu: None,
             memory: None,
             swap: Some(Usage { used: 0, total: 0 }),
+            swap_activity_bps: None,
+            gpu_reason: None,
             load: None,
             disk: None,
             gpus: Vec::new(),

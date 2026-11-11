@@ -18,6 +18,7 @@ const WARN_CPU: f32 = 85.;
 const WARN_MEMORY: f32 = 90.;
 const WARN_DISK: f32 = 85.;
 const WARN_LOAD: f32 = 100.;
+const WARN_SWAP_BPS: f32 = 1024. * 1024.;
 
 /// What a metric row shows besides its chart.
 struct Row {
@@ -147,9 +148,7 @@ impl ReadingsPage {
                     ),
             )
             .child(wrapping(t, &row.value, t.text2))
-            .when(!row.meta.is_empty(), |d| {
-                d.child(wrapping(t, &row.meta, t.dim))
-            })
+            .when(!row.meta.is_empty(), |d| d.child(row_meta(t, row)))
             .when(row.charted, |d| {
                 d.child(small(
                     t,
@@ -258,6 +257,11 @@ fn small(t: &Theme, text: &str, c: Hsla) -> Div {
 /// CPU's) are longer than any column can promise.
 fn wrapping(t: &Theme, text: &str, c: Hsla) -> Div {
     small(t, text, c).whitespace_normal()
+}
+
+fn row_meta(t: &Theme, row: &Row) -> Div {
+    let selector = format!("meta-{}-{}", row.id, row.meta);
+    wrapping(t, &row.meta, t.dim).debug_selector(move || selector)
 }
 
 /// The time axis over the charts: how far back they reach, the local time
@@ -447,8 +451,16 @@ fn rows(node: &str, s: &State, environment: &str) -> Vec<Row> {
             meta: if windows {
                 "commit charge: memory plus page files".into()
             } else {
-                String::new()
+                latest
+                    .and_then(|r| r.swap_activity_bps)
+                    .map(|bps| format!("{} /s active swap I/O", host::bytes(bps as u64)))
+                    .unwrap_or_default()
             },
+            warn: !windows
+                && swap.is_some_and(|u| u.total > 0)
+                && latest
+                    .and_then(|r| r.swap_activity_bps)
+                    .is_some_and(|bps| bps >= WARN_SWAP_BPS),
             ..row(
                 "swap",
                 if windows { "Commit" } else { "Swap" },
@@ -463,6 +475,7 @@ fn rows(node: &str, s: &State, environment: &str) -> Vec<Row> {
             meta: gpu
                 .and_then(|g| g.temp)
                 .map(|c| format!("{c:.0}\u{a0}°C"))
+                .or_else(|| latest.and_then(|r| r.gpu_reason.clone()))
                 .unwrap_or_default(),
             ..row("gpu", "GPU", Metric::Gpu)
         },
@@ -472,4 +485,25 @@ fn rows(node: &str, s: &State, environment: &str) -> Vec<Row> {
             ..row("vram", "VRAM", Metric::Vram)
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use parvi_host_contract::{Reading, Usage};
+
+    #[test]
+    fn swap_warns_for_churn_not_occupancy() {
+        let mut state = State {
+            latest: Some(Reading {
+                swap: Some(Usage { used: 7, total: 8 }),
+                swap_activity_bps: Some(2_457_600.0),
+                ..Reading::default()
+            }),
+            ..State::default()
+        };
+        assert!(rows("test", &state, "linux")[3].warn);
+        state.latest.as_mut().unwrap().swap_activity_bps = Some(0.0);
+        assert!(!rows("test", &state, "linux")[3].warn);
+    }
 }

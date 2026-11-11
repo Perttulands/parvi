@@ -9,8 +9,7 @@
 //! reach, and on Refresh, as CHROTE's (no timer reads the store);
 //! countdowns tick every 30 s. Nothing ticks while the page is not shown.
 //!
-//! The sessions to send to are asked of each node's terminals through their
-//! `session_list` command, so this page needs nothing of the terminals page.
+//! The sessions to send to come from the terminals page's published read model.
 
 mod form;
 mod page;

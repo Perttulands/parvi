@@ -22,3 +22,6 @@ pub const CRON_FIELD: f32 = 260.;
 pub const DAY_W: f32 = 42.;
 /// The padding of a banner, a card and an empty list's words.
 pub const PAD: f32 = 12.;
+
+/// Width of the sessions rail beside the task form.
+pub const SESSION_RAIL_W: f32 = 220.;

@@ -117,6 +117,7 @@ fn sample(cpu: f32) -> ReadingFrame {
         reading: Reading {
             at,
             cpu: Some(cpu),
+            gpu_reason: Some("nvidia-smi failed".into()),
             ..Reading::default()
         },
         point: Point {
@@ -276,6 +277,10 @@ fn service_restart_refusal_and_host_subscription_journey(cx: &mut TestAppContext
     let initial = selector(format!("reading-{}-cpu-10%", running.node));
     until(cx, "the initial reading", |cx| {
         cx.debug_bounds(initial).is_some()
+    });
+    let gpu_reason = selector(format!("meta-{}-gpu-nvidia-smi failed", running.node));
+    until(cx, "GPU failure reason", |cx| {
+        cx.debug_bounds(gpu_reason).is_some()
     });
     running
         .control
