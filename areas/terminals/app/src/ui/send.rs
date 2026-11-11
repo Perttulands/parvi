@@ -43,6 +43,8 @@ pub struct Draft {
     pub stuck: bool,
     /// The picker's "New agent…" row is chosen.
     pub new_agent: bool,
+    /// Explicitly chosen pane; absent means the target tile's pane.
+    pub pane: Option<u32>,
     /// The drawer's launch, by node and request, awaiting its session.
     pub launch: Option<(String, u32)>,
     /// The drawer's launched session (node, id), awaiting its first pane.
@@ -113,6 +115,9 @@ impl Terminals {
     /// Picks a target from the list; the picker's own row is a new agent.
     fn pick(&mut self, target: Option<Key>, window: &mut Window, cx: &mut Context<Self>) {
         self.send.new_agent = target.is_none();
+        if self.send_target != target {
+            self.send.pane = None;
+        }
         if self.send.new_agent {
             let l = self.launchers[SEND].clone();
             l.update(cx, |l, cx| l.focus_first(window, cx));
@@ -158,9 +163,14 @@ impl Terminals {
     /// Writes the attachments on `k`'s node, then pastes the message.
     fn deliver(&mut self, k: Key, enter: bool, launched: bool, cx: &mut Context<Self>) {
         self.send.said = None;
+        let Some(pane) = self.send_pane(&k) else {
+            self.send.said = Some(format!("{} has no pane to paste into.", k.name));
+            cx.notify();
+            return;
+        };
         let files = self.send.files.clone();
         if files.is_empty() {
-            self.paste(k, enter, launched, vec![], cx);
+            self.paste(k, pane, enter, launched, vec![], cx);
             return;
         }
         self.send.uploading = true;
@@ -171,7 +181,7 @@ impl Terminals {
             let _ = this.update(cx, |s, cx| {
                 s.send.uploading = false;
                 match written {
-                    Ok(paths) => s.paste(k, enter, launched, paths, cx),
+                    Ok(paths) => s.paste(k, pane, enter, launched, paths, cx),
                     Err(why) => s.send.said = Some(why),
                 }
                 cx.notify();
@@ -184,6 +194,7 @@ impl Terminals {
     fn paste(
         &mut self,
         k: Key,
+        pane: u32,
         enter: bool,
         launched: bool,
         files: Vec<String>,
@@ -195,10 +206,14 @@ impl Terminals {
             self.send.said = Some(format!("{} is not running.", k.name));
             return;
         };
-        let Some(pane) = s.panes.first().map(|p| p.id) else {
-            self.send.said = Some(format!("{} has no pane to paste into.", k.name));
+        if !s.panes.iter().any(|p| p.id == pane) {
+            self.send.said = Some(format!(
+                "The selected pane of {} is gone; choose another.",
+                k.name
+            ));
+            cx.notify();
             return;
-        };
+        }
         // A launched agent may still be starting: the node waits until it
         // is ready for the paste (#242).
         match self.fleet.paste_to(&k.node, pane, &text, enter, launched) {
@@ -206,6 +221,26 @@ impl Terminals {
             Err(e) => self.send.said = Some(e),
         }
         cx.notify();
+    }
+
+    /// The chosen pane, otherwise the pane shown by the target's tile,
+    /// otherwise the target's first pane.
+    fn send_pane(&self, key: &Key) -> Option<u32> {
+        let session = self.fleet.session(key)?;
+        self.send.pane.or_else(|| {
+            let ws = &self.settings.workspace;
+            ws.shown(ws.focus)
+                .filter(|binding| &binding.key == key)
+                .or_else(|| {
+                    ws.windows()
+                        .iter()
+                        .filter_map(|w| w.shown())
+                        .find(|binding| &binding.key == key)
+                })
+                .and_then(|binding| binding.pane)
+                .filter(|id| session.panes.iter().any(|pane| pane.id == *id))
+                .or_else(|| session.panes.first().map(|pane| pane.id))
+        })
     }
 
     /// The node said what became of a send.
@@ -270,6 +305,7 @@ impl Terminals {
         };
         self.send.waiting = None;
         self.send_target = Some(key.clone());
+        self.send.pane = None;
         self.deliver(key, enter, true, cx);
     }
 
@@ -344,6 +380,47 @@ impl Terminals {
             .child(kit::label(&t, "Target"))
             .child(self.send_query.clone())
             .child(self.render_send_targets(cx));
+        if !self.send.new_agent
+            && let Some(key) = self.send_target.as_ref()
+            && let Some(session) = self.fleet.session(key)
+            && (session.panes.len() > 1
+                || self
+                    .send
+                    .pane
+                    .is_some_and(|id| !session.panes.iter().any(|p| p.id == id)))
+        {
+            let selected = self.send_pane(key);
+            let mut choices = div().flex().flex_wrap().gap(px(6.));
+            for (index, pane) in session.panes.iter().enumerate() {
+                let id = pane.id;
+                let label = format!("Pane {} · %{}", index + 1, id);
+                choices = choices.child(
+                    kit::button(
+                        &t,
+                        ("send-pane", index),
+                        label,
+                        if selected == Some(id) {
+                            Kind::Primary
+                        } else {
+                            Kind::Quiet
+                        },
+                    )
+                    .debug_selector(move || {
+                        if selected == Some(id) {
+                            format!("send-pane-selected-{index}")
+                        } else {
+                            format!("send-pane-{index}")
+                        }
+                    })
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        s.send.pane = Some(id);
+                        s.send.said = None;
+                        cx.notify();
+                    })),
+                );
+            }
+            body = body.child(kit::label(&t, "Pane")).child(choices);
+        }
         if self.send.new_agent {
             body = body
                 .child(kit::note(
