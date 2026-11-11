@@ -477,7 +477,7 @@ impl Work {
         Some(col)
     }
 
-    fn card(&self, cx: &mut Context<Self>) -> Option<gpui::Stateful<Div>> {
+    pub(crate) fn card(&self, cx: &mut Context<Self>) -> Option<gpui::Stateful<Div>> {
         if !self.card {
             return None;
         }
@@ -543,8 +543,12 @@ impl Work {
             .child(
                 kit::button(&t, "w-close", "Close", Kind::Quiet).on_click(cx.listener(
                     |w, _, _, cx| {
-                        w.card = false;
-                        cx.notify();
+                        if let Some(from) = w.beside_from {
+                            w.host.close_beside(from, cx);
+                        } else {
+                            w.card = false;
+                            cx.notify();
+                        }
                     },
                 )),
             );
@@ -659,6 +663,10 @@ impl Work {
             .child(head)
             .child(
                 div()
+                    .debug_selector({
+                        let title = r.title.clone();
+                        move || format!("work-card-title-{title}")
+                    })
                     .text_size(px(CARD_TITLE_SIZE))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(r.title.clone()),

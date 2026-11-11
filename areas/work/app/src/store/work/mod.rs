@@ -401,6 +401,45 @@ impl Board {
         b
     }
 
+    /// Build a card from the node's on-demand item, retaining its project checkout.
+    pub fn from_item(item: parvi_work_contract::Item, projects: &[Project], now: u64) -> Board {
+        let reference = item.reference.clone();
+        let github = reference
+            .strip_prefix("gh:")
+            .and_then(|r| r.rsplit_once('#'))
+            .map(|(r, _)| r.to_owned());
+        let folder = reference
+            .strip_prefix("bead:")
+            .and_then(|r| r.split_once(':'))
+            .and_then(|(_, r)| r.rsplit_once('#'))
+            .map(|(f, _)| f.to_owned())
+            .unwrap_or_default();
+        let snapshot = Snapshot {
+            projects: vec![Project::Beads(parvi_work_contract::StoreView {
+                folder,
+                items: Some(vec![item]),
+                ..Default::default()
+            })],
+        };
+        let mut board = Board::from_snapshot(&snapshot, now, &when::local_offset);
+        if let Some(repo) = github {
+            let project = &mut board.projects[0];
+            project.tracker = Tracker::Github;
+            project.label = repo.clone();
+            project.path = repo.clone();
+            project.checkout = projects.iter().find_map(|p| match p {
+                Project::Github(r) if r.name.eq_ignore_ascii_case(&repo) => r.checkout.clone(),
+                _ => None,
+            });
+            project.url = Some(format!("https://github.com/{repo}"));
+            let row = &mut board.rows[0];
+            row.id = format!("#{}", row.id.trim_start_matches('#'));
+            row.kind = "issue".into();
+            board.index();
+        }
+        board
+    }
+
     /// Two stores with one prefix read as `prefix (folder)`.
     fn name_shared_prefixes(&mut self) {
         let mut seen: HashMap<String, usize> = HashMap::new();

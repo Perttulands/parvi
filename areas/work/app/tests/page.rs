@@ -1,9 +1,11 @@
 //! The Work page's list, card and handoff against a node with a fixture store.
 #![cfg(unix)]
 
+use gpui::{App, Context, IntoElement, Render, div, prelude::*};
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext, Window};
+use parvi_app_kit::ask::Ask;
 use parvi_app_kit::link::client::LinkState;
-use parvi_app_kit::{Host, Mounted, mount};
+use parvi_app_kit::{Host, Mounted, Page, mount};
 use parvi_node_kit::{Built, Listing, Setup};
 use parvi_terminals_app::Terminals;
 use parvi_testkit::node::Node;
@@ -32,9 +34,31 @@ fn terminals(host: Host, window: &mut Window, cx: &mut gpui::App) -> Mounted {
         Terminals::new(host, window, cx)
     })
 }
+struct Toy {
+    host: Host,
+}
+impl Page for Toy {
+    const ID: &'static str = "toy";
+    const TITLE: &'static str = "Toy";
+}
+impl Render for Toy {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("toy-page")
+            .debug_selector(|| "toy-page".into())
+            .size_full()
+            .flex()
+            .child("Toy page")
+            .children(self.host.beside(cx))
+    }
+}
+fn toy(host: Host, window: &mut Window, cx: &mut App) -> Mounted {
+    mount(host, window, cx, |host, _, _| Toy { host })
+}
 struct Running {
     url: String,
     node: String,
+    store: String,
     stop: mpsc::Sender<()>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -57,7 +81,7 @@ fn start() -> Option<Running> {
             let dir = parvi_testkit::fresh_dir("work-page-store");
             std::fs::create_dir_all(dir.join(".beads")).unwrap();
             let script = dir.join("fixture-bd");
-            std::fs::write(&script, "#!/bin/sh\nprintf '%s\\n' '[{\"id\":\"fixture-1\",\"title\":\"Read the fixture\",\"status\":\"open\",\"created_at\":\"2026-11-01T00:00:00Z\",\"updated_at\":\"2026-11-01T00:00:00Z\"}]'\n").unwrap();
+            std::fs::write(&script, "#!/bin/sh\nif [ \"$2\" = config ]; then echo '{\"value\":\"fixture\"}'; exit 0; fi\nprintf '%s\\n' '[{\"id\":\"fixture-1\",\"title\":\"Read the fixture\",\"status\":\"open\",\"created_at\":\"2026-11-01T00:00:00Z\",\"updated_at\":\"2026-11-01T00:00:00Z\"}]'\n").unwrap();
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
             BD.set(script.to_string_lossy().into_owned()).unwrap();
@@ -65,16 +89,17 @@ fn start() -> Option<Running> {
             std::fs::write(&launch, format!("folder {}\n", dir.display())).unwrap();
             let config = format!("[terminals]\nsocket = {:?}\nlaunch = {:?}\n[work]\nprojects = [{:?}]\n", tmux.socket_path(), launch, format!("beads {}", dir.display()));
             let node = Node::start(AREAS, &config).await.unwrap();
-            ready.send(Some((node.url(), node.id()))).unwrap();
+            ready.send(Some((node.url(), node.id(), dir.display().to_string()))).unwrap();
             while stopped.try_recv().is_err() { tokio::time::sleep(Duration::from_millis(50)).await; }
             node.stop().await;
             std::fs::remove_dir_all(dir).unwrap();
         });
     });
     match wait.recv().unwrap() {
-        Some((url, node)) => Some(Running {
+        Some((url, node, store)) => Some(Running {
             url,
             node,
+            store,
             stop,
             thread: Some(thread),
         }),
@@ -129,7 +154,7 @@ fn opens_a_work_item_and_sends_its_reference_to_a_session(cx: &mut TestAppContex
     let path = settings.join("app.json");
     let (shell, cx) = cx.add_window_view(move |window, cx| {
         parvi_app_shell::start(
-            &[terminals, parvi_work_app::build],
+            &[toy, terminals, parvi_work_app::build],
             Some(url),
             Some(path),
             window,
@@ -141,6 +166,44 @@ fn opens_a_work_item_and_sends_its_reference_to_a_session(cx: &mut TestAppContex
             s.hub().read(cx).fleet.here().state == LinkState::Open
         })
     });
+    let toy_host = shell.read_with(cx, |s, _| Host::new(s.hub()).for_page("toy", &[]));
+    let reveal = |id: &str, beside| Ask::Reveal {
+        what: "item".into(),
+        id: id.into(),
+        node: Some(parvi_core::NodeId(running.node.clone())),
+        part: None,
+        beside,
+    };
+    cx.update(|_, cx| toy_host.ask(reveal("fixture-1", true), cx))
+        .unwrap();
+    until(cx, "beside card title", |cx| {
+        cx.debug_bounds("work-card-title-Read the fixture")
+            .is_some()
+    });
+    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy"));
+    assert!(cx.debug_bounds("work-send").is_some());
+    assert!(cx.debug_bounds("work-start").is_some());
+    cx.simulate_keystrokes("alt-i");
+    until(cx, "beside closed", |cx| {
+        cx.debug_bounds("work-beside").is_none()
+    });
+    cx.update(|_, cx| toy_host.ask(reveal("fixture-404", true), cx))
+        .unwrap();
+    until(cx, "not found", |cx| {
+        cx.debug_bounds(Box::leak(
+            format!("work-beside-error-no Bead fixture-404 in {}", running.store).into_boxed_str(),
+        ))
+        .is_some()
+    });
+    cx.simulate_keystrokes("alt-i");
+    cx.update(|_, cx| toy_host.ask(reveal("fixture-1", false), cx))
+        .unwrap();
+    until(cx, "Work page card", |cx| {
+        cx.debug_bounds("work-card-title-Read the fixture")
+            .is_some()
+    });
+    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("work"));
+    cx.update(|window, cx| shell.update(cx, |shell, cx| shell.show_id("terminals", window, cx)));
     let row = format!("row-{}::alpha", running.node);
     until(cx, "session", |cx| {
         cx.debug_bounds(Box::leak(row.clone().into_boxed_str()))
