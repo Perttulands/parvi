@@ -270,15 +270,20 @@ impl ScheduledPage {
         let (edit_node, edit) = (at(node), task.clone());
         let (run_node, run) = (at(node), task.clone());
         let (pause_node, pause) = (at(node), task.clone());
+        let paused = task.paused;
         let (dup_node, dup) = (at(node), task.clone());
         let (del_node, del) = (at(node), task.id.clone());
         let actions = div()
             .flex()
             .flex_wrap()
             .gap(px(8.))
-            .child(kit::button(t, "task-edit", "Edit", Kind::Quiet).on_click(
-                cx.listener(move |page, _, _, cx| page.open(TaskForm::edit(&edit_node, &edit), cx)),
-            ))
+            .child(
+                kit::button(t, "task-edit", "Edit", Kind::Quiet)
+                    .debug_selector(|| "task-edit".into())
+                    .on_click(cx.listener(move |page, _, _, cx| {
+                        page.open(TaskForm::edit(&edit_node, &edit), cx)
+                    })),
+            )
             .child(
                 kit::button(t, "task-run", "Run now", Kind::Quiet)
                     .debug_selector(|| "task-run".into())
@@ -296,6 +301,7 @@ impl ScheduledPage {
                     if task.paused { "Resume" } else { "Pause" },
                     Kind::Quiet,
                 )
+                .debug_selector(move || format!("task-pause-{paused}"))
                 .when(busy, |b| b.opacity(BUSY))
                 .on_click(cx.listener(move |page, _, _, cx| {
                     if !page.state.busy {
@@ -305,9 +311,11 @@ impl ScheduledPage {
                 })),
             )
             .child(
-                kit::button(t, "task-duplicate", "Duplicate", Kind::Quiet).on_click(cx.listener(
-                    move |page, _, _, cx| page.open(TaskForm::duplicate(&dup_node, &dup), cx),
-                )),
+                kit::button(t, "task-duplicate", "Duplicate", Kind::Quiet)
+                    .debug_selector(|| "task-duplicate".into())
+                    .on_click(cx.listener(move |page, _, _, cx| {
+                        page.open(TaskForm::duplicate(&dup_node, &dup), cx)
+                    })),
             )
             .child(
                 kit::button(
@@ -316,6 +324,7 @@ impl ScheduledPage {
                     if armed { "Confirm delete" } else { "Delete" },
                     Kind::Quiet,
                 )
+                .debug_selector(move || format!("task-delete-{armed}"))
                 .text_color(t.error)
                 .when(armed, |b| b.border_color(t.error).bg(alpha(t.error, 0.12)))
                 .on_click(cx.listener(move |page, _, _, cx| page.delete(&del_node, &del, cx))),
@@ -755,7 +764,10 @@ impl ScheduledPage {
                 row = row.child(compact(
                     t,
                     "Cron expression",
-                    div().w(px(CRON_FIELD)).child(fields.cron.clone()),
+                    div()
+                        .debug_selector(|| "scheduled-cron".into())
+                        .w(px(CRON_FIELD))
+                        .child(fields.cron.clone()),
                 ));
             }
         }
@@ -944,7 +956,8 @@ fn compact(t: &Theme, label: &str, input: Div) -> Div {
 fn tab(t: &Theme, id: String, label: &str, on: bool) -> gpui::Stateful<Div> {
     let text = t.text;
     div()
-        .id(SharedString::from(id))
+        .id(SharedString::from(id.clone()))
+        .debug_selector(move || id)
         .flex()
         .flex_col()
         .items_center()

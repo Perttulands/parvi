@@ -93,7 +93,7 @@ async fn schedules_a_prompt_runs_it_now_and_manages_it() {
 /// CLI offers the verbs the old binary had.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_cli_and_the_http_route_see_the_same_tasks() {
-    let Some((node, _tmux)) = start("scheduled-cli", "").await else {
+    let Some((node, tmux)) = start("scheduled-cli", "").await else {
         return;
     };
     let url = format!("{}/", node.url());
@@ -122,7 +122,7 @@ async fn the_cli_and_the_http_route_see_the_same_tasks() {
         "--name",
         "cli",
         "--prompt",
-        "hello",
+        "echo cli-journey-42",
         "--sessions",
         "alpha",
         "--every",
@@ -141,6 +141,65 @@ async fn the_cli_and_the_http_route_see_the_same_tasks() {
         .unwrap();
     assert_eq!(tasks["success"], true);
     assert_eq!(tasks["data"]["tasks"][0]["id"], id);
+    let (code, run_result) = run(&["run", id, "--json"]).await;
+    assert_eq!(code, 0, "{run_result}");
+    let result: Value = serde_json::from_str(&run_result).unwrap();
+    assert_eq!(result["run"]["targets"][0]["status"], "success");
+    eventually("the CLI prompt ran", || {
+        capture(&tmux, "alpha")
+            .lines()
+            .any(|line| line.trim() == "cli-journey-42")
+            .then_some(())
+    })
+    .await;
+    for verb in ["pause", "resume"] {
+        let (code, answer) = run(&[verb, id, "--json"]).await;
+        assert_eq!(code, 0, "{answer}");
+        let answer: Value = serde_json::from_str(&answer).unwrap();
+        assert_eq!(answer["task"]["paused"], verb == "pause");
+    }
+    let (code, edited) = run(&["edit", id, "--name", "changed", "--json"]).await;
+    assert_eq!(code, 0, "{edited}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&edited).unwrap()["task"]["name"],
+        "changed"
+    );
+    let (code, copy) = run(&["copy", id, "--json"]).await;
+    assert_eq!(code, 0, "{copy}");
+    let copy: Value = serde_json::from_str(&copy).unwrap();
+    assert!(copy["task"]["id"].as_str().unwrap() != id);
+    let (code, cron) = run(&[
+        "create",
+        "--name",
+        "cron",
+        "--prompt",
+        "echo cron",
+        "--sessions",
+        "alpha",
+        "--cron",
+        "0 9 * * 1",
+        "--json",
+    ])
+    .await;
+    assert_eq!(code, 0, "{cron}");
+    let cron: Value = serde_json::from_str(&cron).unwrap();
+    assert_eq!(cron["task"]["schedule"]["type"], "cron");
+    for task_id in [
+        id,
+        copy["task"]["id"].as_str().unwrap(),
+        cron["task"]["id"].as_str().unwrap(),
+    ] {
+        let (code, answer) = run(&["delete", task_id, "--json"]).await;
+        assert_eq!(code, 0, "{answer}");
+    }
+    let (code, listed) = run(&["list", "--json"]).await;
+    assert_eq!(code, 0);
+    assert!(
+        serde_json::from_str::<Value>(&listed).unwrap()["tasks"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     node.stop().await;
 }
 

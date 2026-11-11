@@ -189,9 +189,13 @@ impl ReadingsPage {
             grid: t.divider,
         };
         let selector = format!("metric-{}", row.id);
+        let warn_selector = format!("warning-{}", row.id);
         div()
             .id(gpui::SharedString::from(selector.clone()))
             .debug_selector(move || selector)
+            .when(row.warn, |d| {
+                d.child(div().debug_selector(move || warn_selector))
+            })
             .flex()
             .items_center()
             .child(label)
@@ -226,8 +230,10 @@ fn floor_events(t: &Theme, s: &State) -> Div {
         ));
     }
     for e in s.events.iter().rev().take(EVENTS_SHOWN) {
+        let selector = format!("host-event-{}", e.text);
         list = list.child(
             div()
+                .debug_selector(move || selector)
                 .flex()
                 .items_start()
                 .gap(px(board::SMALL_GAP))
