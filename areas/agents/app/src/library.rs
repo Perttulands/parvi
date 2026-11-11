@@ -566,6 +566,7 @@ impl AgentsPage {
                                     id: slug.clone(),
                                     node: Some(parvi_core::NodeId(node.clone())),
                                     part: None,
+                                    beside: false,
                                 },
                                 cx,
                             );
