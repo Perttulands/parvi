@@ -108,6 +108,22 @@ fn files_dock_browses_sends_and_remembers_beside_a_page(cx: &mut TestAppContext)
     until(cx, "dock file", |cx| {
         cx.debug_bounds("file-row-0-note.txt").is_some()
     });
+    let modified = std::fs::metadata(&file)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let date = parvi_files_app::store::format::modified(modified);
+    let name = cx.debug_bounds("file-name-0-note.txt").expect("name drawn");
+    let size = cx
+        .debug_bounds("file-size-0-note.txt-5 B")
+        .expect("size drawn");
+    let date_selector: &'static str =
+        Box::leak(format!("file-modified-0-note.txt-{date}").into_boxed_str());
+    let modified = cx.debug_bounds(date_selector).expect("modified time drawn");
+    assert!(name.right() <= size.left() && size.right() <= modified.left());
     click(cx, "file-row-0-note.txt");
     until(cx, "dock viewer", |cx| {
         cx.debug_bounds("files-send").is_some()
