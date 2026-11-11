@@ -1,0 +1,402 @@
+//! Brain's search rail and reader.
+use crate::page::BrainPage;
+use crate::tokens::*;
+use gpui::{
+    Context, Div, FontWeight, HighlightStyle, KeyDownEvent, MouseButton, SharedString, StyledText,
+    Window, div, prelude::*, px,
+};
+use parvi_app_kit::Ask;
+use parvi_app_kit::theme::{alpha, board, size, theme};
+use parvi_app_kit::widgets::{
+    kit::{self, Kind},
+    markdown, select,
+};
+
+impl Render for BrainPage {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = theme(cx).clone();
+        let mut list = div()
+            .id("brain-results")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col();
+        if self.state.query.is_empty() {
+            list = list.child(self.render_rail_lists(&t, cx));
+        }
+        for (i, hit) in self.state.shown().iter().enumerate() {
+            let path = hit.path.clone();
+            let mut snippet = String::new();
+            let mut highlights = Vec::new();
+            for (part, marked) in crate::state::marks(&hit.snippet) {
+                let start = snippet.len();
+                snippet.push_str(&part);
+                if marked {
+                    highlights.push((
+                        start..snippet.len(),
+                        HighlightStyle {
+                            color: Some(t.text),
+                            background_color: Some(alpha(t.accent, MARK)),
+                            ..Default::default()
+                        },
+                    ));
+                }
+            }
+            list = list.child(
+                div()
+                    .id(SharedString::from(format!("brain-result-{i}")))
+                    .debug_selector(move || format!("brain-result-{i}"))
+                    .px(px(PAD))
+                    .py(px(GAP))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |page, _, _, cx| {
+                        page.state.selected = i;
+                        page.brain_open(&path, cx);
+                    }))
+                    .child(hit.title.clone())
+                    .child(StyledText::new(snippet).with_highlights(highlights)),
+            );
+        }
+        let count = if self.state.query.is_empty() {
+            String::new()
+        } else {
+            self.state.count()
+        };
+        let rail = div()
+            .w(px(board::LIST_W))
+            .flex_none()
+            .h_full()
+            .flex()
+            .flex_col()
+            .bg(t.surface)
+            .border_r_1()
+            .border_color(t.divider)
+            .child(
+                div()
+                    .h(px(size::TAB_BAR))
+                    .px(px(PAD))
+                    .flex()
+                    .items_center()
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Brain"))
+                    .child(div().flex_1())
+                    .child(kit::note(&t, count, Some(t.dim))),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "brain-search".into())
+                    .p(px(GAP))
+                    .child(self.field.clone()),
+            )
+            .child(list)
+            .when_some(self.state.search_error.clone(), |d, e| {
+                d.child(kit::note(&t, e, Some(t.error)))
+            });
+        let mut main = div()
+            .id("brain-reader")
+            .track_focus(&self.reader_focus)
+            .when(self.state.edit.is_none(), |d| {
+                d.on_mouse_down(MouseButton::Left, {
+                    let focus = self.reader_focus.clone();
+                    move |_, window, cx| window.focus(&focus, cx)
+                })
+            })
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll)
+            .p(px(READER_PAD))
+            .flex()
+            .flex_col()
+            .gap(px(PAD));
+        if let Some(page) = &self.state.page {
+            let send = self.state.reference();
+            main = main.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(GAP))
+                    .child(
+                        div()
+                            .debug_selector(|| "brain-page-title".into())
+                            .flex_1()
+                            .font_weight(FontWeight::BOLD)
+                            .child(page.title.clone()),
+                    )
+                    .when(self.state.edit.is_none(), |d| {
+                        d.child(
+                            kit::button(&t, "brain-edit", "Edit", Kind::Plain)
+                                .debug_selector(|| "brain-edit".into())
+                                .on_click(
+                                    cx.listener(|page, _, window, cx| page.brain_edit(window, cx)),
+                                ),
+                        )
+                    })
+                    .when_some(self.state.edit.clone(), |d, edit| {
+                        d.child(
+                            kit::button(
+                                &t,
+                                "brain-save",
+                                if edit.saving { "Saving…" } else { "Save" },
+                                Kind::Primary,
+                            )
+                            .debug_selector(|| "brain-save".into())
+                            .on_click(cx.listener(|page, _, _, cx| page.brain_save(cx))),
+                        )
+                        .child(
+                            kit::button(
+                                &t,
+                                "brain-discard",
+                                if edit.discarding {
+                                    "Confirm"
+                                } else {
+                                    "Discard"
+                                },
+                                Kind::Plain,
+                            )
+                            .on_click(
+                                cx.listener(|page, _, window, cx| page.brain_discard(window, cx)),
+                            ),
+                        )
+                    })
+                    .child(kit::button(&t, "brain-send", "Send", Kind::Plain).on_click(
+                        cx.listener(move |page, _, _, cx| {
+                            let _ = page.host.ask(
+                                Ask::Send {
+                                    reference: send.clone(),
+                                    target: None,
+                                },
+                                cx,
+                            );
+                        }),
+                    ))
+                    .child(
+                        kit::button(&t, "brain-close", "Close", Kind::Quiet).on_click(cx.listener(
+                            |page, _, _, cx| {
+                                page.state.close();
+                                cx.notify();
+                            },
+                        )),
+                    ),
+            );
+            let page_selector = format!("brain-reading-{}", page.path);
+            main = main.child(
+                div()
+                    .debug_selector(move || page_selector.clone())
+                    .child(kit::note(&t, page.path.clone(), Some(t.dim))),
+            );
+            if let Some(error) = &self.state.page_error {
+                main = main.child(kit::note(&t, error.clone(), Some(t.error)));
+            }
+            if !page.history.is_empty() {
+                main = main.child(
+                    kit::button(&t, "brain-history", "History", Kind::Quiet).on_click(cx.listener(
+                        |page, _, _, cx| {
+                            page.state.history_open = !page.state.history_open;
+                            cx.notify();
+                        },
+                    )),
+                );
+                if self.state.history_open {
+                    let mut history = div().flex().flex_col().gap(px(GAP_TINY));
+                    for commit in &page.history {
+                        history = history.child(kit::note(
+                            &t,
+                            format!("{} · {} · {}", commit.time, commit.author, commit.message),
+                            Some(t.dim),
+                        ));
+                    }
+                    main = main.child(history);
+                }
+            }
+            if !page.summary.is_empty() {
+                main = main.child(kit::note(&t, page.summary.clone(), Some(t.text2)));
+            }
+            let weak = cx.weak_entity();
+            let links = page.links.clone();
+            let selection = self.select.clone();
+            let on_link =
+                std::rc::Rc::new(move |target: &str, _: &mut Window, cx: &mut gpui::App| {
+                    if !selection.borrow().selection.is_empty() {
+                        return;
+                    }
+                    if target.starts_with("http://")
+                        || target.starts_with("https://")
+                        || target.starts_with("mailto:")
+                    {
+                        cx.open_url(target);
+                        return;
+                    }
+                    let (target, anchor) = target
+                        .split_once('#')
+                        .map_or((target, None), |(target, anchor)| {
+                            (target, Some(anchor.to_string()))
+                        });
+                    if target.is_empty() {
+                        if let Some(anchor) = anchor {
+                            let _ = weak.update(cx, |page, cx| {
+                                *page.anchor.borrow_mut() = Some(anchor);
+                                cx.notify();
+                            });
+                        }
+                        return;
+                    }
+                    if let Some(path) = links
+                        .iter()
+                        .find(|link| link.target == target)
+                        .and_then(|link| link.page.as_ref())
+                        .map(|page| page.path.clone())
+                    {
+                        let _ = weak.update(cx, |page, cx| page.brain_open_at(&path, anchor, cx));
+                    }
+                });
+            let look = markdown::Look {
+                t: &t,
+                refs: false,
+                on_link: Some(on_link),
+                select: Some(self.select.clone()),
+            };
+            if self.state.edit.is_some() {
+                main = main.child(self.summary.clone()).child(
+                    div()
+                        .flex_1()
+                        .min_h(px(EDITOR_HEIGHT))
+                        .child(self.editor.clone()),
+                );
+            } else {
+                self.select.borrow_mut().begin();
+                let text =
+                    crate::prose::wiki_links(&crate::prose::without_title(&page.body, &page.title));
+                let selection = self.select.clone();
+                let blocks = markdown::parse(&text);
+                let mut slugs = crate::prose::Slugger::default();
+                if text.len() != page.body.len()
+                    && crate::prose::without_title(&page.body, &page.title).len() != page.body.len()
+                {
+                    slugs.slug(&page.title);
+                }
+                let headings: Vec<(String, usize)> = blocks
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, block)| match block {
+                        markdown::Block::Heading(_, heading) => {
+                            Some((slugs.slug(&markdown::inline(heading, false).text), i))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let anchor = self.anchor.clone();
+                let scroll = self.scroll.clone();
+                let body = markdown::render(&look, "brain-body", &blocks)
+                    .debug_selector(|| "brain-prose".into())
+                    .on_children_prepainted(move |bounds, window, cx| {
+                        selection.borrow_mut().laid_out();
+                        let Some(want) = anchor.borrow_mut().take() else {
+                            return;
+                        };
+                        let want = crate::prose::slug(&want);
+                        let Some((_, index)) = headings.iter().find(|(slug, _)| slug == &want)
+                        else {
+                            return;
+                        };
+                        let Some(child) = bounds.get(*index) else {
+                            return;
+                        };
+                        let offset = scroll.offset();
+                        scroll.set_offset(gpui::point(
+                            offset.x,
+                            offset.y + scroll.bounds().top() - child.top(),
+                        ));
+                        window.defer(cx, |window, _| window.refresh());
+                    });
+                main = main.child(select::track(body, &self.select, cx.entity_id(), |_, _| {}));
+            }
+            main = main.child(links_section(&page.links, cx));
+            if !page.backlinks.is_empty() {
+                main = main.child(kit::label(&t, "Linked from"));
+                for (i, backlink) in page.backlinks.iter().enumerate() {
+                    let path = backlink.path.clone();
+                    main = main.child(
+                        div()
+                            .id(SharedString::from(format!("brain-backlink-{i}")))
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |page, _, _, cx| page.brain_open(&path, cx)))
+                            .child(backlink.title.clone()),
+                    );
+                }
+            }
+        } else if let Some(error) = &self.state.page_error {
+            main = main.child(kit::note(&t, error.clone(), Some(t.error)));
+        } else {
+            main = main.child(kit::note(&t, "Select a page to read.", Some(t.dim)));
+        }
+        let mut trail = div()
+            .h(px(size::TAB_BAR))
+            .flex_none()
+            .px(px(PAD))
+            .flex()
+            .items_center()
+            .gap(px(GAP_TINY))
+            .border_b_1()
+            .border_color(t.divider);
+        for (i, (path, title)) in self.state.trail.iter().enumerate() {
+            let path = path.clone();
+            trail = trail.child(
+                kit::button(
+                    &t,
+                    SharedString::from(format!("brain-trail-{i}")),
+                    title.clone(),
+                    Kind::Quiet,
+                )
+                .on_click(cx.listener(move |page, _, _, cx| page.brain_open(&path, cx))),
+            );
+        }
+        let reader = div()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .child(trail)
+            .child(main);
+        let selected = self.select.clone();
+        let can_copy = self.state.edit.is_none();
+        div()
+            .id("brain")
+            .on_key_down(cx.listener(move |page, event: &KeyDownEvent, window, cx| {
+                if can_copy
+                    && !page.field.read(cx).is_focused(window)
+                    && event.keystroke.modifiers.control
+                    && event.keystroke.key == "c"
+                    && let Some(text) = selected.borrow().copied()
+                {
+                    select::copy(text, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .size_full()
+            .flex()
+            .bg(t.bg)
+            .text_color(t.text)
+            .child(rail)
+            .child(reader)
+    }
+}
+
+fn links_section(links: &[crate::state::Link], cx: &mut Context<BrainPage>) -> Div {
+    let mut out = div().flex().flex_col().gap(px(GAP_TINY));
+    for (i, link) in links.iter().enumerate() {
+        if let Some(page) = &link.page {
+            let path = page.path.clone();
+            out = out.child(
+                div()
+                    .id(SharedString::from(format!("brain-link-{i}")))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |page, _, _, cx| page.brain_open(&path, cx)))
+                    .child(page.title.clone()),
+            );
+        }
+    }
+    out
+}
