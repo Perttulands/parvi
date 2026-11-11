@@ -41,6 +41,7 @@ mod ledger_migrate;
 mod limits;
 mod links;
 mod notes_authoring;
+mod notifications;
 mod output_refs;
 pub mod outputs;
 mod port_delivery;
