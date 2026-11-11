@@ -1,4 +1,4 @@
-use parvi_agents_contract::*;
+pub use parvi_agents_contract::*;
 use std::collections::{BTreeMap, HashMap};
 
 /// Gold needs the operator, error is broken, plain is worth knowing.

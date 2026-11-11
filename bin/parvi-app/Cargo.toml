@@ -24,6 +24,7 @@ gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11" }
 async-channel = "2"
 log = "0.4"
 # The pages, one line each, as in PAGES.
+parvi-agents-app = { path = "../../areas/agents/app" }
 parvi-terminals-app = { path = "../../areas/terminals/app" }
 parvi-scheduled-app = { path = "../../areas/scheduled/app" }
 parvi-host-app = { path = "../../areas/host/app" }

@@ -9,6 +9,7 @@ use parvi_app_shell::start;
 use std::borrow::Cow;
 
 pub const PAGES: &[Build] = &[
+    parvi_agents_app::build,
     parvi_terminals_app::build,
     parvi_scheduled_app::build,
     parvi_host_app::build_host,
