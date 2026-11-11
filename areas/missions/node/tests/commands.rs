@@ -32,6 +32,41 @@ const EXPECTED: &[&str] = &[
     "gate_approve",
     "gate_reject",
     "gate_pick",
+    "mission_arrange",
+    "mission_rename",
+    "mission_move",
+    "mission_create",
+    "mission_update",
+    "mission_delete",
+    "mission_input",
+    "mission_output",
+    "mission_wire",
+    "formation_list",
+    "formation_inspect",
+    "formation_create",
+    "formation_rename",
+    "formation_place",
+    "formation_set_type",
+    "formation_set_slots",
+    "formation_assign",
+    "formation_unassign",
+    "formation_set_brief",
+    "formation_add_input",
+    "formation_add_output",
+    "formation_set_port",
+    "formation_wire",
+    "formation_unwire",
+    "formation_delete",
+    "gate_create",
+    "gate_update",
+    "gate_judge",
+    "gate_delete",
+    "end_create",
+    "end_update",
+    "end_delete",
+    "limit_create",
+    "limit_update",
+    "limit_delete",
 ];
 
 #[tokio::test(flavor = "multi_thread")]
@@ -333,5 +368,263 @@ async fn cli_uses_the_same_mission_commands() {
     );
     let result: serde_json::Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(result["mission"]["slug"], "demo");
+    node.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn specialized_authoring_commands_build_and_edit_a_graph() {
+    let node = Node::start(&[sessions::LISTING, parvi_work::LISTING, LAB], "")
+        .await
+        .unwrap();
+    node.call("mission_new", json!({"slug":"board"}))
+        .await
+        .unwrap();
+    node.call("mission_rename", json!({"mission":"board","title":"Board"}))
+        .await
+        .unwrap();
+    let input = node
+        .call("mission_create", json!({"mission":"board","title":"Start"}))
+        .await
+        .unwrap();
+    let input_id = input["inputCard"]["id"].as_str().unwrap().to_owned();
+    node.call("mission_update", json!({"mission":"board","goal":"A goal"}))
+        .await
+        .unwrap();
+    node.call(
+        "mission_input",
+        json!({"mission":"board","name":"topic","required":true}),
+    )
+    .await
+    .unwrap();
+    node.call("mission_output", json!({"mission":"board","name":"result"}))
+        .await
+        .unwrap();
+    let step = node
+        .call(
+            "formation_create",
+            json!({"mission":"board","type":"solo","title":"Work"}),
+        )
+        .await
+        .unwrap();
+    let step_id = step["formation"]["id"].as_str().unwrap().to_owned();
+    assert!(
+        node.call("formation_list", json!({"mission":"board"}))
+            .await
+            .unwrap()["formations"]
+            .is_array()
+    );
+    assert_eq!(
+        node.call(
+            "formation_inspect",
+            json!({"mission":"board","formation":step_id})
+        )
+        .await
+        .unwrap()["formation"]["id"],
+        step_id
+    );
+    node.call(
+        "formation_rename",
+        json!({"mission":"board","formation":step_id,"title":"Build"}),
+    )
+    .await
+    .unwrap();
+    node.call(
+        "formation_place",
+        json!({"mission":"board","formation":step_id,"place":"home"}),
+    )
+    .await
+    .unwrap();
+    node.call(
+        "formation_set_type",
+        json!({"mission":"board","formation":step_id,"type":"solo"}),
+    )
+    .await
+    .unwrap();
+    let mut cli_out = Vec::new();
+    let cli_args = vec![
+        "set-type".into(),
+        "board".into(),
+        step_id.clone(),
+        "solo".into(),
+        "--node".into(),
+        format!("{}/", node.url()),
+        "--json".into(),
+    ];
+    assert_eq!(
+        parvi_node_kit::cli::run("formation", &cli_args, &mut cli_out)
+            .await
+            .unwrap(),
+        0
+    );
+    node.call(
+        "formation_set_slots",
+        json!({"mission":"board","formation":step_id,"slot":["seat=Worker"]}),
+    )
+    .await
+    .unwrap();
+    node.call("formation_assign",json!({"mission":"board","formation":step_id,"slot":"seat","harness":"claude-code","effort":"medium"})).await.unwrap();
+    let client = parvi_node_kit::NodeClient::new(Some(&format!("{}/", node.url()))).unwrap();
+    client
+        .request(
+            axum::http::Method::POST,
+            "/api/characters",
+            Some(json!({"name":"Test stamp","harness":"claude-code","effort":"high"})),
+            None,
+        )
+        .await
+        .unwrap();
+    let stamped = node
+        .call(
+            "formation_assign",
+            json!({"mission":"board","formation":step_id,"slot":"seat","character":"test-stamp"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        stamped["mission"]["formations"][0]["slots"][0]["effort"],
+        "high"
+    );
+    node.call(
+        "formation_unassign",
+        json!({"mission":"board","formation":step_id,"slot":"seat"}),
+    )
+    .await
+    .unwrap();
+    node.call(
+        "formation_set_brief",
+        json!({"mission":"board","formation":step_id,"goal":"Do the work"}),
+    )
+    .await
+    .unwrap();
+    let with_input = node
+        .call(
+            "formation_add_input",
+            json!({"mission":"board","formation":step_id,"label":"Extra input"}),
+        )
+        .await
+        .unwrap();
+    let input_port = with_input["mission"]["formations"][0]["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["label"] == "Extra input")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let with_output = node
+        .call(
+            "formation_add_output",
+            json!({"mission":"board","formation":step_id,"label":"Extra output"}),
+        )
+        .await
+        .unwrap();
+    let output_port = with_output["mission"]["formations"][0]["outputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["label"] == "Extra output")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    node.call(
+        "formation_set_port",
+        json!({"mission":"board","formation":step_id,"port":output_port,"label":"Result"}),
+    )
+    .await
+    .unwrap();
+    node.call(
+        "mission_wire",
+        json!({"mission":"board","input":input_id,"to":format!("{step_id}:{input_port}")}),
+    )
+    .await
+    .unwrap();
+    let end = node
+        .call(
+            "end_create",
+            json!({"mission":"board","title":"Done","outcome":"done"}),
+        )
+        .await
+        .unwrap();
+    let end_id = end["end"]["id"].as_str().unwrap().to_owned();
+    node.call(
+        "end_update",
+        json!({"mission":"board","end":end_id,"title":"Finished"}),
+    )
+    .await
+    .unwrap();
+    let from = format!("{step_id}:{output_port}");
+    let to = format!("{end_id}:in");
+    node.call(
+        "formation_wire",
+        json!({"mission":"board","from":from,"to":to}),
+    )
+    .await
+    .unwrap();
+    node.call(
+        "formation_unwire",
+        json!({"mission":"board","from":from,"to":to}),
+    )
+    .await
+    .unwrap();
+    let gate = node
+        .call("gate_create", json!({"mission":"board","title":"Review"}))
+        .await
+        .unwrap();
+    let gate_id = gate["gate"]["id"].as_str().unwrap().to_owned();
+    node.call(
+        "gate_update",
+        json!({"mission":"board","gate":gate_id,"title":"Review work"}),
+    )
+    .await
+    .unwrap();
+    node.call(
+        "gate_judge",
+        json!({"mission":"board","gate":gate_id,"detach":true}),
+    )
+    .await
+    .unwrap();
+    let limit = node
+        .call(
+            "limit_create",
+            json!({"mission":"board","target":step_id,"rounds":"2"}),
+        )
+        .await
+        .unwrap();
+    let limit_id = limit["limit"]["id"].as_str().unwrap().to_owned();
+    node.call(
+        "limit_update",
+        json!({"mission":"board","limit":limit_id,"rounds":"3"}),
+    )
+    .await
+    .unwrap();
+    node.call(
+        "mission_move",
+        json!({"mission":"board","card":step_id,"x":100,"y":200}),
+    )
+    .await
+    .unwrap();
+    node.call("mission_arrange", json!({"mission":"board"}))
+        .await
+        .unwrap();
+    node.call("limit_delete", json!({"mission":"board","limit":limit_id}))
+        .await
+        .unwrap();
+    node.call("gate_delete", json!({"mission":"board","gate":gate_id}))
+        .await
+        .unwrap();
+    node.call("end_delete", json!({"mission":"board","end":end_id}))
+        .await
+        .unwrap();
+    node.call(
+        "formation_delete",
+        json!({"mission":"board","formation":step_id}),
+    )
+    .await
+    .unwrap();
+    node.call("mission_delete", json!({"mission":"board"}))
+        .await
+        .unwrap();
     node.stop().await;
 }
