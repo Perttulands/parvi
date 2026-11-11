@@ -233,6 +233,26 @@ fn tokens_use(mission: &Mission, events: &[RunEvent], limit: &Limit) -> Option<L
     use_of(events, limit, TOKENS, limit.tokens, used)
 }
 
+/// All configured limits covering a step, measured by the same rules as admission.
+pub(crate) fn uses_for_step(
+    mission: &Mission,
+    events: &[RunEvent],
+    node: &str,
+    now: OffsetDateTime,
+) -> Vec<LimitUse> {
+    covering_cards(mission, node)
+        .into_iter()
+        .flat_map(|limit| {
+            [
+                rounds_use(mission, events, limit),
+                time_use(mission, events, limit, now),
+                tokens_use(mission, events, limit),
+            ]
+        })
+        .flatten()
+        .collect()
+}
+
 /// The limit that starting `node` now would pass: the step's own card first,
 /// then the mission's, rounds before time before tokens. `None` means it may
 /// start.

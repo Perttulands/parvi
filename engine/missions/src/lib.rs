@@ -29,6 +29,7 @@ mod error;
 mod executor;
 mod gate_replay;
 mod gate_request;
+mod gate_views;
 mod graph;
 mod harness;
 mod human_replay;
@@ -40,6 +41,7 @@ mod ledger_migrate;
 mod limits;
 mod links;
 mod notes_authoring;
+mod notifications;
 mod output_refs;
 pub mod outputs;
 mod port_delivery;
@@ -51,6 +53,7 @@ mod run_bindings;
 mod run_capture;
 mod run_dispatch;
 mod run_escalation;
+mod run_evidence;
 mod run_gate;
 mod run_inputs;
 mod run_job;
@@ -67,6 +70,7 @@ mod run_resume;
 mod run_scheduler;
 mod run_shutdown;
 mod run_storage;
+mod run_wait;
 mod run_worker;
 mod run_workspace;
 mod run_workspace_recovery;
@@ -112,6 +116,7 @@ pub use run_inputs::{
     substitute_run_inputs, work_placeholder,
 };
 pub use run_projection::project_run;
+pub use run_wait::{RunWait, WaitUntil};
 pub use seats::{
     AgentSeat, Dispatch, DispatchId, DispatchResult, LocalSeats, SeatEvent, SeatExecutor,
     SeatFuture, SeatId, SeatRecords, SeatSide, SeatWait, Submission, SubmissionAction, TurnWatch,

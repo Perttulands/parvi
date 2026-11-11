@@ -258,11 +258,9 @@ pub(crate) fn execute_formation(
     if !dispatches.is_empty() {
         return Err(io::Error::other("formation has unfinished dispatches"));
     }
-    if formation
-        .slots
-        .iter()
-        .any(|slot| !completed.contains(&slot.id))
-    {
+    if formation.slots.iter().any(|slot| {
+        (formation.kind != "orchestrated" || slot.controller) && !completed.contains(&slot.id)
+    }) {
         return Err(io::Error::other("formation has missing slot results"));
     }
     for port in &formation.outputs {

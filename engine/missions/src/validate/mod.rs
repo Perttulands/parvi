@@ -36,6 +36,7 @@ pub fn validate(mission: &Mission, roles: &RoleStore, harnesses: &Harnesses) -> 
     errors.extend(outputs::port_kind_findings(mission));
     errors.extend(outputs::mission_output_findings(mission));
     errors.extend(wiring::input_card_findings(mission));
+    errors.extend(wiring::unsupported_human_channels(mission));
     errors.extend(staffing::findings(mission, roles, harnesses));
 
     let warnings = &mut report.warnings;
@@ -54,4 +55,14 @@ fn possessive(name: &str) -> String {
     } else {
         format!("{name}'s")
     }
+}
+
+/// Capabilities the runtime cannot execute, independent of incomplete drafts.
+pub(crate) fn unsupported(mission: &Mission) -> Vec<parvi_mission_model::Finding> {
+    let mut findings: Vec<_> = formations::shape_findings(mission)
+        .into_iter()
+        .filter(|finding| finding.code == parvi_mission_model::Code::UnsupportedFormation)
+        .collect();
+    findings.extend(wiring::unsupported_human_channels(mission));
+    findings
 }

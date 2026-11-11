@@ -209,6 +209,19 @@ pub fn input_card_findings(mission: &Mission) -> Vec<Finding> {
     findings
 }
 
+/// Human gates reached from a session-channel Input card cannot be served.
+pub fn unsupported_human_channels(mission: &Mission) -> Vec<Finding> {
+    let reached: std::collections::HashSet<String> = mission
+        .input_cards
+        .iter()
+        .filter(|card| card.human_channel.trim() == "session")
+        .flat_map(|card| graph::reachable(mission, &card.id))
+        .collect();
+    mission.gates.iter().filter(|gate| reached.contains(&gate.id) && gate.kinds.iter().any(|kind| kind == "human"))
+        .map(|gate| Finding::new(Code::UnsupportedHumanChannel, &gate.id, format!("human gate {:?} uses a session channel, which is not supported; set the Input card channel to notify", gate.id)))
+        .collect()
+}
+
 /// An Input card with no wire out cannot start a run.
 pub fn not_runnable_findings(mission: &Mission) -> Vec<Finding> {
     (mission.input_cards.iter())

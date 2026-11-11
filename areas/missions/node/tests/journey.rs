@@ -1,4 +1,5 @@
 //! A two-step mission authored and driven through the same CLI as an operator.
+#![cfg(unix)]
 use parvi_mission_engine::{
     ExecutionSink, Executor, FormationExecution, FormationResult, LabExecutor,
 };
@@ -10,10 +11,10 @@ use parvi_testkit::{
 };
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 // The executor delivers each step to the testkit's fake Sessions, then uses
 // the deterministic lab answer. It runs no real terminal or model.
+static LOG: Mutex<Option<Arc<parvi_node_kit::events::Log>>> = Mutex::new(None);
 static FAKE: Mutex<Option<Arc<FakeSessions>>> = Mutex::new(None);
 struct FakeSeatLab {
     runtime: tokio::runtime::Handle,
@@ -24,6 +25,9 @@ impl Executor for FakeSeatLab {
         execution: FormationExecution,
         sink: ExecutionSink,
     ) -> Result<FormationResult, parvi_core::Error> {
+        if execution.formation.title == "Break" {
+            return Err(parvi_core::Error::new("test_failure", "test block"));
+        }
         let sessions = FAKE
             .lock()
             .unwrap()
@@ -43,6 +47,7 @@ impl Executor for FakeSeatLab {
     }
 }
 fn build(setup: &Setup) -> anyhow::Result<Built> {
+    *LOG.lock().unwrap() = Some(setup.events.clone());
     parvi_missions::build_with_executor(
         setup,
         Some(Box::new(FakeSeatLab {
@@ -66,7 +71,22 @@ async fn cli(node: &Node, noun: &str, args: &[&str]) -> Value {
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn cli_authors_two_steps_answers_gate_and_finishes_with_fake_sessions() {
-    let node = Node::start(&[sessions::LISTING, parvi_work::LISTING, MISSIONS], "")
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = parvi_testkit::fresh_dir("mission-notify-cli");
+    let output = scratch.join("sent.jsonl");
+    let command = scratch.join("notify");
+    std::fs::write(
+        &command,
+        format!(
+            "#!/bin/sh\ncat >> '{}'\nprintf '\\n' >> '{}'\n",
+            output.display(),
+            output.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let config = format!("[missions]\nnotify_command = '{}'\n", command.display());
+    let node = Node::start(&[sessions::LISTING, parvi_work::LISTING, MISSIONS], &config)
         .await
         .unwrap();
     let fake = node.fake_sessions();
@@ -127,7 +147,19 @@ async fn cli_authors_two_steps_answers_gate_and_finishes_with_fake_sessions() {
             id,
         ));
     }
-    let gate = cli(&node, "gate", &["create", "relay", "--title", "Review"]).await["gate"]["id"]
+    let gate = cli(
+        &node,
+        "gate",
+        &[
+            "create",
+            "relay",
+            "--title",
+            "Review",
+            "--criterion",
+            "Is this ready?",
+        ],
+    )
+    .await["gate"]["id"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -161,18 +193,90 @@ async fn cli_authors_two_steps_answers_gate_and_finishes_with_fake_sessions() {
     )
     .await;
     let run = started["runId"].as_str().unwrap();
-    let seq = tokio::time::timeout(Duration::from_secs(10), async {
+    let waiting = cli(&node, "run", &["wait", run, "--timeout", "10"]).await;
+    assert_eq!(waiting["outcome"], "needs-you", "{waiting}");
+    assert_eq!(waiting["asks"][0]["gate"], gate);
+    let gates = cli(&node, "run", &["gates", run]).await;
+    assert_eq!(gates["gates"][0]["state"], "waiting");
+    let request = cli(&node, "gate", &["request", run, &gate]).await;
+    assert_eq!(request["criterion"], "Is this ready?");
+    assert_eq!(request["inputs"][0]["fromNodeId"], steps[0].2);
+    assert_eq!(request["routes"][0]["targets"][0]["nodeId"], steps[1].2);
+    assert_eq!(request["routes"][0]["endsRun"], false);
+    assert_eq!(request["routes"][1]["targets"][0]["nodeId"], rejected);
+    assert_eq!(request["routes"][1]["endsRun"], true);
+    assert_eq!(request["endsRun"], true);
+    assert_eq!(request["picksBest"], false);
+    let message = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            let status = cli(&node, "run", &["status", run]).await;
-            if let Some(seq) = status["waitingGates"][0]["requestedSeq"].as_u64() {
-                break seq;
+            if let Ok(text) = std::fs::read_to_string(&output)
+                && let Some(line) = text.lines().find(|line| !line.is_empty())
+                && let Ok(value) = serde_json::from_str::<Value>(line)
+            {
+                break value;
             }
-            assert_ne!(status["final"], true, "{status}");
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     })
     .await
-    .expect("run reaches human gate");
+    .expect("notification delivered");
+    assert_eq!(message["runId"], run);
+    assert_eq!(message["missionSlug"], "relay");
+    assert_eq!(message["gateId"], gate);
+    assert_eq!(message["ask"], "Is this ready?");
+    assert_eq!(std::fs::read_to_string(&output).unwrap().lines().count(), 1);
+    assert!(
+        LOG.lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .listen()
+            .0
+            .iter()
+            .any(|event| event.text.starts_with("run needs you:"))
+    );
+    let cursor = waiting["cursor"].as_u64().unwrap();
+    let status = cli(&node, "run", &["status", run]).await;
+    let seq = status["waitingGates"][0]["requestedSeq"].as_u64().unwrap();
+    let expected = format!("parvi gate approve {run} {gate} --requested-seq {seq}");
+    assert!(
+        waiting["next"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == &expected)
+    );
+    let mut output = Vec::new();
+    let args = vec![
+        "wait".into(),
+        run.into(),
+        "--until".into(),
+        "needs-you".into(),
+        "--node".into(),
+        format!("{}/", node.url()),
+    ];
+    assert_eq!(
+        parvi_node_kit::cli::run("run", &args, &mut output)
+            .await
+            .unwrap(),
+        0
+    );
+    assert!(String::from_utf8(output).unwrap().contains(&expected));
+    let timed = cli(
+        &node,
+        "run",
+        &[
+            "wait",
+            run,
+            "--since",
+            &cursor.to_string(),
+            "--timeout",
+            "0",
+        ],
+    )
+    .await;
+    assert_eq!(timed["outcome"], "timeout");
+    assert_eq!(timed["status"], "waiting_human");
     cli(
         &node,
         "gate",
@@ -186,21 +290,91 @@ async fn cli_authors_two_steps_answers_gate_and_finishes_with_fake_sessions() {
         ],
     )
     .await;
-    let finished = cli(&node, "run", &["wait", run, "--seconds", "10"]).await;
+    let gates = cli(&node, "run", &["gates", run]).await;
+    assert_eq!(gates["gates"][0]["state"], "answered");
+    assert_eq!(gates["gates"][0]["verdict"], "pass");
+    assert_eq!(gates["gates"][0]["by"], "human:operator");
+    let error = node
+        .call("gate_request", serde_json::json!({"run":run,"gate":gate}))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "gate_not_waiting");
+    let mut output = Vec::new();
+    let args = vec![
+        "request".into(),
+        run.into(),
+        gate.clone(),
+        "--node".into(),
+        format!("{}/", node.url()),
+        "--json".into(),
+    ];
+    assert_eq!(
+        parvi_node_kit::cli::run("gate", &args, &mut output)
+            .await
+            .unwrap(),
+        1
+    );
+    let finished = cli(
+        &node,
+        "run",
+        &["wait", run, "--until", "final", "--timeout", "10"],
+    )
+    .await;
+    assert_eq!(finished["outcome"], "final");
     assert_eq!(finished["status"], "succeeded", "{finished}");
+    let again = cli(
+        &node,
+        "run",
+        &["wait", run, "--until", "final", "--timeout", "0"],
+    )
+    .await;
+    assert_eq!(again["outcome"], "final");
+    let status = cli(&node, "run", &["status", run]).await;
     for (_, _, id) in &steps {
         assert!(
-            finished["events"]
+            status["events"]
                 .as_array()
                 .unwrap()
                 .iter()
                 .any(|e| e["type"] == "node_output" && e["nodeId"] == *id),
-            "{finished}"
+            "{status}"
         );
     }
+    let folder = node.dir().join("missions/missions");
+    std::fs::write(
+        folder.join("broken.mission.toml"),
+        include_str!(
+            "../../../../engine/missions/tests/parity/runs/missions/solo-lab.mission.toml"
+        )
+        .replace("slug = \"hello\"", "slug = \"broken\"")
+        .replace("id = \"msn_hello\"", "id = \"msn_broken\"")
+        .replace("title = \"Work\"", "title = \"Break\""),
+    )
+    .unwrap();
+    let broken = cli(
+        &node,
+        "mission",
+        &["run", "broken", "--inputs", r#"{"brief":"hi"}"#],
+    )
+    .await;
+    let broken_id = broken["runId"].as_str().unwrap();
+    let block = cli(&node, "run", &["wait", broken_id, "--timeout", "10"]).await;
+    assert_eq!(block["status"], "blocked");
+    assert!(
+        LOG.lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .listen()
+            .0
+            .iter()
+            .any(|event| event.text.starts_with("run blocked:"))
+    );
     let delivered = fake.delivered();
     assert_eq!(delivered.len(), 2);
     assert!(delivered.iter().all(|d| d.enter));
     *FAKE.lock().unwrap() = None;
     node.stop().await;
+    *LOG.lock().unwrap() = None;
+    std::fs::remove_dir_all(scratch).unwrap();
 }

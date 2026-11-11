@@ -28,7 +28,9 @@ pub fn run_admission(
         .map(|c| c.id.as_str())
         .collect();
     let in_scope = |finding: &Finding| match finding.code {
-        Code::InvalidFormationType
+        Code::UnsupportedFormation
+        | Code::UnsupportedHumanChannel
+        | Code::InvalidFormationType
         | Code::InvalidFormationShape
         | Code::FormationWithoutSlots
         | Code::OrchestratedController
