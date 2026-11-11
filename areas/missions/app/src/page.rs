@@ -1,8 +1,8 @@
 mod run;
 use crate::store::{Store, canvas as board, flow, undo};
 use gpui::{
-    AppContext, Bounds, Context, Div, Entity, IntoElement, PathBuilder, Pixels, Render, Window,
-    canvas, div, point, prelude::*, px,
+    AppContext, Bounds, Context, Div, Entity, FontWeight, IntoElement, PathBuilder, Pixels, Render,
+    SystemNotification, Window, canvas, div, point, prelude::*, px,
 };
 use parvi_app_kit::{
     Host, Page,
@@ -21,6 +21,8 @@ use parvi_missions_contract::{
 use serde_json::json;
 
 const PAD: f32 = 12.;
+const TAB_PAD: f32 = 20.;
+const TAB_GAP: f32 = 6.;
 const EDGE: f32 = 2.;
 const EDITOR_W: f32 = 360.;
 const LINK_FIELD_W: f32 = 180.;
@@ -69,6 +71,7 @@ pub struct MissionsPage {
     note_saving: bool,
     wanted: Option<Wanted>,
     reveal_card: Option<String>,
+    seen_run_snapshots: std::collections::BTreeSet<String>,
 }
 #[derive(Clone, Copy)]
 enum EditKind {
@@ -166,6 +169,7 @@ impl MissionsPage {
             note_saving: false,
             wanted: None,
             reveal_card: None,
+            seen_run_snapshots: Default::default(),
         };
         for field in [
             &page.title,
@@ -194,8 +198,141 @@ impl MissionsPage {
         ] {
             Self::watch_editor_field(field, cx);
         }
+        page.host.channel(WATCH_RUNS, true, cx);
         host_guard(&page.host, cx);
         page
+    }
+    fn report_new_asks(
+        &mut self,
+        node: &NodeId,
+        body: &[u8],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Ok(runs) = serde_json::from_slice::<Vec<parvi_missions_contract::RunProjection>>(body)
+        else {
+            return;
+        };
+        let initial = self.seen_run_snapshots.insert(node.to_string());
+        if initial {
+            return;
+        }
+        for run in runs {
+            let previous = self
+                .state
+                .nodes
+                .get(node.as_str())
+                .and_then(|feed| feed.runs.get(&run.run_id));
+            if previous.is_some_and(|old| old.event_count >= run.event_count) || run.r#final {
+                continue;
+            }
+            for gate in &run.waiting_gates {
+                if previous.is_some_and(|old| {
+                    old.waiting_gates
+                        .iter()
+                        .any(|g| g.gate_id == gate.gate_id && g.requested_seq == gate.requested_seq)
+                }) {
+                    continue;
+                }
+                if !window.is_window_active() {
+                    let page = cx.entity().downgrade();
+                    let run_id = run.run_id.clone();
+                    let run_node = node.clone();
+                    self.host.notify(
+                        SystemNotification {
+                            tag: format!("mission-{}-{}-{}", node, run.run_id, gate.requested_seq)
+                                .into(),
+                            title: format!("{} needs you", run.mission_slug).into(),
+                            body: format!("Gate {} is waiting for your answer", gate.gate_id)
+                                .into(),
+                            actions: vec![],
+                        },
+                        move |_, cx| {
+                            let _ = page.update(cx, |page, cx| {
+                                page.host.show(cx);
+                                page.wanted = Some(Wanted {
+                                    what: "run".into(),
+                                    id: run_id.clone(),
+                                    node: Some(run_node.clone()),
+                                    part: None,
+                                });
+                                page.resolve_wanted(cx);
+                            });
+                        },
+                        cx,
+                    );
+                }
+            }
+            let blocked_seq = |run: &parvi_missions_contract::RunProjection| {
+                run.events
+                    .iter()
+                    .rev()
+                    .find(|event| event.kind == "run_blocked")
+                    .map(|event| event.seq)
+            };
+            if run.status == "blocked"
+                && previous.is_none_or(|old| {
+                    old.status != "blocked" || blocked_seq(old) != blocked_seq(&run)
+                })
+                && !window.is_window_active()
+            {
+                let page = cx.entity().downgrade();
+                let run_id = run.run_id.clone();
+                let run_node = node.clone();
+                self.host.notify(
+                    SystemNotification {
+                        tag: format!(
+                            "mission-{}-{}-blocked-{}",
+                            node, run.run_id, run.event_count
+                        )
+                        .into(),
+                        title: format!("{} needs you", run.mission_slug).into(),
+                        body: "Run is blocked".into(),
+                        actions: vec![],
+                    },
+                    move |_, cx| {
+                        let _ = page.update(cx, |page, cx| {
+                            page.host.show(cx);
+                            page.wanted = Some(Wanted {
+                                what: "run".into(),
+                                id: run_id.clone(),
+                                node: Some(run_node.clone()),
+                                part: None,
+                            });
+                            page.resolve_wanted(cx);
+                        });
+                    },
+                    cx,
+                );
+            }
+        }
+    }
+    fn run_row(
+        &self,
+        node: &str,
+        run: &parvi_missions_contract::RunProjection,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        let t = theme(cx).clone();
+        let id = run.run_id.clone();
+        let node = node.to_owned();
+        let slug = run.mission_slug.clone();
+        let selector = format!("run-row-{id}");
+        div()
+            .id(gpui::SharedString::from(selector.clone()))
+            .debug_selector(move || selector.clone())
+            .px(px(PAD))
+            .cursor_pointer()
+            .text_color(t.text2)
+            .child(format!("{} · {}", run.run_id, run.status))
+            .on_click(cx.listener(move |page, _, _, cx| {
+                if page.state.selected.as_ref() != Some(&(node.clone(), slug.clone())) {
+                    page.open(node.clone(), slug.clone(), cx);
+                }
+                if page.state.selected.as_ref() == Some(&(node.clone(), slug.clone())) {
+                    page.show_run(id.clone(), cx);
+                }
+            }))
     }
     fn watch_editor_field(field: &Entity<TextField>, cx: &mut Context<Self>) {
         cx.subscribe(field, |page, _, event: &FieldEvent, cx| {
@@ -1444,7 +1581,7 @@ impl Page for MissionsPage {
     const TITLE: &'static str = "Missions";
     const AREA: Option<&'static str> = Some("missions");
     const KINDS: parvi_core::frame::Kinds = parvi_missions_contract::KINDS;
-    const CHANNELS: &'static [u8] = &[WATCH, WATCH_RUNS];
+    const CHANNELS: &'static [u8] = &[WATCH];
     const ANSWERS: &'static [parvi_app_kit::ask::Answers] = &[
         parvi_app_kit::ask::Answers::Reveal("mission"),
         parvi_app_kit::ask::Answers::Reveal("run"),
@@ -1475,14 +1612,76 @@ impl Page for MissionsPage {
         }
     }
 
+    fn tabs(
+        &mut self,
+        shown: bool,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let t = theme(cx).clone();
+        let count = self
+            .state
+            .nodes
+            .values()
+            .flat_map(|feed| feed.runs.values())
+            .filter(|run| crate::store::words::needs_you(run))
+            .count();
+        let mut tab = div()
+            .id("missions-tab")
+            .debug_selector(|| "tab-missions".into())
+            .px(px(TAB_PAD))
+            .flex()
+            .items_center()
+            .gap(px(TAB_GAP))
+            .cursor_pointer()
+            .text_size(px(size::TEXT))
+            .font_weight(if shown {
+                FontWeight::SEMIBOLD
+            } else {
+                FontWeight::NORMAL
+            })
+            .text_color(if shown { t.text } else { t.text2 })
+            .when(shown, |d| d.border_b_2().border_color(t.accent))
+            .hover(|d| d.text_color(t.text))
+            .child("Missions");
+        if count > 0 {
+            tab = tab.child(
+                div()
+                    .debug_selector(move || format!("missions-count-{count}"))
+                    .child(count.to_string()),
+            );
+        }
+        Some(
+            tab.on_click(cx.listener(|page, _, _, cx| page.host.show(cx)))
+                .into_any_element(),
+        )
+    }
+
+    fn link(
+        &mut self,
+        node: &NodeId,
+        state: Option<parvi_app_kit::link::client::LinkState>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if state.is_none() {
+            self.state.nodes.remove(node.as_str());
+            self.seen_run_snapshots.remove(node.as_str());
+            cx.notify();
+        }
+    }
+
     fn frame(
         &mut self,
         node: &NodeId,
         kind: u8,
         body: &[u8],
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if kind == parvi_missions_contract::RUNS_SNAPSHOT {
+            self.report_new_asks(node, body, window, cx);
+        }
         self.state.frame(node.as_str(), kind, body);
         self.resolve_wanted(cx);
         if kind == parvi_missions_contract::RUNS_SNAPSHOT {
@@ -1511,6 +1710,27 @@ impl Render for MissionsPage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
         let mut list = div().flex().flex_col().gap(px(PAD));
+        let attention: Vec<_> = self
+            .state
+            .nodes
+            .iter()
+            .flat_map(|(node, feed)| {
+                feed.runs
+                    .values()
+                    .filter(|run| crate::store::words::needs_you(run))
+                    .map(move |run| (node.clone(), run.clone()))
+            })
+            .collect();
+        if !attention.is_empty() {
+            list = list.child(
+                div()
+                    .debug_selector(|| "needs-you-group".into())
+                    .child("Needs you"),
+            );
+            for (node, run) in &attention {
+                list = list.child(self.run_row(node, run, cx));
+            }
+        }
         for (node, feed) in &self.state.nodes {
             if let Some(missions) = &feed.missions {
                 for mission in missions {
@@ -1521,8 +1741,7 @@ impl Render for MissionsPage {
                         mission.title.clone()
                     };
                     let selector = format!("mission-{node}-{slug}");
-                    let run_node = node.clone();
-                    let run_slug = slug.clone();
+                    let selected_node = node.clone();
                     list = list.child(
                         div()
                             .id(gpui::SharedString::from(selector.clone()))
@@ -1533,13 +1752,15 @@ impl Render for MissionsPage {
                             .border_color(t.divider)
                             .child(label)
                             .on_click(cx.listener(move |page, _, _, cx| {
-                                page.open(node.clone(), slug.clone(), cx)
+                                page.open(selected_node.clone(), slug.clone(), cx)
                             })),
                     );
                     let mut runs: Vec<_> = feed
                         .runs
                         .values()
-                        .filter(|r| r.mission_slug == mission.slug)
+                        .filter(|r| {
+                            r.mission_slug == mission.slug && !crate::store::words::needs_you(r)
+                        })
                         .collect();
                     runs.sort_by(|a, b| {
                         let attention = |r: &parvi_missions_contract::RunProjection| {
@@ -1558,31 +1779,7 @@ impl Render for MissionsPage {
                             .then_with(|| b.started_at.cmp(&a.started_at))
                     });
                     for run in runs {
-                        let id = run.run_id.clone();
-                        let node = run_node.clone();
-                        let slug = run_slug.clone();
-                        let selector = format!("run-row-{id}");
-                        list = list.child(
-                            div()
-                                .id(gpui::SharedString::from(selector.clone()))
-                                .debug_selector(move || selector.clone())
-                                .px(px(PAD))
-                                .cursor_pointer()
-                                .text_color(t.text2)
-                                .child(format!("{} · {}", run.run_id, run.status))
-                                .on_click(cx.listener(move |page, _, _, cx| {
-                                    if page.state.selected.as_ref()
-                                        != Some(&(node.clone(), slug.clone()))
-                                    {
-                                        page.open(node.clone(), slug.clone(), cx);
-                                    }
-                                    if page.state.selected.as_ref()
-                                        == Some(&(node.clone(), slug.clone()))
-                                    {
-                                        page.show_run(id.clone(), cx);
-                                    }
-                                })),
-                        );
+                        list = list.child(self.run_row(node.as_str(), run, cx));
                     }
                 }
             }

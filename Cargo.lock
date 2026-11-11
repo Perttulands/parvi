@@ -4697,6 +4697,7 @@ name = "parvi-missions-app"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "axum",
  "gpui-pre",
  "http",
  "parvi-agents-contract",
