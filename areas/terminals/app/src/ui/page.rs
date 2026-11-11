@@ -1111,7 +1111,14 @@ impl Terminals {
         if self.restarting.contains(&k) {
             return;
         }
-        match self.fleet.launch_on(&k.node, restart_launch(&k)) {
+        let ws = &self.settings.workspace;
+        let target = ws
+            .bound(&k)
+            .filter(|(tab, _)| *tab == ws.active)
+            .map_or(ws.focus, |(_, w)| w);
+        let mut launch = restart_launch(&k);
+        launch.size = self.launch_grids.borrow()[target];
+        match self.fleet.launch_on(&k.node, launch) {
             Some(id) => {
                 let tab = self.settings.workspace.active;
                 self.launches
