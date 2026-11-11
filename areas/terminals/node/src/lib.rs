@@ -18,6 +18,7 @@ mod against_tmux;
 mod agent_events;
 mod channel;
 mod commands;
+mod flags;
 mod frames;
 mod hub;
 mod launch;
@@ -188,6 +189,7 @@ impl Area for Terminals {
             .route("/api/terminal/windows", get(windows))
             .with_state(self.ctx.hub.clone())
             .merge(agent_events::routes(self.ctx.hub.clone()))
+            .merge(flags::routes(self.ctx.launcher.clone()))
     }
 
     fn commands(&self) -> Vec<Command> {

@@ -16,12 +16,34 @@ pub use down::{
 /// 0x04, 0x1c, 0x1d and 0x2a (settings) keep their numbers for those areas.
 pub const KINDS: Kinds = &[0x01..=0x02, 0x10..=0x1a, 0x1e..=0x29, 0x2b..=0x2b];
 
+/// A harness option reported by its help output.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct Flag {
+    pub name: String,
+    pub short: Option<String>,
+    pub value: Option<String>,
+    pub description: String,
+    #[serde(default)]
+    pub values: Vec<String>,
+}
+
 /// A pane, by its node-wide id.
 pub type PaneId = u32;
 
 /// A session command that could not do what it was asked; the message
 /// says why.
 pub const COMMAND_FAILED: &str = "session_failed";
+
+/// A flag catalogue request named an unconfigured harness.
+pub const UNKNOWN_HARNESS: &str = "unknown_harness";
+/// A configured harness binary could not be found.
+pub const HARNESS_NOT_FOUND: &str = "harness_not_found";
+/// A harness did not finish printing help in time.
+pub const HARNESS_HELP_TIMEOUT: &str = "harness_help_timeout";
+/// A harness exited unsuccessfully while printing help.
+pub const HARNESS_HELP_FAILED: &str = "harness_help_failed";
+/// A harness help process or its output could not be read.
+pub const HARNESS_HELP_ERROR: &str = "harness_help_error";
 
 /// A frame that cannot be read.
 pub const BAD_FRAME: &str = "bad_frame";

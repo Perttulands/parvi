@@ -511,6 +511,10 @@ impl Render for Launcher {
             harnesses = harnesses.child(
                 div()
                     .id(("harness", i * 100 + n))
+                    .debug_selector({
+                        let id = h.id.clone();
+                        move || format!("harness-{i}-{id}")
+                    })
                     .h(px(32.))
                     .px(px(10.))
                     .flex()
@@ -674,6 +678,10 @@ impl Render for Launcher {
                         list = list.child(
                             div()
                                 .id(("catalogue-flag", i * 1000 + n))
+                                .debug_selector({
+                                    let name = flag.name.clone();
+                                    move || format!("flag-{i}-{name}")
+                                })
                                 .cursor_pointer()
                                 .p(px(4.))
                                 .flex()
@@ -770,6 +778,7 @@ impl Render for Launcher {
                             if self.panel_open { "Close" } else { "Browse" },
                             Kind::Quiet,
                         )
+                        .debug_selector(move || format!("flags-browse-{i}"))
                         .on_click(cx.listener({
                             let node = target.clone().unwrap_or_default();
                             let harness = harness.clone();
@@ -797,6 +806,10 @@ impl Render for Launcher {
                     .text_color(t.dim)
                     .overflow_hidden()
                     .whitespace_nowrap()
+                    .debug_selector({
+                        let flags = flags.clone();
+                        move || format!("flag-line-{i}-{flags}")
+                    })
                     .child(if preview.is_empty() {
                         "a shell".to_string()
                     } else {

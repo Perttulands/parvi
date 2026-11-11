@@ -123,6 +123,10 @@ impl Drop for Running {
 
 /// A node following a scratch tmux server with one session, `alpha`.
 fn start(label: &str) -> Option<Running> {
+    start_with_harness(label, false)
+}
+
+fn start_with_harness(label: &str, harness: bool) -> Option<Running> {
     let label = label.to_string();
     let (ready, wait) = mpsc::channel();
     let (stop, stopped) = mpsc::channel();
@@ -135,13 +139,28 @@ fn start(label: &str) -> Option<Running> {
             };
             tmux.new_session("alpha", 100, 30);
             tmux.new_session("beta", 100, 30);
-            let config = format!("[terminals]\nsocket = {:?}\n", tmux.socket_path());
+            let dir = parvi_testkit::fresh_dir("flags-ui");
+            let binary = dir.join("fake");
+            let launch = dir.join("launch.conf");
+            if harness {
+                parvi_testkit::tmux::write_script(
+                    &binary,
+                    "#!/bin/sh\nprintf 'Options:\\n  -v, --verbose  Verbose output\\n'\n",
+                );
+                std::fs::write(&launch, format!("harness fake {}\n", binary.display())).unwrap();
+            }
+            let config = format!(
+                "[terminals]\nsocket = {:?}\nlaunch = {:?}\n",
+                tmux.socket_path(),
+                launch
+            );
             let node = Node::start(AREAS, &config).await.expect("a node");
             let _ = ready.send(Some((node.url(), node.id(), tmux.socket_path())));
             while stopped.try_recv().is_err() {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
             node.stop().await;
+            let _ = std::fs::remove_dir_all(dir);
         });
     });
     match wait.recv().expect("the node thread") {
@@ -578,5 +597,33 @@ fn launches_use_each_tile_grid(cx: &mut TestAppContext) {
         ),
         format!("{}x{}", grid.0, grid.1)
     );
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+#[gpui::test]
+fn launcher_browses_and_selects_node_flags(cx: &mut TestAppContext) {
+    let Some(running) = start_with_harness("terminals-flags", true) else {
+        return;
+    };
+    let settings = parvi_testkit::fresh_dir("flags-ui-settings").join("app.json");
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let url = running.url.clone();
+    let path = settings.clone();
+    let (_shell, cx) = cx.add_window_view(move |window, cx| {
+        parvi_app_shell::start(&[terminals], Some(url), Some(path), window, cx)
+    });
+    until(cx, "fake harness", |cx| {
+        cx.debug_bounds("harness-0-fake").is_some()
+    });
+    click(cx, "harness-0-fake".into());
+    click(cx, "flags-browse-0".into());
+    until(cx, "verbose flag", |cx| {
+        cx.debug_bounds("flag-0---verbose").is_some()
+    });
+    click(cx, "flag-0---verbose".into());
+    until(cx, "flag in preview", |cx| {
+        cx.debug_bounds("flag-line-0---verbose").is_some()
+    });
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }
