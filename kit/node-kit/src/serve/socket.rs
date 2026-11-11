@@ -1,4 +1,5 @@
-//! One client's `/ws`: the hello first, then each area's channel. A frame
+//! One client's `/ws`: the hello first, then each area's channel and view
+//! control's ([`crate::view`]). A frame
 //! from the client goes to the area whose kinds hold its kind byte; every
 //! channel's pushes go out as they come. When the client goes, its
 //! channels are dropped, which gives back whatever it held.
@@ -33,6 +34,7 @@ pub(super) async fn connection(mut socket: WebSocket, shared: Arc<Shared>) {
         .areas
         .iter()
         .filter_map(|(listed, area)| Some((listed.kinds, area.channel(client)?)))
+        .chain([(frame::VIEW, shared.views.channel(client))])
         .collect();
     loop {
         let event = {

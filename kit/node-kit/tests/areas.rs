@@ -596,6 +596,116 @@ async fn config_show_answers_the_file_and_each_section() {
         .iter()
         .filter_map(|t| t["name"].as_str())
         .collect();
-    assert!(names.contains(&"config_show"), "{names:?}");
+    for own in ["config_show", "view_show", "view_open"] {
+        assert!(names.contains(&own), "{names:?}");
+    }
+    node.stop().await.unwrap();
+}
+
+/// An MCP tool call's answer: its value, or its error's code.
+async fn tool(client: &NodeClient, name: &str, arguments: Value) -> Result<Value, String> {
+    let call = json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": { "name": name, "arguments": arguments },
+    });
+    let (answer, _) = client
+        .request(Method::POST, "/mcp", Some(call), None)
+        .await
+        .unwrap();
+    let text = answer["result"]["content"][0]["text"].as_str().unwrap();
+    match answer["result"]["isError"].as_bool() {
+        Some(false) => Ok(serde_json::from_str(text).unwrap()),
+        _ => Err(serde_json::from_str::<Error>(text).unwrap().code),
+    }
+}
+
+/// View control, the node's side, with a socket client standing in for the
+/// app: it is an app once it says what it shows, and `view_open` reaches it
+/// as a view command whose answer is the command's.
+#[tokio::test(flavor = "multi_thread")]
+async fn view_open_reaches_the_app_and_answers_its_answer() {
+    let node = start(&[], "").await.unwrap();
+    let url = format!("http://{}/", node.address);
+    let client = NodeClient::new(Some(&url)).unwrap();
+    assert_eq!(parvi("view", &["show"], &url).await, (0, json!([])));
+    assert_eq!(
+        parvi("view", &["open", "--page", "files"], &url).await.0,
+        1,
+        "no app"
+    );
+    let args = json!({ "page": "files" });
+    assert_eq!(
+        tool(&client, "view_open", args).await.unwrap_err(),
+        "no_app"
+    );
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{}/ws", node.address))
+        .await
+        .unwrap();
+    ws.next().await.unwrap().unwrap(); // the hello
+    // Not an app until it says what it shows.
+    assert_eq!(tool(&client, "view_show", json!({})).await, Ok(json!([])));
+    ws.send(Message::Binary(
+        [&[0xb0][..], br#"{"page":"terminals"}"#].concat().into(),
+    ))
+    .await
+    .unwrap();
+    let shown = loop {
+        let shown = tool(&client, "view_show", json!({})).await.unwrap();
+        if shown != json!([]) {
+            break shown;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    assert_eq!(shown[0]["page"], "terminals");
+
+    // Two things at once are refused before reaching the app.
+    let two = json!({ "page": "files", "path": "/a", "item": "x" });
+    assert_eq!(
+        tool(&client, "view_open", two).await.unwrap_err(),
+        "invalid_argument"
+    );
+
+    // The app is told, and its answer is the command's.
+    let opening = {
+        let client = NodeClient::new(Some(&url)).unwrap();
+        tokio::spawn(async move {
+            let args = json!({ "page": "files", "path": "/tmp/x" });
+            tool(&client, "view_open", args).await
+        })
+    };
+    let told = ws.next().await.unwrap().unwrap().into_data();
+    assert_eq!(told[0], 0xb8);
+    let command: Value = serde_json::from_slice(&told[5..]).unwrap();
+    assert_eq!(
+        command,
+        json!({ "do": "open", "page": "files", "path": "/tmp/x", "node": node.node.id })
+    );
+    let answer = br#"{"ok":true,"view":{"page":"files"}}"#;
+    ws.send(Message::Binary(
+        [&[0xb1][..], &told[1..5], answer].concat().into(),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(opening.await.unwrap(), Ok(json!({ "page": "files" })));
+
+    // An app that does not answer.
+    let args = json!({ "page": "files" });
+    assert_eq!(
+        tool(&client, "view_open", args).await.unwrap_err(),
+        "timeout"
+    );
+
+    // Gone, it is no app.
+    drop(ws);
+    let mut shown = json!(null);
+    for _ in 0..100 {
+        shown = tool(&client, "view_show", json!({})).await.unwrap();
+        if shown == json!([]) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(shown, json!([]));
     node.stop().await.unwrap();
 }
