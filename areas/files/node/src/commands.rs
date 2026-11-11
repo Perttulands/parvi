@@ -38,6 +38,12 @@ pub fn commands(files: Arc<Files>, home: Option<PathBuf>) -> Vec<Command> {
             &["path"],
         ),
         (
+            "file_diff",
+            "Show a file's diff against HEAD.",
+            &["path"],
+            &["path"],
+        ),
+        (
             "file_write",
             "Create or save a text file.",
             &["path", "text", "base", "new"],
@@ -201,6 +207,7 @@ fn work(name: &str, files: &Files, home: Option<&Path>, args: &Value) -> Result<
                 json!({"node":node,"path":at,"size":bytes.len(),"version":version,"truncated":shown.len()<bytes.len(),"text":content}),
             )
         }
+        "file_diff" => serde_json::to_value(files.diff(&at)?).map_err(bad),
         "file_write" => {
             let data = text(args, "text").map_err(bad)?.as_bytes();
             let base = maybe_text(args, "base").map_err(bad)?;

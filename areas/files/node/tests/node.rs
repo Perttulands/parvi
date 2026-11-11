@@ -229,6 +229,7 @@ async fn exact_commands_are_exposed_to_mcp_and_cli_and_operate_on_files() {
     let mut expected = vec![
         "file_list",
         "file_read",
+        "file_diff",
         "file_write",
         "file_mkdir",
         "file_move",
@@ -280,6 +281,94 @@ async fn exact_commands_are_exposed_to_mcp_and_cli_and_operate_on_files() {
         .await
         .unwrap_err();
     assert_eq!(err.code, "unknown_node");
+    node.stop().await;
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn file_diff_command_matches_the_route_and_prints_unified_lines() {
+    let root = parvi_testkit::fresh_dir("files-diff-command");
+    let repo = root.join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .current_dir(&repo)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(&["init", "-q"]);
+    let file = repo.join("note.txt");
+    std::fs::write(&file, "before\n").unwrap();
+    git(&["add", "note.txt"]);
+    git(&[
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-qm",
+        "initial",
+    ]);
+    std::fs::write(&file, "after\n").unwrap();
+    let plain = root.join("plain.txt");
+    std::fs::write(&plain, "outside a repository").unwrap();
+    let config = format!(
+        "[files]\nroots = [{}]\n",
+        serde_json::to_string(root.to_str().unwrap()).unwrap()
+    );
+    let node = Node::start(&[parvi_files::LISTING], &config).await.unwrap();
+    let (status, body) = request(&node, "GET", &at("diff", &file), Body::empty(), false).await;
+    assert_eq!(status, StatusCode::OK);
+    let route: Value = serde_json::from_slice(&body).unwrap();
+    let mut out = Vec::new();
+    let args = vec![
+        "diff".into(),
+        file.to_string_lossy().into_owned(),
+        "--node".into(),
+        node.url(),
+    ];
+    assert_eq!(cli::run("file", &args, &mut out).await.unwrap(), 0);
+    let human = String::from_utf8(out).unwrap();
+    assert!(human.lines().any(|line| line == "-before"), "{human}");
+    assert!(human.lines().any(|line| line == "+after"), "{human}");
+    let mut args_json = args.clone();
+    args_json.push("--json".into());
+    let mut out = Vec::new();
+    assert_eq!(cli::run("file", &args_json, &mut out).await.unwrap(), 0);
+    assert_eq!(serde_json::from_slice::<Value>(&out).unwrap(), route);
+    assert_eq!(
+        node.call("file_diff", json!({"path": file})).await.unwrap(),
+        route
+    );
+
+    let (status, body) = request(&node, "GET", &at("diff", &plain), Body::empty(), false).await;
+    assert_eq!(status, StatusCode::OK);
+    let no_repo: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(no_repo["repository"], "");
+    assert_eq!(no_repo["diff"], "");
+    assert_eq!(
+        node.call("file_diff", json!({"path": plain}))
+            .await
+            .unwrap(),
+        no_repo
+    );
+    let missing = root.join("missing");
+    let (status, body) = request(&node, "GET", &at("diff", &missing), Body::empty(), false).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let error: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        node.call("file_diff", json!({"path": missing}))
+            .await
+            .unwrap_err()
+            .code,
+        error["error"]["code"].as_str().unwrap()
+    );
     node.stop().await;
     std::fs::remove_dir_all(root).unwrap();
 }
