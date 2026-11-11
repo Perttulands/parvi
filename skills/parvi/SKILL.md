@@ -12,17 +12,17 @@ Commands use `parvi <noun> <verb>`. Required arguments can be positional or name
 | Noun | Purpose and verbs |
 |---|---|
 | `session` | Terminal sessions: `list`, `read`, `history`, `search`, `send`, `keys`, `launch`, `copy`, `rename`, `kill`, `mouse`, `seen`. |
-| `file` | Browse and change files: `list`, `read`, `write`, `mkdir`, `move`, `delete`, `find`, `search`, `copy`, `resume`, `transfer`. Use the base version on writes to detect stale edits. |
-| `work` | Read the configured work board and item family: `list`, `show`. |
-| `brain` | Find and read knowledge: `search`, `read`. |
+| `file` | Browse and change files: `list`, `read`, `diff`, `projects`, `download`, `upload`, `write`, `mkdir`, `move`, `delete`, `find`, `search`, `copy`, `resume`, `transfer`. Use the base version on writes to detect stale edits. |
+| `work` | Read the configured work board and item family, or file an item: `list`, `show`, `create`. |
+| `brain` | Find, read and save knowledge: `search`, `read`, `save`, `collections`, `changes`, `send`. |
 | `host` | Read host information: `show`. |
 | `service` | Inspect and control services: `list`, `show`, `start`, `stop`, `restart`. |
 | `scheduled` | Manage prompts sent into sessions: `list`, `show`, `create`, `edit`, `copy`, `pause`, `resume`, `run`, `delete`. |
 | `role` | Manage the role library: `list`, `inspect`, `usage`, `new`, `edit`, `retire`, `restore`, `delete`, `characters`. |
 | `agents` | Inspect agent tools, skills and checkouts with `show`; `sync` a skills checkout. |
 | `mission`, `formation`, `layout`, `gate`, `end`, `limit`, `run` | Author mission graphs and drive runs; read [missions](references/missions.md). |
-| `view` | App view commands, when available; consult node help for verbs. |
-| `config` | Node configuration commands, when available; consult node help for verbs. |
+| `view` | Inspect connected apps with `show` and open a page or item with `open`. |
+| `config` | Read the node configuration with `show`. |
 
 ## Sessions and scheduled prompts
 
@@ -33,3 +33,5 @@ The app's Send to Session composes a reference, note and attached file paths int
 For recurring work, inspect `scheduled list` and update a matching task instead of duplicating it. Target existing session names (or `user/name`), inspect the receiving session and its input, and write a durable prompt with the purpose, context and expected result. `scheduled create` takes a name, prompt, sessions and either `--every` minutes or a five-field `--cron`; specify an IANA `--timezone`. Use command help for exact syntax. Read back the task and its next run after changing it. `scheduled run` sends immediately; use it only when that is appropriate. The scheduler does not launch an agent. Check the receiving conversation and artifacts to verify consumption and completion.
 
 For authoring a mission, staffing its steps, or driving and recovering a run, read [missions](references/missions.md).
+
+For the complete command inventory, see [commands](references/commands.md).
