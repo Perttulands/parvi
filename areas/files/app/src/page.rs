@@ -22,7 +22,10 @@ pub struct Side {
     pub pane: Pane,
     pub code: Entity<Code>,
     pub search: Entity<TextField>,
+    pub search_content: bool,
+    pub pending_line: Option<usize>,
     pub name: Entity<TextField>,
+    pub room: crate::picture::Room,
     pub opened: Option<Opened>,
 }
 pub struct FilesPage {
@@ -40,6 +43,7 @@ pub struct FilesPage {
     copy_ordinal: usize,
     pub confirm_close_beside: bool,
     pub menu: Option<(usize, gpui::Point<gpui::Pixels>)>,
+    pub drawn: Vec<std::sync::Arc<gpui::RenderImage>>,
     beside_view: Option<Entity<FilesPage>>,
     restored: bool,
     beside_from: &'static str,
@@ -172,7 +176,9 @@ impl FilesPage {
                     FieldEvent::Changed => {
                         let query = field.read(cx).text.clone();
                         page.sides[i].pane.filter = query.clone();
-                        page.sides[i].pane.set_find(&query, false);
+                        page.sides[i]
+                            .pane
+                            .set_find(&query, page.sides[i].search_content);
                         if !query.trim().is_empty() {
                             cx.spawn(async move |this, cx| {
                                 cx.background_executor()
@@ -211,10 +217,27 @@ impl FilesPage {
                 pane: Pane::from_kept(&kept.panes[i]),
                 code,
                 search,
+                search_content: false,
+                pending_line: None,
                 name,
+                room: Default::default(),
                 opened: None,
             }
         });
+        host.guard_close(
+            &cx.entity(),
+            |page: &FilesPage, _| {
+                let mut names: Vec<_> = page
+                    .drafts
+                    .keys()
+                    .map(|(_, path)| paths::base_name(path).to_owned())
+                    .collect();
+                names.sort();
+                names.dedup();
+                (!names.is_empty()).then(|| names.join(", "))
+            },
+            cx,
+        );
         Self {
             focus: cx.focus_handle().tab_stop(true),
             host,
@@ -241,6 +264,7 @@ impl FilesPage {
             copy_ordinal: 1,
             confirm_close_beside: false,
             menu: None,
+            drawn: Vec::new(),
             beside_view: None,
             restored: false,
             beside_from: "",
@@ -412,13 +436,18 @@ impl FilesPage {
         let Some(path) = self.sides[i].pane.path.clone() else {
             return;
         };
-        self.sides[i].pane.set_find(&q, false);
+        let content = self.sides[i].search_content;
+        self.sides[i].pane.set_find(&q, content);
         if q.trim().is_empty() {
             cx.notify();
             return;
         }
         let node = self.sides[i].pane.node.clone();
-        let uri = format!("{}&q={}", route("find", &path), enc(&q));
+        let uri = format!(
+            "{}&q={}",
+            route(if content { "search" } else { "find" }, &path),
+            enc(&q)
+        );
         self.request(
             Request::get(NodeId(node), uri),
             move |p, s, b, cx| {
@@ -427,13 +456,30 @@ impl FilesPage {
                 } else {
                     Err(String::from_utf8_lossy(&b).into_owned())
                 };
-                p.sides[i].pane.found(&q, false, found);
+                p.sides[i].pane.found(&q, content, found);
                 cx.notify()
             },
             cx,
         )
     }
+    pub fn toggle_search_content(&mut self, i: usize, cx: &mut Context<Self>) {
+        self.sides[i].search_content = !self.sides[i].search_content;
+        let query = self.sides[i].search.read(cx).text.clone();
+        self.find(i, query, cx);
+    }
+    pub fn open_at(
+        &mut self,
+        i: usize,
+        path: String,
+        line: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open(i, path, window, cx);
+        self.sides[i].pending_line = line;
+    }
     pub fn open(&mut self, i: usize, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.sides[i].pending_line = None;
         self.sides[i]
             .code
             .update(cx, |code, cx| code.edit(false, window, cx));
@@ -554,9 +600,13 @@ impl FilesPage {
                 let base = open::version(&b);
                 let draft = p.drafts.get(&(node, path)).cloned();
                 let code = p.sides[i].code.clone();
+                let line = p.sides[i].pending_line.take();
                 code.update(cx, |code, cx| {
                     code.set_lang(syntax::lang(&name), cx);
-                    code.set(draft.as_ref().map_or(&text, |d| &d.text), cx)
+                    code.set(draft.as_ref().map_or(&text, |d| &d.text), cx);
+                    if let Some(line) = line {
+                        code.show_line(line.saturating_sub(1), cx);
+                    }
                 });
                 let o = p.sides[i].opened.as_mut().unwrap();
                 o.show = show;

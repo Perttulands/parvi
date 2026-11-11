@@ -446,6 +446,22 @@ fn open_path_beside_keeps_the_terminal_and_the_draft(cx: &mut TestAppContext) {
     click(cx, "files-edit");
     cx.simulate_keystrokes("ctrl-a");
     cx.simulate_input("draft");
+    let unsaved = shell.read_with(cx, |s, cx| s.hub().read(cx).unsaved(cx));
+    assert!(
+        unsaved
+            .iter()
+            .any(|(page, label)| *page == "files" && label.contains("first.txt")),
+        "{unsaved:?}"
+    );
+    assert!(!cx.simulate_close(), "the beside draft holds the window");
+    until(cx, "close confirmation", |cx| {
+        cx.debug_bounds("close-stay").is_some()
+    });
+    click(cx, "close-stay");
+    cx.update(|window, cx| shell.update(cx, |shell, cx| shell.show(0, window, cx)));
+    until(cx, "terminal restored", |cx| {
+        shell.read_with(cx, |s, _| s.shown_page()) == Some("terminals")
+    });
     cx.update(|_, cx| host.ask(ask(root.join("second.txt")), cx).unwrap());
     until(cx, "second viewer", |cx| {
         cx.debug_bounds("file-view-second.txt").is_some() && cx.debug_bounds("files-edit").is_some()
@@ -490,6 +506,12 @@ fn find_opens_a_file_below_the_current_folder(cx: &mut TestAppContext) {
     });
     click(cx, "find-result-0-needle.txt");
     until(cx, "viewer", |cx| cx.debug_bounds("files-edit").is_some());
+    cx.simulate_keystrokes("escape / ctrl-a");
+    cx.simulate_input("found");
+    click(cx, "search-mode-0");
+    until(cx, "content result", |cx| {
+        cx.debug_bounds("find-result-0-needle.txt").is_some()
+    });
     drop(running);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -527,6 +549,86 @@ fn conflicting_save_can_write_a_separate_copy(cx: &mut TestAppContext) {
         std::fs::read(root.join("note (mine).txt")).ok().as_deref() == Some(b"my draft")
     });
     assert_eq!(std::fs::read(root.join("note.txt")).unwrap(), b"other edit");
+    drop(running);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Unsaved edits in the main Files page hold the app window open.
+#[gpui::test]
+fn unsaved_file_holds_the_window_until_the_operator_decides(cx: &mut TestAppContext) {
+    let root = parvi_testkit::fresh_dir("files-close");
+    std::fs::write(root.join("note.txt"), "before").unwrap();
+    let running = start(root.clone());
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let url = running.url.clone();
+    let (shell, cx) = cx.add_window_view(move |w, cx| {
+        parvi_app_shell::start(&[parvi_files_app::build], Some(url), None, w, cx)
+    });
+    until(cx, "Files", |cx| {
+        shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
+    });
+    until(cx, "row", |cx| {
+        cx.debug_bounds("file-row-0-note.txt").is_some()
+    });
+    click(cx, "file-row-0-note.txt");
+    until(cx, "viewer", |cx| cx.debug_bounds("files-edit").is_some());
+    click(cx, "files-edit");
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("unsaved");
+    assert!(!cx.simulate_close(), "the unsaved draft refuses close");
+    until(cx, "close confirmation", |cx| {
+        cx.debug_bounds("close-stay").is_some()
+    });
+    click(cx, "close-stay");
+    assert!(!cx.simulate_close(), "keeping the edit still refuses close");
+    assert_eq!(std::fs::read(root.join("note.txt")).unwrap(), b"before");
+    drop(running);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Picture zoom is shared and kept in the Files settings.
+#[gpui::test]
+fn picture_zoom_can_switch_between_fit_and_actual_size(cx: &mut TestAppContext) {
+    let root = parvi_testkit::fresh_dir("files-picture");
+    std::fs::write(root.join("pixel.png"), include_bytes!("pixel.png")).unwrap();
+    let running = start(root.clone());
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let url = running.url.clone();
+    let (shell, cx) = cx.add_window_view(move |w, cx| {
+        parvi_app_shell::start(&[parvi_files_app::build], Some(url), None, w, cx)
+    });
+    until(cx, "Files", |cx| {
+        shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
+    });
+    until(cx, "picture", |cx| {
+        cx.debug_bounds("file-row-0-pixel.png").is_some()
+    });
+    click(cx, "file-row-0-pixel.png");
+    until(cx, "zoom controls", |cx| {
+        cx.debug_bounds("zoom-1-0").is_some()
+    });
+    click(cx, "zoom-1-0");
+    let zoom = shell.read_with(cx, |s, cx| {
+        s.hub()
+            .read(cx)
+            .settings
+            .section::<parvi_files_app::store::Kept>("files")
+            .unwrap()
+            .zoom
+    });
+    assert_eq!(zoom, Some(100));
+    click(cx, "zoom-fit-0");
+    let zoom = shell.read_with(cx, |s, cx| {
+        s.hub()
+            .read(cx)
+            .settings
+            .section::<parvi_files_app::store::Kept>("files")
+            .unwrap()
+            .zoom
+    });
+    assert_eq!(zoom, None);
     drop(running);
     std::fs::remove_dir_all(root).unwrap();
 }

@@ -30,6 +30,7 @@ impl FilesPage {
         {
             for item in &found.matches {
                 let path = item.path.clone();
+                let line = item.line;
                 let name = item.name.clone();
                 let selector = format!("find-result-{i}-{name}");
                 list = list.child(
@@ -40,7 +41,9 @@ impl FilesPage {
                         Kind::Quiet,
                     )
                     .debug_selector(move || selector.clone())
-                    .on_click(cx.listener(move |p, _, w, cx| p.open(i, path.clone(), w, cx))),
+                    .on_click(
+                        cx.listener(move |p, _, w, cx| p.open_at(i, path.clone(), line, w, cx)),
+                    ),
                 );
             }
         } else {
@@ -135,6 +138,23 @@ impl FilesPage {
                         page.search_key(i, e, w, cx)
                     }))
                     .child(side.search.clone()),
+            )
+            .child(
+                kit::button(
+                    &t,
+                    ("search-mode", i),
+                    if side.search_content {
+                        "Search contents"
+                    } else {
+                        "Find names"
+                    },
+                    Kind::Quiet,
+                )
+                .debug_selector({
+                    let id = format!("search-mode-{i}");
+                    move || id.clone()
+                })
+                .on_click(cx.listener(move |p, _, _, cx| p.toggle_search_content(i, cx))),
             )
             .child(
                 div()
@@ -279,6 +299,9 @@ impl FilesPage {
                 })),
             );
         }
+        if let Some(zoom) = self.zoom_bar(i, &t, cx) {
+            bar = bar.child(zoom);
+        }
         if self.beside {
             bar = bar.child(
                 kit::button(&t, "files-close-beside", "Close", Kind::Quiet)
@@ -332,10 +355,7 @@ impl FilesPage {
                 Show::Failed(s) | Show::Not(s) => {
                     kit::note(&t, s.clone(), Some(t.error)).into_any_element()
                 }
-                Show::Picture { image, .. } => img(image.clone())
-                    .max_w_full()
-                    .max_h_full()
-                    .into_any_element(),
+                Show::Picture { image, natural } => self.picture(i, image, *natural, cx),
                 Show::Model(m) => div()
                     .id(("model-stage", i))
                     .size_full()
@@ -442,7 +462,8 @@ impl FilesPage {
     }
 }
 impl Render for FilesPage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.release_pictures(window);
         let t = theme(cx).clone();
         let mut page = div()
             .size_full()

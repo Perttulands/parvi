@@ -4,6 +4,7 @@ pub mod open;
 pub mod store;
 
 mod page;
+mod picture;
 mod view;
 pub use page::FilesPage;
 
