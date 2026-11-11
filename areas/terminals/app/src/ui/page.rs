@@ -436,7 +436,12 @@ impl Terminals {
                 FieldEvent::Submit | FieldEvent::Tab => {
                     let t = sessions::targets(&s.fleet.all, &s.settings.recent_targets, &q);
                     if let Some(x) = t.get(s.send_cursor) {
-                        s.send_target = Some(Key::of(x));
+                        let target = Key::of(x);
+                        if s.send_target.as_ref() != Some(&target) {
+                            s.send.pane = None;
+                        }
+                        s.send.new_agent = false;
+                        s.send_target = Some(target);
                     }
                     s.send_query.update(cx, |f, cx| f.set("", false, cx));
                     field::focus(&s.send_note, window, cx);

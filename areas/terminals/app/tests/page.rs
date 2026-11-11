@@ -815,3 +815,207 @@ fn restart_of_external_session_uses_last_folder_and_says_shell(cx: &mut TestAppC
     );
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }
+
+#[gpui::test]
+fn send_chooses_a_pane_and_defaults_to_the_focused_pane(cx: &mut TestAppContext) {
+    let Some(running) = start("terminals-send-panes") else {
+        return;
+    };
+    let (shell, cx, settings) = open_with_alpha(&running, "send-panes", cx);
+    tmux(
+        &running,
+        &["split-window", "-d", "-t", "alpha:0", "env PS1='$ ' sh"],
+    );
+    let ids = tmux(
+        &running,
+        &["list-panes", "-t", "alpha:0", "-F", "#{pane_id}"],
+    );
+    let panes: Vec<String> = ids.lines().map(str::to_owned).collect();
+    assert_eq!(panes.len(), 2);
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    let key = Key {
+        node: running.node.clone(),
+        user: String::new(),
+        name: "alpha".into(),
+    };
+    until(cx, "two panes listed", |cx| {
+        page.read_with(cx, |p, _| {
+            p.fleet.session(&key).is_some_and(|s| s.panes.len() == 2)
+        })
+    });
+    let host = shell.read_with(cx, |s, _| Host::new(s.hub()).for_page("toy", &[]));
+    let target = SessionTarget {
+        node: NodeId(running.node.clone()),
+        user: String::new(),
+        name: "alpha".into(),
+    };
+    cx.update(|_, cx| {
+        host.ask(
+            Ask::Send {
+                reference: "echo pane-second-$((40+2))".into(),
+                target: Some(target.clone()),
+            },
+            cx,
+        )
+    })
+    .unwrap();
+    until(cx, "pane chooser", |cx| {
+        cx.debug_bounds("send-pane-1").is_some()
+    });
+    assert!(cx.debug_bounds("send-pane-selected-0").is_some());
+    click(cx, "send-pane-1".into());
+    until(cx, "second pane selected", |cx| {
+        cx.debug_bounds("send-pane-selected-1").is_some()
+    });
+    click(cx, "send-go".into());
+    until(cx, "text in second pane", |_| {
+        tmux(&running, &["capture-pane", "-p", "-t", &panes[1]]).contains("pane-second-42")
+    });
+    assert!(!tmux(&running, &["capture-pane", "-p", "-t", &panes[0]]).contains("pane-second-42"));
+    until(cx, "drawer closed", |cx| {
+        cx.debug_bounds("send-go").is_none()
+    });
+    let second = panes[1].trim_start_matches('%').parse::<u32>().unwrap();
+    cx.update(|_, cx| {
+        page.update(cx, |p, cx| {
+            p.settings.workspace.choose_pane(0, second);
+            cx.notify();
+        })
+    });
+    cx.update(|_, cx| {
+        host.ask(
+            Ask::Send {
+                reference: "echo next".into(),
+                target: Some(target.clone()),
+            },
+            cx,
+        )
+    })
+    .unwrap();
+    until(cx, "focused pane selected by default", |cx| {
+        cx.debug_bounds("send-pane-selected-1").is_some()
+    });
+    // The target can also be shown in a different tile; its displayed pane
+    // remains the default even when another tile has focus.
+    cx.update(|_, cx| {
+        page.update(cx, |p, cx| {
+            p.settings.workspace.set_windows(0, 2);
+            p.settings
+                .workspace
+                .bind_in(0, 1, key.clone(), Some(second));
+            p.settings.workspace.focus = 0;
+            cx.notify();
+        })
+    });
+    cx.update(|_, cx| {
+        host.ask(
+            Ask::Send {
+                reference: "echo next".into(),
+                target: Some(target),
+            },
+            cx,
+        )
+    })
+    .unwrap();
+    until(cx, "other tile's pane selected", |cx| {
+        cx.debug_bounds("send-pane-selected-1").is_some()
+    });
+    // Explicitly select that pane, then let it disappear: the drawer must
+    // report the loss instead of silently sending into the other pane.
+    click(cx, "send-pane-selected-1".into());
+    tmux(&running, &["kill-pane", "-t", &panes[1]]);
+    until(cx, "remaining pane offered", |cx| {
+        cx.debug_bounds("send-pane-0").is_some()
+    });
+    click(cx, "send-go".into());
+    until(cx, "pane loss reported", |cx| {
+        page.read_with(cx, |p, _| {
+            p.send
+                .said
+                .as_deref()
+                .is_some_and(|s| s.contains("selected pane") && s.contains("gone"))
+        })
+    });
+    assert!(!tmux(&running, &["capture-pane", "-p", "-t", &panes[0]]).contains("echo next"));
+    click(cx, "send-pane-0".into());
+    let first = panes[0].trim_start_matches('%').parse::<u32>().unwrap();
+    until(cx, "remaining pane selected", |cx| {
+        page.read_with(cx, |p, _| p.send.pane == Some(first))
+    });
+    cx.update(|_, cx| {
+        host.ask(
+            Ask::Send {
+                reference: "echo single".into(),
+                target: Some(SessionTarget {
+                    node: NodeId(running.node.clone()),
+                    user: String::new(),
+                    name: "beta".into(),
+                }),
+            },
+            cx,
+        )
+    })
+    .unwrap();
+    until(cx, "single-pane target", |cx| {
+        page.read_with(cx, |p, _| {
+            p.send_target.as_ref().is_some_and(|k| k.name == "beta")
+        })
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("send-pane-0").is_none());
+    assert!(cx.debug_bounds("send-pane-selected-0").is_none());
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cli_send_accepts_an_explicit_pane_id() {
+    let Some(server) = Server::start_in("terminals-cli-send-pane") else {
+        return;
+    };
+    server.new_session("cli-alpha", 100, 30);
+    server.run(&["split-window", "-d", "-t", "cli-alpha:0", "env PS1='$ ' sh"]);
+    let ids = server.run(&["list-panes", "-t", "cli-alpha:0", "-F", "#{pane_id}"]);
+    let panes: Vec<&str> = ids.lines().collect();
+    assert_eq!(panes, ["%0", "%1"]);
+    let config = format!("[terminals]\nsocket = {:?}\n", server.socket_path());
+    let node = Node::start(AREAS, &config).await.unwrap();
+    parvi_testkit::tmux::eventually("both panes listed", || {
+        node.sessions()
+            .list()
+            .iter()
+            .find(|s| s.name == "cli-alpha" && s.panes.len() == 2)
+            .map(|_| ())
+    })
+    .await;
+    let url = node.url();
+    let args = [
+        "send",
+        "cli-alpha",
+        "--pane",
+        "1",
+        "--text",
+        "echo cli-pane-42",
+        "--node",
+        &url,
+    ]
+    .map(str::to_owned);
+    assert_eq!(
+        parvi_node_kit::cli::run("session", &args, &mut Vec::new())
+            .await
+            .unwrap(),
+        0
+    );
+    parvi_testkit::tmux::eventually("CLI text in pane 1", || {
+        server
+            .run(&["capture-pane", "-p", "-t", "%1"])
+            .contains("cli-pane-42")
+            .then_some(())
+    })
+    .await;
+    assert!(
+        !server
+            .run(&["capture-pane", "-p", "-t", "%0"])
+            .contains("cli-pane-42")
+    );
+    node.stop().await;
+}
