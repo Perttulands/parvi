@@ -181,7 +181,7 @@ fn object<'a>(json: &'a str, key: &str, value: &str) -> &'a str {
 async fn reports_tools_skills_and_the_checkout() {
     let scratch = scratch();
     let home = &scratch.home;
-    let mut report = gather(home, Fetch::Fetching).await;
+    let report = gather(home, Fetch::Fetching).await;
     let json = report.json(home);
     assert!(!json.contains(SECRET), "a secret came out: {json}");
 
@@ -262,7 +262,8 @@ async fn reports_tools_skills_and_the_checkout() {
         "{kit}"
     );
 
-    report.fetch(home).await;
+    git(&home.dir.join("kit"), &["fetch", "--quiet"]);
+    let report = gather(home, Fetch::Fetched).await;
     let json = report.json(home);
     let kit = object(section(&json, "checkouts"), "name", "kit");
     assert!(
@@ -281,8 +282,7 @@ async fn a_failed_fetch_says_why_and_keeps_the_last_counts() {
         &home.dir.join("kit"),
         &["remote", "set-url", "origin", "/nonexistent/82.git"],
     );
-    let mut report = gather(home, Fetch::Fetching).await;
-    report.fetch(home).await;
+    let report = gather(home, Fetch::Failed("fetch failed".into())).await;
     let json = report.json(home);
     let kit = object(section(&json, "checkouts"), "name", "kit");
     assert!(
@@ -293,7 +293,7 @@ async fn a_failed_fetch_says_why_and_keeps_the_last_counts() {
 }
 
 #[tokio::test]
-async fn sync_pulls_and_runs_the_setup_in_a_session() {
+async fn sync_fetches_fast_forwards_and_runs_setup_in_a_session() {
     use parvi_testkit::node::Node;
     use parvi_testkit::tmux::{Server, eventually};
     let Some(tmux) = Server::start_in("agents-sync") else {

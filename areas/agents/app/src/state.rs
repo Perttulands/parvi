@@ -248,7 +248,8 @@ pub fn upstream_words(c: &Checkout) -> String {
     let when = match c.fetch.as_str() {
         "fetching" => "fetching…",
         "failed" => "last known",
-        _ => "just fetched",
+        "fetched" => "just fetched",
+        _ => "local refs",
     };
     format!("{at} {up} · {when}")
 }
@@ -278,8 +279,15 @@ pub enum Chosen {
 /// What a sync frame answered.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Synced {
-    Started { checkout: String, session: String },
-    Refused { checkout: String, why: String },
+    Started {
+        checkout: String,
+        session: String,
+    },
+    Refused {
+        checkout: String,
+        code: String,
+        why: String,
+    },
 }
 
 pub struct Agents {
@@ -322,11 +330,11 @@ impl Agents {
                         session: text,
                     }
                 } else {
+                    let error = serde_json::from_str::<parvi_core::Error>(&text).ok()?;
                     Synced::Refused {
                         checkout,
-                        why: serde_json::from_str::<parvi_core::Error>(&text)
-                            .ok()?
-                            .message,
+                        code: error.code,
+                        why: error.message,
                     }
                 }))
             }
@@ -482,6 +490,13 @@ mod tests {
                 .any(|drift| drift.what.contains("fetch failed"))
         );
         assert!(!upstream_words(&r.checkouts[0]).contains("failed"));
+    }
+
+    #[test]
+    fn a_local_report_does_not_claim_a_fetch() {
+        let mut report = report();
+        report.checkouts[0].fetch = "local".into();
+        assert!(upstream_words(&report.checkouts[0]).ends_with("local refs"));
     }
 
     #[test]

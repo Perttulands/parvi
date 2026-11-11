@@ -1,4 +1,4 @@
-//! Sync: `git pull` and the checkout's setup script, typed into a new tmux
+//! Sync: fetch, then fast-forward and run setup in a new tmux
 //! session so the operator can watch it and read what it said. Git is kept
 //! non-interactive even though the session has a terminal.
 
@@ -6,17 +6,23 @@ use anyhow::{Context, Result};
 
 use super::checkout::SETUP;
 use super::report::checkout_paths;
-use super::{Home, skills};
+use super::{Home, run, skills};
 use parvi_term::{Sessions, Start};
 
 /// Starts syncing the checkout the operator knows as `shown` (as the report
 /// shows its path), if it is one the skills come from. Returns the new
 /// session's name.
 pub async fn sync(home: &Home, sessions: &dyn Sessions, shown: &str) -> Result<String> {
-    let path = checkout_paths(&skills::scan(home))
-        .into_iter()
-        .find(|path| home.show(path) == shown)
-        .with_context(|| format!("{shown} is not a checkout the skills come from"))?;
+    let path = checkout(home, shown)?;
+    run::fetch(home, &path).await.map_err(anyhow::Error::msg)?;
+    sync_fetched(sessions, &path).await
+}
+
+/// Start the visible fast-forward using refs already fetched by the caller.
+pub(crate) async fn sync_fetched(
+    sessions: &dyn Sessions,
+    path: &std::path::Path,
+) -> Result<String> {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -43,12 +49,19 @@ pub async fn sync(home: &Home, sessions: &dyn Sessions, shown: &str) -> Result<S
     Ok(session)
 }
 
-/// What the session types: the pull, then the setup if the pull worked.
+pub(crate) fn checkout(home: &Home, shown: &str) -> Result<std::path::PathBuf> {
+    checkout_paths(&skills::scan(home))
+        .into_iter()
+        .find(|path| home.show(path) == shown)
+        .with_context(|| format!("{shown} is not a checkout the skills come from"))
+}
+
+/// What the session types after a successful fetch: fast-forward, then setup.
 fn line(setup: Option<&str>) -> String {
     #[cfg(windows)]
-    let prefix = "$env:GIT_TERMINAL_PROMPT = '0'; git pull --ff-only";
+    let prefix = "$env:GIT_TERMINAL_PROMPT = '0'; git merge --ff-only '@{upstream}'";
     #[cfg(not(windows))]
-    let prefix = "export GIT_TERMINAL_PROMPT=0; git pull --ff-only";
+    let prefix = "export GIT_TERMINAL_PROMPT=0; git merge --ff-only '@{upstream}'";
     match setup {
         #[cfg(windows)]
         Some(script) => format!("{prefix}; if ($?) {{ .\\{script} }}"),
@@ -107,7 +120,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn sync_is_noninteractive_and_runs_setup_only_after_a_successful_pull() {
+    fn sync_is_noninteractive_and_runs_setup_only_after_a_successful_fast_forward() {
         use std::os::unix::fs::PermissionsExt;
         use std::process::Command;
         let dir = std::env::temp_dir().join(format!("parvi-sync-command-{}", std::process::id()));
@@ -142,7 +155,7 @@ mod tests {
         );
         assert_eq!(
             std::fs::read_to_string(dir.join("git-args")).unwrap(),
-            "pull --ff-only"
+            "merge --ff-only @{upstream}"
         );
         assert!(!dir.join("setup-prompt").exists());
         std::fs::remove_file(dir.join("fail")).unwrap();

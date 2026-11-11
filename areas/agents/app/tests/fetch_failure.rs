@@ -31,25 +31,27 @@ fn executable(path: &Path, script: &str) {
 fn start() -> Running {
     let home = fresh_dir("parvi-agents-fetch-page");
     let bin = home.join("bin");
-    let kit = home.join("kit");
-    let skill = kit.join("skills/sample");
     let links = home.join(".agents/skills");
     std::fs::create_dir_all(&bin).unwrap();
-    std::fs::create_dir_all(kit.join(".git")).unwrap();
-    std::fs::create_dir_all(&skill).unwrap();
     std::fs::create_dir_all(&links).unwrap();
-    std::fs::write(
-        skill.join("SKILL.md"),
-        "---\nname: sample\ndescription: Sample\n---\n",
-    )
-    .unwrap();
-    symlink(&skill, links.join("sample")).unwrap();
+    for name in ["kit", "extras"] {
+        let checkout = home.join(name);
+        let skill = checkout.join(format!("skills/{name}-skill"));
+        std::fs::create_dir_all(checkout.join(".git")).unwrap();
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            format!("---\nname: {name}-skill\ndescription: Sample\n---\n"),
+        )
+        .unwrap();
+        symlink(&skill, links.join(format!("{name}-skill"))).unwrap();
+    }
     for name in ["claude", "codex", "pi"] {
         executable(&bin.join(name), "#!/bin/sh\necho '1.2.3'\n");
     }
     executable(
         &bin.join("git"),
-        "#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = fetch ]; then\n    if [ \"$GIT_TERMINAL_PROMPT\" != 0 ]; then echo 'unexpected credential prompt' >&2; exit 2; fi\n    echo 'fatal: could not read Username: terminal prompts disabled' >&2\n    exit 1\n  fi\ndone\nexit 0\n",
+        "#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = status ]; then printf '%s\\n' \"$*\" >> \"$HOME/status.log\"; fi\n  if [ \"$arg\" = fetch ]; then\n    printf '%s\\n' \"$*\" >> \"$HOME/fetch.log\"\n    if [ \"$GIT_TERMINAL_PROMPT\" != 0 ]; then echo 'unexpected credential prompt' >&2; exit 2; fi\n    echo 'fatal: could not read Username: terminal prompts disabled' >&2\n    exit 1\n  fi\ndone\nexit 0\n",
     );
     let (ready, wait) = mpsc::channel();
     let (stop, stopped) = mpsc::channel();
@@ -121,10 +123,36 @@ fn failed_fetch_is_reported_once_without_marking_available_harnesses_broken(
             shell.hub().read(cx).fleet.here().state == LinkState::Open
         })
     });
+    until(cx, "local checkout report", |cx| {
+        cx.debug_bounds("agents-checkout-kit").is_some()
+            && cx.debug_bounds("agents-checkout-extras").is_some()
+    });
+    assert!(
+        !running.home.join("fetch.log").exists(),
+        "opening the page must not fetch"
+    );
+    assert!(cx.debug_bounds("agents-sync-failures-1").is_none());
+    let click = |cx: &mut VisualTestContext, selector: &str| {
+        let at = cx
+            .debug_bounds(Box::leak(selector.to_owned().into_boxed_str()))
+            .expect(selector)
+            .center();
+        cx.simulate_click(at, Modifiers::none());
+    };
+    click(cx, "agents-checkout-kit");
+    let sync_kit = format!("agents-sync-{}-kit", running.node);
+    until(cx, "sync kit", |cx| {
+        cx.debug_bounds(Box::leak(sync_kit.clone().into_boxed_str()))
+            .is_some()
+    });
+    click(cx, &sync_kit);
+    until(cx, "one failed checkout", |cx| {
+        cx.debug_bounds("agents-sync-failures-1").is_some()
+    });
     let failure = Box::leak(format!("agents-sync-failure-{}-kit", running.node).into_boxed_str());
-    until(cx, "fetch failure", |cx| cx.debug_bounds(failure).is_some());
     let message = "agents-sync-message-Sync failed: fatal: could not read Username: terminal prompts disabled";
-    assert!(cx.debug_bounds(message).is_some());
+    assert!(cx.debug_bounds(failure).is_none());
+    assert!(cx.debug_bounds(message).is_none());
     for name in ["claude", "codex", "pi"] {
         let available = Box::leak(format!("agents-tool-state-{name}-available").into_boxed_str());
         let broken = Box::leak(format!("agents-tool-state-{name}-broken").into_boxed_str());
@@ -134,13 +162,64 @@ fn failed_fetch_is_reported_once_without_marking_available_harnesses_broken(
         );
         assert!(cx.debug_bounds(broken).is_none());
     }
-    // The same checkout is linked to multiple harnesses, but its failure is
-    // presented once and stays visible when the operator opens the checkout.
-    let checkout = cx.debug_bounds("agents-checkout-kit").unwrap().center();
-    cx.simulate_click(checkout, Modifiers::none());
-    until(cx, "checkout detail", |cx| {
+    click(cx, "agents-checkout-extras");
+    let sync_extras = format!("agents-sync-{}-extras", running.node);
+    until(cx, "sync extras", |cx| {
+        cx.debug_bounds(Box::leak(sync_extras.clone().into_boxed_str()))
+            .is_some()
+    });
+    click(cx, &sync_extras);
+    until(cx, "two failed checkouts", |cx| {
+        cx.debug_bounds("agents-sync-failures-2").is_some()
+    });
+    cx.run_until_parked();
+    assert!(
+        shell.read_with(cx, |shell, cx| shell
+            .hub()
+            .read(cx)
+            .status
+            .as_ref()
+            .is_none_or(|status| !status.text.contains("could not read Username"))),
+        "fetch details must not appear in an unsolicited status error"
+    );
+    assert_eq!(
+        std::fs::read_to_string(running.home.join("fetch.log"))
+            .unwrap()
+            .lines()
+            .count(),
+        2
+    );
+    assert!(cx.debug_bounds(failure).is_none());
+    click(cx, "agents-sync-details");
+    until(cx, "expanded failures", |cx| {
         cx.debug_bounds(failure).is_some()
     });
+    let other = Box::leak(format!("agents-sync-failure-{}-extras", running.node).into_boxed_str());
+    assert!(cx.debug_bounds(other).is_some());
     assert!(cx.debug_bounds(message).is_some());
+    click(cx, "agents-sync-details");
+    until(cx, "collapsed failures", |cx| {
+        cx.debug_bounds(failure).is_none()
+    });
+    let old_reads = std::fs::read_to_string(running.home.join("status.log"))
+        .unwrap()
+        .lines()
+        .count();
+    let refresh = format!("agents-refresh-{}", running.node);
+    click(cx, &refresh);
+    until(cx, "local refresh completes", |_| {
+        std::fs::read_to_string(running.home.join("status.log"))
+            .is_ok_and(|text| text.lines().count() > old_reads)
+    });
+    until(cx, "failures persist through local refresh", |cx| {
+        cx.debug_bounds("agents-sync-failures-2").is_some()
+    });
+    assert_eq!(
+        std::fs::read_to_string(running.home.join("fetch.log"))
+            .unwrap()
+            .lines()
+            .count(),
+        2
+    );
     let _ = std::fs::remove_dir_all(settings);
 }

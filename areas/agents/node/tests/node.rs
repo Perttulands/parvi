@@ -265,3 +265,193 @@ async fn role_routes_and_commands_keep_versions_and_usage() {
     node.stop().await;
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn watching_does_not_fetch_and_sync_failures_survive_refresh_and_other_watchers() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let home = fresh_dir("agents-no-fetch-watch");
+    let bin = home.join("bin");
+    let links = home.join(".agents/skills");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::create_dir_all(&links).unwrap();
+    let git = bin.join("git");
+    std::fs::write(&git, "#!/bin/sh\nif [ \"$3\" = fetch ]; then printf '%s\\n' \"$2\" >> \"$HOME/fetch-log\"; case \"$2\" in */first) if [ -f \"$HOME/block-fetch\" ]; then : > \"$HOME/fetch-started\"; while [ ! -f \"$HOME/continue-fetch\" ]; do :; done; fi;; esac; echo 'fatal: credentials unavailable' >&2; exit 1; fi\nexit 0\n").unwrap();
+    std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
+    for name in ["first", "second"] {
+        let checkout = home.join(name);
+        std::fs::create_dir_all(checkout.join(".git")).unwrap();
+        let skill = checkout.join("skills").join(name);
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: Fixture\n---\n"),
+        )
+        .unwrap();
+        symlink(&skill, links.join(name)).unwrap();
+    }
+    let config = format!("[agents]\nhome = {:?}\npath = [{:?}]\n", home, bin);
+    let node = Node::start(&[sessions::LISTING, parvi_agents::LISTING], &config)
+        .await
+        .unwrap();
+    let (mut first, _) = tokio_tungstenite::connect_async(node.ws()).await.unwrap();
+    let (mut second, _) = tokio_tungstenite::connect_async(node.ws()).await.unwrap();
+    for ws in [&mut first, &mut second] {
+        ws.send(Message::Binary(vec![WATCH, 1].into()))
+            .await
+            .unwrap();
+        let report: Value = serde_json::from_slice(&next_kind(ws, REPORT).await[1..]).unwrap();
+        assert_eq!(report["checkouts"].as_array().unwrap().len(), 2);
+        assert!(
+            report["checkouts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|item| item["fetch"] == "local")
+        );
+    }
+    let show = node.call("agents_show", json!({})).await.unwrap();
+    assert!(
+        show["checkouts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["fetch"] == "local")
+    );
+    assert!(
+        !home.join("fetch-log").exists(),
+        "reading or watching must not fetch"
+    );
+    first
+        .send(Message::Binary(
+            [&[SYNC][..], &17_u32.to_le_bytes(), b"~/first"]
+                .concat()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    let answer = next_kind(&mut first, SYNCED).await;
+    assert_eq!(answer[5], 0);
+    let error: Error = serde_json::from_slice(&answer[6..]).unwrap();
+    assert_eq!(error.code, "agents_fetch_failed");
+    assert!(error.message.contains("credentials unavailable"));
+    let other = next_report_with_failure(&mut second, "first", 1).await;
+    assert_eq!(
+        other["checkouts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "first")
+            .unwrap()["fetchError"],
+        "fatal: credentials unavailable"
+    );
+    let error = node
+        .call("agents_sync", json!({"checkout":"~/second"}))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "agents_fetch_failed");
+    let both = next_report_with_failure(&mut second, "second", 2).await;
+    assert_eq!(
+        both["checkouts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|c| c["fetch"] == "failed")
+            .count(),
+        2
+    );
+    first
+        .send(Message::Binary(vec![WATCH, 0].into()))
+        .await
+        .unwrap();
+    first
+        .send(Message::Binary(vec![WATCH, 1].into()))
+        .await
+        .unwrap();
+    let refreshed = next_report_with_failure(&mut first, "second", 2).await;
+    assert_eq!(
+        refreshed["checkouts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|c| c["fetch"] == "failed")
+            .count(),
+        2
+    );
+    // A second Sync can arrive while a first is in flight, and the first
+    // watcher can disconnect without losing either checkout's result.
+    std::fs::write(home.join("block-fetch"), "").unwrap();
+    first
+        .send(Message::Binary(
+            [&[SYNC][..], &18_u32.to_le_bytes(), b"~/first"]
+                .concat()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !home.join("fetch-started").exists() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("first fetch started");
+    second
+        .send(Message::Binary(
+            [&[SYNC][..], &19_u32.to_le_bytes(), b"~/second"]
+                .concat()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    drop(first);
+    std::fs::write(home.join("continue-fetch"), "").unwrap();
+    let answer = next_kind(&mut second, SYNCED).await;
+    assert_eq!(&answer[1..5], &19_u32.to_le_bytes());
+    assert_eq!(answer[5], 0);
+    let after_disconnect = node.call("agents_show", json!({})).await.unwrap();
+    assert_eq!(
+        after_disconnect["checkouts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|c| c["fetch"] == "failed")
+            .count(),
+        2
+    );
+    let log = std::fs::read_to_string(home.join("fetch-log")).unwrap();
+    assert_eq!(
+        log.lines().count(),
+        4,
+        "only explicit Sync commands fetch: {log}"
+    );
+    drop(second);
+    node.stop().await;
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[cfg(unix)]
+async fn next_report_with_failure(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    name: &str,
+    count: usize,
+) -> Value {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let frame = next_kind(ws, REPORT).await;
+            let report: Value = serde_json::from_slice(&frame[1..]).unwrap();
+            let checkouts = report["checkouts"].as_array().unwrap();
+            if checkouts
+                .iter()
+                .any(|c| c["name"] == name && c["fetch"] == "failed")
+                && checkouts.iter().filter(|c| c["fetch"] == "failed").count() == count
+            {
+                return report;
+            }
+        }
+    })
+    .await
+    .expect("report with retained sync failures")
+}

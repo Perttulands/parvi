@@ -225,17 +225,64 @@ impl AgentsPage {
             }
             _ => kit::note(&t, "Choose a harness, a tool or a checkout.", Some(t.dim)),
         };
-        let mut sync_failures = div().flex().flex_col().gap(px(tokens::P8));
+        let mut failures = Vec::new();
         for (node, report) in &reports {
             for checkout in &report.checkouts {
                 if let Some(message) = agents::sync_failure(checkout) {
-                    let selector = format!("agents-sync-failure-{node}-{}", checkout.name);
+                    failures.push((
+                        self.place_name(node),
+                        (*node).to_owned(),
+                        checkout.name.clone(),
+                        message,
+                    ));
+                }
+            }
+        }
+        let mut sync_failures = div().flex().flex_col().gap(px(tokens::P8));
+        if !failures.is_empty() {
+            let count = failures.len();
+            let selector = format!("agents-sync-failures-{count}");
+            sync_failures = sync_failures.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(tokens::P8))
+                    .child(
+                        div()
+                            .debug_selector(move || selector.clone())
+                            .text_color(t.error)
+                            .child(format!(
+                                "{count} checkout{} failed to sync",
+                                if count == 1 { "" } else { "s" }
+                            )),
+                    )
+                    .child(
+                        kit::button(
+                            &t,
+                            "agents-sync-details",
+                            if self.show_sync_failures {
+                                "Hide details"
+                            } else {
+                                "Show details"
+                            },
+                            Kind::Quiet,
+                        )
+                        .debug_selector(|| "agents-sync-details".into())
+                        .on_click(cx.listener(|page, _, _, cx| {
+                            page.show_sync_failures = !page.show_sync_failures;
+                            cx.notify();
+                        })),
+                    ),
+            );
+            if self.show_sync_failures {
+                for (place, node, name, message) in failures {
+                    let selector = format!("agents-sync-failure-{node}-{name}");
                     let message_selector = format!("agents-sync-message-{message}");
                     sync_failures = sync_failures.child(
                         div()
                             .debug_selector(move || selector.clone())
                             .text_color(t.error)
-                            .child(format!("{} · {} · ", self.place_name(node), checkout.name))
+                            .child(format!("{place} · {name} · "))
                             .child(
                                 div()
                                     .debug_selector(move || message_selector.clone())
@@ -440,8 +487,6 @@ impl AgentsPage {
             let place = self.place_name(node);
             let tone = if c.behind > 0 {
                 Tone::Behind
-            } else if c.fetch == "failed" {
-                Tone::Error
             } else {
                 Tone::Plain
             };
@@ -513,12 +558,12 @@ impl AgentsPage {
             };
             let busy = self.state.starting(node, &c.path);
             let why = format!(
-                "git pull{} in {}, in a new session",
+                "Fetch {}, then fast-forward to its upstream{} in a new session",
+                c.path,
                 c.setup
                     .as_deref()
                     .map(|s| format!(" and ./{s}"))
                     .unwrap_or_default(),
-                c.path
             );
             let (n, path) = (node.to_string(), c.path.clone());
             let b = kit::button(
@@ -527,6 +572,11 @@ impl AgentsPage {
                 label,
                 if i == 0 { Kind::Primary } else { Kind::Plain },
             )
+            .debug_selector({
+                let node = node.to_owned();
+                let name = c.name.clone();
+                move || format!("agents-sync-{node}-{name}")
+            })
             .tooltip(kit::tip(why));
             buttons = buttons.child(if busy {
                 b.opacity(tokens::DIMMED)
@@ -543,7 +593,11 @@ impl AgentsPage {
                 "Refresh",
                 Kind::Plain,
             )
-            .tooltip(kit::tip("Read everything again and fetch every checkout"))
+            .debug_selector({
+                let node = node.to_owned();
+                move || format!("agents-refresh-{node}")
+            })
+            .tooltip(kit::tip("Read local tools and checkouts again"))
             .on_click(cx.listener(|s, _: &ClickEvent, _, cx| s.agents_refresh(cx))),
         );
         div()
