@@ -25,6 +25,7 @@ use parvi_testkit::node::Node;
 use parvi_testkit::tmux::Server;
 
 const AREAS: &[Listing] = &[parvi_terminals::LISTING];
+const AREAS_WITH_FILES: &[Listing] = &[parvi_terminals::LISTING, parvi_files::LISTING];
 
 thread_local! {
     static PAGE: RefCell<Option<Entity<Terminals>>> = const { RefCell::new(None) };
@@ -51,7 +52,7 @@ const REFERENCE: &str = "echo sent-$((40+2))";
 impl Page for Toy {
     const ID: &'static str = "toy";
     const TITLE: &'static str = "Toy";
-    const ANSWERS: &'static [Answers] = &[Answers::Reveal("item")];
+    const ANSWERS: &'static [Answers] = &[Answers::Reveal("item"), Answers::OpenPath];
 
     fn answer(&mut self, ask: Ask, from: &'static str, _: &mut Window, cx: &mut Context<Self>) {
         if ask.beside() {
@@ -141,6 +142,10 @@ fn start_with_harness(label: &str, harness: bool) -> Option<Running> {
 }
 
 fn start_with_restart_harness(label: &str, harness: bool, restart: bool) -> Option<Running> {
+    start_config(label, harness, restart, false)
+}
+
+fn start_config(label: &str, harness: bool, restart: bool, files: bool) -> Option<Running> {
     let label = label.to_string();
     let (ready, wait) = mpsc::channel();
     let (stop, stopped) = mpsc::channel();
@@ -173,7 +178,9 @@ fn start_with_restart_harness(label: &str, harness: bool, restart: bool) -> Opti
                 tmux.socket_path(),
                 launch
             );
-            let node = Node::start(AREAS, &config).await.expect("a node");
+            let areas = if files { AREAS_WITH_FILES } else { AREAS };
+            let config = if files { format!("{config}\n[files]\nroots = []\n") } else { config };
+            let node = Node::start(areas, &config).await.expect("a node");
             let _ = ready.send(Some((node.url(), node.id(), tmux.socket_path(), dir.clone())));
             while stopped.try_recv().is_err() {
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -540,6 +547,12 @@ fn launches_use_each_tile_grid(cx: &mut TestAppContext) {
         });
         assert!(f32::from(font) >= 11.);
     }
+    // All four panes must receive their screens without clicking a tile.
+    until(cx, "all four newly launched screens", |cx| {
+        page.read_with(cx, |p, _| {
+            (0..4).all(|i| p.window_text(i).is_some_and(|text| !text.trim().is_empty()))
+        })
+    });
     let grid = page.read_with(cx, |p, _| {
         p.launch_grids.borrow()[p.settings.workspace.focus].unwrap()
     });
@@ -677,6 +690,17 @@ fn launcher_browses_and_selects_node_flags(cx: &mut TestAppContext) {
     click(cx, "flag-0---verbose".into());
     until(cx, "flag in preview", |cx| {
         cx.debug_bounds("flag-line-0---verbose").is_some()
+    });
+    scroll_to_launch(cx, "launcher-scroll-0");
+    until(cx, "visible launch button", |cx| {
+        cx.debug_bounds("launch-0")
+            .zip(cx.debug_bounds("launcher-scroll-0"))
+            .is_some_and(|(button, viewport)| viewport.contains(&button.center()))
+    });
+    click(cx, "launch-0".into());
+    until(cx, "selected flag reaches the harness", |_| {
+        std::fs::read_to_string(running.fixture.join("runs"))
+            .is_ok_and(|runs| runs.contains("--verbose"))
     });
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }
@@ -1412,5 +1436,530 @@ fn late_launch_success_does_not_replace_a_newer_failure(cx: &mut TestAppContext)
             true
         ))
     );
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+/// The shell routes the leader and Escape while a real terminal is attached.
+#[gpui::test]
+fn leader_and_escape_route_around_an_attached_terminal(cx: &mut TestAppContext) {
+    let Some(running) = start("terminals-keys-journey") else {
+        return;
+    };
+    let (shell, cx, settings) = open_with_alpha(&running, "keys-journey", cx);
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    cx.simulate_keystrokes("ctrl-shift-space s");
+    until(cx, "leader opens Send", |cx| {
+        cx.debug_bounds("send-body").is_some()
+    });
+    cx.simulate_keystrokes("escape");
+    until(cx, "Escape closes Send", |cx| {
+        cx.debug_bounds("send-body").is_none()
+    });
+    assert!(!page.read_with(cx, |p, _| p.is_open("send")));
+    let escape_file = running.fixture.join("escape-byte");
+    tmux(
+        &running,
+        &[
+            "send-keys",
+            "-t",
+            "alpha",
+            &format!(
+                "stty raw -echo; dd bs=1 count=1 of='{}' 2>/dev/null; stty sane",
+                escape_file.display()
+            ),
+            "Enter",
+        ],
+    );
+    until(cx, "terminal waiting for a byte", |_| {
+        tmux(
+            &running,
+            &[
+                "display-message",
+                "-p",
+                "-t",
+                "alpha",
+                "#{pane_current_command}",
+            ],
+        )
+        .trim()
+            == "dd"
+    });
+    cx.simulate_keystrokes("escape");
+    until(cx, "Escape reaches the terminal", |_| {
+        std::fs::read(&escape_file).is_ok_and(|b| b == [27])
+    });
+    // A Finnish keyboard produces plus without Shift.
+    cx.simulate_event(gpui::KeyDownEvent {
+        keystroke: gpui::Keystroke {
+            key: "+".into(),
+            key_char: Some("+".into()),
+            modifiers: Modifiers {
+                alt: true,
+                ..Modifiers::none()
+            },
+        },
+        is_held: false,
+        prefer_character_input: false,
+    });
+    until(cx, "Finnish Alt-plus adds a window", |cx| {
+        page.read_with(cx, |p, _| p.settings.workspace.windows().len() == 2)
+    });
+    cx.simulate_keystrokes("ctrl-shift-space k");
+    until(cx, "keys off", |cx| {
+        shell.read_with(cx, |s, cx| !s.hub().read(cx).settings.keys)
+    });
+    cx.simulate_keystrokes("alt-s");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("send-body").is_none());
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+/// A clipboard image travels through Send to the target node before its path
+/// and the originating reference are delivered to the session.
+#[gpui::test]
+fn pasted_attachment_reaches_the_node_and_session(cx: &mut TestAppContext) {
+    let Some(running) = start_config("terminals-pasted-attachment", false, false, true) else {
+        return;
+    };
+    let received = running.fixture.join("received");
+    tmux(
+        &running,
+        &[
+            "send-keys",
+            "-t",
+            "alpha",
+            &format!("cat > '{}'", received.display()),
+            "Enter",
+        ],
+    );
+    let (shell, cx, settings) = open_with_alpha(&running, "pasted-attachment", cx);
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    let host = shell.read_with(cx, |s, _| Host::new(s.hub()).for_page("toy", &[]));
+    cx.update(|_, cx| {
+        host.ask(
+            Ask::Send {
+                reference: "file /example.txt".into(),
+                target: None,
+            },
+            cx,
+        )
+    })
+    .unwrap();
+    until(cx, "Send drawer", |cx| cx.debug_bounds("send-go").is_some());
+    let bytes = vec![1, 2, 3, 4, 5];
+    let image = gpui::Image::from_bytes(gpui::ImageFormat::Png, bytes.clone());
+    cx.write_to_clipboard(gpui::ClipboardItem::new_image(&image));
+    cx.update(|window, cx| {
+        page.update(cx, |p, cx| {
+            parvi_app_kit::widgets::field::focus(&p.send_note, window, cx);
+        })
+    });
+    cx.simulate_keystrokes("ctrl-v");
+    until(cx, "clipboard attachment", |cx| {
+        page.read_with(cx, |p, _| !p.send.files.is_empty())
+    });
+    click(cx, "send-go".into());
+    let mut path = std::path::PathBuf::new();
+    until(cx, "reference and drop path delivered", |_| {
+        let Ok(text) = std::fs::read_to_string(&received) else {
+            return false;
+        };
+        if !text.contains("file /example.txt") {
+            return false;
+        }
+        let Some(drop) = text.lines().find_map(|line| line.strip_prefix("- ")) else {
+            return false;
+        };
+        path = drop.into();
+        path.exists()
+    });
+    assert!(path.to_string_lossy().contains("drops"));
+    assert_eq!(std::fs::read(path).unwrap(), bytes);
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+/// Hooks mark both the session and its tab until a CLI acknowledgement.
+#[gpui::test]
+fn hook_reports_mark_session_and_tab_until_cli_seen(cx: &mut TestAppContext) {
+    struct ToneLog;
+    static TONES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    static LOGGER: ToneLog = ToneLog;
+    impl log::Log for ToneLog {
+        fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+            true
+        }
+        fn log(&self, record: &log::Record<'_>) {
+            if record.target() == "parvi_terminals_app::sound" {
+                TONES.lock().unwrap().push(record.args().to_string());
+            }
+        }
+        fn flush(&self) {}
+    }
+    log::set_logger(&LOGGER).expect("install the tone observer");
+    log::set_max_level(log::LevelFilter::Warn);
+    let Some(running) = start("terminals-hook-journey") else {
+        return;
+    };
+    let (_shell, cx, settings) = open_with_alpha(&running, "hook-journey", cx);
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    cx.update(|_, cx| page.update(cx, |p, _| p.settings.event_tone = true));
+    let key = Key {
+        node: running.node.clone(),
+        user: String::new(),
+        name: "alpha".into(),
+    };
+    let id = page.read_with(cx, |p, _| p.fleet.session(&key).unwrap().id.clone());
+    // The terminal is not being looked at, so a report remains news.
+    click(cx, "tab-toy".into());
+    for (event, kind) in [
+        ("finished", parvi_terminals_contract::EventKind::Finished),
+        (
+            "needs-input",
+            parvi_terminals_contract::EventKind::NeedsInput,
+        ),
+    ] {
+        let url = format!(
+            "{}/api/agent/event?session=%24{}&event={event}",
+            running.url,
+            &id[1..]
+        );
+        parvi_node_kit::hook::report(&[url, "{\"message\":\"ready\"}".into()]);
+        until(cx, "hook marks the row and tab", |cx| {
+            page.read_with(cx, |p, _| {
+                p.fleet
+                    .session(&key)
+                    .and_then(|s| p.marked(s))
+                    .is_some_and(|e| e.kind == kind)
+                    && p.tab_marked(0)
+            })
+        });
+        until(cx, "tone requested on the test platform", |_| {
+            TONES
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|line| line.contains(&format!("tone {event} not played")))
+        });
+        let args = ["seen", "alpha", "--node", &running.url].map(str::to_owned);
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        assert_eq!(
+            runtime
+                .block_on(parvi_node_kit::cli::run("session", &args, &mut Vec::new()))
+                .unwrap(),
+            0
+        );
+        until(cx, "seen clears the row and tab", |cx| {
+            page.read_with(cx, |p, _| {
+                p.fleet.session(&key).is_some_and(|s| p.marked(s).is_none()) && !p.tab_marked(0)
+            })
+        });
+    }
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+/// Links emitted by a scratch tmux session reach the platform and the page
+/// that answers paths, including a path wrapped by the terminal grid.
+#[gpui::test]
+fn terminal_links_open_url_and_wrapped_quoted_path(cx: &mut TestAppContext) {
+    let Some(running) = start("terminals-link-journey") else {
+        return;
+    };
+    let (_shell, cx, settings) = open_with_alpha(&running, "link-journey", cx);
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    let path = format!("/tmp/{}/leaf.txt", "long".repeat(55));
+    let command =
+        format!("printf '\\033[2J\\033[H\"{path}\"\\nhttps://example.test/safe\\n🙂X\\n'");
+    tmux(&running, &["send-keys", "-t", "alpha", &command, "Enter"]);
+    until(cx, "terminal links and emoji printed", |cx| {
+        let text = shown(cx);
+        text.lines()
+            .any(|line| line.trim() == "https://example.test/safe")
+            && text.lines().any(|line| line.trim() == "🙂 X")
+    });
+    let position = |cx: &mut VisualTestContext, needle: &str| {
+        page.read_with(cx, |p, _| {
+            let text = p.window_text(0).unwrap();
+            let (row, line) = text
+                .lines()
+                .enumerate()
+                .find(|(_, line)| line.contains(needle))
+                .unwrap();
+            let col = line.find(needle).unwrap();
+            let geo = p.geo.borrow()[0];
+            let origin = geo.origin.unwrap();
+            let cell = geo.cell.unwrap();
+            gpui::point(
+                origin.x + cell.width * col as f32 + px(2.),
+                origin.y + cell.height * row as f32 + px(2.),
+            )
+        })
+    };
+    let url = position(cx, "https://example.test/safe");
+    cx.simulate_click(url, Modifiers::none());
+    until(cx, "URL opened", |cx| {
+        cx.opened_url().as_deref() == Some("https://example.test/safe")
+    });
+    ITEM_ASK.with(|slot| *slot.borrow_mut() = None);
+    let path_pos = position(cx, "/tmp/");
+    cx.simulate_click(path_pos, Modifiers::none());
+    until(cx, "wrapped path opened", |_| {
+        ITEM_ASK.with(|slot| matches!(&*slot.borrow(), Some(Ask::OpenPath { path: got, beside: true, .. }) if got == &path))
+    });
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+#[gpui::test]
+fn selection_copies_when_mouse_releases_outside_the_tile(cx: &mut TestAppContext) {
+    let Some(running) = start("terminals-selection-journey") else {
+        return;
+    };
+    let (_shell, cx, settings) = open_with_alpha(&running, "selection-journey", cx);
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    tmux(
+        &running,
+        &[
+            "send-keys",
+            "-t",
+            "alpha",
+            "printf '\\033[2J\\033[Hcopy-marker\\n'",
+            "Enter",
+        ],
+    );
+    until(cx, "selection text", |cx| {
+        shown(cx).lines().any(|line| line.trim() == "copy-marker")
+    });
+    let (start, end) = page.read_with(cx, |p, _| {
+        let text = p.window_text(0).unwrap();
+        let (row, line) = text
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.contains("copy-marker"))
+            .unwrap();
+        let col = line.find("copy-marker").unwrap();
+        let geo = p.geo.borrow()[0];
+        let origin = geo.origin.unwrap();
+        let cell = geo.cell.unwrap();
+        (
+            gpui::point(
+                origin.x + cell.width * col as f32 + px(2.),
+                origin.y + cell.height * row as f32 + px(2.),
+            ),
+            gpui::point(
+                origin.x + cell.width * (col + 11) as f32 + px(2.),
+                origin.y + cell.height * row as f32 + px(2.),
+            ),
+        )
+    });
+    cx.simulate_mouse_down(start, gpui::MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(end, gpui::MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(
+        gpui::point(px(0.), px(0.)),
+        gpui::MouseButton::Left,
+        Modifiers::none(),
+    );
+    until(cx, "selection copied", |cx| {
+        cx.read_from_clipboard()
+            .and_then(|c| c.text())
+            .is_some_and(|s| s.contains("copy-marker"))
+    });
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+/// Arrange a real session using the same page actions as the tab menus and
+/// drag another session from the rail into an empty window.
+#[gpui::test]
+fn arrange_tabs_preset_drag_and_claim_on_a_live_node(cx: &mut TestAppContext) {
+    let Some(running) = start("terminals-arrange-journey") else {
+        return;
+    };
+    let (_shell, cx, settings) = open_with_alpha(&running, "arrange-journey", cx);
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    let run_item = |cx: &mut VisualTestContext, tab: usize, label: &str| {
+        let action = page.read_with(cx, |p, _| {
+            p.tab_menu(tab)
+                .into_iter()
+                .find(|r| r.label == label)
+                .unwrap()
+                .act
+                .unwrap()
+        });
+        cx.update(|window, cx| page.update(cx, |p, cx| p.act(action, window, cx)));
+    };
+    let two = page.read_with(cx, |p, _| {
+        p.tab_menu(0)
+            .into_iter()
+            .find(|r| r.label == "Windows")
+            .unwrap()
+            .sub
+            .into_iter()
+            .find(|r| r.label == "2")
+            .unwrap()
+            .act
+            .unwrap()
+    });
+    cx.update(|window, cx| page.update(cx, |p, cx| p.act(two, window, cx)));
+    until(cx, "second window", |cx| {
+        cx.debug_bounds("launcher-scroll-1").is_some()
+    });
+    let beta: &'static str = Box::leak(format!("row-{}::beta", running.node).into_boxed_str());
+    until(cx, "beta row", |cx| cx.debug_bounds(beta).is_some());
+    let from = cx.debug_bounds(beta).unwrap().center();
+    let to = cx.debug_bounds("launcher-scroll-1").unwrap().center();
+    cx.simulate_mouse_down(from, gpui::MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(
+        gpui::point(from.x + px(10.), from.y),
+        gpui::MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.simulate_mouse_move(to, gpui::MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(to, gpui::MouseButton::Left, Modifiers::none());
+    until(cx, "beta bound by dragging", |cx| {
+        page.read_with(cx, |p, _| {
+            p.settings
+                .workspace
+                .shown(1)
+                .is_some_and(|b| b.key.name == "beta")
+        })
+    });
+    run_item(cx, 0, "Save layout as preset");
+    cx.simulate_input("Morning");
+    cx.simulate_keystrokes("enter");
+    until(cx, "preset saved", |cx| {
+        page.read_with(cx, |p, _| {
+            p.settings
+                .workspace
+                .presets
+                .iter()
+                .any(|p| p.name == "Morning")
+        })
+    });
+    until(cx, "tab add control", |cx| {
+        cx.debug_bounds("tab-add").is_some()
+    });
+    click(cx, "tab-add".into());
+    until(cx, "second tab", |cx| {
+        cx.debug_bounds("tab-terminals-1").is_some()
+    });
+    run_item(cx, 1, "Rename tab");
+    cx.simulate_input("Ops");
+    cx.simulate_keystrokes("enter");
+    until(cx, "tab renamed", |cx| {
+        page.read_with(cx, |p, _| {
+            p.settings.workspace.tabs[1].name.as_deref() == Some("Ops")
+        })
+    });
+    run_item(cx, 1, "Close tab");
+    until(cx, "tab removed", |cx| {
+        page.read_with(cx, |p, _| p.settings.workspace.shown_tabs().len() == 1)
+    });
+    let restore = page.read_with(cx, |p, _| {
+        p.tab_menu(0)
+            .into_iter()
+            .find(|r| r.label == "Restore preset")
+            .unwrap()
+            .sub
+            .into_iter()
+            .find(|r| r.label == "Morning")
+            .unwrap()
+            .act
+            .unwrap()
+    });
+    cx.update(|window, cx| page.update(cx, |p, cx| p.act(restore, window, cx)));
+    until(cx, "preset restores beta", |cx| {
+        page.read_with(cx, |p, _| {
+            p.settings
+                .workspace
+                .shown(1)
+                .is_some_and(|b| b.key.name == "beta")
+        })
+    });
+    cx.simulate_keystrokes("alt-c");
+    until(cx, "Claim all reaches tmux", |cx| {
+        page.read_with(cx, |p, _| {
+            p.fleet
+                .all
+                .iter()
+                .filter(|s| s.name == "alpha" || s.name == "beta")
+                .all(|s| s.seat == Some(parvi_terminals_contract::Seat::Mine))
+        })
+    });
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+/// The offered recent folder is completed by Tab and used by the fake harness.
+#[gpui::test]
+fn launcher_completes_recent_folder_before_starting_agent(cx: &mut TestAppContext) {
+    let Some(running) = start_with_restart_harness("terminals-folder-journey", true, true) else {
+        return;
+    };
+    let settings = parvi_testkit::fresh_dir("folder-journey-settings").join("app.json");
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let (url, path) = (running.url.clone(), settings.clone());
+    let (_shell, cx) = cx.add_window_view(move |window, cx| {
+        parvi_app_shell::start(&[terminals], Some(url), Some(path), window, cx)
+    });
+    until(cx, "fake harness offered", |cx| {
+        cx.debug_bounds("harness-0-fake").is_some()
+    });
+    click(cx, "harness-0-fake".into());
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    cx.update(|window, cx| {
+        page.update(cx, |p, cx| {
+            p.launchers[0].update(cx, |l, cx| l.focus_first(window, cx))
+        })
+    });
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("flags-ui-");
+    cx.simulate_keystrokes("tab");
+    scroll_to_launch(cx, "launcher-scroll-0");
+    until(cx, "launch available", |cx| {
+        cx.debug_bounds("launch-0")
+            .zip(cx.debug_bounds("launcher-scroll-0"))
+            .is_some_and(|(button, viewport)| viewport.contains(&button.center()))
+    });
+    click(cx, "launch-0".into());
+    let expected = format!("{}|--marker", running.fixture.display());
+    until(cx, "agent started in the completed folder", |_| {
+        std::fs::read_to_string(running.fixture.join("runs")).is_ok_and(|s| s.contains(&expected))
+    });
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+/// Send opened from alpha carries its identity when redirected to beta.
+#[gpui::test]
+fn terminal_send_carries_source_reference_to_another_session(cx: &mut TestAppContext) {
+    let Some(running) = start("terminals-send-source") else {
+        return;
+    };
+    let received = running.fixture.join("source-reference");
+    tmux(
+        &running,
+        &[
+            "send-keys",
+            "-t",
+            "beta",
+            &format!("cat > '{}'", received.display()),
+            "Enter",
+        ],
+    );
+    let (_shell, cx, settings) = open_with_alpha(&running, "send-source", cx);
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    until(cx, "beta listed", |cx| {
+        page.read_with(cx, |p, _| p.fleet.all.iter().any(|s| s.name == "beta"))
+    });
+    cx.simulate_keystrokes("alt-s");
+    until(cx, "Send opened from terminal", |cx| {
+        cx.debug_bounds("send-go").is_some()
+    });
+    let beta = format!("send-target-{}::beta", running.node);
+    let selector: &'static str = Box::leak(beta.clone().into_boxed_str());
+    until(cx, "beta target", |cx| cx.debug_bounds(selector).is_some());
+    click(cx, beta);
+    click(cx, "send-go".into());
+    let expected = format!("session {}::alpha", running.node);
+    until(cx, "source reference delivered to beta", |_| {
+        std::fs::read_to_string(&received).is_ok_and(|s| s.contains(&expected))
+    });
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }

@@ -81,6 +81,7 @@ impl Terminals {
             bar = bar.child(
                 div()
                     .id("tab-add")
+                    .debug_selector(|| "tab-add".into())
                     .px(px(12.))
                     .flex()
                     .items_center()

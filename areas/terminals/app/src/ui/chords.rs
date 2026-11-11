@@ -193,9 +193,12 @@ mod tests {
 
     /// Every terminal chord in CHROTE's useAppChords.ts, Alt form and
     /// leader key, and what Parvi does with it. `None` is the app's or no
-    /// page's: Work, Brain, Agents and the keys panel are the app's and
-    /// other pages' now; the report box, the table and the resident are
-    /// recorded deviations (docs/app.md, Differences).
+    /// page's. Work owns leader B / Alt+B (column rather than a separate
+    /// Beads tab) and leader I / Alt+I (close its beside card); Brain owns
+    /// leader L / Alt+L. The shell owns leader ? / Alt+K and leader K.
+    /// Files owns leader O / Alt+O instead of CHROTE's leader F / Alt+O,
+    /// leaving Alt+F to the shell. There is no Agents tab, resident, or
+    /// report-issue surface, so their G, Enter, and R chords have no action.
     #[test]
     fn every_chrote_chord_has_its_place() {
         let all = chords(&WeakEntity::new_invalid(), 6);

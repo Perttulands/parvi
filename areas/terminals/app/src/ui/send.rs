@@ -68,9 +68,12 @@ pub enum Attachment {
 }
 
 impl Terminals {
-    /// Opens Send to Session aimed at `target`, with nothing in hand.
+    /// Opens Send with the focused terminal as the source, aimed at `target`.
     pub fn open_send(&mut self, target: Option<Key>, window: &mut Window, cx: &mut Context<Self>) {
-        self.handoff(None, target, window, cx);
+        let reference = self
+            .focused_key()
+            .map(|key| format!("session {}", key.text()));
+        self.handoff(reference, target, window, cx);
     }
 
     /// Opens Send to Session with `reference`, the line naming what the
@@ -621,8 +624,10 @@ impl Terminals {
         for (i, s) in list.iter().enumerate() {
             let key = Key::of(s);
             let k = key.clone();
+            let selector = format!("send-target-{}", key.text());
             targets = targets.child(
                 row(("target", i), target.as_ref() == Some(&key))
+                    .debug_selector(move || selector.clone())
                     .when(i == cursor && !query.is_empty(), |d| d.bg(t.raised))
                     .when_some(s.user.clone(), |d, u| d.child(kit::user_square(&t, &u)))
                     .when(sessions::waiting(s).is_some(), |d| {

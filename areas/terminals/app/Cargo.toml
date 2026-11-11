@@ -30,6 +30,7 @@ windows-sys = { version = "0.61", features = ["Win32_Media_Audio"] }
 gpui = { package = "gpui-pre", version = "=0.3.12", features = ["test-support"] }
 parvi-app-shell = { path = "../../../kit/app-shell" }
 parvi-terminals = { path = "../node" }
+parvi-files = { path = "../../files/node" }
 parvi-testkit = { path = "../../../kit/testkit" }
 parvi-node-kit = { path = "../../../kit/node-kit" }
 tokio = { version = "1", features = ["full"] }

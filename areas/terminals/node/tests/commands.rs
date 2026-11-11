@@ -635,3 +635,139 @@ async fn seats_run_through_the_sessions_terminals_provide() {
     assert_eq!(sessions.find("seat").await.unwrap(), None);
     node.stop().await;
 }
+
+/// The command-line client reaches the same session operations on a test node.
+#[tokio::test(flavor = "multi_thread")]
+async fn cli_manages_and_reads_a_session_on_the_test_node() {
+    let Some(node) = Node::start("cli-journey").await else {
+        return;
+    };
+    let url = node.node.url();
+    let run = |arguments: Vec<String>| {
+        let url = url.clone();
+        async move {
+            let mut args = arguments;
+            args.extend(["--node".into(), url, "--json".into()]);
+            let mut output = Vec::new();
+            assert_eq!(
+                parvi_node_kit::cli::run("session", &args, &mut output)
+                    .await
+                    .unwrap(),
+                0
+            );
+            serde_json::from_slice::<Value>(&output).unwrap()
+        }
+    };
+    run(vec![
+        "launch".into(),
+        "shell".into(),
+        node.folder.to_string_lossy().into_owned(),
+        "cli-journey".into(),
+    ])
+    .await;
+    assert_eq!(
+        node.tmux.display("cli-journey", "#{pane_current_path}"),
+        node.folder.display().to_string()
+    );
+    run(vec![
+        "send".into(),
+        "cli-journey".into(),
+        "--text".into(),
+        "echo journey-$((6*7))".into(),
+    ])
+    .await;
+    eventually("CLI output", || {
+        capture(&node.tmux, "cli-journey")
+            .contains("journey-42")
+            .then_some(())
+    })
+    .await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let read = run(vec!["read".into(), "cli-journey".into()]).await;
+        if read["text"].as_str().unwrap().contains("journey-42") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "CLI screen never caught up"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let history = run(vec!["history".into(), "cli-journey".into()]).await;
+    assert!(history["text"].as_str().unwrap().contains("journey-42"));
+    let listed = run(vec!["list".into()]).await;
+    assert_eq!(session_named(&listed, "cli-journey")["name"], "cli-journey");
+    run(vec![
+        "rename".into(),
+        "cli-journey".into(),
+        "renamed-cli".into(),
+    ])
+    .await;
+    run(vec!["seen".into(), "renamed-cli".into()]).await;
+    run(vec!["kill".into(), "renamed-cli".into()]).await;
+    eventually("CLI killed session", || {
+        (!node
+            .tmux
+            .run(&["list-sessions", "-F", "#{session_name}"])
+            .lines()
+            .any(|s| s == "renamed-cli"))
+        .then_some(())
+    })
+    .await;
+    node.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cli_launches_on_the_offered_users_scratch_server() {
+    let (Some(own), Some(other)) = (
+        Server::start_in("cli-own-user"),
+        Server::start_in("cli-other-user"),
+    ) else {
+        return;
+    };
+    own.new_session("keep", 80, 24);
+    other.new_session("other-keep", 80, 24);
+    let user = parvi_testkit::tmux::whoami();
+    let launch = own.dir().join("launch.conf");
+    std::fs::write(&launch, "folder /tmp").unwrap();
+    let config = format!(
+        "[terminals]\nsocket = {:?}\nlaunch = {:?}\nusers = {{ {user} = {:?} }}\n",
+        own.socket_path(),
+        launch,
+        other.socket_path()
+    );
+    let node = TestNode::start(&[parvi_terminals::LISTING], &config)
+        .await
+        .unwrap();
+    let url = node.url();
+    let args = [
+        "launch",
+        "shell",
+        "/tmp",
+        "other-cli",
+        "--user",
+        &user,
+        "--node",
+        &url,
+    ]
+    .map(str::to_owned);
+    assert_eq!(
+        parvi_node_kit::cli::run("session", &args, &mut Vec::new())
+            .await
+            .unwrap(),
+        0
+    );
+    assert!(
+        other
+            .run(&["list-sessions", "-F", "#{session_name}"])
+            .lines()
+            .any(|s| s == "other-cli")
+    );
+    assert!(
+        !own.run(&["list-sessions", "-F", "#{session_name}"])
+            .lines()
+            .any(|s| s == "other-cli")
+    );
+    node.stop().await;
+}

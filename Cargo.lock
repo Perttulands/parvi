@@ -4845,6 +4845,7 @@ dependencies = [
  "parvi-app-kit",
  "parvi-app-shell",
  "parvi-core",
+ "parvi-files",
  "parvi-node-kit",
  "parvi-terminals",
  "parvi-terminals-contract",
