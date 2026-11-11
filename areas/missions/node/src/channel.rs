@@ -134,7 +134,13 @@ impl Channel for Connection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use parvi_missions::{Coordinator, LabExecutor, RunSettings, Store};
+    use parvi_mission_engine::{Coordinator, LabExecutor, RunSettings, Store};
+    struct NoResolver;
+    impl parvi_work_contract::Resolver for NoResolver {
+        fn resolve<'a>(&'a self, _: &'a str) -> parvi_work_contract::Resolving<'a> {
+            Box::pin(async { Err(parvi_core::Error::new("bad_request", "unused")) })
+        }
+    }
     #[tokio::test]
     async fn watches_missions_and_unsubscribes() {
         let root = parvi_testkit::fresh_dir("missions-channel");
@@ -144,6 +150,7 @@ mod tests {
             store: Store::new(&root),
             coordinator,
             changes: broadcast::channel(32).0,
+            resolver: std::sync::Arc::new(NoResolver),
         };
         let mut socket = Connection::new(missions.clone());
         socket.receive(&[WATCH, 1]).unwrap();
