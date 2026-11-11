@@ -230,6 +230,10 @@ impl ScheduledPage {
             .hover(|d| d.bg(alpha(t.text, HOVER)))
             .cursor_pointer()
             .on_click(cx.listener(move |page, e: &ClickEvent, _, cx| {
+                if page.state.selected.as_ref() != Some(&(pick_node.clone(), pick_id.clone())) {
+                    page.state.delete_armed = None;
+                    page.state.notice = None;
+                }
                 page.state.selected = Some((pick_node.clone(), pick_id.clone()));
                 if e.click_count() >= 2
                     && let Some(task) = page.state.task(&pick_node, &pick_id).cloned()
@@ -240,6 +244,10 @@ impl ScheduledPage {
             }))
             .child(
                 div()
+                    .debug_selector({
+                        let name = task.name.clone();
+                        move || format!("scheduled-task-name-{name}")
+                    })
                     .font_weight(FontWeight::SEMIBOLD)
                     .overflow_hidden()
                     .whitespace_nowrap()
@@ -265,7 +273,7 @@ impl ScheduledPage {
 
     fn detail(&self, t: &Theme, node: &str, task: &Task, cx: &mut Context<Self>) -> AnyElement {
         let busy = self.state.busy;
-        let armed = self.state.delete_armed(&task.id, now_ms());
+        let armed = self.state.delete_armed(node, &task.id);
         let at = |n: &str| n.to_string();
         let (edit_node, edit) = (at(node), task.clone());
         let (run_node, run) = (at(node), task.clone());

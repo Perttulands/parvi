@@ -463,6 +463,11 @@ impl Work {
             col = col.child(
                 div()
                     .id(SharedString::from(format!("fam-{label}-{k}")))
+                    .debug_selector({
+                        let text = text.clone();
+                        let label = label.to_owned();
+                        move || format!("work-family-{label}-{text}")
+                    })
                     .whitespace_nowrap()
                     .overflow_hidden()
                     .text_ellipsis()
@@ -522,6 +527,7 @@ impl Work {
         if !self.trail.is_empty() {
             head = head.child(
                 kit::button(&t, "w-back", "Back", Kind::Quiet)
+                    .debug_selector(|| "w-back".into())
                     .tooltip(kit::tip("Alt+Left"))
                     .on_click(cx.listener(|w, _, _, cx| w.back(cx))),
             );

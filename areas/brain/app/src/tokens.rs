@@ -6,6 +6,7 @@ pub const READER_PAD: f32 = 24.;
 pub const NESTED_INDENT: f32 = 30.;
 pub const ROW_PAD: f32 = 6.;
 pub const HOVER: f32 = 0.04;
+pub const SELECTED: f32 = 0.08;
 
 pub const DOCK_WIDTH: f32 = 760.;
 pub const EDITOR_HEIGHT: f32 = 320.;

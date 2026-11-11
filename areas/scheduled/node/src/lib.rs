@@ -38,7 +38,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use axum::Router;
-use parvi_node_kit::{Area, BoxFuture, Built, Command, Listing, Setup};
+use parvi_node_kit::{Area, BoxFuture, Built, Channel, Client, Command, Listing, Setup};
 use parvi_term::Sessions;
 use serde::Deserialize;
 use tokio::task::JoinHandle;
@@ -50,10 +50,10 @@ pub use service::{Create, Error, Invalid, Patch, Runner, Scheduled};
 /// The area's name and config section.
 pub const NAME: &str = "scheduled";
 
-/// How `bin/parvi` lists the area. It owns no frame kinds.
+/// How `bin/parvi` lists the area.
 pub const LISTING: Listing = Listing {
     name: NAME,
-    kinds: &[],
+    kinds: parvi_scheduled_contract::KINDS,
     commands: &[
         "scheduled_list",
         "scheduled_show",
@@ -132,10 +132,50 @@ impl Area for ScheduledArea {
         commands::commands(&self.ctx)
     }
 
+    fn channel(&self, _: Client) -> Option<Box<dyn Channel>> {
+        Some(Box::new(Changes {
+            scheduled: self.ctx.scheduled.clone(),
+            watching: None,
+        }))
+    }
+
     fn stop(&self) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             for handle in self.running.lock().unwrap().drain(..) {
                 handle.abort();
+            }
+        })
+    }
+}
+
+struct Changes {
+    scheduled: Arc<Scheduled>,
+    watching: Option<tokio::sync::watch::Receiver<u64>>,
+}
+
+impl Channel for Changes {
+    fn receive(&mut self, frame: Vec<u8>) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            match frame.as_slice() {
+                [parvi_scheduled_contract::WATCH, 1] => {
+                    let mut watching = self.scheduled.updates();
+                    watching.mark_changed();
+                    self.watching = Some(watching);
+                }
+                [parvi_scheduled_contract::WATCH, 0] => self.watching = None,
+                _ => {}
+            }
+        })
+    }
+
+    fn next(&mut self) -> BoxFuture<'_, Option<Vec<u8>>> {
+        Box::pin(async move {
+            match &mut self.watching {
+                Some(watching) => {
+                    watching.changed().await.ok()?;
+                    Some(vec![parvi_scheduled_contract::CHANGED])
+                }
+                None => std::future::pending().await,
             }
         })
     }

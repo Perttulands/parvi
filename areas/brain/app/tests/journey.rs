@@ -34,6 +34,7 @@ fn start() -> Running {
             std::fs::write(corpus.join("other/third.md"), "# Third\n").unwrap();
             std::fs::write(corpus.join("notes/first.md"), "# First\n\n[[second|Second]]\n").unwrap();
             std::fs::write(corpus.join("notes/second.md"), "# Second\n\nLinked page.\n").unwrap();
+            std::fs::write(corpus.join("notes/long.md"), format!("# {}\n", "A very long arrival title ".repeat(12))).unwrap();
             let git = |args: &[&str]| {
                 let output = std::process::Command::new("git").arg("-C").arg(&corpus).args(args).output().unwrap();
                 assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
@@ -107,6 +108,15 @@ fn search_open_and_follow_a_link_in_the_reader(cx: &mut TestAppContext) {
     until(cx, "search field", |cx| {
         cx.debug_bounds("brain-search").is_some()
     });
+    until(cx, "long arrival", |cx| {
+        cx.debug_bounds("brain-rail-page-notes/long.md").is_some()
+    });
+    let title = cx.debug_bounds("brain-rail-page-notes/long.md").unwrap();
+    let date = cx.debug_bounds("brain-rail-date-notes/long.md").unwrap();
+    assert!(
+        title.right() <= date.left(),
+        "arrival title leaves room for its date"
+    );
     let search = cx.debug_bounds("brain-search").unwrap().center();
     cx.simulate_click(search, Modifiers::none());
     cx.simulate_input("first");
@@ -114,6 +124,13 @@ fn search_open_and_follow_a_link_in_the_reader(cx: &mut TestAppContext) {
     until(cx, "search result", |cx| {
         cx.debug_bounds("brain-result-0").is_some()
     });
+    assert!(cx.debug_bounds("brain-result-selected-0").is_some());
+    let second = cx.debug_bounds("brain-result-1").unwrap().center();
+    cx.simulate_click(second, Modifiers::none());
+    until(cx, "selected second result", |cx| {
+        cx.debug_bounds("brain-result-selected-1").is_some()
+    });
+    assert!(cx.debug_bounds("brain-result-selected-0").is_none());
     let result = cx.debug_bounds("brain-result-0").unwrap().center();
     cx.simulate_click(result, Modifiers::none());
     until(cx, "first page", |cx| {

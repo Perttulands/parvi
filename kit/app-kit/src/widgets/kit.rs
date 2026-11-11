@@ -48,6 +48,18 @@ pub enum Kind {
     Quiet,
 }
 
+/// The label shared by the shell's page tabs and workspace tabs.
+pub fn tab_label(title: &str) -> Div {
+    let text = title
+        .to_uppercase()
+        .chars()
+        .map(|c| c.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let selector = format!("tab-label-{text}");
+    div().debug_selector(move || selector).child(text)
+}
+
 pub fn button(
     t: &Theme,
     id: impl Into<ElementId>,

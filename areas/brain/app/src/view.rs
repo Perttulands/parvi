@@ -70,6 +70,17 @@ impl Render for BrainPage {
                 div()
                     .id(SharedString::from(format!("brain-result-{i}")))
                     .debug_selector(move || format!("brain-result-{i}"))
+                    .border_l(px(board::WALL))
+                    .border_color(if i == self.state.selected {
+                        t.accent
+                    } else {
+                        t.surface
+                    })
+                    .when(i == self.state.selected, |d| {
+                        d.bg(alpha(t.accent, SELECTED)).child(
+                            div().debug_selector(move || format!("brain-result-selected-{i}")),
+                        )
+                    })
                     .px(px(PAD))
                     .py(px(GAP))
                     .cursor_pointer()

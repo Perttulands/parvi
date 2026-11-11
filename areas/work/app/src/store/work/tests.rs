@@ -204,6 +204,28 @@ fn board_of(projects: Vec<Project>) -> Board {
     Board::from_snapshot(&Snapshot { projects }, NOW, &|_| 0)
 }
 
+#[test]
+fn an_on_demand_card_rechecks_a_completed_blocker_when_the_list_arrives() {
+    let project = store(
+        "/x",
+        vec![b("x-1").blocked_by(&["x-2"]), b("x-2").status("closed")],
+    );
+    let Project::Beads(store) = &project else {
+        unreachable!()
+    };
+    let item = store
+        .items
+        .as_ref()
+        .unwrap()
+        .iter()
+        .find(|i| i.id == "x-1")
+        .unwrap()
+        .clone();
+    let board = Board::from_item(item, &[project], NOW);
+    assert_eq!(board.rows[0].status, Status::Open);
+    assert_eq!(board.links.blockers[0].len(), 1);
+}
+
 fn row(b: &Board, id: &str) -> usize {
     b.rows.iter().position(|r| r.id == id).unwrap()
 }

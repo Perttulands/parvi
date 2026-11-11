@@ -10,13 +10,13 @@ use parvi_app_kit::link::client::LinkState;
 use parvi_app_kit::widgets::field::{FieldEvent, TextField};
 use parvi_app_kit::{Host, Page};
 use parvi_core::NodeId;
-use parvi_scheduled_contract::{INTENT, INTENT_VALUE, PATH, Target, Task};
+use parvi_scheduled_contract::{CHANGED, INTENT, INTENT_VALUE, PATH, Target, Task, WATCH};
 use parvi_terminals_contract::SessionList;
 use serde_json::{Value, json};
 
 use crate::ACTOR;
 use crate::form::TaskForm;
-use crate::state::{CONFIRM_MS, Saved, Scheduled, data};
+use crate::state::{Saved, Scheduled, data};
 
 /// How often the countdowns move: CHROTE's.
 const TICK: Duration = Duration::from_secs(30);
@@ -71,6 +71,14 @@ impl Page for ScheduledPage {
     const ID: &'static str = crate::NAME;
     const TITLE: &'static str = "Scheduled";
     const AREA: Option<&'static str> = Some(crate::NAME);
+    const KINDS: parvi_core::frame::Kinds = &[CHANGED..=CHANGED];
+    const CHANNELS: &'static [u8] = &[WATCH];
+
+    fn frame(&mut self, node: &NodeId, _: u8, _: &[u8], _: &mut Window, cx: &mut Context<Self>) {
+        if self.shown {
+            self.read(node.as_str(), cx);
+        }
+    }
 
     /// A node that came into reach while the page shows is read at once;
     /// one that came while it was behind is read when it comes forward.
@@ -212,6 +220,7 @@ impl ScheduledPage {
     pub(crate) fn read(&mut self, node: &str, cx: &mut Context<Self>) {
         let n = self.state.nodes.entry(node.to_string()).or_default();
         if n.reading {
+            n.reread = true;
             return;
         }
         n.reading = true;
@@ -219,11 +228,29 @@ impl ScheduledPage {
         self.ask(
             Request::get(NodeId(node.to_string()), PATH),
             move |page, status, body, cx| {
+                let n = page.state.nodes.entry(at.clone()).or_default();
+                if std::mem::take(&mut n.reread) {
+                    n.reading = false;
+                    page.read(&at, cx);
+                    return;
+                }
+                let before = page
+                    .state
+                    .selected_task()
+                    .map(|(n, t)| (n.to_string(), t.clone()));
                 page.state
                     .nodes
                     .entry(at)
                     .or_default()
                     .listed(status, &body);
+                let after = page
+                    .state
+                    .selected_task()
+                    .map(|(n, t)| (n.to_string(), t.clone()));
+                if before != after && status == 200 {
+                    page.state.notice = None;
+                    page.state.delete_armed = None;
+                }
                 cx.notify();
             },
             cx,
@@ -419,15 +446,10 @@ impl ScheduledPage {
     }
 
     pub(crate) fn delete(&mut self, node: &str, id: &str, cx: &mut Context<Self>) {
-        if !self.state.press_delete(id, now_ms()) {
-            // The armed state falls back by itself after three seconds.
-            cx.spawn(async move |this, cx| {
-                cx.background_executor()
-                    .timer(Duration::from_millis(CONFIRM_MS))
-                    .await;
-                let _ = this.update(cx, |_, cx| cx.notify());
-            })
-            .detach();
+        if self.state.busy {
+            return;
+        }
+        if !self.state.press_delete(node, id) {
             cx.notify();
             return;
         }

@@ -11,6 +11,12 @@
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+/// Watch task changes while the Scheduled page is shown.
+pub const WATCH: u8 = 0xc8;
+/// The node's tasks changed; the page should read them again.
+pub const CHANGED: u8 = 0xc0;
+pub const KINDS: parvi_core::frame::Kinds = &[WATCH..=WATCH];
+
 /// The tasks' HTTP root: `GET` lists, `POST` creates; `/{id}` reads,
 /// patches and deletes; `POST /{id}/pause`, `/resume` and `/run-now` act.
 pub const PATH: &str = "/api/scheduled-tasks";

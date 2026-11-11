@@ -40,11 +40,18 @@ async fn item(State(work): State<Work>, Query(params): Query<HashMap<String, Str
             let line = work.reference_line(&item).await;
             Json(json!({ "item": item, "line": line })).into_response()
         }
-        Err(error) => refuse(
-            StatusCode::BAD_GATEWAY,
-            parvi_work_contract::TRACKER_ERROR,
-            error,
-        ),
+        Err(error) => {
+            if let Some(not_found) = error.downcast_ref::<parvi_core::Error>()
+                && not_found.code == "not_found"
+            {
+                return (StatusCode::NOT_FOUND, Json(json!({"error": not_found}))).into_response();
+            }
+            refuse(
+                StatusCode::BAD_GATEWAY,
+                parvi_work_contract::TRACKER_ERROR,
+                error,
+            )
+        }
     }
 }
 

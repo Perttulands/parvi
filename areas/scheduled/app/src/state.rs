@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use crate::form::TaskForm;
 
-/// How long a second ask to discard (or delete) is taken as meaning it.
+/// How long a second ask to discard is taken as meaning it.
 pub const CONFIRM_MS: u64 = 3_000;
 
 /// One node's tasks as last read.
@@ -18,6 +18,8 @@ pub struct NodeTasks {
     pub list: Option<Vec<Task>>,
     pub error: Option<String>,
     pub reading: bool,
+    /// An invalidation arrived while the current read was in flight.
+    pub reread: bool,
 }
 
 #[derive(Default)]
@@ -29,8 +31,8 @@ pub struct Scheduled {
     pub dirty: bool,
     /// When a discard was asked for once, Unix ms.
     pub discard_armed: Option<u64>,
-    /// When Delete was pressed once, for which task.
-    pub delete_armed: Option<(String, u64)>,
+    /// The node and task whose deletion is awaiting confirmation.
+    pub delete_armed: Option<(String, String)>,
     pub notice: Option<String>,
     pub error: Option<String>,
     pub busy: bool,
@@ -129,6 +131,7 @@ impl Scheduled {
             return false;
         }
         self.form = Some(form);
+        self.delete_armed = None;
         self.dirty = false;
         self.notice = None;
         self.error = None;
@@ -150,24 +153,20 @@ impl Scheduled {
         }
     }
 
-    /// Delete asks where it stands: a second press within three seconds
-    /// deletes. Returns whether this press deletes.
-    pub fn press_delete(&mut self, id: &str, now: u64) -> bool {
-        if let Some((armed, at)) = &self.delete_armed
-            && armed == id
-            && now.saturating_sub(*at) < CONFIRM_MS
-        {
+    /// The visible confirmation remains valid until used or another task is chosen.
+    pub fn press_delete(&mut self, node: &str, id: &str) -> bool {
+        if self.delete_armed(node, id) {
             self.delete_armed = None;
             return true;
         }
-        self.delete_armed = Some((id.into(), now));
+        self.delete_armed = Some((node.into(), id.into()));
         false
     }
 
-    pub fn delete_armed(&self, id: &str, now: u64) -> bool {
+    pub fn delete_armed(&self, node: &str, id: &str) -> bool {
         self.delete_armed
             .as_ref()
-            .is_some_and(|(a, at)| a == id && now.saturating_sub(*at) < CONFIRM_MS)
+            .is_some_and(|(n, a)| n == node && a == id)
     }
 
     /// The words after a Run now, CHROTE's.

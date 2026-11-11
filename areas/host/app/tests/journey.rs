@@ -51,7 +51,8 @@ impl Area for FakeArea {
             Json(ServiceList { services: vec![Service {
                 id: "fixture".into(), name: "Fixture service".into(), state: "running".into(),
                 controllable: true, components: vec!["active".into()], ..Service::default()
-            }] })
+            }, Service { id: "other".into(), name: "Other".into(), state: "stopped".into(),
+                controllable: true, link: "https://example.invalid/path".into(), ..Service::default() }] })
         })).route("/api/services/fixture/restart", post(move || {
             let control = control.clone();
             async move {
@@ -258,6 +259,17 @@ fn service_restart_refusal_and_host_subscription_journey(cx: &mut TestAppContext
     });
     let restart = selector(format!("svc-restart-{}-fixture", running.node));
     until(cx, "Restart", |cx| cx.debug_bounds(restart).is_some());
+    let other_restart = selector(format!("svc-restart-{}-other", running.node));
+    let first_send = selector(format!("svc-send-{}-fixture", running.node));
+    let other_send = selector(format!("svc-send-{}-other", running.node));
+    assert_eq!(
+        cx.debug_bounds(restart).unwrap().origin.x,
+        cx.debug_bounds(other_restart).unwrap().origin.x
+    );
+    assert_eq!(
+        cx.debug_bounds(first_send).unwrap().origin.x,
+        cx.debug_bounds(other_send).unwrap().origin.x
+    );
     click(cx, restart);
     let failure = selector(format!("svc-failure-{}-fixture", running.node));
     until(cx, "restart refusal displayed", |cx| {

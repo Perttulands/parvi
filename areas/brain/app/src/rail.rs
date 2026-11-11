@@ -212,10 +212,19 @@ impl BrainPage {
                     .min_w_0()
                     .overflow_hidden()
                     .whitespace_nowrap()
+                    .text_ellipsis()
                     .debug_selector(move || page_selector.clone())
                     .child(p.page.title.clone()),
             )
-            .child(kit::note(t, brain::when(&p.updated, now), Some(t.dim)))
+            .child(
+                div()
+                    .debug_selector({
+                        let path = p.page.path.clone();
+                        move || format!("brain-rail-date-{path}")
+                    })
+                    .flex_none()
+                    .child(kit::note(t, brain::when(&p.updated, now), Some(t.dim))),
+            )
     }
 }
 

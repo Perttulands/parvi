@@ -169,6 +169,9 @@ impl SettingsPage {
             let selector = format!("node-config:{at}:{text}");
             div()
                 .debug_selector(move || selector)
+                .w_full()
+                .min_w_0()
+                .whitespace_normal()
                 .text_color(t.text)
                 .child(text)
         };
@@ -181,13 +184,20 @@ impl SettingsPage {
             }
             Some(Ok(config)) => {
                 let path = config["path"].as_str().unwrap_or_default().to_string();
-                part = part.child(line(t, "File", text("path", path)));
+                part = part.child(
+                    line(
+                        t,
+                        "File",
+                        div().flex_1().min_w_0().child(text("path", path)),
+                    )
+                    .items_start(),
+                );
                 for (name, keys) in config["sections"].as_object().into_iter().flatten() {
-                    let mut lines = div().flex().flex_col();
+                    let mut lines = div().flex_1().min_w_0().flex().flex_col();
                     for (key, value) in keys.as_object().into_iter().flatten() {
                         lines = lines.child(text(name, format!("{key} = {value}")));
                     }
-                    part = part.child(line(t, &format!("[{name}]"), lines));
+                    part = part.child(line(t, &format!("[{name}]"), lines).items_start());
                 }
             }
         }
@@ -258,6 +268,10 @@ impl SettingsPage {
             }
             Owner::Page(id) => h.set_value(id, key, value, cx),
         });
+        if owner == Owner::App && key == "node" {
+            let node = self.hub.read(cx).settings.node.clone();
+            self.fields[&(owner, key)].update(cx, |f, cx| f.set(&node, false, cx));
+        }
         cx.notify();
     }
 
@@ -312,8 +326,11 @@ impl SettingsPage {
             }
             Control::Text { .. } => {
                 let field = self.fields[&(owner, key)].clone();
+                let selector = format!("{id}:{}", field.read(cx).text);
                 div()
-                    .w(px(size::LABEL_COL * 1.5))
+                    .debug_selector(move || selector)
+                    .w_full()
+                    .min_w_0()
                     .child(field)
                     .into_any_element()
             }
@@ -330,10 +347,17 @@ impl SettingsPage {
     ) -> AnyElement {
         let mut part = section(t, title);
         for setting in settings {
-            let mut row = line(t, setting.label, self.control(owner, setting, t, cx));
+            let mut value = div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(size::RADIUS));
+            value = value.child(self.control(owner, setting, t, cx));
             if !setting.note.is_empty() {
-                row = row.child(kit::note(t, setting.note, Some(t.dim)));
+                value = value.child(kit::note(t, setting.note, Some(t.dim)));
             }
+            let row = line(t, setting.label, value).items_start();
             part = part.child(row);
         }
         part.into_any_element()
