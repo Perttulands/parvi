@@ -107,7 +107,11 @@ async fn services_and_commands_use_the_same_catalog_and_coded_errors() {
         .await
         .unwrap();
     let tools = body["result"]["tools"].as_array().unwrap();
-    let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    let names: Vec<_> = tools
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .filter(|name| !parvi_node_kit::own::COMMANDS.contains(name))
+        .collect();
     assert_eq!(
         names,
         [
@@ -276,6 +280,12 @@ async fn disabled_host_has_no_routes_or_tools() {
         .request(Method::POST, "/mcp", Some(list), None)
         .await
         .unwrap();
-    assert_eq!(body["result"]["tools"], json!([]));
+    let names: Vec<_> = body["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, parvi_node_kit::own::COMMANDS, "only the node's own");
     node.stop().await;
 }

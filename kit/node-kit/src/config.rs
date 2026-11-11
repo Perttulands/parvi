@@ -23,8 +23,8 @@ const ENABLED: &str = "enabled";
 #[derive(Clone, Debug)]
 pub struct Config {
     table: toml::Table,
-    /// The file's folder, where relative paths are.
-    dir: PathBuf,
+    /// The file, in whose folder relative paths are.
+    file: PathBuf,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -47,24 +47,58 @@ fn refused(message: String) -> Error {
 impl Config {
     /// Reads `path`; no file is an empty one.
     pub fn load(path: &Path) -> Result<Config, Error> {
-        let dir = path.parent().unwrap_or(Path::new(".")).to_owned();
-        match std::fs::read_to_string(path) {
-            Ok(text) => Config::parse(&text, dir)
-                .map_err(|e| refused(format!("in {}: {}", path.display(), e.message))),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::parse("", dir)?),
-            Err(e) => Err(refused(format!("reading {}: {e}", path.display()))),
-        }
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(refused(format!("reading {}: {e}", path.display()))),
+        };
+        Config::read(&text, path.to_owned())
+            .map_err(|e| refused(format!("in {}: {}", path.display(), e.message)))
     }
 
-    /// `text` as a file in `dir`.
+    /// `text` as the file [`FILE`] in `dir`.
     pub fn parse(text: &str, dir: PathBuf) -> Result<Config, Error> {
+        Config::read(text, dir.join(FILE))
+    }
+
+    fn read(text: &str, file: PathBuf) -> Result<Config, Error> {
         let table: toml::Table = toml::from_str(text).map_err(|e| refused(e.to_string()))?;
         if let Some((name, _)) = table.iter().find(|(_, value)| !value.is_table()) {
             return Err(refused(format!("{name} is not a section")));
         }
-        let config = Config { table, dir };
+        let config = Config { table, file };
         config.node()?;
         Ok(config)
+    }
+
+    /// The file it was read from.
+    pub fn file(&self) -> &Path {
+        &self.file
+    }
+
+    /// What `parvi config show` answers: the file and each section's keys
+    /// and values as the file has them, or only `section`'s. A section is
+    /// the node's or one of `areas`; another is `unknown_section`.
+    pub fn show(&self, section: Option<&str>, areas: &[&str]) -> Result<serde_json::Value, Error> {
+        let sections: toml::Table = match section {
+            None => self.table.clone(),
+            Some(name) if name == NODE || areas.contains(&name) => {
+                let keys = self.table.get(name).cloned();
+                [(name.to_string(), keys.unwrap_or(toml::Table::new().into()))]
+                    .into_iter()
+                    .collect()
+            }
+            Some(name) => {
+                return Err(Error::new(
+                    "unknown_section",
+                    format!(
+                        "no section [{name}]; the sections are {NODE}, {}",
+                        areas.join(", ")
+                    ),
+                ));
+            }
+        };
+        Ok(serde_json::json!({ "path": self.file, "sections": sections }))
     }
 
     /// The node's own section.
@@ -123,7 +157,7 @@ impl Config {
             .map(PathBuf::from);
         match (path.strip_prefix("~"), home) {
             (Ok(rest), Some(home)) => home.join(rest),
-            _ if path.is_relative() => self.dir.join(path),
+            _ if path.is_relative() => self.file.parent().unwrap_or(Path::new(".")).join(path),
             _ => path.to_owned(),
         }
     }
@@ -185,6 +219,25 @@ rooms = ['{srv}', "notes", "~/notes"]
         assert_eq!(absent.node().unwrap(), NodeSection::default());
         assert_eq!(absent.section::<Lights>("lights").unwrap().brightness, 0);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn show_answers_the_file_and_its_sections_as_read() {
+        let config =
+            Config::parse("[lights]\nrooms = [\"a\"]\n", PathBuf::from("/etc/parvi")).unwrap();
+        let all = config.show(None, &["lights", "dark"]).unwrap();
+        assert_eq!(
+            all["path"],
+            Path::new("/etc/parvi").join(FILE).to_str().unwrap()
+        );
+        assert_eq!(
+            all["sections"],
+            serde_json::json!({"lights": {"rooms": ["a"]}})
+        );
+        let dark = config.show(Some("dark"), &["lights", "dark"]).unwrap();
+        assert_eq!(dark["sections"], serde_json::json!({"dark": {}}));
+        let unknown = config.show(Some("nodes"), &["lights"]).unwrap_err();
+        assert_eq!(unknown.code, "unknown_section");
     }
 
     #[test]

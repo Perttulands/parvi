@@ -4450,12 +4450,15 @@ dependencies = [
 name = "parvi-app-shell"
 version = "0.0.1"
 dependencies = [
+ "anyhow",
  "async-channel",
  "futures-util",
  "gpui-pre",
  "log",
  "parvi-app-kit",
  "parvi-core",
+ "parvi-node-kit",
+ "parvi-testkit",
  "serde",
  "serde_json",
  "tokio",

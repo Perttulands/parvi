@@ -143,6 +143,7 @@ async fn speaks_the_mcp_lifecycle_and_offers_every_session_tool() {
             assert_eq!(tool["inputSchema"]["type"], "object", "{tool}");
             tool["name"].as_str().unwrap()
         })
+        .filter(|name| !parvi_node_kit::own::COMMANDS.contains(name))
         .collect();
     assert_eq!(
         names,

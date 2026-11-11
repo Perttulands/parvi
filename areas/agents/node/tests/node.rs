@@ -48,6 +48,7 @@ async fn commands_and_channel_work_over_the_node() {
         .unwrap()
         .iter()
         .filter_map(|tool| tool["name"].as_str())
+        .filter(|name| !parvi_node_kit::own::COMMANDS.contains(name))
         .collect();
     assert_eq!(
         names,

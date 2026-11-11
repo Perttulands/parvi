@@ -131,6 +131,7 @@ async fn node_serves_brain_routes_commands_and_coded_errors() {
         .unwrap()
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
+        .filter(|name| !parvi_node_kit::own::COMMANDS.contains(name))
         .collect();
     assert_eq!(names, ["brain_search", "brain_read"]);
     let read = node
@@ -178,6 +179,12 @@ async fn disabled_brain_has_no_routes_or_tools() {
         .await
         .unwrap()
         .0;
-    assert_eq!(tools["result"]["tools"], json!([]));
+    let names: Vec<&str> = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, parvi_node_kit::own::COMMANDS, "only the node's own");
     node.stop().await;
 }

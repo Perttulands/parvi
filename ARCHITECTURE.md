@@ -78,6 +78,13 @@ real list, and `parvi kinds` prints who owns which kinds.
 - **Config.** `config.toml` in the node's folder has a `[node]` section and one
   section per area, read by that area. `enabled = false` leaves an area unbuilt
   and listed as off in `/api/health`; a section no area reads refuses to start.
+  `parvi config show [--section]` and `GET /api/config` answer the file's
+  path and each section as the node loaded it, and the Settings page shows
+  the connected node's read-only; an agent edits the file and a restart
+  applies it.
+- **The node's own commands.** Every node has a few commands whatever areas
+  it serves (`node-kit`'s `own::COMMANDS`: `config_show`); a listing that
+  names one is refused.
 - **Provided interfaces.** What one area offers others is a narrow trait that
   lives with its provider's contract or engine crate, never in `node-kit`. The
   provider fills the slot keyed by that trait (`setup.provided.provide`) while
