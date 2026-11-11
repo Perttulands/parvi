@@ -83,8 +83,15 @@ real list, and `parvi kinds` prints who owns which kinds.
   the connected node's read-only; an agent edits the file and a restart
   applies it.
 - **The node's own commands.** Every node has a few commands whatever areas
-  it serves (`node-kit`'s `own::COMMANDS`: `config_show`); a listing that
-  names one is refused.
+  it serves (`node-kit`'s `own::COMMANDS`: `config_show`, `view_show`,
+  `view_open`); a listing that names one is refused.
+- **View control.** The node keeps the view-control kinds itself: a client
+  that reports the page it shows (0xb0) is an app until it goes. `parvi view
+  show` lists what each app shows; `parvi view open --page <id> [--path|item|
+  run|mission|document|session <id>] [--step]` sends the apps a view command
+  (0xb8) and answers the first answer (0xb1): `no_app` with none connected,
+  `timeout` after 5 s. The app shows the page and hands it the thing as an
+  `Ask::Reveal`, on this node.
 - **Provided interfaces.** What one area offers others is a narrow trait that
   lives with its provider's contract or engine crate, never in `node-kit`. The
   provider fills the slot keyed by that trait (`setup.provided.provide`) while

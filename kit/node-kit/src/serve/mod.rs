@@ -40,6 +40,7 @@ use crate::events::{self, Log};
 use crate::identity::{Identity, Ports};
 use crate::mcp::Mcp;
 use crate::own::{self, Own};
+use crate::view::Views;
 use crate::{Area, Built, Command, Listing, Provided, Setup, address, listing};
 
 /// How a node is started.
@@ -57,6 +58,8 @@ struct Shared {
     off: Vec<&'static str>,
     /// Each built area, with how it is listed.
     areas: Vec<(Listing, Arc<dyn Area>)>,
+    /// View control's side of every connection.
+    views: Arc<Views>,
 }
 
 /// A node serving until stopped.
@@ -137,6 +140,8 @@ pub async fn start(options: Options, areas: &[Listing]) -> Result<Running> {
     let own = Arc::new(Own {
         config: setup.config.clone(),
         areas: names.clone(),
+        node: node.id.clone(),
+        views: Arc::default(),
     });
     let mut commands = commands(&built)?;
     commands.extend(own::commands(&own));
@@ -150,6 +155,7 @@ pub async fn start(options: Options, areas: &[Listing]) -> Result<Running> {
         node: node.clone(),
         off,
         areas: built,
+        views: own.views.clone(),
     });
     let trust = Arc::new(Trust::local(section.names));
     let mut app = Router::new()
