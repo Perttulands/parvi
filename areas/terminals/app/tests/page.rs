@@ -575,10 +575,12 @@ fn launches_use_each_tile_grid(cx: &mut TestAppContext) {
         format!("{}x{}", grid.0, grid.1)
     );
     let before = tmux(&running, &["list-sessions", "-F", "#{session_name}"]);
+    let submitted = running.fixture.join("send-was-submitted");
+    let reference = format!("touch {}", submitted.display());
     cx.update(|_, cx| {
         host.ask(
             Ask::Send {
-                reference: "hello".into(),
+                reference: reference.clone(),
                 target: None,
             },
             cx,
@@ -624,6 +626,16 @@ fn launches_use_each_tile_grid(cx: &mut TestAppContext) {
             ]
         ),
         format!("{}x{}", grid.0, grid.1)
+    );
+    until(cx, "new agent paste completed", |cx| {
+        cx.debug_bounds("send-body").is_none()
+    });
+    until(cx, "reference pasted into the new agent", |_cx| {
+        tmux(&running, &["capture-pane", "-p", "-t", &new_name]).contains(&reference)
+    });
+    assert!(
+        !submitted.exists(),
+        "new agent must not submit the pasted command"
     );
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }
