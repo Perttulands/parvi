@@ -10,6 +10,7 @@ use parvi_node_kit::{Config, Options, cli, config, hook, listing, mcp};
 const USAGE: &str = "usage:
   parvi serve [--config file] [--listen addr:port]
   parvi mcp [--node addr:port]
+  parvi help [--node id|url]                            list a node's commands
   parvi <noun> <verb> [args] [--json] [--node id|url]   the node's commands, e.g. parvi session list
   parvi hook <url> [--then command...] [payload]        (run by a program's own hook)
   parvi kinds                                           who owns which frame kinds
@@ -30,12 +31,16 @@ async fn main() -> Result<()> {
             Ok(())
         }
         "" | "-h" | "--help" | "help" => {
+            let node = help_node(&args)?;
             println!("{USAGE}");
-            match cli::overview(None).await {
+            match cli::overview(node).await {
                 Ok(commands) => println!(
                     "\nCommands from the running node (parvi <noun> <verb> --help):\n{commands}"
                 ),
-                Err(error) => println!("\nThe node's commands show here while it runs: {error:#}"),
+                Err(error) if node.is_none() => {
+                    println!("\nThe node's commands show here while it runs: {error:#}")
+                }
+                Err(error) => return Err(error.context("listing the requested node's commands")),
             }
             Ok(())
         }
@@ -63,6 +68,18 @@ async fn main() -> Result<()> {
             let code = cli::run(noun, &args, &mut std::io::stdout()).await?;
             std::process::exit(code);
         }
+    }
+}
+
+/// The optional node for the top-level help overview.
+fn help_node(args: &[String]) -> Result<Option<&str>> {
+    match args {
+        [] => Ok(None),
+        [flag, node] if flag == "--node" && !node.is_empty() => Ok(Some(node)),
+        [flag] if flag.starts_with("--node=") && flag.len() > "--node=".len() => {
+            Ok(Some(&flag["--node=".len()..]))
+        }
+        _ => bail!("usage: parvi help [--node id|url]"),
     }
 }
 
