@@ -1,0 +1,45 @@
+schema = 1
+id = "msn_hello"
+slug = "hello"
+title = "Hello"
+rev = 1
+
+[[inputCard]]
+id = "inp_hello"
+title = "Hello"
+goal = "Return the supplied input"
+
+[[formation]]
+id = "fmn_work"
+type = "solo"
+title = "Work"
+[formation.brief]
+goal = "Return a short result using the supplied output contract."
+[[formation.input]]
+id = "port_in"
+label = "Input"
+[[formation.output]]
+id = "port_out"
+label = "Result"
+[[formation.slot]]
+id = "slot_work"
+label = "Worker"
+agentId = "builder"
+harness = "openai-codex"
+model = "" # harness default
+effort = "medium"
+
+[[end]]
+id = "end_done"
+title = "Done"
+outcome = "done"
+
+[[connection]]
+id = "edge_start"
+from = "inp_hello:out"
+to = "fmn_work:port_in"
+
+[[connection]]
+id = "edge_done"
+from = "fmn_work:port_out"
+to = "end_done:in"
