@@ -19,6 +19,7 @@ parvi-scheduled = { path = "../../areas/scheduled/node" }
 parvi-host = { path = "../../areas/host/node" }
 parvi-work = { path = "../../areas/work/node" }
 parvi-brain = { path = "../../areas/brain/node" }
+parvi-files = { path = "../../areas/files/node" }
 
 [dev-dependencies]
 parvi-testkit = { path = "../../kit/testkit" }

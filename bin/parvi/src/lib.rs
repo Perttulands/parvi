@@ -11,6 +11,7 @@ pub const AREAS: &[Listing] = &[
     parvi_host::LISTING,
     parvi_work::LISTING,
     parvi_brain::LISTING,
+    parvi_files::LISTING,
 ];
 
 /// The binary's own first words, which no area's command noun may take.
