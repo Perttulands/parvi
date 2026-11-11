@@ -333,6 +333,7 @@ impl Terminals {
             self.send.sending.is_some() || self.send.uploading || self.send.waiting.is_some();
         let mut body = div()
             .id("send-body")
+            .debug_selector(|| "send-body".into())
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -534,6 +535,7 @@ impl Terminals {
             .flex_col()
             .child(
                 row(("target-new", 0), self.send.new_agent)
+                    .debug_selector(|| "target-new".into())
                     .child(div().flex_1().text_color(t.text2).child("New agent…"))
                     .on_click(cx.listener(|s, _, window, cx| s.pick(None, window, cx))),
             );

@@ -157,7 +157,7 @@ impl Terminals {
             notify: self.settings.notify
                 && notify_offered(&harness.command, "")
                 && conf.notify_off.is_none(),
-            size: None,
+            size: self.launch_grids.borrow()[self.settings.workspace.focus],
         };
         match self.fleet.launch_on(node, launch) {
             Some(id) => {
