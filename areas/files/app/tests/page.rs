@@ -765,6 +765,59 @@ fn page_renders_node_data(cx: &mut TestAppContext) {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// Revealing either kind of path opens its actual location, including a root
+/// and a folder whose name looks like a media file.
+#[gpui::test]
+fn reveal_opens_files_and_lists_folders(cx: &mut TestAppContext) {
+    let root = parvi_testkit::fresh_dir("files-reveal");
+    let folder = root.join("clips.pdf");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join("note.txt"), "hello reveal").unwrap();
+    std::fs::write(root.join("outside.txt"), "outside").unwrap();
+    let running = start(root.clone());
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let url = running.url.clone();
+    let (shell, cx) = cx.add_window_view(move |window, cx| {
+        parvi_app_shell::start(&[toy, parvi_files_app::build], Some(url), None, window, cx)
+    });
+    until(cx, "node linked", |cx| {
+        shell.read_with(cx, |s, cx| {
+            s.hub().read(cx).fleet.here().state == parvi_app_kit::link::client::LinkState::Open
+        })
+    });
+    let host = shell.read_with(cx, |s, _| {
+        parvi_app_kit::Host::new(s.hub()).for_page("toy", &[])
+    });
+    let reveal = |path: &std::path::Path| parvi_app_kit::Ask::Reveal {
+        what: "path".into(),
+        id: path.to_string_lossy().into_owned(),
+        node: Some(parvi_core::NodeId(running.node.clone())),
+        part: None,
+        beside: false,
+    };
+    cx.update(|_, cx| host.ask(reveal(&folder.join("note.txt")), cx).unwrap());
+    until(cx, "revealed file selected and open", |cx| {
+        cx.debug_bounds("selected-0-note.txt").is_some()
+            && cx.debug_bounds("file-view-note.txt").is_some()
+            && cx.debug_bounds("files-edit").is_some()
+    });
+    assert!(cx.debug_bounds("file-row-0-outside.txt").is_none());
+    cx.update(|_, cx| host.ask(reveal(&root), cx).unwrap());
+    until(cx, "revealed root contents", |cx| {
+        cx.debug_bounds("file-row-0-outside.txt").is_some()
+            && cx.debug_bounds("file-row-0-clips.pdf").is_some()
+    });
+    cx.update(|_, cx| host.ask(reveal(&folder), cx).unwrap());
+    until(cx, "revealed folder contents", |cx| {
+        cx.debug_bounds("file-row-0-note.txt").is_some()
+            && cx.debug_bounds("file-row-0-outside.txt").is_none()
+    });
+    assert!(cx.debug_bounds("file-view-clips.pdf").is_none());
+    drop(running);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Carries the old editor's discard/keep interaction through the node.
 #[gpui::test]
 fn editing_by_keyboard_keeps_the_work_and_discard_restores_it(cx: &mut TestAppContext) {
