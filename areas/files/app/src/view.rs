@@ -310,6 +310,7 @@ impl FilesPage {
         }
         bar = bar.child(
             kit::button(&t, "files-send", "Send to Session", Kind::Quiet)
+                .debug_selector(|| "files-send".into())
                 .on_click(cx.listener(move |p, _, _, cx| p.send(i, cx))),
         );
         let body: AnyElement = if o.diff_open {

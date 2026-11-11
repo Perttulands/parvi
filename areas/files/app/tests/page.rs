@@ -21,16 +21,25 @@ impl Drop for Running {
     }
 }
 fn start(root: std::path::PathBuf) -> Running {
+    start_with_terminal(root, None)
+}
+fn start_with_terminal(root: std::path::PathBuf, socket: Option<std::path::PathBuf>) -> Running {
     let (ready, wait) = mpsc::channel();
     let (stop, stopped) = mpsc::channel();
     let thread = std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let config = format!(
+            let mut config = format!(
                 "[files]\nroots = [{}]\n",
                 serde_json::to_string(root.to_str().unwrap()).unwrap()
             );
-            let node = Node::start(&[parvi_files::LISTING], &config).await.unwrap();
+            let areas = if let Some(socket) = socket {
+                config.push_str(&format!("[terminals]\nsocket = {:?}\n", socket));
+                vec![parvi_files::LISTING, parvi_terminals::LISTING]
+            } else {
+                vec![parvi_files::LISTING]
+            };
+            let node = Node::start(&areas, &config).await.unwrap();
             ready.send((node.url(), node.id())).unwrap();
             while stopped.try_recv().is_err() {
                 tokio::time::sleep(Duration::from_millis(20)).await;
@@ -45,6 +54,86 @@ fn start(root: std::path::PathBuf) -> Running {
         stop,
         thread: Some(thread),
     }
+}
+
+/// Browse, find, edit and send the saved file to a real scratch session.
+#[cfg(unix)]
+#[gpui::test]
+fn browse_find_edit_save_and_send_to_a_session(cx: &mut TestAppContext) {
+    let Some(tmux) = parvi_testkit::tmux::Server::start_in("files-journey") else {
+        assert!(std::env::var_os("PARVI_REQUIRE_TMUX").is_none());
+        return;
+    };
+    let root = parvi_testkit::fresh_dir("files-journey-root");
+    std::fs::create_dir(root.join("folder")).unwrap();
+    let file = root.join("folder/needle.txt");
+    std::fs::write(&file, "before").unwrap();
+    let received = tmux.dir().join("received");
+    tmux.new_session("alpha", 100, 30);
+    tmux.run(&[
+        "send-keys",
+        "-t",
+        "alpha",
+        &format!("cat > '{}'", received.display()),
+        "Enter",
+    ]);
+    let running = start_with_terminal(root.clone(), Some(tmux.socket_path()));
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let url = running.url.clone();
+    let (shell, cx) = cx.add_window_view(move |window, cx| {
+        parvi_app_shell::start(
+            &[parvi_terminals_app::build, parvi_files_app::build],
+            Some(url),
+            None,
+            window,
+            cx,
+        )
+    });
+    let row: &'static str = Box::leak(format!("row-{}::alpha", running.node).into_boxed_str());
+    until(cx, "session in rail", |cx| cx.debug_bounds(row).is_some());
+    click(cx, row);
+    until(cx, "attach session", |cx| {
+        cx.debug_bounds("peek-attach").is_some()
+    });
+    click(cx, "peek-attach");
+    click(cx, "tab-files");
+    until(cx, "folder", |cx| {
+        cx.debug_bounds("file-row-0-folder").is_some()
+    });
+    click(cx, "file-row-0-folder");
+    until(cx, "folder listing", |cx| {
+        cx.debug_bounds("file-row-0-needle.txt").is_some()
+    });
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("needle");
+    cx.simulate_keystrokes("enter");
+    until(cx, "search result", |cx| {
+        cx.debug_bounds("find-result-0-needle.txt").is_some()
+    });
+    click(cx, "find-result-0-needle.txt");
+    until(cx, "viewer", |cx| cx.debug_bounds("files-edit").is_some());
+    click(cx, "files-edit");
+    until(cx, "editor", |cx| cx.debug_bounds("files-save").is_some());
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("after");
+    cx.simulate_keystrokes("ctrl-s");
+    until(cx, "saved file", |_| {
+        std::fs::read(&file).ok().as_deref() == Some(b"after")
+    });
+    click(cx, "files-send");
+    until(cx, "send drawer", |cx| cx.debug_bounds("send-go").is_some());
+    assert_eq!(
+        shell.read_with(cx, |s, _| s.shown_page()),
+        Some("terminals")
+    );
+    click(cx, "send-go");
+    let expected = format!("path {}", file.display());
+    until(cx, "reference delivered to session", |_| {
+        std::fs::read_to_string(&received).is_ok_and(|text| text.contains(&expected))
+    });
+    drop(running);
+    std::fs::remove_dir_all(root).unwrap();
 }
 fn until(
     cx: &mut VisualTestContext,
@@ -62,7 +151,10 @@ fn until(
     }
 }
 fn click(cx: &mut VisualTestContext, id: &'static str) {
-    let point = cx.debug_bounds(id).expect("visible control").center();
+    let point = cx
+        .debug_bounds(id)
+        .unwrap_or_else(|| panic!("missing {id}"))
+        .center();
     cx.simulate_click(point, Modifiers::none());
 }
 

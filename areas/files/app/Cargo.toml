@@ -24,6 +24,8 @@ parvi-core = { path = "../../../kit/core" }
 [dev-dependencies]
 parvi-app-shell = { path = "../../../kit/app-shell" }
 parvi-files = { path = "../node" }
+parvi-terminals = { path = "../../terminals/node" }
+parvi-terminals-app = { path = "../../terminals/app" }
 parvi-testkit = { path = "../../../kit/testkit" }
 gpui = { package = "gpui-pre", version = "=0.3.11", features = ["test-support"] }
 tokio = { version = "1", features = ["full"] }
