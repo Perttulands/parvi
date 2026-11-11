@@ -28,6 +28,178 @@ async fn node(tmux: &Tmux, launch: &str) -> Node {
         .unwrap()
 }
 
+/// Listing through an already running node must not disturb any session,
+/// including one with another node and an ordinary attached terminal.
+#[tokio::test(flavor = "multi_thread")]
+async fn listing_does_not_touch_sessions_with_other_clients() {
+    use parvi_testkit::tmux::{capture, eventually};
+    use std::os::fd::FromRawFd;
+
+    struct Viewer {
+        child: std::process::Child,
+        _master: std::fs::File,
+    }
+    impl Drop for Viewer {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    let Some(tmux) = Tmux::start_in("list-with-other-clients") else {
+        return;
+    };
+    let program = "sh -c 'trap \"printf WINCH\" WINCH; printf \"\\033[?1049hREADY\"; while :; do sleep 1; done'";
+    // tmux's own server log records commands, including commands on control
+    // clients, without instrumenting the node or relying on a mock backend.
+    let output = tmux
+        .command()
+        .current_dir(tmux.dir())
+        .args([
+            "-vv",
+            "new-session",
+            "-d",
+            "-s",
+            "alpha",
+            "-x",
+            "100",
+            "-y",
+            "30",
+            program,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    tmux.run(&[
+        "new-session",
+        "-d",
+        "-s",
+        "beta",
+        "-x",
+        "100",
+        "-y",
+        "30",
+        program,
+    ]);
+    tmux.run(&["set-option", "-g", "focus-events", "on"]);
+
+    let (mut master, mut slave) = (-1, -1);
+    let size = libc::winsize {
+        ws_row: 45,
+        ws_col: 140,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    // SAFETY: openpty initializes both descriptors, each owned exactly once.
+    assert_eq!(
+        unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                &size,
+            )
+        },
+        0
+    );
+    // SAFETY: both descriptors came from the successful call above.
+    let master = unsafe { std::fs::File::from_raw_fd(master) };
+    let slave = unsafe { std::fs::File::from_raw_fd(slave) };
+    let child = tmux
+        .command()
+        .args(["attach-session", "-t", "alpha"])
+        .env("TERM", "xterm")
+        .stdin(slave.try_clone().unwrap())
+        .stdout(slave.try_clone().unwrap())
+        .stderr(slave)
+        .spawn()
+        .unwrap();
+    let _viewer = Viewer {
+        child,
+        _master: master,
+    };
+    let first = node(&tmux, "").await;
+    let second = node(&tmux, "").await;
+    eventually("both nodes and the terminal attached", || {
+        (tmux.clients().len() == 5).then_some(())
+    })
+    .await;
+    eventually("full-screen programs ready", || {
+        ["alpha", "beta"]
+            .iter()
+            .all(|s| capture(&tmux, s).contains("READY"))
+            .then_some(())
+    })
+    .await;
+    // Let attach and resize effects finish before taking the baseline.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let snapshot = || {
+        ["alpha", "beta"].map(|s| {
+            (
+                tmux.display(s, "#{session_activity}"),
+                tmux.window_size(s),
+                capture(&tmux, s),
+            )
+        })
+    };
+    let before = snapshot();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let log = std::fs::read_dir(tmux.dir())
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| {
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("tmux-server-")
+        })
+        .unwrap();
+    let offset = std::fs::metadata(&log).unwrap().len() as usize;
+    let (mut ws, _) = tokio_tungstenite::connect_async(first.ws()).await.unwrap();
+    until(&mut ws, "both sessions", |f| {
+        f[0] == protocol::SESSIONS
+            && std::str::from_utf8(&f[1..]).is_ok_and(|s| s.contains("alpha") && s.contains("beta"))
+    })
+    .await;
+    eventually("facts refresh commands logged", || {
+        let text = std::fs::read_to_string(&log).ok()?;
+        let trace = text.get(offset..)?;
+        (trace.matches("cmdq_fire_command").count() >= 4 && trace.contains("list-clients"))
+            .then_some(())
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let log_text = std::fs::read_to_string(&log).unwrap();
+    let trace = &log_text[offset..];
+    let commands: Vec<_> = trace
+        .lines()
+        .filter(|line| line.contains("cmdq_fire_command"))
+        .collect();
+    assert!(
+        commands.iter().any(|line| line.contains("display-message")),
+        "{commands:?}"
+    );
+    assert!(
+        commands.iter().any(|line| line.contains("list-clients")),
+        "{commands:?}"
+    );
+    assert!(
+        commands
+            .iter()
+            .all(|line| !line.contains("refresh-client") && !line.contains("resize-window")),
+        "{commands:?}"
+    );
+    assert_eq!(before, snapshot(), "listing changed tmux session state");
+    drop(ws);
+    second.stop().await;
+    first.stop().await;
+}
+
 /// The sessions `session_list` lists.
 async fn listed(node: &Node) -> Vec<Value> {
     let list = node.call("session_list", json!({})).await.unwrap();

@@ -4829,6 +4829,7 @@ dependencies = [
  "anyhow",
  "axum",
  "futures-util",
+ "libc",
  "parvi-core",
  "parvi-node-kit",
  "parvi-term",
