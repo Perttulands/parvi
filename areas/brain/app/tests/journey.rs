@@ -30,10 +30,25 @@ fn start() -> Running {
         runtime.block_on(async move {
             let corpus = fresh_dir("brain-journey-corpus");
             std::fs::create_dir(corpus.join("notes")).unwrap();
+            std::fs::create_dir(corpus.join("other")).unwrap();
+            std::fs::write(corpus.join("other/third.md"), "# Third\n").unwrap();
             std::fs::write(corpus.join("notes/first.md"), "# First\n\n[[second|Second]]\n").unwrap();
             std::fs::write(corpus.join("notes/second.md"), "# Second\n\nLinked page.\n").unwrap();
+            let git = |args: &[&str]| {
+                let output = std::process::Command::new("git").arg("-C").arg(&corpus).args(args).output().unwrap();
+                assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            };
+            git(&["init", "-q"]);
+            git(&["config", "user.name", "Fixture"]);
+            git(&["config", "user.email", "fixture@example.org"]);
+            git(&["add", "."]);
+            git(&["commit", "-qm", "Fixture"]);
             let citadel = axum::Router::new().route("/v1/library/search", post(|Json(query): Json<Value>| async move {
-                let results = if query["query"] == "first" { json!([{ "path": "notes/first.md", "title": "First", "collection": "notes", "kind": "note", "summary": "A fixture summary" }]) } else { json!([]) };
+                let results = if query["query"] == "first" { json!([
+                    { "path": "notes/first.md", "title": "First", "collection": "notes", "kind": "note", "summary": "A fixture summary" },
+                    { "path": "notes/second.md", "title": "Second", "collection": "notes" },
+                    { "path": "other/third.md", "title": "Third", "collection": "other" }
+                ]) } else { json!([]) };
                 Json(json!({"results": results}))
             }));
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -109,6 +124,15 @@ fn search_open_and_follow_a_link_in_the_reader(cx: &mut TestAppContext) {
     until(cx, "linked page", |cx| {
         cx.debug_bounds("brain-reading-notes/second.md").is_some()
     });
+    let back = cx
+        .debug_bounds("brain-trail-notes/first.md")
+        .unwrap()
+        .center();
+    cx.simulate_click(back, Modifiers::none());
+    until(cx, "back along trail", |cx| {
+        cx.debug_bounds("brain-reading-notes/first.md").is_some()
+    });
+    assert!(cx.debug_bounds("brain-trail-notes/second.md").is_none());
     std::fs::remove_dir_all(settings).unwrap();
 }
 
@@ -197,6 +221,14 @@ fn dock_search_send_and_toggle_from_another_page(cx: &mut TestAppContext) {
         cx.debug_bounds("brain-result-summary-A fixture summary")
             .is_some()
     );
+    cx.simulate_keystrokes("down");
+    until(cx, "down opens second hit", |cx| {
+        cx.debug_bounds("brain-reading-notes/second.md").is_some()
+    });
+    cx.simulate_keystrokes("up");
+    until(cx, "up opens first hit", |cx| {
+        cx.debug_bounds("brain-reading-notes/first.md").is_some()
+    });
     cx.simulate_keystrokes("escape");
     until(cx, "search cleared", |cx| {
         cx.debug_bounds("brain-result-0").is_none()
@@ -238,5 +270,47 @@ fn dock_search_send_and_toggle_from_another_page(cx: &mut TestAppContext) {
     });
     assert!(cx.debug_bounds("toy-page").is_some());
     assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy"));
+    std::fs::remove_dir_all(settings).unwrap();
+}
+
+#[gpui::test]
+fn hiding_a_collection_removes_its_arrivals_and_search_hits(cx: &mut TestAppContext) {
+    let running = start();
+    let settings = fresh_dir("brain-hide-journey-settings");
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        parvi_app_shell::start(
+            &[parvi_brain_app::build],
+            Some(running.url.clone()),
+            Some(settings.join("app.json")),
+            window,
+            cx,
+        )
+    });
+    until(cx, "node link", |cx| {
+        shell.read_with(cx, |s, cx| {
+            s.hub().read(cx).fleet.here().state == LinkState::Open
+        })
+    });
+    until(cx, "notes arrival", |cx| {
+        cx.debug_bounds("brain-rail-page-notes/first.md").is_some()
+    });
+    assert!(cx.debug_bounds("brain-rail-page-other/third.md").is_some());
+    let hide = cx.debug_bounds("brain-hide-0").unwrap().center();
+    cx.simulate_click(hide, Modifiers::none());
+    until(cx, "hidden arrivals removed", |cx| {
+        cx.debug_bounds("brain-rail-page-notes/first.md").is_none()
+    });
+    assert!(cx.debug_bounds("brain-rail-page-other/third.md").is_some());
+    let search = cx.debug_bounds("brain-search").unwrap().center();
+    cx.simulate_click(search, Modifiers::none());
+    cx.simulate_input("first");
+    cx.executor().advance_clock(Duration::from_millis(250));
+    until(cx, "other search hit", |cx| {
+        cx.debug_bounds("brain-hit-other/third.md").is_some()
+    });
+    assert!(cx.debug_bounds("brain-hit-notes/first.md").is_none());
+    assert!(cx.debug_bounds("brain-hit-notes/second.md").is_none());
     std::fs::remove_dir_all(settings).unwrap();
 }

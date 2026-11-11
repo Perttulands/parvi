@@ -1,5 +1,5 @@
 use crate::brain::Brain;
-use parvi_brain_contract::{BAD_REQUEST, BRAIN_ERROR};
+use parvi_brain_contract::{BAD_REQUEST, BRAIN_ERROR, NOT_FOUND, UNAVAILABLE};
 use parvi_core::Error;
 use parvi_node_kit::{
     Command,
@@ -8,7 +8,11 @@ use parvi_node_kit::{
 use serde_json::json;
 use std::sync::Arc;
 
-pub fn commands(brain: Arc<Brain>, node: String) -> Vec<Command> {
+pub fn commands(
+    brain: Arc<Brain>,
+    node: String,
+    sessions: Option<Arc<dyn parvi_term::Sessions>>,
+) -> Vec<Command> {
     let search = brain.clone();
     let search_node = node.clone();
     let read = brain.clone();
@@ -17,6 +21,8 @@ pub fn commands(brain: Arc<Brain>, node: String) -> Vec<Command> {
     let save_node = node.clone();
     let collections = brain.clone();
     let collections_node = node.clone();
+    let sending = brain.clone();
+    let sending_node = node.clone();
     vec![
         Command::new(
             "brain_search",
@@ -146,6 +152,72 @@ pub fn commands(brain: Arc<Brain>, node: String) -> Vec<Command> {
                         "pages": change.pages,
                     })).collect();
                     Ok(json!({"node": node, "changes": changes, "error": read.error}))
+                }
+            },
+        ),
+        Command::new(
+            "brain_send",
+            "Send a page reference to a session; use user/name if the name is ambiguous.",
+            || {
+                object(
+                    json!({"path": {"type":"string"}, "session": {"type":"string"}}),
+                    &["path", "session"],
+                )
+            },
+            move |args| {
+                let brain = sending.clone();
+                let node = sending_node.clone();
+                let sessions = sessions.clone();
+                async move {
+                    let path =
+                        text(&args, "path").map_err(|e| Error::new(BAD_REQUEST, e.to_string()))?;
+                    let target = text(&args, "session")
+                        .map_err(|e| Error::new(BAD_REQUEST, e.to_string()))?;
+                    let page = brain
+                        .page(path)
+                        .await
+                        .map_err(|e| Error::new(crate::brain::refusal_code(e.status), e.message))?;
+                    let sessions = sessions.ok_or_else(|| {
+                        Error::new(
+                            UNAVAILABLE,
+                            "No terminal sessions are available on this node",
+                        )
+                    })?;
+                    let found: Vec<_> = sessions
+                        .list()
+                        .into_iter()
+                        .filter(|s| {
+                            s.id == target
+                                || (s.user.is_none() && s.name == target)
+                                || s.user
+                                    .as_ref()
+                                    .is_some_and(|user| format!("{user}/{}", s.name) == target)
+                        })
+                        .collect();
+                    let session = match found.as_slice() {
+                        [session] => session,
+                        [] => return Err(Error::new(NOT_FOUND, format!("No session {target}"))),
+                        _ => {
+                            return Err(Error::new(
+                                BAD_REQUEST,
+                                format!("Session {target} is ambiguous"),
+                            ));
+                        }
+                    };
+                    let pane = sessions
+                        .active_pane(&session.id)
+                        .await
+                        .map_err(|e| Error::new(BRAIN_ERROR, e.to_string()))?;
+                    let reference = format!("library {}", page.path);
+                    sessions
+                        .deliver(pane, reference.clone(), true)
+                        .await
+                        .map_err(|e| Error::new(BRAIN_ERROR, e.to_string()))?
+                        .await
+                        .map_err(|e| Error::new(BRAIN_ERROR, e.to_string()))?;
+                    Ok(
+                        json!({"node": node, "session": session.id, "reference": reference, "sent": true}),
+                    )
                 }
             },
         ),

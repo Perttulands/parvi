@@ -47,6 +47,7 @@ impl Render for BrainPage {
         }
         for (i, hit) in self.state.shown().iter().enumerate() {
             let path = hit.path.clone();
+            let hit_selector = format!("brain-hit-{path}");
             let mut snippet = String::new();
             let mut highlights = Vec::new();
             for (part, marked) in crate::state::snippet_parts(&hit.snippet) {
@@ -76,7 +77,11 @@ impl Render for BrainPage {
                         page.state.selected = i;
                         page.brain_open(&path, cx);
                     }))
-                    .child(hit.title.clone())
+                    .child(
+                        div()
+                            .debug_selector(move || hit_selector.clone())
+                            .child(hit.title.clone()),
+                    )
                     .when(!kind.is_empty(), |d| {
                         let selector = format!("brain-result-kind-{kind}");
                         d.child(
@@ -441,6 +446,7 @@ impl Render for BrainPage {
             .border_color(t.divider);
         for (i, (path, title)) in self.state.trail.iter().enumerate() {
             let path = path.clone();
+            let selector = format!("brain-trail-{path}");
             trail = trail.child(
                 kit::button(
                     &t,
@@ -448,6 +454,7 @@ impl Render for BrainPage {
                     title.clone(),
                     Kind::Quiet,
                 )
+                .debug_selector(move || selector.clone())
                 .on_click(cx.listener(move |page, _, _, cx| page.brain_open(&path, cx))),
             );
         }

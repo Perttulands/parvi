@@ -35,7 +35,8 @@ async fn brain_commands_save_and_read_changes() {
             "brain_read",
             "brain_save",
             "brain_collections",
-            "brain_changes"
+            "brain_changes",
+            "brain_send"
         ]
     );
     let root = fresh_dir("brain-commands-corpus");
@@ -49,17 +50,68 @@ async fn brain_commands_save_and_read_changes() {
     git(&root, &["add", "."]);
     git(&root, &["commit", "-qm", "Initial"]);
     let base = git(&root, &["rev-parse", "HEAD"]);
-    let config = format!("[brain]\ncorpus = {:?}\n", root.to_str().unwrap());
-    let node = Node::start(&[parvi_brain::LISTING], &config).await.unwrap();
+    let router = axum::Router::new().route("/v1/library/search", axum::routing::post(|| async {
+        axum::Json(json!({"results":[{"path":"notes/page.md", "title":"First", "collection":"notes"}]}))
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let config = format!(
+        "[brain]\ncorpus = {:?}\ncitadel = {:?}\n",
+        root.to_str().unwrap(),
+        format!("http://{addr}")
+    );
+    let node = Node::start(
+        &[parvi_brain::LISTING, parvi_testkit::sessions::LISTING],
+        &config,
+    )
+    .await
+    .unwrap();
     let (_, help) = run(&node, &[]).await;
-    for verb in ["search", "read", "save", "collections", "changes"] {
+    for verb in ["search", "read", "save", "collections", "changes", "send"] {
         assert!(help.contains(&format!("parvi brain {verb}")), "{help}");
     }
-    let missing = node
-        .call("brain_search", json!({"query":"north"}))
+    let (status, search) = run(&node, &["search", "First"]).await;
+    assert_eq!(status, 0);
+    assert!(
+        search.contains("notes/page.md") && search.contains("First"),
+        "{search}"
+    );
+    let (status, read) = run(&node, &["read", "notes/page.md"]).await;
+    assert_eq!(status, 0);
+    assert!(read.contains("# First"), "{read}");
+    let sessions = node.fake_sessions();
+    sessions.add("alpha");
+    let (status, sent) = run(&node, &["send", "notes/page.md", "alpha"]).await;
+    assert_eq!(status, 0, "{sent}");
+    assert_eq!(
+        sessions.delivered(),
+        vec![parvi_testkit::sessions::Delivered {
+            session: "alpha".into(),
+            text: "library notes/page.md".into(),
+            enter: true,
+        }]
+    );
+    assert_eq!(
+        node.call(
+            "brain_send",
+            json!({"path":"notes/missing.md", "session":"alpha"})
+        )
         .await
-        .unwrap_err();
-    assert!(missing.message.contains("[brain].citadel"));
+        .unwrap_err()
+        .code,
+        "not_found"
+    );
+    assert_eq!(
+        node.call(
+            "brain_send",
+            json!({"path":"notes/page.md", "session":"missing"})
+        )
+        .await
+        .unwrap_err()
+        .code,
+        "not_found"
+    );
     let (status, output) = run(
         &node,
         &[
@@ -126,5 +178,6 @@ async fn brain_commands_save_and_read_changes() {
         "bad_request"
     );
     node.stop().await;
+    server.abort();
     std::fs::remove_dir_all(root).unwrap();
 }

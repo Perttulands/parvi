@@ -139,7 +139,8 @@ async fn node_serves_brain_routes_commands_and_coded_errors() {
             "brain_read",
             "brain_save",
             "brain_collections",
-            "brain_changes"
+            "brain_changes",
+            "brain_send"
         ]
     );
     let read = node
@@ -147,6 +148,14 @@ async fn node_serves_brain_routes_commands_and_coded_errors() {
         .await
         .unwrap();
     assert_eq!(read["title"], "Second");
+    let no_sessions = node
+        .call(
+            "brain_send",
+            json!({"path":"notes/second.md", "session":"alpha"}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(no_sessions.code, "unavailable");
     let searched = node
         .call("brain_search", json!({"query":"first"}))
         .await

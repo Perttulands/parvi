@@ -48,19 +48,30 @@ fn page_renders_a_collection_from_a_node(cx: &mut TestAppContext) {
                 );
             };
             git(&["init", "-q"]);
-            git(&["config", "user.name", "perttu"]);
+            git(&["config", "user.name", "Corpus Owner"]);
             git(&["config", "user.email", "author@example.org"]);
             git(&["add", "."]);
             git(&["commit", "-qm", "Initial page"]);
-            let config = format!("[brain]\ncorpus = {:?}\n", corpus.to_str().unwrap());
+            let config = format!(
+                "[brain]\ncorpus = {:?}\nauthor = \"perttu <author@example.org>\"\n",
+                corpus.to_str().unwrap()
+            );
             let node = Node::start(&[parvi_brain::LISTING], &config).await.unwrap();
             ready.send(node.url()).unwrap();
             while stopped.try_recv().is_err() {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
             node.stop().await;
+            let contents = std::fs::read_to_string(corpus.join("notes/page.md")).unwrap();
+            let log = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&corpus)
+                .args(["log", "-1", "--format=%an|%s"])
+                .output()
+                .unwrap();
+            assert!(log.status.success());
             saved
-                .send(std::fs::read_to_string(corpus.join("notes/page.md")).unwrap())
+                .send((contents, String::from_utf8(log.stdout).unwrap()))
                 .unwrap();
             std::fs::remove_dir_all(corpus).unwrap();
         });
@@ -97,7 +108,8 @@ fn page_renders_a_collection_from_a_node(cx: &mut TestAppContext) {
         cx.debug_bounds("brain-page-title").is_some()
     });
     let when = parvi_brain_app::state::when("2020-02-03T04:05:06Z", jiff::Timestamp::now());
-    let meta = Box::leak(format!("brain-meta-notes · changed {when} by perttu").into_boxed_str());
+    let meta =
+        Box::leak(format!("brain-meta-notes · changed {when} by Corpus Owner").into_boxed_str());
     let head = cx
         .debug_bounds(meta)
         .expect("subject, time and author on the metadata line");
@@ -134,7 +146,9 @@ fn page_renders_a_collection_from_a_node(cx: &mut TestAppContext) {
     });
     stop.send(()).unwrap();
     thread.join().unwrap();
-    assert!(saved_text.recv().unwrap().contains("Saved from Brain"));
+    let (contents, log) = saved_text.recv().unwrap();
+    assert!(contents.contains("Saved from Brain"));
+    assert_eq!(log.trim(), "perttu|Edit Test page");
     std::fs::remove_dir_all(settings).unwrap();
 }
 

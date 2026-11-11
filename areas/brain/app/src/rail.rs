@@ -164,6 +164,7 @@ impl BrainPage {
                     toggle,
                     Kind::Quiet,
                 )
+                .debug_selector(move || format!("brain-hide-{i}"))
                 .on_click(
                     cx.listener(move |s, _: &ClickEvent, _, cx| {
                         s.brain_toggle_hidden(&to_hide, cx)
@@ -185,6 +186,7 @@ impl BrainPage {
     ) -> gpui::Stateful<Div> {
         let path = p.page.path.clone();
         let selector = id.clone();
+        let page_selector = format!("brain-rail-page-{}", p.page.path);
         let current = self
             .state
             .page
@@ -210,6 +212,7 @@ impl BrainPage {
                     .min_w_0()
                     .overflow_hidden()
                     .whitespace_nowrap()
+                    .debug_selector(move || page_selector.clone())
                     .child(p.page.title.clone()),
             )
             .child(kit::note(t, brain::when(&p.updated, now), Some(t.dim)))

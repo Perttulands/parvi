@@ -17,6 +17,7 @@ pub const LISTING: Listing = Listing {
         "brain_save",
         "brain_collections",
         "brain_changes",
+        "brain_send",
     ],
     build,
 };
@@ -34,20 +35,25 @@ pub fn build(setup: &Setup) -> Result<Built> {
     let corpus = section.corpus.as_ref().map(|p| setup.config.path(p));
     let brain = brain::Brain::new(corpus.as_deref(), section.citadel.as_deref())?
         .with_author(section.author.as_deref())?;
-    Built::now(BrainArea {
-        brain: Arc::new(brain),
-        node: setup.node.id.to_string(),
+    let node = setup.node.id.to_string();
+    Built::then(move |provided| {
+        Ok(Arc::new(BrainArea {
+            brain: Arc::new(brain),
+            node,
+            sessions: provided.get::<dyn parvi_term::Sessions>().ok(),
+        }) as Arc<dyn Area>)
     })
 }
 struct BrainArea {
     brain: Arc<brain::Brain>,
     node: String,
+    sessions: Option<Arc<dyn parvi_term::Sessions>>,
 }
 impl Area for BrainArea {
     fn routes(&self) -> Router {
         brain::routes(self.brain.clone())
     }
     fn commands(&self) -> Vec<Command> {
-        commands::commands(self.brain.clone(), self.node.clone())
+        commands::commands(self.brain.clone(), self.node.clone(), self.sessions.clone())
     }
 }
