@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 pub fn version(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex::encode(Sha256::digest(bytes))
 }
 
 /// The most of a file shown as text (CHROTE `MAX_TEXT_PREVIEW_BYTES`).

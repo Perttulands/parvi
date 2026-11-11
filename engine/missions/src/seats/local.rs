@@ -100,7 +100,7 @@ impl LocalSeats {
                 "parvi-{}-{}-{}",
                 component(&request.run_id),
                 component(&request.slot_id),
-                &format!("{:x}", Sha256::digest(request.id.as_bytes()))[..8]
+                &hex::encode(Sha256::digest(request.id.as_bytes()))[..8]
             );
             if let Some(session) = self.engine.find(&name).await.map_err(|e| e.to_string())? {
                 return self.bind_created(&request.id, name, session).await;

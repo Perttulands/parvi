@@ -75,7 +75,7 @@ pub fn offset(roots: &Roots, probe: &Probe) -> Result<Offset, FilesError> {
     }
     Ok(Offset {
         offset: length,
-        hash: format!("{:x}", hash.finalize()),
+        hash: hex::encode(hash.finalize()),
         done: false,
     })
 }
@@ -338,7 +338,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(staged.offset, 3);
-        assert_eq!(staged.hash, format!("{:x}", Sha256::digest(b"abc")));
+        assert_eq!(staged.hash, hex::encode(Sha256::digest(b"abc")));
         assert!(!dir.join("copy.txt").exists());
         write(&roots, &chunk(&target, 0, b"abcd")).unwrap();
         assert!(matches!(

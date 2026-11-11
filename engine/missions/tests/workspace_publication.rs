@@ -278,10 +278,10 @@ fn recovery_removes_a_turn_left_after_settlement() {
     assert_eq!(wait(&c, &id).status, "succeeded");
     drop(c);
     let primary = root.0.join("worktrees").join(&id);
-    let turn = root
-        .0
-        .join("worktrees")
-        .join(format!(".turn-{id}-{:x}-1", Sha256::digest(b"fmn_work")));
+    let turn = root.0.join("worktrees").join(format!(
+        ".turn-{id}-{}-1",
+        hex::encode(Sha256::digest(b"fmn_work"))
+    ));
     git(
         &primary,
         &[
@@ -355,10 +355,10 @@ fn recovery_discards_an_interrupted_attempt_before_retrying() {
     drop(c);
     let primary = root.0.join("worktrees").join(&id);
     git(&primary, &["reset", "--hard", "HEAD~2"]);
-    let turn = root
-        .0
-        .join("worktrees")
-        .join(format!(".turn-{id}-{:x}-1", Sha256::digest(b"fmn_work")));
+    let turn = root.0.join("worktrees").join(format!(
+        ".turn-{id}-{}-1",
+        hex::encode(Sha256::digest(b"fmn_work"))
+    ));
     git(
         &primary,
         &[
@@ -483,10 +483,10 @@ fn recovery_does_not_duplicate_a_published_prefix_of_agent_commits() {
         assert_eq!(commits.len(), 3);
         let source_head = commits[2].as_str().unwrap();
         git(&primary, &["reset", "--hard", "HEAD~2"]);
-        let turn = root
-            .0
-            .join("worktrees")
-            .join(format!(".turn-{id}-{:x}-1", Sha256::digest(b"fmn_work")));
+        let turn = root.0.join("worktrees").join(format!(
+            ".turn-{id}-{}-1",
+            hex::encode(Sha256::digest(b"fmn_work"))
+        ));
         git(
             &primary,
             &[
@@ -559,10 +559,10 @@ fn recovery_unregisters_a_turn_whose_directory_was_already_removed() {
     assert_eq!(wait(&c, &id).status, "succeeded");
     drop(c);
     let primary = root.0.join("worktrees").join(&id);
-    let turn = root
-        .0
-        .join("worktrees")
-        .join(format!(".turn-{id}-{:x}-1", Sha256::digest(b"fmn_work")));
+    let turn = root.0.join("worktrees").join(format!(
+        ".turn-{id}-{}-1",
+        hex::encode(Sha256::digest(b"fmn_work"))
+    ));
     git(
         &primary,
         &[

@@ -34,7 +34,7 @@ pub fn record(stage: &Path, path: &Path, attrs: &Attributes) -> Result<(), Files
     }
     let parts =
         serde_json::to_vec(&attrs.parts).map_err(|e| FilesError::Io(std::io::Error::other(e)))?;
-    let name = format!("{:x}", Sha256::digest(parts));
+    let name = hex::encode(Sha256::digest(parts));
     let temp = directory.join(format!("{name}.tmp"));
     let data = serde_json::to_vec(attrs).map_err(|e| FilesError::Io(std::io::Error::other(e)))?;
     fs::write(&temp, data)?;

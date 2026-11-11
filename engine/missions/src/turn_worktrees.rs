@@ -242,7 +242,7 @@ impl TurnWorktrees {
 }
 
 fn step_hash(step: &str) -> String {
-    format!("{:x}", Sha256::digest(step.as_bytes()))
+    hex::encode(Sha256::digest(step.as_bytes()))
 }
 
 fn git<I, S>(cwd: &Path, args: I) -> io::Result<String>

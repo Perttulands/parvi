@@ -303,7 +303,7 @@ impl Executor for LabExecutor {
             file.write_all(brief.as_bytes())
                 .and_then(|()| file.sync_all())
                 .map_err(|e| e.to_string())?;
-            let digest = format!("{:x}", Sha256::digest(brief.as_bytes()));
+            let digest = hex::encode(Sha256::digest(brief.as_bytes()));
             send(
                 "slot_dispatch",
                 json!({"dispatchId":dispatch_id,"nodeId":request.formation.id,"slotId":slot.id,"agentId":slot.agent_id,"harness":slot.harness,"sessionStem":stem,"sessionRef":format!("lab:{stem}"),"briefPath":brief_path,"promptSha256":digest,"promptRef":"","phase":"","recordedBeforeSend":true,"nativeAck":false}),

@@ -784,7 +784,7 @@ fn dispatch_data(
     phase: &str,
     recorded_before_send: bool,
 ) -> Map<String, Value> {
-    let prompt_sha = format!("{:x}", Sha256::digest(prompt.as_bytes()));
+    let prompt_sha = hex::encode(Sha256::digest(prompt.as_bytes()));
     let data = json!({"dispatchId":id,"nodeId":node,"slotId":slot.id,"agentId":slot.agent_id,"harness":slot.harness,"sessionStem":slot.id,"sessionRef":format!("terminal:{}",seat.session_name),"briefPath":path,"promptSha256":prompt_sha,"promptRef":"","phase":phase,"recordedBeforeSend":recorded_before_send,"nativeAck":false});
     data.as_object().cloned().unwrap_or_default()
 }
@@ -799,7 +799,7 @@ fn dispatch_id(request: &FormationExecution, slot: &Slot, phase: &str) -> String
 }
 fn dispatch_key(run: &str, node: &str, slot: &str, attempt: i64, phase: &str) -> String {
     let digest = Sha256::digest(format!("{run}\0{node}\0{slot}\0{attempt}\0{phase}").as_bytes());
-    format!("dsp_{digest:x}")
+    format!("dsp_{}", hex::encode(digest))
 }
 
 /// Publishes a placed turn on its node and describes it for the run's ledger.
