@@ -9,8 +9,6 @@ if [ -z "$nouns" ]; then
 fi
 missing=0
 for noun in $nouns; do
-    # The mission family belongs to the next slice.
-    case "$noun" in mission|formation|gate|end|limit|run) continue ;; esac
     if ! grep -Fq "\`$noun\`" "$skill"; then
         echo "Missing noun: $noun" >&2
         missing=1
