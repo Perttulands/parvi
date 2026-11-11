@@ -824,11 +824,19 @@ impl Render for Launcher {
                     .map(|p| kit::note(&t, p, Some(t.error))),
             )
             .child(
-                div().mt(px(6.)).flex().justify_end().child(
-                    kit::button(&t, ("launch", i), button_label, Kind::Primary)
-                        .debug_selector(move || format!("launch-{i}"))
-                        .on_click(cx.listener(|l, _, window, cx| l.launch(window, cx))),
-                ),
+                div()
+                    .mt(px(6.))
+                    .flex()
+                    .justify_end()
+                    .debug_selector({
+                        let label = button_label.clone();
+                        move || format!("launch-label-{i}-{label}")
+                    })
+                    .child(
+                        kit::button(&t, ("launch", i), button_label, Kind::Primary)
+                            .debug_selector(move || format!("launch-{i}"))
+                            .on_click(cx.listener(|l, _, window, cx| l.launch(window, cx))),
+                    ),
             )
     }
 }

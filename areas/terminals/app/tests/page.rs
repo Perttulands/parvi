@@ -2087,7 +2087,15 @@ fn launcher_completes_a_folder_outside_files_roots(cx: &mut TestAppContext) {
     let row: &'static str =
         Box::leak(format!("folder-row-0-{}", chosen.display()).into_boxed_str());
     until(cx, "folder completion", |cx| cx.debug_bounds(row).is_some());
+    until(cx, "button names the typed folder", |cx| {
+        cx.debug_bounds("launch-label-0-Launch fake in sub")
+            .is_some()
+    });
     cx.simulate_keystrokes("tab");
+    until(cx, "button names the completed folder", |cx| {
+        cx.debug_bounds("launch-label-0-Launch fake in subfolder")
+            .is_some()
+    });
     scroll_to_launch(cx, "launcher-scroll-0");
     until(cx, "launch available", |cx| {
         cx.debug_bounds("launch-0")
