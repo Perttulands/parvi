@@ -1,8 +1,9 @@
 #![cfg(unix)]
 use gpui::{Modifiers, TestAppContext, VisualTestContext};
 use parvi_app_kit::link::client::LinkState;
-use parvi_node_kit::Listing;
+use parvi_node_kit::{Listing, NodeClient};
 use parvi_testkit::{node::Node, sessions};
+use serde_json::json;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -104,5 +105,69 @@ fn opens_a_fixture_mission_on_the_canvas(cx: &mut TestAppContext) {
         cx.debug_bounds("mission-card-fmn_work").is_some()
     });
     assert!(cx.debug_bounds("mission-card-inp_hello").is_some());
+    let card = cx.debug_bounds("mission-card-fmn_work").unwrap().center();
+    cx.simulate_click(card, Modifiers::none());
+    until(cx, "step editor", |cx| {
+        cx.debug_bounds("step-goal").is_some()
+    });
+    let goal = cx.debug_bounds("step-goal").unwrap().center();
+    cx.simulate_click(goal, Modifiers::none());
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("Deliver the result");
+    let save = cx.debug_bounds("step-save").unwrap().center();
+    cx.simulate_click(save, Modifiers::none());
+    until(cx, "save", |cx| cx.debug_bounds("step-goal").is_none());
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let client = NodeClient::new(Some(&format!("{}/", running.url))).unwrap();
+        let (doc, _) = client
+            .request(http::Method::GET, "/api/missions/hello", None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            doc["mission"]["formations"][0]["brief"]["goal"],
+            "Deliver the result"
+        );
+    });
+    let card = cx.debug_bounds("mission-card-fmn_work").unwrap().center();
+    cx.simulate_click(card, Modifiers::none());
+    until(cx, "editor reopened", |cx| {
+        cx.debug_bounds("step-goal").is_some()
+    });
+    let goal = cx.debug_bounds("step-goal").unwrap().center();
+    cx.simulate_click(goal, Modifiers::none());
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("Keep this draft");
+    rt.block_on(async {
+        let client = NodeClient::new(Some(&format!("{}/", running.url))).unwrap();
+        let (doc, etag) = client
+            .request(http::Method::GET, "/api/missions/hello", None, None)
+            .await
+            .unwrap();
+        client
+            .request(
+                http::Method::PATCH,
+                "/api/missions/hello",
+                Some(json!({"expectedRev": doc["mission"]["rev"], "title":"Changed elsewhere"})),
+                Some(&etag),
+            )
+            .await
+            .unwrap();
+    });
+    let save = cx.debug_bounds("step-save").unwrap().center();
+    cx.simulate_click(save, Modifiers::none());
+    until(cx, "conflict", |cx| {
+        cx.debug_bounds("step-error-conflict: mission changed")
+            .is_some()
+    });
+    let goal = cx.debug_bounds("step-goal").unwrap().center();
+    cx.simulate_click(goal, Modifiers::none());
+    cx.simulate_keystrokes("ctrl-a ctrl-c");
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some("Keep this draft")
+    );
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }
