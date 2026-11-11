@@ -12,6 +12,7 @@ pub const PAGES: &[Build] = &[
     parvi_agents_app::build,
     parvi_terminals_app::build,
     parvi_scheduled_app::build,
+    parvi_files_app::build,
     parvi_host_app::build_host,
     parvi_host_app::build_services,
     parvi_work_app::build,

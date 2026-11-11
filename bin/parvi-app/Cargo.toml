@@ -27,6 +27,7 @@ log = "0.4"
 parvi-agents-app = { path = "../../areas/agents/app" }
 parvi-terminals-app = { path = "../../areas/terminals/app" }
 parvi-scheduled-app = { path = "../../areas/scheduled/app" }
+parvi-files-app = { path = "../../areas/files/app" }
 parvi-host-app = { path = "../../areas/host/app" }
 parvi-work-app = { path = "../../areas/work/app" }
 parvi-brain-app = { path = "../../areas/brain/app" }
