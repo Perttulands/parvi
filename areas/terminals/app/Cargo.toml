@@ -13,7 +13,7 @@ workspace = true
 parvi-app-kit = { path = "../../../kit/app-kit" }
 parvi-core = { path = "../../../kit/core" }
 parvi-terminals-contract = { path = "../contract" }
-gpui = { package = "gpui-pre", version = "=0.3.11" }
+gpui = { package = "gpui-pre", version = "=0.3.12" }
 alacritty_terminal = "0.26"
 async-channel = "2"
 log = "0.4"
@@ -26,7 +26,7 @@ unicode-width = "0.2"
 windows-sys = { version = "0.61", features = ["Win32_Media_Audio"] }
 
 [dev-dependencies]
-gpui = { package = "gpui-pre", version = "=0.3.11", features = ["test-support"] }
+gpui = { package = "gpui-pre", version = "=0.3.12", features = ["test-support"] }
 parvi-app-shell = { path = "../../../kit/app-shell" }
 parvi-terminals = { path = "../node" }
 parvi-testkit = { path = "../../../kit/testkit" }

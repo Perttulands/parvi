@@ -13,7 +13,7 @@ parvi-app-kit = { path = "../../../kit/app-kit" }
 parvi-files-contract = { path = "../contract" }
 serde = { version = "1", features = ["derive"] }
 time = { version = "0.3", features = ["local-offset"] }
-gpui = { package = "gpui-pre", version = "=0.3.11" }
+gpui = { package = "gpui-pre", version = "=0.3.12" }
 gltf = { version = "1.4", default-features = false, features = ["utils", "names"] }
 image = { version = "0.25", default-features = false }
 sha2 = "0.10"
@@ -27,5 +27,5 @@ parvi-files = { path = "../node" }
 parvi-terminals = { path = "../../terminals/node" }
 parvi-terminals-app = { path = "../../terminals/app" }
 parvi-testkit = { path = "../../../kit/testkit" }
-gpui = { package = "gpui-pre", version = "=0.3.11", features = ["test-support"] }
+gpui = { package = "gpui-pre", version = "=0.3.12", features = ["test-support"] }
 tokio = { version = "1", features = ["full"] }
