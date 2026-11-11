@@ -4,6 +4,7 @@ mod column;
 mod fit;
 mod graph_view;
 mod natural;
+mod report;
 pub mod store;
 mod strip;
 #[cfg(test)]
@@ -39,6 +40,7 @@ pub struct Work {
     focus: FocusHandle,
     search: Entity<TextField>,
     rail_search: Entity<TextField>,
+    report: Option<Entity<report::Report>>,
     snapshots: BTreeMap<String, Snapshot>,
     board: Board,
     slice: Slice,
@@ -105,7 +107,13 @@ impl Page for Work {
     fn chords(&self, _: &App) -> Vec<parvi_app_kit::chords::Chord> {
         let me = self.me.clone();
         let close = self.me.clone();
+        let report = self.me.clone();
         vec![
+            parvi_app_kit::chords::Chord::new("r", "Report", move |window, cx| {
+                let _ = report.update(cx, |work, cx| work.open_report(window, cx));
+            })
+            .alt("r", Some(false))
+            .everywhere(),
             parvi_app_kit::chords::Chord::new("i", "Close the table", move |_, cx| {
                 let _ = close.update(cx, |work, cx| {
                     if let Some(from) = work.beside_from.take() {
@@ -153,6 +161,7 @@ impl Work {
             focus: cx.focus_handle(),
             search,
             rail_search,
+            report: None,
             snapshots: BTreeMap::new(),
             board: Board::default(),
             slice: Slice::default(),

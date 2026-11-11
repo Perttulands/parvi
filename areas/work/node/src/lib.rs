@@ -90,6 +90,7 @@ impl Area for WorkArea {
                                 p.iter()
                                     .all(|p| p.get("synced").is_some() || p.get("error").is_some())
                             }) {
+                                snapshot["items"] = json!(listed_items(&snapshot));
                                 snapshot["node"] = json!(node);
                                 return Ok(snapshot);
                             }
@@ -143,6 +144,31 @@ impl Area for WorkArea {
     fn channel(&self, _: Client) -> Option<Box<dyn Channel>> {
         Some(Box::new(Socket(work::Channel::new(self.work.clone()))))
     }
+}
+/// A flat index makes the board's items visible in the generic CLI renderer,
+/// which otherwise shows only each project's scalar fields.
+fn listed_items(snapshot: &serde_json::Value) -> Vec<serde_json::Value> {
+    let mut items = Vec::new();
+    for project in snapshot["projects"].as_array().into_iter().flatten() {
+        match project["tracker"].as_str() {
+            Some("beads") => {
+                for item in project["items"].as_array().into_iter().flatten() {
+                    items.push(json!({"project": project["folder"], "id": item["id"], "reference": item["reference"], "title": item["title"], "status": item["status"]}));
+                }
+            }
+            Some("github") => {
+                for (key, kind) in [("issues", "issue"), ("pulls", "pull")] {
+                    for item in project[key].as_array().into_iter().flatten() {
+                        let repo = project["name"].as_str().unwrap_or("");
+                        let number = item["number"].as_u64().unwrap_or_default();
+                        items.push(json!({"project": repo, "id": number, "reference": format!("gh:{repo}#{number}"), "title": item["title"], "status": item["state"], "kind": kind}));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    items
 }
 fn failed(e: impl std::fmt::Display) -> Error {
     Error::new("tracker_error", e.to_string())
