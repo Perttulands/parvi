@@ -322,7 +322,16 @@ async fn run_changes_arrive_on_the_socket_through_completion() {
                     let (request, _) = client.request(Method::GET, &path, None, None).await.unwrap();
                     assert_eq!(request["request"]["requestedSeq"], gate.requested_seq);
                     let path = format!("/api/runs/{id}/gates/{}/verdict", gate.gate_id);
-                    client.request(Method::POST, &path, Some(json!({"requestedSeq":gate.requested_seq,"verdict":"pass","reason":"approved"})), None).await.unwrap();
+                    for (body, status) in [
+                        (json!({"requestedSeq":gate.requested_seq,"verdict":"pass","relayedBy":"-invalid"}), axum::http::StatusCode::BAD_REQUEST),
+                        (json!({"requestedSeq":1,"verdict":"pass"}), axum::http::StatusCode::CONFLICT),
+                    ] {
+                        let error = client.request(Method::POST, &path, Some(body), None).await.unwrap_err();
+                        assert_eq!(error.downcast_ref::<NodeError>().unwrap().status, status);
+                    }
+                    client.request(Method::POST, &path, Some(json!({"requestedSeq":gate.requested_seq,"verdict":"pass","reason":"  accepted\n"})), None).await.unwrap();
+                    let duplicate = client.request(Method::POST, &path, Some(json!({"requestedSeq":gate.requested_seq,"verdict":"pass"})), None).await.unwrap_err();
+                    assert_eq!(duplicate.downcast_ref::<NodeError>().unwrap().status, axum::http::StatusCode::CONFLICT);
                     answered = true;
                 }
                 if run.r#final { break 'stream run; }
@@ -333,6 +342,30 @@ async fn run_changes_arrive_on_the_socket_through_completion() {
     .await
     .expect("run reaches a final projection");
     assert!(answered);
+    let ledger = parvi_mission_engine::Ledger::new(
+        parvi_mission_engine::Store::root_in(node.dir()).join(format!("runs/{id}.ndjson")),
+        id,
+    );
+    let events = ledger.read().unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| event.kind == "human_verdict_recorded"
+                && event.data["reason"] == "  accepted\n")
+    );
+    let unknown = client
+        .request(
+            Method::POST,
+            &format!("/api/runs/{id}/resume"),
+            Some(json!({"grant":true,"completedDispatchId":"dsp_1"})),
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        unknown.downcast_ref::<NodeError>().unwrap().status,
+        axum::http::StatusCode::BAD_REQUEST
+    );
     assert_eq!(final_run.work, "gh:example/project#1");
     let (listed, _) = client
         .request(Method::GET, "/api/runs", None, None)

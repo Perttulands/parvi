@@ -70,7 +70,8 @@ impl From<parvi_core::Error> for ApiError {
             | "input_occupied"
             | "duplicate_connection"
             | "not_pending"
-            | "character_exists" => StatusCode::CONFLICT,
+            | "character_exists"
+            | "slot_choice_required" => StatusCode::CONFLICT,
             "precondition_required" => StatusCode::PRECONDITION_REQUIRED,
             "invalid_character"
             | "invalid_code_gate_profile"
@@ -460,4 +461,27 @@ async fn gate_profiles() -> Response {
     let profiles: parvi_missions_contract::GateProfiles =
         serde_json::from_str(include_str!("gate_profiles.json")).expect("gate profiles are valid");
     Json(profiles).into_response()
+}
+
+#[cfg(test)]
+mod error_tests {
+    use super::*;
+    #[test]
+    fn authoring_errors_keep_their_http_boundaries() {
+        for (code, status) in [
+            ("slot_choice_required", StatusCode::CONFLICT),
+            ("input_occupied", StatusCode::CONFLICT),
+            ("duplicate_connection", StatusCode::CONFLICT),
+            ("not_found", StatusCode::NOT_FOUND),
+            ("note_author_mismatch", StatusCode::FORBIDDEN),
+            ("note_too_large", StatusCode::PAYLOAD_TOO_LARGE),
+            ("self_wire", StatusCode::UNPROCESSABLE_ENTITY),
+        ] {
+            assert_eq!(
+                ApiError::from(parvi_core::Error::new(code, "test")).0,
+                status,
+                "{code}"
+            );
+        }
+    }
 }
