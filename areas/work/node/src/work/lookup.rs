@@ -64,7 +64,10 @@ impl Work {
                     .iter()
                     .find(|item| item.id == *id)
                     .cloned()
-                    .with_context(|| format!("no Bead {id} in {folder}"))
+                    .ok_or_else(|| {
+                        parvi_core::Error::new("not_found", format!("no Bead {id} in {folder}"))
+                            .into()
+                    })
             }
         }
     }

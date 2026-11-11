@@ -83,7 +83,7 @@ fn start() -> Option<Running> {
             let dir = parvi_testkit::fresh_dir("work-page-store");
             std::fs::create_dir_all(dir.join(".beads")).unwrap();
             let script = dir.join("fixture-bd");
-            std::fs::write(&script, "#!/bin/sh\nif [ \"$2\" = config ]; then echo '{\"value\":\"fixture\"}'; exit 0; fi\nprintf '%s\\n' '[{\"id\":\"fixture-1\",\"title\":\"Read the fixture\",\"status\":\"open\",\"created_at\":\"2026-11-01T00:00:00Z\",\"updated_at\":\"2026-11-01T00:00:00Z\"}]'\n").unwrap();
+            std::fs::write(&script, "#!/bin/sh\nif [ \"$2\" = config ]; then echo '{\"value\":\"fixture\"}'; exit 0; fi\nif [ -f slow ]; then sleep 6; fi\nif [ -f fail ]; then echo 'tracker unavailable' >&2; exit 1; fi\nprintf '%s\\n' '[{\"id\":\"fixture-1\",\"title\":\"Read the fixture\",\"status\":\"open\",\"created_at\":\"2026-11-01T00:00:00Z\",\"updated_at\":\"2026-11-01T00:00:00Z\"}]'\n").unwrap();
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
             BD.set(script.to_string_lossy().into_owned()).unwrap();
@@ -182,8 +182,17 @@ fn work_column_and_terminal_links_open_cards_and_hand_off(cx: &mut TestAppContex
         part: None,
         beside,
     };
+    std::fs::write(std::path::Path::new(&running.store).join("slow"), "").unwrap();
     cx.update(|_, cx| toy_host.ask(reveal("fixture-1", true), cx))
         .unwrap();
+    until(cx, "loading card", |cx| {
+        cx.debug_bounds("work-beside-loading").is_some()
+    });
+    std::thread::sleep(Duration::from_millis(5300));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("work-beside-loading").is_some());
+    assert!(cx.debug_bounds("work-beside-failed").is_none());
+    std::fs::remove_file(std::path::Path::new(&running.store).join("slow")).unwrap();
     until(cx, "beside card title", |cx| {
         cx.debug_bounds("work-card-title-Read the fixture")
             .is_some()
@@ -203,6 +212,19 @@ fn work_column_and_terminal_links_open_cards_and_hand_off(cx: &mut TestAppContex
         ))
         .is_some()
     });
+    assert!(cx.debug_bounds("work-beside-not-found").is_some());
+    cx.simulate_keystrokes("alt-i");
+    let failure = std::path::Path::new(&running.store).join("fail");
+    std::fs::write(&failure, "").unwrap();
+    cx.update(|_, cx| toy_host.ask(reveal("fixture-1", true), cx))
+        .unwrap();
+    until(cx, "tracker failure", |cx| {
+        cx.debug_bounds("work-beside-error-tracker unavailable")
+            .is_some()
+    });
+    assert!(cx.debug_bounds("work-beside-failed").is_some());
+    assert!(cx.debug_bounds("work-beside-not-found").is_none());
+    std::fs::remove_file(failure).unwrap();
     cx.simulate_keystrokes("alt-i");
     cx.update(|_, cx| toy_host.ask(reveal("fixture-1", false), cx))
         .unwrap();

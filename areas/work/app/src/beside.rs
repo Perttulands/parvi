@@ -6,10 +6,11 @@ use parvi_app_kit::theme::{FAMILY, theme};
 use parvi_app_kit::widgets::kit;
 use parvi_core::NodeId;
 use parvi_work_contract::{Item, ProjectView, Snapshot, StoreView};
+use std::time::Duration;
 
 struct Card {
     work: Entity<Work>,
-    error: Option<String>,
+    error: Option<(String, bool)>,
     loading: bool,
 }
 
@@ -31,9 +32,13 @@ impl Render for Card {
             .border_color(t.divider)
             .font_family(FAMILY)
             .when(self.loading, |d| {
-                d.child(kit::note(&t, "Reading item…", None))
+                d.child(
+                    div()
+                        .debug_selector(|| "work-beside-loading".into())
+                        .child(kit::note(&t, "Reading item…", None)),
+                )
             })
-            .when_some(self.error.clone(), |d, error| {
+            .when_some(self.error.clone(), |d, (error, not_found)| {
                 d.child(
                     div()
                         .id("work-beside-error")
@@ -42,7 +47,26 @@ impl Render for Card {
                             move || format!("work-beside-error-{error}")
                         })
                         .p(px(SPACE_4XL))
-                        .child(kit::note(&t, "Item not found", Some(t.error)))
+                        .child(
+                            div()
+                                .debug_selector(move || {
+                                    if not_found {
+                                        "work-beside-not-found"
+                                    } else {
+                                        "work-beside-failed"
+                                    }
+                                    .into()
+                                })
+                                .child(kit::note(
+                                    &t,
+                                    if not_found {
+                                        "Item not found"
+                                    } else {
+                                        "Could not read item"
+                                    },
+                                    Some(t.error),
+                                )),
+                        )
                         .child(error),
                 )
             })
@@ -93,7 +117,8 @@ impl Work {
         self.beside_from = Some(from);
         host.show_beside(from, card.clone().into(), cx);
         let task = host.request(
-            Request::get(node.clone(), format!("/api/work/item?ref={}", encode(&id))),
+            Request::get(node.clone(), format!("/api/work/item?ref={}", encode(&id)))
+                .within(Duration::from_secs(95)),
             cx,
         );
         // The Work page may not be watched while the asker is shown. Ask the
@@ -104,16 +129,21 @@ impl Work {
             let result = match answer {
                 Ok(answer) if answer.ok() => {
                     serde_json::from_slice::<serde_json::Value>(&answer.body)
-                        .map_err(|e| e.to_string())
+                        .map_err(|e| (e.to_string(), false))
                         .and_then(|v| {
                             let line = v["line"].as_str().unwrap_or("").to_owned();
                             serde_json::from_value::<Item>(v["item"].clone())
                                 .map(|item| (item, line))
-                                .map_err(|e| e.to_string())
+                                .map_err(|e| (e.to_string(), false))
                         })
                 }
-                Ok(answer) => Err(answer.error_text()),
-                Err(error) => Err(error.message),
+                Ok(answer) => {
+                    let not_found = serde_json::from_slice::<serde_json::Value>(&answer.body)
+                        .ok()
+                        .is_some_and(|v| v["error"]["code"] == "not_found");
+                    Err((answer.error_text(), not_found))
+                }
+                Err(error) => Err((error.message, false)),
             };
             let mut projects = projects;
             if let Ok(answer) = projects_task.await
