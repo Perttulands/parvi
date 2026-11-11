@@ -179,7 +179,9 @@ pub fn description(name: &str) -> &'static str {
         "mission_update" => {
             "Change the Input card. Only the flags you give change it, and an empty value clears that field."
         }
-        "mission_delete" => "Remove the whole mission and its layout; run history remains.",
+        "mission_delete" => {
+            "Archive the mission definition, layout and its notes; run history remains. List archives with mission archives and remove one with mission purge-archive."
+        }
         "mission_input" => {
             "List the inputs a run supplies, or with a name declare, change or --delete that input. A mission that declares none takes one required text input, brief. A new input is optional text unless the flags say otherwise, and only the flags you give change an existing one; step briefs reference it as {name}."
         }

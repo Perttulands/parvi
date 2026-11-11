@@ -313,7 +313,7 @@ impl MissionsPage {
                         .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
                         .when(matches!(form.doing, Doing::Archive { .. }), |d| {
                             let Doing::Archive { title, .. } = &form.doing else { return d; };
-                            d.child(div().debug_selector(|| "mission-archive-explanation".into()).child(format!("“{title}” will be removed from the mission list. Its definition and layout are archived; run history remains.")))
+                            d.child(div().debug_selector(|| "mission-archive-explanation".into()).child(format!("“{title}” will be removed from the mission list. Its definition, layout and notes are archived; run history remains.")))
                         })
                         .when(!matches!(form.doing, Doing::Archive { .. }), |d| d.child(kit::label(t, "Name")).child(div().debug_selector(|| "mission-form-name".into()).child(form.name.clone())).child(kit::note(t, "The mission slug is derived from this name and stays the same when renamed.", Some(t.dim))))
                         .when_some(form.problem.clone(), |d, problem| {

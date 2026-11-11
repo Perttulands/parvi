@@ -322,6 +322,16 @@ impl Store {
         let current = edit(&raw)?;
         check(&precondition, &current)?;
         let archive_id = id("archive")?;
+        let notes = self.root().join("notes").join(format!("{slug}.notes.toml"));
+        let archived_notes =
+            notes.with_file_name(format!("{slug}.notes.toml.deleted-{archive_id}"));
+        // Only archive notes that identify this mission. Refuse an unreadable
+        // notes file: its ownership cannot safely be inferred from the slug.
+        let archive_notes = match crate::links::read_definition(&notes) {
+            Ok(raw) => parvi_mission_model::Notes::parse(&raw)?.mission_id == current.mission.id,
+            Err(error) if error.code == "not_found" => false,
+            Err(error) => return Err(error),
+        };
         let layout = self
             .root()
             .join("layout")
@@ -330,20 +340,17 @@ impl Store {
             layout.with_file_name(format!("{slug}.layout.toml.deleted-{archive_id}"));
         let archived_mission =
             target.with_file_name(format!("{slug}.mission.toml.deleted-{archive_id}"));
-        let has_layout = match std::fs::symlink_metadata(&layout) {
-            Ok(_) => {
-                std::fs::rename(&layout, &archived_layout).map_err(crate::error::io)?;
-                true
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-            Err(e) => return Err(crate::error::io(e)),
-        };
-        if let Err(error) = std::fs::rename(&target, &archived_mission) {
-            if has_layout {
-                std::fs::rename(&archived_layout, &layout).map_err(crate::error::io)?;
-            }
-            return Err(crate::error::io(error));
+        let mut moves = Vec::new();
+        if archive_notes {
+            moves.push((notes, archived_notes));
         }
+        match std::fs::symlink_metadata(&layout) {
+            Ok(_) => moves.push((layout, archived_layout)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+            Err(e) => return Err(crate::error::io(e)),
+        }
+        moves.push((target, archived_mission));
+        crate::mission_archives::move_archives(moves)?;
         Ok(MissionDeletion {
             id: current.mission.id,
             slug,
