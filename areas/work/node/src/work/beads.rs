@@ -1,5 +1,5 @@
 //! Reads one Beads store through `bd --json`, run in its project folder.
-//! Parvi only reads; writing stays with `bd` (ARCHITECTURE.md: Work).
+//! Creates items through the same isolated store environment.
 
 use std::path::Path;
 use std::time::Duration;
@@ -35,6 +35,27 @@ impl Bd {
     pub async fn list(&self, folder: &str) -> Result<String> {
         self.run(folder, &["list", "--status", "all", "--limit", "0"])
             .await
+    }
+
+    pub async fn create(
+        &self,
+        folder: &str,
+        title: &str,
+        description: &str,
+        kind: &str,
+    ) -> Result<String> {
+        let output = self
+            .run(
+                folder,
+                &["create", title, "--description", description, "-t", kind],
+            )
+            .await?;
+        let value: serde_json::Value =
+            serde_json::from_str(&output).context("bd's answer is not JSON")?;
+        Ok(value["id"]
+            .as_str()
+            .context("bd did not return an id")?
+            .to_owned())
     }
 
     /// The prefix the store gives its Beads' ids.
@@ -73,10 +94,19 @@ impl Bd {
         if output.status.success() && (trimmed.starts_with('[') || trimmed.starts_with('{')) {
             return Ok(stdout.into_owned());
         }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !output.status.success() && !stderr.trim().is_empty() {
+            bail!(
+                "{}",
+                stderr
+                    .trim()
+                    .strip_prefix("Error: ")
+                    .unwrap_or(stderr.trim())
+            );
+        }
         let said = serde_json::from_str::<serde_json::Value>(trimmed)
             .ok()
             .and_then(|v| v["error"].as_str().map(str::to_owned));
-        let stderr = String::from_utf8_lossy(&output.stderr);
         match said.or_else(|| {
             stderr
                 .lines()
