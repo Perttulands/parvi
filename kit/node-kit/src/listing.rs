@@ -59,13 +59,16 @@ pub fn check(areas: &[Listing]) -> Result<(), Error> {
     Ok(())
 }
 
-/// Whether a command's name reads as `noun_verb`.
+/// Whether a command's name reads as `noun_verb`: a noun, then a verb of
+/// one or more words (`formation_set_type` is `parvi formation set-type`),
+/// lowercase letters and digits between single underscores.
 pub fn well_named(name: &str) -> bool {
-    let mut parts = name.split('_');
-    matches!(
-        (parts.next(), parts.next(), parts.next()),
-        (Some(noun), Some(verb), None) if !noun.is_empty() && !verb.is_empty()
-    )
+    let word = |w: &str| {
+        !w.is_empty()
+            && w.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+    };
+    name.split('_').count() >= 2 && name.split('_').all(word)
 }
 
 /// Who owns which frame kinds: the reserved ones and each area's, in the
@@ -132,6 +135,17 @@ mod tests {
             message(&[named]),
             "area c: command list is not named noun_verb"
         );
+        for bad in [
+            "thing__list",
+            "_list",
+            "thing_",
+            "thing_set-type",
+            "Thing_list",
+        ] {
+            assert!(!well_named(bad), "{bad}");
+        }
+        assert!(well_named("thing_list"));
+        assert!(well_named("formation_set_type"));
     }
 
     #[test]
