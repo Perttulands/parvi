@@ -746,13 +746,19 @@ impl FilesPage {
                         select: None,
                     };
                     div()
+                        .id(("files-markdown-scroll", i))
                         .size_full()
+                        .overflow_y_scroll()
                         .debug_selector(|| "files-markdown-rendered".into())
-                        .child(parvi_app_kit::widgets::markdown::render(
-                            &look,
-                            "file-markdown",
-                            blocks,
-                        ))
+                        .child(
+                            div()
+                                .debug_selector(|| "files-markdown-content".into())
+                                .child(parvi_app_kit::widgets::markdown::render(
+                                    &look,
+                                    "file-markdown",
+                                    blocks,
+                                )),
+                        )
                         .into_any_element()
                 }
                 Show::Text { .. }
@@ -779,6 +785,10 @@ impl FilesPage {
             }
         };
         div()
+            .debug_selector({
+                let id = format!("files-viewer-bounds-{i}");
+                move || id.clone()
+            })
             .flex_1()
             .min_w_0()
             .min_h_0()

@@ -1174,6 +1174,74 @@ fn terminal(
     parvi_app_kit::mount(host, window, cx, |host, _, _| TerminalPage { host })
 }
 
+/// A long rendered document stays in the terminal's side pane and scrolls.
+#[gpui::test]
+fn markdown_beside_terminal_scrolls_inside_its_border(cx: &mut TestAppContext) {
+    let root = parvi_testkit::fresh_dir("files-beside-markdown");
+    let file = root.join("long.md");
+    std::fs::write(
+        &file,
+        (0..120)
+            .map(|n| format!("Paragraph {n}: text in a long document.\n\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    let running = start(root.clone());
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let url = running.url.clone();
+    let (shell, cx) = cx.add_window_view(move |w, cx| {
+        parvi_app_shell::start(&[terminal, parvi_files_app::build], Some(url), None, w, cx)
+    });
+    until(cx, "node linked", |cx| {
+        shell.read_with(cx, |s, cx| {
+            s.hub().read(cx).fleet.here().state == parvi_app_kit::link::client::LinkState::Open
+        })
+    });
+    let host = shell.read_with(cx, |s, _| {
+        parvi_app_kit::Host::new(s.hub()).for_page("terminals", &[])
+    });
+    cx.update(|_, cx| {
+        host.ask(
+            parvi_app_kit::Ask::OpenPath {
+                node: parvi_core::NodeId(running.node.clone()),
+                path: file.to_string_lossy().into_owned(),
+                beside: true,
+            },
+            cx,
+        )
+        .unwrap()
+    });
+    until(cx, "rendered Markdown", |cx| {
+        cx.debug_bounds("files-markdown-rendered").is_some()
+    });
+    let viewer = cx.debug_bounds("files-viewer-bounds-0").unwrap();
+    let viewport = cx.debug_bounds("files-markdown-rendered").unwrap();
+    let before = cx.debug_bounds("files-markdown-content").unwrap();
+    assert!(viewport.top() >= viewer.top() && viewport.bottom() <= viewer.bottom());
+    assert!(
+        before.size.height > viewport.size.height,
+        "document exceeds the viewport"
+    );
+    cx.simulate_event(gpui::ScrollEvent {
+        position: viewport.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(-500.))),
+        modifiers: Modifiers::none(),
+        touch_phase: gpui::TouchPhase::Moved,
+        source: gpui::ScrollSource::Pointer,
+    });
+    cx.run_until_parked();
+    let after = cx.debug_bounds("files-markdown-content").unwrap();
+    assert!(
+        after.top() < before.top(),
+        "scroll moves the document within its viewport"
+    );
+    let viewport_after = cx.debug_bounds("files-markdown-rendered").unwrap();
+    assert_eq!(viewport, viewport_after);
+    drop(running);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// A beside ask leaves the terminal shown and switching files keeps the draft.
 #[gpui::test]
 fn open_path_beside_keeps_the_terminal_and_the_draft(cx: &mut TestAppContext) {
