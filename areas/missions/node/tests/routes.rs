@@ -1,5 +1,5 @@
 use axum::http::Method;
-use parvi_node_kit::{Listing, NodeClient};
+use parvi_node_kit::{Listing, NodeClient, NodeError};
 use parvi_testkit::{node::Node, sessions};
 use serde_json::json;
 
@@ -11,9 +11,7 @@ const AREAS: &[Listing] = &[
 
 #[tokio::test(flavor = "multi_thread")]
 async fn mission_routes_on_a_node_with_fake_sessions() {
-    let node = Node::start(AREAS, "[missions]\ndir = \"missions\"\n")
-        .await
-        .unwrap();
+    let node = Node::start(AREAS, "").await.unwrap();
     let client = NodeClient::new(Some(&format!("{}/", node.url()))).unwrap();
     let (created, etag) = client
         .request(
@@ -152,6 +150,31 @@ async fn mission_routes_on_a_node_with_fake_sessions() {
         .await
         .unwrap_err();
     assert!(format!("{invalid:#}").contains("bad_request"));
+    for path in [
+        "/api/runs/run_missing/resume",
+        "/api/runs/run_missing/abort",
+        "/api/runs/run_missing/land",
+        "/api/runs/run_missing/gates/g/verdict",
+        "/api/runs/run_missing/gates/g/pick",
+    ] {
+        let error = client
+            .request(Method::POST, path, Some(json!("wrong type")), None)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<NodeError>().unwrap().code,
+            "bad_request",
+            "{path}"
+        );
+    }
+    let error = client
+        .request(Method::GET, "/api/runs?mission=a&mission=b", None, None)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<NodeError>().unwrap().code,
+        "bad_request"
+    );
     let missing_work = client
         .request(
             Method::POST,
@@ -203,12 +226,9 @@ const LAB: Listing = Listing {
 async fn run_changes_arrive_on_the_socket_through_completion() {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::{connect_async, tungstenite::Message};
-    let node = Node::start(
-        &[sessions::LISTING, parvi_work::LISTING, LAB],
-        "[missions]\ndir = \"missions\"\n",
-    )
-    .await
-    .unwrap();
+    let node = Node::start(&[sessions::LISTING, parvi_work::LISTING, LAB], "")
+        .await
+        .unwrap();
     let folder = node.dir().join("missions/missions");
     std::fs::create_dir_all(&folder).unwrap();
     let mission = include_str!("fixtures/solo-lab.mission.toml")
@@ -216,6 +236,29 @@ async fn run_changes_arrive_on_the_socket_through_completion() {
         + "\n[[gate]]\nid = \"gate_review\"\ntitle = \"Review\"\nkinds = [\"human\"]\n\n[[end]]\nid = \"end_rejected\"\ntitle = \"Rejected\"\noutcome = \"rejected\"\n\n[[connection]]\nid = \"edge_pass\"\nfrom = \"gate_review:pass\"\nto = \"end_done:in\"\n\n[[connection]]\nid = \"edge_fail\"\nfrom = \"gate_review:fail\"\nto = \"end_rejected:in\"\n";
     std::fs::write(folder.join("hello.mission.toml"), mission).unwrap();
     let client = NodeClient::new(Some(&format!("{}/", node.url()))).unwrap();
+    std::fs::write(
+        folder.join("admission-findings.mission.toml"),
+        include_str!("fixtures/admission-findings.mission.toml"),
+    )
+    .unwrap();
+    let rejected = client
+        .request(
+            Method::POST,
+            "/api/runs",
+            Some(json!({"mission":"admission-findings","inputCardId":"inp","expectedRev":1})),
+            None,
+        )
+        .await
+        .unwrap_err();
+    let rejected = rejected.downcast_ref::<NodeError>().unwrap();
+    assert_eq!(rejected.code, "run_admission_failed");
+    let findings = rejected.findings.as_ref().unwrap().as_array().unwrap();
+    assert!(findings.iter().any(|f| f["code"] == "missing_input"));
+    assert!(
+        findings
+            .iter()
+            .any(|f| f["code"] == "formation_without_slots")
+    );
     let remote = include_str!("fixtures/solo-lab.mission.toml")
         .replace("slug = \"hello\"", "slug = \"remote\"")
         .replace("id = \"msn_hello\"", "id = \"msn_remote\"")
@@ -226,6 +269,25 @@ async fn run_changes_arrive_on_the_socket_through_completion() {
     std::fs::write(folder.join("remote.mission.toml"), remote).unwrap();
     let error = client.request(Method::POST, "/api/runs", Some(json!({"mission":"remote","inputCardId":"inp_hello","expectedRev":1,"inputs":{"brief":"hello"}})), None).await.unwrap_err();
     assert!(format!("{error:#}").contains("run_admission_failed"));
+    let (health, _) = client
+        .request(Method::GET, "/api/health", None, None)
+        .await
+        .unwrap();
+    let place = format!(
+        "{}/{}",
+        health["device"].as_str().unwrap(),
+        health["environment"].as_str().unwrap()
+    );
+    let local = include_str!("fixtures/solo-lab.mission.toml")
+        .replace("slug = \"hello\"", "slug = \"local\"")
+        .replace("id = \"msn_hello\"", "id = \"msn_local\"")
+        .replace(
+            "id = \"fmn_work\"",
+            &format!("id = \"fmn_work\"\ndevice = \"{place}\""),
+        );
+    std::fs::write(folder.join("local.mission.toml"), local).unwrap();
+    let (local_run, _) = client.request(Method::POST, "/api/runs", Some(json!({"mission":"local","inputCardId":"inp_hello","expectedRev":1,"inputs":{"brief":"hello"}})), None).await.unwrap();
+    assert!(local_run["runId"].is_string());
     let (mut socket, _) = connect_async(node.ws()).await.unwrap();
     socket
         .send(Message::Binary(
@@ -272,6 +334,11 @@ async fn run_changes_arrive_on_the_socket_through_completion() {
     .expect("run reaches a final projection");
     assert!(answered);
     assert_eq!(final_run.work, "gh:example/project#1");
+    let (listed, _) = client
+        .request(Method::GET, "/api/runs", None, None)
+        .await
+        .unwrap();
+    let _: Vec<parvi_missions_contract::RunSummary> = serde_json::from_value(listed).unwrap();
     for suffix in [
         "",
         "/events",
@@ -290,20 +357,16 @@ async fn run_changes_arrive_on_the_socket_through_completion() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn explicitly_shared_role_store_is_used_for_mission_validation() {
-    let root = parvi_testkit::fresh_dir("missions-shared-roles");
-    let config = format!("[missions]\ndir = {root:?}\n[agents]\nmissions_dir = {root:?}\n");
-    let node = Node::start(
-        &[
-            sessions::LISTING,
-            parvi_work::LISTING,
-            parvi_agents::LISTING,
-            LAB,
-        ],
-        &config,
-    )
-    .await
-    .unwrap();
+async fn default_role_store_is_shared_and_isolated() {
+    let areas = &[
+        sessions::LISTING,
+        parvi_work::LISTING,
+        parvi_agents::LISTING,
+        LAB,
+    ];
+    let node = Node::start(areas, "").await.unwrap();
+    let other = Node::start(areas, "").await.unwrap();
+    let root = parvi_mission_engine::Store::root_in(node.dir());
     let client = NodeClient::new(Some(&format!("{}/", node.url()))).unwrap();
     client
         .request(
@@ -330,6 +393,21 @@ async fn explicitly_shared_role_store_is_used_for_mission_validation() {
             .any(|f| f["code"] == "unavailable_persona"),
         "{report}"
     );
+    let (started, _) = client.request(Method::POST, "/api/runs", Some(json!({"mission":"hello","inputCardId":"inp_hello","expectedRev":1,"inputs":{"brief":"hello"}})), None).await.unwrap();
+    assert!(started["runId"].is_string());
+    let other_client = NodeClient::new(Some(&format!("{}/", other.url()))).unwrap();
+    assert!(
+        other_client
+            .request(Method::GET, "/api/roles/fixture-writer", None, None)
+            .await
+            .is_err()
+    );
+    assert!(
+        other_client
+            .request(Method::GET, "/api/missions/hello", None, None)
+            .await
+            .is_err()
+    );
     node.stop().await;
-    std::fs::remove_dir_all(root).unwrap();
+    other.stop().await;
 }
