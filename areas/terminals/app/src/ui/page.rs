@@ -220,7 +220,7 @@ pub struct Terminals {
     /// Status lines said since the page last handed them to the app.
     said: Vec<Status>,
     pub geo: Rc<RefCell<[Geo; 4]>>,
-    /// The grid each empty window's body would hold at the terminal font,
+    /// The grid each window's body would hold at the terminal font,
     /// as last painted: what a launch into it asks the node for (#161).
     pub launch_grids: Rc<RefCell<[Option<Grid>; 4]>>,
     /// The window a drag selection started in.
@@ -249,9 +249,9 @@ pub struct Terminals {
     pub rename_field: Entity<TextField>,
     pub overview_cursor: usize,
     pub hover_row: Option<String>,
-    /// Launches asked of a node, by node and request: the name, the window
+    /// Launches asked of a node, by node and request: the recipe, the window
     /// it goes to and that window's tab.
-    pub launches: HashMap<(String, u32), (String, Option<usize>, usize)>,
+    pub launches: HashMap<(String, u32), (Launch, Option<usize>, usize)>,
     /// Kills asked of nodes, answered together (`store::selection`).
     pub kills: crate::store::selection::Kills,
     /// Rail rows picked to kill together; on this device only, never kept.
@@ -436,7 +436,12 @@ impl Terminals {
                 FieldEvent::Submit | FieldEvent::Tab => {
                     let t = sessions::targets(&s.fleet.all, &s.settings.recent_targets, &q);
                     if let Some(x) = t.get(s.send_cursor) {
-                        s.send_target = Some(Key::of(x));
+                        let target = Key::of(x);
+                        if s.send_target.as_ref() != Some(&target) {
+                            s.send.pane = None;
+                        }
+                        s.send.new_agent = false;
+                        s.send_target = Some(target);
                     }
                     s.send_query.update(cx, |f, cx| f.set("", false, cx));
                     field::focus(&s.send_note, window, cx);
@@ -613,7 +618,25 @@ impl Terminals {
         if !self.places.is_empty() {
             kept.retain(|n, _| self.places.contains_key(n));
         }
-        if *kept != before {
+        let changed = *kept != before;
+        let before_restarts = self.settings.restarts.clone();
+        for session in &self.fleet.all {
+            let key = Key::of(session).text();
+            let record = self.settings.restarts.entry(key).or_default();
+            if record.id != session.id {
+                *record = crate::store::settings::Restart {
+                    id: session.id.clone(),
+                    ..Default::default()
+                };
+            }
+            if record.harness.is_none()
+                && let Some(cwd) = &session.cwd
+                && !cwd.is_empty()
+            {
+                record.folder.clone_from(cwd);
+            }
+        }
+        if changed || self.settings.restarts != before_restarts {
             self.save(cx);
         }
     }
@@ -630,14 +653,32 @@ impl Terminals {
             }
             Notice::Launched { id, ok, text } => {
                 self.send_launched(node, id, ok, &text, cx);
-                let Some((name, window_index, tab)) = self.launches.remove(&(node.to_string(), id))
+                let Some((launch, window_index, tab)) =
+                    self.launches.remove(&(node.to_string(), id))
                 else {
                     return;
                 };
+                let name = launch.name.clone();
                 // A restart answered: its windows were bound all along.
                 self.restarting
                     .retain(|k| !(k.node == node && k.name == name));
                 if ok {
+                    let key = Key {
+                        node: node.to_string(),
+                        user: launch.user.clone(),
+                        name: name.clone(),
+                    };
+                    self.settings.restarts.insert(
+                        key.text(),
+                        crate::store::settings::Restart {
+                            id: text.split('\0').next().unwrap_or_default().to_string(),
+                            folder: launch.folder.clone(),
+                            harness: Some(launch.harness.clone()),
+                            flags: launch.flags.clone(),
+                            notify: launch.notify,
+                        },
+                    );
+                    self.save(cx);
                     if let Some(w) = window_index {
                         let node = node.to_string();
                         let user = self
@@ -688,6 +729,9 @@ impl Terminals {
                         name: name.clone(),
                         ..old.clone()
                     };
+                    if let Some(record) = self.settings.restarts.remove(&old.text()) {
+                        self.settings.restarts.insert(new.text(), record);
+                    }
                     for k in [
                         self.peek.as_mut().map(|p| &mut p.key),
                         self.send_target.as_mut(),
@@ -1103,19 +1147,24 @@ impl Terminals {
         }
     }
 
-    /// Makes an ended session again as CHROTE does: the same name on the
-    /// same node and Unix user, a shell in the home folder, and every window
-    /// it was bound to shows it once it is there. What ran in it is not
-    /// guessed: tmux names only the program in front, not how it was run.
+    /// Makes an ended session again under the same name and user. A witnessed
+    /// launch keeps its recipe; other sessions use a shell in their last folder.
     fn restart(&mut self, k: Key) {
         if self.restarting.contains(&k) {
             return;
         }
-        match self.fleet.launch_on(&k.node, restart_launch(&k)) {
+        let ws = &self.settings.workspace;
+        let target = ws
+            .bound(&k)
+            .filter(|(tab, _)| *tab == ws.active)
+            .map_or(ws.focus, |(_, w)| w);
+        let mut launch = restart_launch(&k, self.settings.restarts.get(&k.text()));
+        launch.size = self.launch_grids.borrow()[target];
+        match self.fleet.launch_on(&k.node, launch.clone()) {
             Some(id) => {
                 let tab = self.settings.workspace.active;
                 self.launches
-                    .insert((k.node.clone(), id), (k.name.clone(), None, tab));
+                    .insert((k.node.clone(), id), (launch, None, tab));
                 self.report(&format!("Restarting {}…", k.name), false, None);
                 self.restarting.insert(k);
             }
@@ -1195,6 +1244,104 @@ impl Terminals {
             None => ws.focus,
         };
         self.attach(k, w, window, cx);
+    }
+
+    /// Bring a session and optional immutable pane id into view. Resolve the
+    /// whole request before changing the workspace, including a bad pane.
+    fn reveal_session(
+        &mut self,
+        id: &str,
+        node: Option<NodeId>,
+        part: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let node = node
+            .map(|n| n.to_string())
+            .or_else(|| self.fleet.here_id().map(str::to_owned))
+            .unwrap_or_else(|| "here".into());
+        let candidates: Vec<_> = self.fleet.all.iter().filter(|s| s.node == node).collect();
+        let by_id = candidates.iter().copied().find(|s| s.id == id);
+        let names: Vec<_> = candidates
+            .iter()
+            .copied()
+            .filter(|s| s.name == id)
+            .collect();
+        let session = by_id.or_else(|| (names.len() == 1).then(|| names[0]));
+        let Some(session) = session else {
+            let why = if names.len() > 1 {
+                format!("several sessions named {id} on {node}; use a session id")
+            } else {
+                format!("no session {id} on {node}")
+            };
+            self.report(&why, true, None);
+            self.flush(cx);
+            cx.notify();
+            return;
+        };
+        let pane = match part {
+            None => None,
+            Some(part) => match part
+                .strip_prefix('%')
+                .unwrap_or(part)
+                .parse::<u32>()
+                .ok()
+                .filter(|p| session.panes.iter().any(|pane| pane.id == *p))
+            {
+                Some(pane) => Some(pane),
+                None => {
+                    self.report(
+                        &format!("no pane {part} in session {id} on {node}"),
+                        true,
+                        None,
+                    );
+                    self.flush(cx);
+                    cx.notify();
+                    return;
+                }
+            },
+        };
+        let key = Key::of(session);
+        // Bindings in hidden windows and tabs remain the operator's intent.
+        let bound = self
+            .settings
+            .workspace
+            .tabs
+            .iter()
+            .enumerate()
+            .find_map(|(tab, t)| {
+                t.windows
+                    .iter()
+                    .enumerate()
+                    .find(|(_, w)| w.sessions.iter().any(|b| b.key == key))
+                    .map(|(w, _)| (tab, w))
+            });
+        let w = if let Some((tab, w)) = bound {
+            let ws = &mut self.settings.workspace;
+            ws.count = ws.count.max(tab + 1);
+            if ws.tabs[tab].count <= w {
+                ws.set_windows(tab, w + 1);
+            }
+            ws.show_tab(tab);
+            ws.focus = w;
+            if ws.show_tag(w, &key) {
+                self.histories.remove(&w);
+            }
+            w
+        } else {
+            let w = self.settings.workspace.focus;
+            self.attach(key, w, window, cx);
+            w
+        };
+        if let Some(pane) = pane {
+            self.settings.workspace.choose_pane(w, pane);
+            self.histories.remove(&w);
+        }
+        self.sync(cx);
+        self.save(cx);
+        self.host.show(cx);
+        window.focus(&self.term_focus, cx);
+        cx.notify();
     }
 
     pub fn open_peek(
@@ -1319,7 +1466,8 @@ impl Page for Terminals {
     const TITLE: &'static str = "Terminals";
     const AREA: Option<&'static str> = Some(crate::NAME);
     const KINDS: Kinds = parvi_terminals_contract::KINDS;
-    const ANSWERS: &'static [Answers] = &[Answers::Send, Answers::Launch];
+    const ANSWERS: &'static [Answers] =
+        &[Answers::Send, Answers::Launch, Answers::Reveal("session")];
     const SETTINGS: &'static [Setting] = crate::store::settings::DECLARED;
 
     /// The Settings page changed one of ours: taken, the rest as it is.
@@ -1387,6 +1535,14 @@ impl Page for Terminals {
                 };
                 self.handoff(Some(reference), target, window, cx);
             }
+            Ask::Reveal {
+                what,
+                id,
+                node,
+                part,
+            } if what == "session" => {
+                self.reveal_session(&id, node, part.as_deref(), window, cx);
+            }
             Ask::Launch { node, folder, name } => {
                 self.launch_asked(node.as_str(), &folder, &name);
                 self.flush(cx);
@@ -1423,16 +1579,21 @@ impl Render for Terminals {
     }
 }
 
-/// What Restart asks the node for, as CHROTE's Restart does: the session
-/// again under its name and Unix user, a shell in the home folder.
-fn restart_launch(k: &Key) -> Launch {
+/// What Restart asks the node for, retaining a witnessed launch recipe or
+/// falling back to a shell in the last observed folder.
+fn restart_launch(k: &Key, saved: Option<&crate::store::settings::Restart>) -> Launch {
     Launch {
-        harness: "shell".into(),
-        folder: String::new(),
+        harness: saved
+            .and_then(|s| s.harness.clone())
+            .unwrap_or_else(|| "shell".into()),
+        folder: saved.map(|s| s.folder.clone()).unwrap_or_default(),
         name: k.name.clone(),
-        flags: String::new(),
+        flags: saved
+            .filter(|s| s.harness.is_some())
+            .map(|s| s.flags.clone())
+            .unwrap_or_default(),
         user: k.user.clone(),
-        notify: false,
+        notify: saved.is_some_and(|s| s.harness.is_some() && s.notify),
         size: None,
     }
 }
@@ -1468,12 +1629,43 @@ mod tests {
             user: "alice".into(),
             name: "build".into(),
         };
-        let l = restart_launch(&k);
+        let l = restart_launch(&k, None);
         assert_eq!((l.name.as_str(), l.user.as_str()), ("build", "alice"));
         assert_eq!(
             (l.harness.as_str(), l.folder.as_str(), l.flags.as_str()),
             ("shell", "", "")
         );
         assert!(!l.notify);
+        let saved = crate::store::settings::Restart {
+            id: "$1".into(),
+            folder: "/tmp/work".into(),
+            harness: Some("fake".into()),
+            flags: "--chosen".into(),
+            notify: true,
+        };
+        let l = restart_launch(&k, Some(&saved));
+        assert_eq!(
+            (
+                l.harness.as_str(),
+                l.folder.as_str(),
+                l.flags.as_str(),
+                l.notify
+            ),
+            ("fake", "/tmp/work", "--chosen", true)
+        );
+        let fallback = crate::store::settings::Restart {
+            harness: None,
+            ..saved
+        };
+        let l = restart_launch(&k, Some(&fallback));
+        assert_eq!(
+            (
+                l.harness.as_str(),
+                l.folder.as_str(),
+                l.flags.as_str(),
+                l.notify
+            ),
+            ("shell", "/tmp/work", "", false)
+        );
     }
 }

@@ -1,15 +1,5 @@
 //! The catalogue edits the free-form flag line without losing quoted tokens.
-use serde::Deserialize;
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-pub struct Flag {
-    pub name: String,
-    pub short: Option<String>,
-    pub value: Option<String>,
-    pub description: String,
-    #[serde(default)]
-    pub values: Vec<String>,
-}
+pub use parvi_terminals_contract::Flag;
 
 fn tokens(line: &str) -> Vec<(String, String)> {
     let (mut raw, mut text) = (String::new(), String::new());

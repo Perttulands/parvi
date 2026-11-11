@@ -425,29 +425,15 @@ impl Terminals {
         let body: AnyElement = match state {
             TileState::Empty => {
                 let launcher = self.launchers[i].clone();
-                let grids = self.launch_grids.clone();
-                let font = self.settings.font_size;
-                // The grid a terminal here would hold: its box less the pad.
-                let measure = canvas(
-                    |_, _, _| (),
-                    move |b, _, window, _| {
-                        let pad = px(2. * size::TERM_PAD);
-                        let inner = gpui::size(b.size.width - pad, b.size.height - pad);
-                        let grid = paint::grid_for(inner, paint::metrics(window, font));
-                        grids.borrow_mut()[i] = Some(grid);
-                    },
-                )
-                .absolute()
-                .inset_0();
                 div()
                     .flex_1()
                     .min_h_0()
                     .relative()
                     .bg(t.term_bg)
-                    .child(measure)
                     .child(
                         div()
                             .id(("launcher-scroll", i))
+                            .debug_selector(move || format!("launcher-scroll-{i}"))
                             .absolute()
                             .inset_0()
                             .overflow_y_scroll()
@@ -523,7 +509,17 @@ impl Terminals {
                 self.detached_body(last, note.into_any_element(), &t)
             }
             TileState::Ended(name) => {
-                let note = format!("{name} has ended.");
+                let note = match binding
+                    .as_ref()
+                    .and_then(|b| self.settings.restarts.get(&b.key.text()))
+                {
+                    Some(saved) if saved.harness.is_some() => format!("{name} has ended."),
+                    Some(saved) if !saved.folder.is_empty() => format!(
+                        "{name} has ended. Restart opens a shell in {}.",
+                        saved.folder
+                    ),
+                    _ => format!("{name} has ended. Restart opens a shell in its home folder."),
+                };
                 let last = binding
                     .as_ref()
                     .and_then(|b| self.fleet.ended_screen(&b.key, b.pane));
@@ -546,6 +542,18 @@ impl Terminals {
                 self.detached_body(last, panel, &t)
             }
         };
+        let grids = self.launch_grids.clone();
+        let font = self.settings.font_size;
+        let measure = canvas(
+            |_, _, _| (),
+            move |b, _, window, _| {
+                let pad = px(2. * size::TERM_PAD);
+                let inner = gpui::size(b.size.width - pad, b.size.height - pad);
+                grids.borrow_mut()[i] = Some(paint::grid_for(inner, paint::metrics(window, font)));
+            },
+        )
+        .absolute()
+        .inset_0();
         // Only the body focuses the window and reaches the terminal; the
         // head is the tags'.
         let body = div()
@@ -572,6 +580,7 @@ impl Terminals {
                     s.tile_mouse_down(i, e, window, cx)
                 }),
             )
+            .child(measure)
             .child(body)
             .when(drop_over, |d| d.child(drop_note(&t)));
         frame.child(head).child(body).into_any_element()
@@ -987,6 +996,7 @@ impl Terminals {
             let kind = if n == 0 { Kind::Primary } else { Kind::Plain };
             buttons = buttons.child(
                 kit::button(t, ("detached", i * 10 + n), label.to_string(), kind)
+                    .debug_selector(move || format!("ended-{i}-{n}"))
                     .on_click(cx.listener(move |s, _, window, cx| s.act(act.clone(), window, cx))),
             );
         }
@@ -998,7 +1008,10 @@ impl Terminals {
             .items_center()
             .gap(px(12.))
             .max_w(px(360.))
-            .child(kit::note(t, note.to_string(), None))
+            .child(kit::note(t, note.to_string(), None).debug_selector({
+                let note = note.to_string();
+                move || format!("ended-note-{i}-{note}")
+            }))
             .child(buttons)
             .into_any_element()
     }

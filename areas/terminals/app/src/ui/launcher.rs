@@ -317,15 +317,22 @@ impl Launcher {
                 notify: s.settings.notify
                     && notify_offered(&command, &user)
                     && conf.as_ref().is_some_and(|l| l.notify_off.is_none()),
-                // The window's own grid, so the session starts at the size
-                // it is seen at (#161); Send to Session's launch has none.
-                size: s.launch_grids.borrow().get(index).copied().flatten(),
+                // Send's launcher targets the focused tile.
+                size: s
+                    .launch_grids
+                    .borrow()
+                    .get(if index == SEND {
+                        s.settings.workspace.focus
+                    } else {
+                        index
+                    })
+                    .copied()
+                    .flatten(),
             };
-            let id = s.fleet.launch_on(&node, l)?;
+            let id = s.fleet.launch_on(&node, l.clone())?;
             let tab = s.settings.workspace.active;
             let window = (index != SEND).then_some(index);
-            s.launches
-                .insert((node.clone(), id), (name.clone(), window, tab));
+            s.launches.insert((node.clone(), id), (l, window, tab));
             if index == SEND {
                 s.send_launching(&node, id);
             }
@@ -503,6 +510,10 @@ impl Render for Launcher {
             harnesses = harnesses.child(
                 div()
                     .id(("harness", i * 100 + n))
+                    .debug_selector({
+                        let id = h.id.clone();
+                        move || format!("harness-{i}-{id}")
+                    })
                     .h(px(32.))
                     .px(px(10.))
                     .flex()
@@ -666,6 +677,10 @@ impl Render for Launcher {
                         list = list.child(
                             div()
                                 .id(("catalogue-flag", i * 1000 + n))
+                                .debug_selector({
+                                    let name = flag.name.clone();
+                                    move || format!("flag-{i}-{name}")
+                                })
                                 .cursor_pointer()
                                 .p(px(4.))
                                 .flex()
@@ -762,6 +777,7 @@ impl Render for Launcher {
                             if self.panel_open { "Close" } else { "Browse" },
                             Kind::Quiet,
                         )
+                        .debug_selector(move || format!("flags-browse-{i}"))
                         .on_click(cx.listener({
                             let node = target.clone().unwrap_or_default();
                             let harness = harness.clone();
@@ -789,6 +805,10 @@ impl Render for Launcher {
                     .text_color(t.dim)
                     .overflow_hidden()
                     .whitespace_nowrap()
+                    .debug_selector({
+                        let flags = flags.clone();
+                        move || format!("flag-line-{i}-{flags}")
+                    })
                     .child(if preview.is_empty() {
                         "a shell".to_string()
                     } else {
@@ -806,6 +826,7 @@ impl Render for Launcher {
             .child(
                 div().mt(px(6.)).flex().justify_end().child(
                     kit::button(&t, ("launch", i), button_label, Kind::Primary)
+                        .debug_selector(move || format!("launch-{i}"))
                         .on_click(cx.listener(|l, _, window, cx| l.launch(window, cx))),
                 ),
             )

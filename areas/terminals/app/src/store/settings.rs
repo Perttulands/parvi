@@ -38,6 +38,8 @@ pub struct Settings {
     /// its windows and rail rows, named, until it answers again, across
     /// restarts too.
     pub kept: BTreeMap<String, Vec<Kept>>,
+    /// The last known incarnation and restart recipe of each session.
+    pub restarts: BTreeMap<String, Restart>,
 }
 
 /// What the Settings page lists for the terminals, each under its field's
@@ -69,6 +71,17 @@ pub struct Kept {
     pub user: String,
 }
 
+/// What can be used to start an ended session again.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Restart {
+    pub id: String,
+    pub folder: String,
+    /// Absent for sessions whose launch the app did not witness.
+    pub harness: Option<String>,
+    pub flags: String,
+    pub notify: bool,
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -87,6 +100,7 @@ impl Default for Settings {
             event_desktop: true,
             workspace: Workspace::default(),
             kept: Default::default(),
+            restarts: Default::default(),
         }
     }
 }

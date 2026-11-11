@@ -90,13 +90,13 @@ impl Terminals {
             notify: self.settings.notify
                 && notify_offered(&harness.command, &k.user)
                 && conf.as_ref().is_some_and(|l| l.notify_off.is_none()),
-            size: None,
+            size: self.launch_grids.borrow()[self.settings.workspace.focus],
         };
-        match self.fleet.launch_on(&k.node, launch) {
+        match self.fleet.launch_on(&k.node, launch.clone()) {
             Some(id) => {
                 let tab = self.settings.workspace.active;
                 self.launches
-                    .insert((k.node.clone(), id), (name.clone(), None, tab));
+                    .insert((k.node.clone(), id), (launch, None, tab));
                 self.report(&format!("Copying {} as {name}…", k.name), false, None);
             }
             None => self.report(
@@ -157,13 +157,13 @@ impl Terminals {
             notify: self.settings.notify
                 && notify_offered(&harness.command, "")
                 && conf.notify_off.is_none(),
-            size: None,
+            size: self.launch_grids.borrow()[self.settings.workspace.focus],
         };
-        match self.fleet.launch_on(node, launch) {
+        match self.fleet.launch_on(node, launch.clone()) {
             Some(id) => {
                 let tab = self.settings.workspace.active;
                 self.launches
-                    .insert((node.to_string(), id), (name.clone(), None, tab));
+                    .insert((node.to_string(), id), (launch, None, tab));
                 self.report(&format!("Starting {name} in {folder}…"), false, None);
             }
             None => self.report(
