@@ -218,6 +218,26 @@ pub fn inverse(m: &Value, layout: &[Placed], step: &Step) -> Result<Vec<Step>, S
         name[..1].make_ascii_uppercase();
         return board(json!({ format!("delete{name}"): {"id": node["id"]} }));
     }
+    if op == "updatePort" {
+        let formation = v["formationId"].as_str().unwrap_or("");
+        let slot = list(m, "formations")
+            .iter()
+            .find(|f| f["id"] == formation)
+            .and_then(|f| {
+                list(f, "inputs")
+                    .iter()
+                    .chain(list(f, "outputs"))
+                    .find(|p| p["id"] == v["portId"])
+            })
+            .ok_or("the edited port no longer exists")?;
+        let mut fields = json!({"formationId":formation,"portId":v["portId"]});
+        for key in ["label", "kind"] {
+            if v.get(key).is_some() {
+                fields[key] = slot.get(key).cloned().unwrap_or_else(|| json!(""));
+            }
+        }
+        return board(json!({"updatePort":fields}));
+    }
     if op.starts_with("update") || op == "editFormation" {
         let (_, _, node, _) = node_of(m, id).ok_or("the edited card no longer exists")?;
         let mut fields = serde_json::Map::new();
@@ -592,6 +612,20 @@ mod tests {
             vec![Step::Board(json!({"wireConnection": {
                 "from": "gate_r:pass", "to": "fmn_beads:in", "joinIfOccupied": true,
             }}))]
+        );
+    }
+    #[test]
+    fn a_port_edit_reverses_only_its_changed_fields() {
+        let mut m = mission();
+        m["formations"][0]["inputs"] = json!([{"id":"in","label":"Original","kind":"text"}]);
+        let step = Step::Board(
+            json!({"updatePort":{"formationId":"fmn_plan","portId":"in","label":"Renamed"}}),
+        );
+        assert_eq!(
+            inverse(&m, &[], &step).unwrap(),
+            vec![Step::Board(
+                json!({"updatePort":{"formationId":"fmn_plan","portId":"in","label":"Original"}})
+            )]
         );
     }
 }

@@ -5,6 +5,7 @@
 
 use parvi_missions_contract::{AttemptVerdict, StepAttempt, StepAttempts};
 use std::collections::HashSet;
+use time::OffsetDateTime;
 
 /// Something read over HTTP for a window.
 #[derive(Clone, Debug)]
@@ -302,6 +303,22 @@ pub fn picker_words(decided_by: &str, title_of: impl Fn(&str) -> String) -> Stri
             t => t,
         },
     }
+}
+
+/// "10:42 · 4m 12s", or "10:42 · 38s so far" while it runs.
+pub fn timing(a: &StepAttempt, now: OffsetDateTime) -> String {
+    use super::words::{parse_time, short_time, span};
+    let Some(started) = parse_time(&a.started_at) else {
+        return String::new();
+    };
+    let clock = short_time(&a.started_at, now);
+    if let Some(ended) = parse_time(&a.ended_at) {
+        return format!("{clock} · {}", span((ended - started).whole_seconds()));
+    }
+    if a.status == "running" {
+        return format!("{clock} · {} so far", span((now - started).whole_seconds()));
+    }
+    clock
 }
 
 #[cfg(test)]

@@ -163,6 +163,27 @@ fn click(cx: &mut VisualTestContext, selector: &str) {
         .expect(selector);
     cx.simulate_click(bounds.center(), Modifiers::none());
 }
+fn reveal_control(cx: &mut VisualTestContext, selector: &str) {
+    let selector: &'static str = Box::leak(selector.to_owned().into_boxed_str());
+    for _ in 0..10 {
+        let Some(bounds) = cx.debug_bounds(selector) else {
+            cx.run_until_parked();
+            continue;
+        };
+        let y = f32::from(bounds.center().y);
+        if (100. ..800.).contains(&y) {
+            return;
+        }
+        cx.simulate_event(gpui::ScrollEvent {
+            position: point(px(700.), px(500.)),
+            delta: gpui::ScrollDelta::Pixels(point(px(0.), px((500. - y).clamp(-400., 400.)))),
+            modifiers: Default::default(),
+            touch_phase: gpui::TouchPhase::Moved,
+            source: gpui::ScrollSource::Pointer,
+        });
+        cx.run_until_parked();
+    }
+}
 #[gpui::test]
 fn evidence_links_and_attempt_images(cx: &mut TestAppContext) {
     OPENED.lock().unwrap().clear();
@@ -201,6 +222,10 @@ fn evidence_links_and_attempt_images(cx: &mut TestAppContext) {
             )
             .unwrap();
     });
+    until(cx, "mission flow", |cx| {
+        cx.debug_bounds("flow-step-fmn_work").is_some()
+    });
+    click(cx, "mission-mode-canvas");
     until(cx, "mission", |cx| {
         cx.debug_bounds("mission-card-fmn_work").is_some()
     });
@@ -268,6 +293,35 @@ fn evidence_links_and_attempt_images(cx: &mut TestAppContext) {
             beside: true
         }
     );
+    reveal_control(cx, "run-mode-canvas");
+    click(cx, "run-mode-canvas");
+    until(cx, "run canvas attempts", |cx| {
+        cx.debug_bounds("card-attempts-fmn_work").is_some()
+    });
+    reveal_control(cx, "card-attempts-fmn_work");
+    click(cx, "card-attempts-fmn_work");
+    until(cx, "canvas attempts window", |cx| {
+        cx.debug_bounds("attempts-window").is_some()
+    });
+    reveal_control(cx, "attempts-close");
+    click(cx, "attempts-close");
+    until(cx, "canvas attempts closed", |cx| {
+        cx.debug_bounds("attempts-window").is_none()
+    });
+    reveal_control(cx, "run-mode-flow");
+    click(cx, "run-mode-flow");
+    until(cx, "flow view", |cx| {
+        cx.debug_bounds("run-step-fmn_work-done").is_some()
+    });
+    reveal_control(cx, "run-step-attempts-fmn_work");
+    click(cx, "run-step-attempts-fmn_work");
+    until(cx, "flow attempts window", |cx| {
+        cx.debug_bounds("attempts-window").is_some()
+    });
+    click(cx, "attempts-close");
+    until(cx, "flow attempts closed", |cx| {
+        cx.debug_bounds("attempts-window").is_none()
+    });
     cx.simulate_event(gpui::ScrollEvent {
         position: point(px(700.), px(500.)),
         delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-800.))),
@@ -310,4 +364,32 @@ fn evidence_links_and_attempt_images(cx: &mut TestAppContext) {
         a.origin.x < b.origin.x,
         "images must be side by side: {a:?}, {b:?}"
     );
+    cx.simulate_keystrokes("c");
+    until(cx, "single attempt", |cx| {
+        cx.debug_bounds("attempt-card-1").is_none() && cx.debug_bounds("attempt-card-2").is_some()
+    });
+    cx.simulate_keystrokes("left");
+    until(cx, "previous attempt", |cx| {
+        cx.debug_bounds("attempt-card-1").is_some() && cx.debug_bounds("attempt-card-2").is_none()
+    });
+    cx.simulate_keystrokes("end");
+    until(cx, "last attempt", |cx| {
+        cx.debug_bounds("attempt-card-2").is_some()
+    });
+    cx.simulate_keystrokes("home");
+    until(cx, "first attempt", |cx| {
+        cx.debug_bounds("attempt-card-1").is_some()
+    });
+    cx.simulate_keystrokes("2");
+    until(cx, "numbered attempt", |cx| {
+        cx.debug_bounds("attempt-card-2").is_some()
+    });
+    cx.simulate_keystrokes("shift-left");
+    until(cx, "keyboard comparison", |cx| {
+        cx.debug_bounds("attempt-card-1").is_some() && cx.debug_bounds("attempt-card-2").is_some()
+    });
+    cx.simulate_keystrokes("escape");
+    until(cx, "closed attempts", |cx| {
+        cx.debug_bounds("attempts-window").is_none()
+    });
 }

@@ -4,6 +4,7 @@ pub mod canvas;
 pub mod evidence;
 pub mod flow;
 pub mod gate;
+pub mod navigator;
 pub mod placement;
 pub mod run_state;
 pub mod seats;

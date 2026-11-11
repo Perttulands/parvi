@@ -253,7 +253,7 @@ pub fn work_label(work: &str) -> String {
 pub fn actor_label(actor: &str) -> String {
     match actor {
         "human:operator" => "you".into(),
-        "parvi" => "Parvi".into(),
+        "parvi" | "archond" => "Parvi".into(),
         other => other.trim_start_matches("agent:").to_string(),
     }
 }

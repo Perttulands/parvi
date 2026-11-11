@@ -63,6 +63,106 @@ pub fn pick_model(catalog: &Roles, staff: &mut [String; 4], model: &str) {
     staff[2] = model.to_owned();
     clamp(catalog, staff);
 }
+/// A picker choice retains the machine value separately from its label.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Choice {
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Choices {
+    pub roles: Vec<Choice>,
+    pub harnesses: Vec<Choice>,
+    pub models: Vec<Choice>,
+    pub efforts: Vec<Choice>,
+}
+
+fn choice(id: &str, label: &str) -> Choice {
+    Choice {
+        id: id.into(),
+        label: label.into(),
+    }
+}
+fn with_current(mut choices: Vec<Choice>, id: &str, label: String) -> Vec<Choice> {
+    if !choices.iter().any(|c| c.id == id) {
+        choices.push(Choice {
+            id: id.into(),
+            label,
+        });
+    }
+    choices
+}
+
+/// Catalog order follows the original staffing picker: vanilla then active
+/// roles by name; the existing value always remains available, even if the
+/// node no longer offers it. Models and efforts follow the chosen harness.
+pub fn choices(catalog: Option<&Roles>, staff: &[String; 4]) -> Choices {
+    use super::words::{harness_name, role_name};
+    let empty = Roles::default();
+    let c = catalog.unwrap_or(&empty);
+    let mut roles: Vec<_> = c
+        .roles
+        .iter()
+        .filter(|r| r.status != "retired")
+        .map(|r| {
+            let label = if r.display_name.is_empty() {
+                role_name(&r.id)
+            } else {
+                r.display_name.clone()
+            };
+            choice(&r.id, &label)
+        })
+        .collect();
+    roles.sort_by_key(|r| r.label.to_lowercase());
+    roles.insert(0, choice("", "vanilla"));
+    let harnesses = c
+        .harnesses
+        .iter()
+        .map(|h| choice(&h.id, &harness_name(&h.id)))
+        .collect();
+    let mut models_list = vec![choice("", "default")];
+    models_list.extend(
+        models(c, &staff[1])
+            .iter()
+            .filter_map(|m| m["id"].as_str())
+            .map(|id| choice(id, id)),
+    );
+    let model = models(c, &staff[1])
+        .iter()
+        .find(|m| m["id"].as_str() == Some(staff[2].as_str()));
+    let model_efforts: Vec<String> = model
+        .and_then(|m| m["efforts"].as_array())
+        .map(|v| {
+            v.iter()
+                .filter_map(|e| e.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    let efforts = if model_efforts.is_empty() {
+        c.harnesses
+            .iter()
+            .find(|h| h.id == staff[1])
+            .map(|h| h.efforts.as_slice())
+            .unwrap_or_default()
+    } else {
+        &model_efforts
+    };
+    Choices {
+        roles: with_current(roles, &staff[0], role_name(&staff[0])),
+        harnesses: with_current(harnesses, &staff[1], harness_name(&staff[1])),
+        models: with_current(models_list, &staff[2], staff[2].clone()),
+        efforts: with_current(
+            efforts.iter().map(|e| choice(e, e)).collect(),
+            &staff[3],
+            if staff[3].is_empty() {
+                "no effort".into()
+            } else {
+                staff[3].clone()
+            },
+        ),
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,5 +184,40 @@ mod tests {
         pick_harness(&c, &mut s, "openai-codex");
         pick_model(&c, &mut s, "gpt-6");
         assert_eq!(s[3], "high");
+    }
+    #[test]
+    fn picker_keeps_current_and_uses_sorted_active_roles_and_model_efforts() {
+        let c: Roles = serde_json::from_str(r#"{"roles":[{"id":"reviewer","displayName":"Zed"},{"id":"retired","displayName":"Old","status":"retired"},{"id":"planner","displayName":"Alpha"}],"harnesses":[{"id":"openai-codex","efforts":["low","medium","high"],"models":[{"id":"gpt-6","efforts":["low","high"]}]}]}"#).unwrap();
+        let staff = [
+            "retired".into(),
+            "openai-codex".into(),
+            "gpt-6".into(),
+            "medium".into(),
+        ];
+        let choices = choices(Some(&c), &staff);
+        assert_eq!(
+            choices
+                .roles
+                .iter()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>(),
+            ["", "planner", "reviewer", "retired"]
+        );
+        assert_eq!(
+            choices
+                .efforts
+                .iter()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>(),
+            ["low", "high", "medium"]
+        );
+        assert_eq!(
+            choices
+                .models
+                .iter()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>(),
+            ["", "gpt-6"]
+        );
     }
 }

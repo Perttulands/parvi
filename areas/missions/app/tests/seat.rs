@@ -206,6 +206,10 @@ fn step_and_run_bar_open_the_owned_session_and_disable_ended_seats(cx: &mut Test
             )
             .unwrap()
     });
+    until(cx, "mission flow", |cx| {
+        cx.debug_bounds("flow-step-fmn_work").is_some()
+    });
+    click(cx, "mission-mode-canvas");
     until(cx, "mission", |cx| {
         cx.debug_bounds("mission-card-fmn_work").is_some()
     });
