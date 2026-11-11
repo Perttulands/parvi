@@ -2,11 +2,13 @@
 use gpui::{Modifiers, TestAppContext, VisualTestContext};
 use parvi_app_kit::link::client::LinkState;
 use parvi_testkit::{fresh_dir, node::Node, sessions};
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 struct Running {
     url: String,
+    role_file: PathBuf,
     stop: mpsc::Sender<()>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -25,6 +27,9 @@ fn start() -> Running {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             let home = fresh_dir("parvi-agents-page-home");
+            let role_file = home.join("roles/fixture-writer.toml");
+            std::fs::create_dir_all(role_file.parent().unwrap()).unwrap();
+            std::fs::write(&role_file, "schema = 1\n[card]\nid = \"fixture-writer\"\ndisplay_name = \"Fixture writer\"\nkind = \"specialist\"\nsummary = \"Before edit\"\nstatus = \"active\"\n").unwrap();
             let config = format!(
                 "[agents]\nhome = {:?}\npath = []\nmissions_dir = {:?}\n",
                 home, home
@@ -32,13 +37,7 @@ fn start() -> Running {
             let node = Node::start(&[sessions::LISTING, parvi_agents::LISTING], &config)
                 .await
                 .unwrap();
-            node.call(
-                "role_new",
-                serde_json::json!({"role":"fixture-writer","display_name":"Fixture writer"}),
-            )
-            .await
-            .unwrap();
-            ready.send(node.url()).unwrap();
+            ready.send((node.url(), role_file)).unwrap();
             while stopped.try_recv().is_err() {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
@@ -46,8 +45,10 @@ fn start() -> Running {
             std::fs::remove_dir_all(home).unwrap();
         });
     });
+    let (url, role_file) = wait.recv().unwrap();
     Running {
-        url: wait.recv().unwrap(),
+        url,
+        role_file,
         stop,
         thread: Some(thread),
     }
@@ -68,7 +69,7 @@ fn until(
     }
 }
 #[gpui::test]
-fn agents_page_renders_a_node_report(cx: &mut TestAppContext) {
+fn role_library_edits_and_saves_a_fixture_card(cx: &mut TestAppContext) {
     let running = start();
     let settings = fresh_dir("parvi-agents-page-settings");
     cx.executor().allow_parking();
@@ -102,6 +103,27 @@ fn agents_page_renders_a_node_report(cx: &mut TestAppContext) {
     let at = cx.debug_bounds("role-fixture-writer").unwrap().center();
     cx.simulate_click(at, Modifiers::none());
     until(cx, "the role detail", |cx| {
+        cx.debug_bounds("role-edit").is_some()
+    });
+    let at = cx.debug_bounds("role-edit").unwrap().center();
+    cx.simulate_click(at, Modifiers::none());
+    until(cx, "the role form", |cx| {
+        cx.debug_bounds("role-field-Summary").is_some()
+    });
+    let at = cx.debug_bounds("role-field-Summary").unwrap().center();
+    cx.simulate_click(at, Modifiers::none());
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("Updated from the library");
+    let at = cx.debug_bounds("role-save").unwrap().center();
+    cx.simulate_click(at, Modifiers::none());
+    until(cx, "the edited card to be saved", |_| {
+        std::fs::read_to_string(&running.role_file)
+            .is_ok_and(|s| s.contains("summary = \"Updated from the library\""))
+    });
+    let saved = std::fs::read_to_string(&running.role_file).unwrap();
+    assert!(saved.contains("id = \"fixture-writer\""));
+    assert!(!saved.contains("Before edit"));
+    until(cx, "the saved role detail", |cx| {
         cx.debug_bounds("role-edit").is_some()
     });
     std::fs::remove_dir_all(settings).unwrap();

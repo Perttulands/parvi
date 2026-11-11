@@ -48,18 +48,24 @@ async fn commands_and_channel_work_over_the_node() {
         .unwrap()
         .iter()
         .filter_map(|tool| tool["name"].as_str())
-        .filter(|name| name.starts_with("agents_"))
         .collect();
-    assert_eq!(names, ["agents_show", "agents_sync"]);
     assert_eq!(
-        parvi_agents::LISTING
-            .commands
-            .iter()
-            .copied()
-            .filter(|n| n.starts_with("agents_"))
-            .collect::<Vec<_>>(),
-        names
+        names,
+        [
+            "agents_show",
+            "agents_sync",
+            "role_list",
+            "role_inspect",
+            "role_usage",
+            "role_new",
+            "role_edit",
+            "role_retire",
+            "role_restore",
+            "role_delete",
+            "role_characters"
+        ]
     );
+    assert_eq!(parvi_agents::LISTING.commands, names);
 
     let args = vec!["--node".into(), node.url()];
     let mut output = Vec::new();
@@ -142,7 +148,7 @@ async fn role_routes_and_commands_keep_versions_and_usage() {
         .await
         .unwrap();
     let client = NodeClient::new(Some(&node.url())).unwrap();
-    let (created, tag) = client.request(Method::POST, "/api/roles", Some(json!({"id":"writer","displayName":"Writer","kind":"specialist","summary":"Writes","capabilities":["draft"]})), None).await.unwrap();
+    let (created, tag) = client.request(Method::POST, "/api/roles", Some(json!({"id":"writer","displayName":"Writer","kind":"specialist","summary":"Writes","capabilities":["draft"],"personality":"calm"})), None).await.unwrap();
     assert_eq!(created["displayName"], "Writer");
     assert!(!tag.is_empty());
     let (list, _) = client
@@ -165,12 +171,19 @@ async fn role_routes_and_commands_keep_versions_and_usage() {
         .request(
             Method::PATCH,
             "/api/roles/writer",
-            Some(json!({"summary":"Revised"})),
+            Some(json!({"summary":"Revised","note":"Keep context","capabilities":["draft"]})),
             Some(&tag),
         )
         .await
         .unwrap();
     assert_eq!(changed["summary"], "Revised");
+    assert_eq!(changed["notes"][0]["text"], "Keep context");
+    assert!(
+        changed["tags"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("personality:calm"))
+    );
     let conflict = client
         .request(
             Method::PATCH,
@@ -202,6 +215,16 @@ async fn role_routes_and_commands_keep_versions_and_usage() {
         .await
         .unwrap();
     assert_eq!(retired["status"], "retired");
+    let (filtered, _) = client
+        .request(
+            Method::GET,
+            "/api/roles?capable=draft&assignable=true",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(filtered["roles"], json!([]));
     let (restored, next) = client
         .request(
             Method::PATCH,

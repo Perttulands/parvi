@@ -476,7 +476,13 @@ impl AgentsPage {
                 ("Capabilities", &form.capabilities),
             ] {
                 if label != "ID" || form.creating {
-                    detail = detail.child(kit::label(&t, label)).child(field.clone());
+                    let selector = format!("role-field-{label}");
+                    detail = detail.child(kit::label(&t, label)).child(
+                        div()
+                            .id(selector.clone())
+                            .debug_selector(move || selector.clone())
+                            .child(field.clone()),
+                    );
                 }
             }
             detail = detail.child(
@@ -485,6 +491,7 @@ impl AgentsPage {
                     .gap(px(tokens::P8))
                     .child(
                         kit::button(&t, "role-save", "Save", Kind::Primary)
+                            .debug_selector(|| "role-save".into())
                             .on_click(cx.listener(|s, _, _, cx| s.save_role(cx))),
                     )
                     .child(
