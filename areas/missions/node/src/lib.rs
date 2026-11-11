@@ -1,4 +1,5 @@
 //! The node-side mission service.
+mod authoring;
 mod channel;
 mod commands;
 mod routes;

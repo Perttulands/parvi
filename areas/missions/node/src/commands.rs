@@ -33,6 +33,41 @@ pub const NAMES: &[&str] = &[
     "gate_approve",
     "gate_reject",
     "gate_pick",
+    "mission_arrange",
+    "mission_rename",
+    "mission_move",
+    "mission_create",
+    "mission_update",
+    "mission_delete",
+    "mission_input",
+    "mission_output",
+    "mission_wire",
+    "formation_list",
+    "formation_inspect",
+    "formation_create",
+    "formation_rename",
+    "formation_place",
+    "formation_set_type",
+    "formation_set_slots",
+    "formation_assign",
+    "formation_unassign",
+    "formation_set_brief",
+    "formation_add_input",
+    "formation_add_output",
+    "formation_set_port",
+    "formation_wire",
+    "formation_unwire",
+    "formation_delete",
+    "gate_create",
+    "gate_update",
+    "gate_judge",
+    "gate_delete",
+    "end_create",
+    "end_update",
+    "end_delete",
+    "limit_create",
+    "limit_update",
+    "limit_delete",
 ];
 
 pub fn commands(missions: &Missions) -> Vec<Command> {
@@ -76,6 +111,7 @@ fn description(name: &str) -> &'static str {
         "gate_approve" => "Approve a pending human gate.",
         "gate_reject" => "Reject a pending human gate.",
         "gate_pick" => "Pick an attempt at a pending human gate.",
+        _ if crate::authoring::NAMES.contains(&name) => crate::authoring::description(name),
         _ => unreachable!(),
     }
 }
@@ -126,6 +162,7 @@ fn schema(name: &str) -> Value {
             json!({"run":s,"gate":s,"requested_seq":i,"attempt":i,"reason":s,"relayed_by":s}),
             &["run", "gate", "requested_seq", "attempt"],
         ),
+        _ if crate::authoring::NAMES.contains(&name) => crate::authoring::schema(name),
         _ => object(json!({"run":s}), &["run"]),
     }
 }
@@ -163,7 +200,7 @@ async fn blocking<T: Send + 'static>(
 fn value<T: serde::Serialize>(v: T) -> Result<Value, Error> {
     serde_json::to_value(v).map_err(|e| Error::new("internal", e.to_string()))
 }
-fn document(mission: wire::Mission, etag: String) -> Result<Value, Error> {
+pub(super) fn document(mission: wire::Mission, etag: String) -> Result<Value, Error> {
     value(wire::document::MissionDocument {
         mission,
         etag: Some(etag),
@@ -174,7 +211,7 @@ fn notes(edit: wire::NotesEdit) -> Result<Value, Error> {
         edit.notes, edit.etag,
     ))
 }
-fn layout(edit: wire::LayoutEdit) -> Result<Value, Error> {
+pub(super) fn layout(edit: wire::LayoutEdit) -> Result<Value, Error> {
     value(wire::document::LayoutDocument {
         layout: edit.layout,
         etag: edit.etag,
@@ -416,6 +453,7 @@ async fn call(m: Missions, name: &str, a: Value) -> Result<Value, Error> {
             )?;
             Ok(json!({"node":node,"runId":id}))
         }
+        _ if crate::authoring::NAMES.contains(&name) => crate::authoring::call(&m, name, &a),
         _ => unreachable!(),
     }
 }
