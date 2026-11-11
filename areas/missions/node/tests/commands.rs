@@ -72,6 +72,26 @@ const EXPECTED: &[&str] = &[
 #[tokio::test(flavor = "multi_thread")]
 async fn command_list_and_coded_failures() {
     assert_eq!(parvi_missions::LISTING.commands, EXPECTED);
+    let role_commands: Vec<_> = parvi_agents::LISTING
+        .commands
+        .iter()
+        .copied()
+        .filter(|name| name.starts_with("role_"))
+        .collect();
+    assert_eq!(
+        role_commands,
+        [
+            "role_list",
+            "role_inspect",
+            "role_usage",
+            "role_new",
+            "role_edit",
+            "role_retire",
+            "role_restore",
+            "role_delete",
+            "role_characters"
+        ]
+    );
     let node = Node::start(&[sessions::LISTING, parvi_work::LISTING, LAB], "")
         .await
         .unwrap();

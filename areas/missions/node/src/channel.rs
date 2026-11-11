@@ -175,4 +175,60 @@ mod tests {
         drop(missions);
         std::fs::remove_dir_all(root).unwrap();
     }
+    async fn snapshot_discards_older_updates(lagged: bool) {
+        use parvi_mission_engine::{Ledger, RunEvent, project_run};
+        let root = parvi_testkit::fresh_dir("missions-channel-order");
+        let coordinator =
+            Coordinator::open(&root, RunSettings::default(), Box::new(LabExecutor)).unwrap();
+        let missions = Missions {
+            store: Store::new(&root),
+            coordinator,
+            changes: broadcast::channel(32).0,
+            resolver: std::sync::Arc::new(NoResolver),
+            node: "test".into(),
+        };
+        let ledger = Ledger::new(root.join("runs/run_test.ndjson"), "run_test");
+        let event = |kind: &str| RunEvent {
+            kind: kind.into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            actor: "test".into(),
+            mission_id: "mission".into(),
+            ..Default::default()
+        };
+        ledger.create(event("run_started")).unwrap();
+        let projection = || project_run(&ledger.read().unwrap(), "run_test").unwrap();
+        let old = projection();
+        let (tx, rx) = broadcast::channel(2);
+        let mut channel = Connection::new(missions);
+        channel.runs = Some(rx);
+        channel.runs_initial = !lagged;
+        tx.send(old.clone()).unwrap();
+        if lagged {
+            tx.send(old.clone()).unwrap();
+            tx.send(old).unwrap();
+        }
+        ledger.append(event("node_started")).unwrap();
+        let frame = channel.next().await;
+        assert_eq!(frame[0], RUNS_SNAPSHOT);
+        let snapshot: serde_json::Value = serde_json::from_slice(&frame[1..]).unwrap();
+        assert_eq!(snapshot[0]["eventCount"], 2);
+        ledger.append(event("run_succeeded")).unwrap();
+        tx.send(projection()).unwrap();
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(1), channel.next())
+            .await
+            .unwrap();
+        let update: serde_json::Value = serde_json::from_slice(&frame[1..]).unwrap();
+        assert_eq!(update[0]["eventCount"], 3);
+        assert_eq!(update[0]["status"], "succeeded");
+        drop(channel);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[tokio::test]
+    async fn initial_snapshot_does_not_regress_to_queued_updates() {
+        snapshot_discards_older_updates(false).await;
+    }
+    #[tokio::test]
+    async fn lag_snapshot_does_not_regress_to_queued_updates() {
+        snapshot_discards_older_updates(true).await;
+    }
 }
