@@ -193,10 +193,10 @@ async fn author_and_run_with_tools() {
     let run = started["runId"].as_str().unwrap();
     assert!(node.call("run_list", json!({})).await.unwrap()["runs"].is_array());
     assert_eq!(
-        node.call("run_wait", json!({"run":run,"seconds":5}))
+        node.call("run_wait", json!({"run":run,"until":"final","timeout":5}))
             .await
-            .unwrap()["final"],
-        true
+            .unwrap()["outcome"],
+        "final"
     );
     assert_eq!(
         node.call("run_status", json!({"run":run})).await.unwrap()["runId"],
@@ -352,10 +352,10 @@ async fn a_repository_run_can_be_landed() {
         .unwrap();
     let run = start["runId"].as_str().unwrap();
     assert_eq!(
-        node.call("run_wait", json!({"run":run,"seconds":5}))
+        node.call("run_wait", json!({"run":run,"until":"final","timeout":5}))
             .await
-            .unwrap()["final"],
-        true
+            .unwrap()["outcome"],
+        "final"
     );
     assert_eq!(
         node.call("run_land", json!({"run":run,"force":true}))

@@ -67,6 +67,7 @@ mod run_resume;
 mod run_scheduler;
 mod run_shutdown;
 mod run_storage;
+mod run_wait;
 mod run_worker;
 mod run_workspace;
 mod run_workspace_recovery;
@@ -112,6 +113,7 @@ pub use run_inputs::{
     substitute_run_inputs, work_placeholder,
 };
 pub use run_projection::project_run;
+pub use run_wait::{RunWait, WaitUntil};
 pub use seats::{
     AgentSeat, Dispatch, DispatchId, DispatchResult, LocalSeats, SeatEvent, SeatExecutor,
     SeatFuture, SeatId, SeatRecords, SeatSide, SeatWait, Submission, SubmissionAction, TurnWatch,

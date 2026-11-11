@@ -10,7 +10,6 @@ use parvi_testkit::{
 };
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 // The executor delivers each step to the testkit's fake Sessions, then uses
 // the deterministic lab answer. It runs no real terminal or model.
@@ -161,18 +160,51 @@ async fn cli_authors_two_steps_answers_gate_and_finishes_with_fake_sessions() {
     )
     .await;
     let run = started["runId"].as_str().unwrap();
-    let seq = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            let status = cli(&node, "run", &["status", run]).await;
-            if let Some(seq) = status["waitingGates"][0]["requestedSeq"].as_u64() {
-                break seq;
-            }
-            assert_ne!(status["final"], true, "{status}");
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("run reaches human gate");
+    let waiting = cli(&node, "run", &["wait", run, "--timeout", "10"]).await;
+    assert_eq!(waiting["outcome"], "needs-you", "{waiting}");
+    assert_eq!(waiting["asks"][0]["gate"], gate);
+    let cursor = waiting["cursor"].as_u64().unwrap();
+    let status = cli(&node, "run", &["status", run]).await;
+    let seq = status["waitingGates"][0]["requestedSeq"].as_u64().unwrap();
+    let expected = format!("parvi gate approve {run} {gate} --requested-seq {seq}");
+    assert!(
+        waiting["next"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == &expected)
+    );
+    let mut output = Vec::new();
+    let args = vec![
+        "wait".into(),
+        run.into(),
+        "--until".into(),
+        "needs-you".into(),
+        "--node".into(),
+        format!("{}/", node.url()),
+    ];
+    assert_eq!(
+        parvi_node_kit::cli::run("run", &args, &mut output)
+            .await
+            .unwrap(),
+        0
+    );
+    assert!(String::from_utf8(output).unwrap().contains(&expected));
+    let timed = cli(
+        &node,
+        "run",
+        &[
+            "wait",
+            run,
+            "--since",
+            &cursor.to_string(),
+            "--timeout",
+            "0",
+        ],
+    )
+    .await;
+    assert_eq!(timed["outcome"], "timeout");
+    assert_eq!(timed["status"], "waiting_human");
     cli(
         &node,
         "gate",
@@ -186,16 +218,30 @@ async fn cli_authors_two_steps_answers_gate_and_finishes_with_fake_sessions() {
         ],
     )
     .await;
-    let finished = cli(&node, "run", &["wait", run, "--seconds", "10"]).await;
+    let finished = cli(
+        &node,
+        "run",
+        &["wait", run, "--until", "final", "--timeout", "10"],
+    )
+    .await;
+    assert_eq!(finished["outcome"], "final");
     assert_eq!(finished["status"], "succeeded", "{finished}");
+    let again = cli(
+        &node,
+        "run",
+        &["wait", run, "--until", "final", "--timeout", "0"],
+    )
+    .await;
+    assert_eq!(again["outcome"], "final");
+    let status = cli(&node, "run", &["status", run]).await;
     for (_, _, id) in &steps {
         assert!(
-            finished["events"]
+            status["events"]
                 .as_array()
                 .unwrap()
                 .iter()
                 .any(|e| e["type"] == "node_output" && e["nodeId"] == *id),
-            "{finished}"
+            "{status}"
         );
     }
     let delivered = fake.delivered();
