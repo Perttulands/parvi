@@ -112,3 +112,78 @@ pub struct Report {
     #[serde(default)]
     pub skills: Vec<Skill>,
 }
+
+/// The role library's HTTP wire data.
+pub mod roles {
+    use serde::{Deserialize, Serialize};
+
+    pub const PATH: &str = "/api/roles";
+
+    #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+    #[serde(default, rename_all = "camelCase")]
+    pub struct Role {
+        pub schema: u32,
+        pub id: String,
+        pub display_name: String,
+        pub kind: String,
+        pub summary: String,
+        pub tags: Vec<String>,
+        pub status: String,
+        pub etag: String,
+        pub notes: Vec<Note>,
+        pub preset: bool,
+    }
+    #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+    #[serde(default)]
+    pub struct Note {
+        pub ts: String,
+        pub actor: String,
+        pub text: String,
+    }
+    #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+    #[serde(default, rename_all = "camelCase")]
+    pub struct Roles {
+        pub roles: Vec<Role>,
+        pub unreadable: Vec<Unreadable>,
+        pub harnesses: Vec<Harness>,
+        pub effort_policy: Vec<EffortPolicy>,
+    }
+    #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+    #[serde(default)]
+    pub struct Harness {
+        pub id: String,
+        pub efforts: Vec<String>,
+        pub models: Vec<serde_json::Value>,
+    }
+    #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+    #[serde(default)]
+    pub struct EffortPolicy {
+        pub effort: String,
+        #[serde(rename = "use")]
+        pub usage: String,
+    }
+    #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+    #[serde(default, rename_all = "camelCase")]
+    pub struct Use {
+        pub mission_id: String,
+        pub mission_slug: String,
+        pub mission_title: String,
+        pub formation_id: String,
+        pub formation_title: String,
+        pub slot_id: String,
+        pub slot_label: String,
+    }
+    #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+    #[serde(default)]
+    pub struct Usage {
+        pub usage: Vec<Use>,
+        pub complete: bool,
+        pub unreadable: Vec<Unreadable>,
+    }
+    #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+    #[serde(default)]
+    pub struct Unreadable {
+        pub name: String,
+        pub reason: String,
+    }
+}

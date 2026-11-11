@@ -1,4 +1,6 @@
 //! Agents: harnesses, tools and their skills checkouts across nodes.
+mod library;
+mod role_state;
 pub mod state;
 mod view;
 mod tokens {
@@ -31,6 +33,7 @@ use std::collections::BTreeMap;
 
 pub struct AgentsPage {
     host: Host,
+    library: library::Library,
     state: Agents,
     filter: Option<Entity<TextField>>,
     places: BTreeMap<String, String>,
@@ -39,6 +42,7 @@ impl AgentsPage {
     fn new(host: Host, _: &mut Window, _: &mut Context<Self>) -> Self {
         Self {
             host,
+            library: library::Library::default(),
             state: Agents::default(),
             filter: None,
             places: BTreeMap::new(),

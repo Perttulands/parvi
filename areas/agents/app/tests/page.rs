@@ -25,10 +25,19 @@ fn start() -> Running {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             let home = fresh_dir("parvi-agents-page-home");
-            let config = format!("[agents]\nhome = {:?}\npath = []\n", home);
+            let config = format!(
+                "[agents]\nhome = {:?}\npath = []\nmissions_dir = {:?}\n",
+                home, home
+            );
             let node = Node::start(&[sessions::LISTING, parvi_agents::LISTING], &config)
                 .await
                 .unwrap();
+            node.call(
+                "role_new",
+                serde_json::json!({"role":"fixture-writer","display_name":"Fixture writer"}),
+            )
+            .await
+            .unwrap();
             ready.send(node.url()).unwrap();
             while stopped.try_recv().is_err() {
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -85,6 +94,15 @@ fn agents_page_renders_a_node_report(cx: &mut TestAppContext) {
     });
     let at = cx.debug_bounds("agents-tool-claude").unwrap().center();
     cx.simulate_click(at, Modifiers::none());
-    assert!(cx.debug_bounds("agents-tool-claude").is_some());
+    let at = cx.debug_bounds("agents-library").unwrap().center();
+    cx.simulate_click(at, Modifiers::none());
+    until(cx, "the fixture role", |cx| {
+        cx.debug_bounds("role-fixture-writer").is_some()
+    });
+    let at = cx.debug_bounds("role-fixture-writer").unwrap().center();
+    cx.simulate_click(at, Modifiers::none());
+    until(cx, "the role detail", |cx| {
+        cx.debug_bounds("role-edit").is_some()
+    });
     std::fs::remove_dir_all(settings).unwrap();
 }

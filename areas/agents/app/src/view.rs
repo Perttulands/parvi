@@ -14,6 +14,9 @@ impl AgentsPage {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = theme(cx).clone();
+        if self.library.open {
+            return self.render_role_library(window, cx);
+        }
         let filter = self.agents_filter(window, cx);
         let reports = self.agents_reports();
         if reports.is_empty() {
@@ -28,6 +31,14 @@ impl AgentsPage {
                 .bg(t.bg)
                 .p(px(board::PAD))
                 .child(kit::note(&t, words, Some(t.dim)))
+                .child(
+                    kit::button(&t, "agents-library-empty", "Roles library", Kind::Plain).on_click(
+                        cx.listener(|s, _, _, cx| {
+                            s.library.open = true;
+                            s.load_role_library(cx);
+                        }),
+                    ),
+                )
                 .into_any_element();
         }
         let words = filter.read(cx).text.trim().to_lowercase();
@@ -76,7 +87,15 @@ impl AgentsPage {
                     .child(div().flex_1())
                     .child(kit::note(&t, format!("{harnesses} harnesses"), Some(t.dim))),
             )
-            .child(div().p(px(tokens::P8)).child(filter));
+            .child(div().p(px(tokens::P8)).child(filter))
+            .child(
+                kit::button(&t, "agents-library", "Roles library", Kind::Plain)
+                    .debug_selector(|| "agents-library".into())
+                    .on_click(cx.listener(|s, _, _, cx| {
+                        s.library.open = true;
+                        s.load_role_library(cx);
+                    })),
+            );
         let groups: [(&str, Vec<&Tool>); 2] = [
             (
                 "Harnesses",

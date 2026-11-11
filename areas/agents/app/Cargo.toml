@@ -13,6 +13,7 @@ parvi-core = { path = "../../../kit/core" }
 parvi-agents-contract = { path = "../contract" }
 parvi-app-kit = { path = "../../../kit/app-kit" }
 gpui = { package = "gpui-pre", version = "=0.3.11" }
+serde = "1"
 serde_json = "1"
 
 [dev-dependencies]

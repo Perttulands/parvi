@@ -2,6 +2,7 @@
 mod checkout;
 mod home;
 mod report;
+mod roles;
 mod run;
 mod skills;
 mod sync;
@@ -29,7 +30,19 @@ pub const NAME: &str = "agents";
 pub const LISTING: Listing = Listing {
     name: NAME,
     kinds: &[0x80..=0x8f],
-    commands: &["agents_show", "agents_sync"],
+    commands: &[
+        "agents_show",
+        "agents_sync",
+        "role_list",
+        "role_inspect",
+        "role_usage",
+        "role_new",
+        "role_edit",
+        "role_retire",
+        "role_restore",
+        "role_delete",
+        "role_characters",
+    ],
     build,
 };
 
@@ -37,6 +50,7 @@ struct AgentsArea {
     home: Option<Home>,
     sessions: Arc<dyn Sessions>,
     node: String,
+    roles: Arc<roles::Service>,
 }
 
 /// Overrides the probed home and executable path for a node environment.
@@ -45,10 +59,15 @@ struct AgentsArea {
 struct Section {
     home: Option<PathBuf>,
     path: Option<Vec<PathBuf>>,
+    missions_dir: Option<PathBuf>,
 }
 
 pub fn build(setup: &Setup) -> Result<Built> {
     let section: Section = setup.config.section(NAME)?;
+    let fixture_codex = section
+        .home
+        .as_ref()
+        .map(|p| setup.config.path(p).join(".codex"));
     let mut home = Home::from_env();
     if let Some(dir) = section.home {
         home = Some(Home {
@@ -59,11 +78,18 @@ pub fn build(setup: &Setup) -> Result<Built> {
     if let (Some(home), Some(path)) = (&mut home, section.path) {
         home.path = path.iter().map(|p| setup.config.path(p)).collect();
     }
+    let root = section
+        .missions_dir
+        .map(|p| setup.config.path(&p))
+        .or_else(parvi_missions::Store::default_root)
+        .context("agents roles need a missions directory")?;
+    let roles = Arc::new(roles::Service::new(root, fixture_codex));
     let node = setup.node.id.to_string();
     Built::then(move |provided| {
         Ok(Arc::new(AgentsArea {
             home,
             node,
+            roles,
             sessions: provided
                 .get::<dyn Sessions>()
                 .context("agents sync needs sessions")?,
@@ -72,6 +98,9 @@ pub fn build(setup: &Setup) -> Result<Built> {
 }
 
 impl Area for AgentsArea {
+    fn routes(&self) -> axum::Router {
+        roles::routes(self.roles.clone())
+    }
     fn channel(&self, _: Client) -> Option<Box<dyn Channel>> {
         let (out, incoming) = mpsc::channel(32);
         Some(Box::new(Connection {
@@ -121,7 +150,9 @@ impl Area for AgentsArea {
                 }
             },
         );
-        vec![show, sync]
+        let mut commands = vec![show, sync];
+        commands.extend(roles::commands(self.roles.clone(), self.node.clone()));
+        commands
     }
 }
 #[derive(Debug, PartialEq, Eq)]

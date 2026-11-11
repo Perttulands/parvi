@@ -51,7 +51,15 @@ async fn commands_and_channel_work_over_the_node() {
         .filter(|name| name.starts_with("agents_"))
         .collect();
     assert_eq!(names, ["agents_show", "agents_sync"]);
-    assert_eq!(parvi_agents::LISTING.commands, names);
+    assert_eq!(
+        parvi_agents::LISTING
+            .commands
+            .iter()
+            .copied()
+            .filter(|n| n.starts_with("agents_"))
+            .collect::<Vec<_>>(),
+        names
+    );
 
     let args = vec!["--node".into(), node.url()];
     let mut output = Vec::new();
@@ -121,4 +129,118 @@ async fn next_kind(
     })
     .await
     .expect("timed out waiting for frame")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn role_routes_and_commands_keep_versions_and_usage() {
+    let root = fresh_dir("parvi-roles-node");
+    let config = format!(
+        "[agents]\nhome = {:?}\npath = []\nmissions_dir = {:?}\n",
+        root, root
+    );
+    let node = Node::start(&[sessions::LISTING, parvi_agents::LISTING], &config)
+        .await
+        .unwrap();
+    let client = NodeClient::new(Some(&node.url())).unwrap();
+    let (created, tag) = client.request(Method::POST, "/api/roles", Some(json!({"id":"writer","displayName":"Writer","kind":"specialist","summary":"Writes","capabilities":["draft"]})), None).await.unwrap();
+    assert_eq!(created["displayName"], "Writer");
+    assert!(!tag.is_empty());
+    let (list, _) = client
+        .request(
+            Method::GET,
+            "/api/roles?capable=draft&assignable=true",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(list["roles"][0]["id"], "writer");
+    let (read, etag) = client
+        .request(Method::GET, "/api/roles/writer", None, None)
+        .await
+        .unwrap();
+    assert_eq!(etag, tag);
+    assert_eq!(read["etag"], tag);
+    let (changed, next) = client
+        .request(
+            Method::PATCH,
+            "/api/roles/writer",
+            Some(json!({"summary":"Revised"})),
+            Some(&tag),
+        )
+        .await
+        .unwrap();
+    assert_eq!(changed["summary"], "Revised");
+    let conflict = client
+        .request(
+            Method::PATCH,
+            "/api/roles/writer",
+            Some(json!({"summary":"stale"})),
+            Some(&tag),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        conflict
+            .downcast_ref::<parvi_node_kit::NodeError>()
+            .unwrap()
+            .code,
+        "conflict"
+    );
+    let (usage, _) = client
+        .request(Method::GET, "/api/roles/writer/usage", None, None)
+        .await
+        .unwrap();
+    assert_eq!(usage["complete"], true);
+    let (retired, next) = client
+        .request(
+            Method::PATCH,
+            "/api/roles/writer",
+            Some(json!({"retire":true})),
+            Some(&next),
+        )
+        .await
+        .unwrap();
+    assert_eq!(retired["status"], "retired");
+    let (restored, next) = client
+        .request(
+            Method::PATCH,
+            "/api/roles/writer",
+            Some(json!({"retire":false})),
+            Some(&next),
+        )
+        .await
+        .unwrap();
+    assert_eq!(restored["status"], "active");
+    let (deleted, _) = client
+        .request(Method::DELETE, "/api/roles/writer", None, Some(&next))
+        .await
+        .unwrap();
+    assert_eq!(deleted["deleted"], "writer");
+    assert!(!root.join("roles/writer.toml").exists());
+    let names = [
+        "role_list",
+        "role_inspect",
+        "role_usage",
+        "role_new",
+        "role_edit",
+        "role_retire",
+        "role_restore",
+        "role_delete",
+        "role_characters",
+    ];
+    assert_eq!(&parvi_agents::LISTING.commands[2..], names);
+    let role = node
+        .call("role_new", json!({"role":"editor","display_name":"Editor"}))
+        .await
+        .unwrap();
+    assert_eq!(role["id"], "editor");
+    assert_eq!(
+        node.call("role_inspect", json!({"role":"editor"}))
+            .await
+            .unwrap()["id"],
+        "editor"
+    );
+    node.stop().await;
+    std::fs::remove_dir_all(root).unwrap();
 }
