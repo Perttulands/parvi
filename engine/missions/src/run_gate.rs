@@ -114,10 +114,13 @@ pub(crate) fn advance(
                 .map_err(|e| e.to_string())?;
                 let bindings: crate::BindingsSnapshot =
                     toml::from_str(&source).map_err(|e| e.to_string())?;
-                let binding = bindings.gate_binding(id, mission, gate)?;
+                let binding = bindings
+                    .gate_binding(id, mission, gate)
+                    .map_err(|error| error.message)?;
                 crate::code_binding::validate_results(id, mission, &bindings, events)?;
                 let result =
-                    crate::GateEvaluator::evaluate(&crate::CodeGateEvaluator, gate, &input)?;
+                    crate::GateEvaluator::evaluate(&crate::CodeGateEvaluator, gate, &input)
+                        .map_err(|error| error.message)?;
                 let data = binding.result_data(&input.text, &result)?;
                 Ok((result, data))
             })();
@@ -310,7 +313,7 @@ pub(crate) fn settle_gate(
     } else {
         "gate_verdict"
     };
-    let events = c.ledger(id)?.read()?;
+    let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
     let anchor = events
         .iter()
         .rev()

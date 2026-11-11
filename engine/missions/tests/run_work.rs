@@ -95,9 +95,14 @@ impl Executor for Recording {
         &self,
         execution: FormationExecution,
         events: ExecutionSink,
-    ) -> Result<FormationResult, String> {
-        self.0.lock().unwrap().push(execution.clone());
-        LabExecutor.execute_formation(execution, events)
+    ) -> Result<FormationResult, parvi_missions::Error> {
+        {
+            self.0.lock().unwrap().push(execution.clone());
+            LabExecutor
+                .execute_formation(execution, events)
+                .map_err(|error| error.message)
+        }
+        .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
     }
 }
 
@@ -228,11 +233,16 @@ impl Executor for FailOnce {
         &self,
         execution: FormationExecution,
         events: ExecutionSink,
-    ) -> Result<FormationResult, String> {
-        if !std::mem::replace(&mut *self.1.lock().unwrap(), true) {
-            return Err("seat lost".into());
-        }
-        self.0.execute_formation(execution, events)
+    ) -> Result<FormationResult, parvi_missions::Error> {
+        (|| -> Result<FormationResult, String> {
+            if !std::mem::replace(&mut *self.1.lock().unwrap(), true) {
+                return Err("seat lost".into());
+            }
+            self.0
+                .execute_formation(execution, events)
+                .map_err(|error| error.message)
+        })()
+        .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
     }
 }
 

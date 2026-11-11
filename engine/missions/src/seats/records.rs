@@ -114,43 +114,48 @@ impl SeatRecords {
         }
     }
 
-    pub fn create(&self, dispatch: &Dispatch) -> io::Result<()> {
-        let dir = self.directory(&dispatch.id)?;
-        self.locked(&dir, true, || {
-            let path = dir.join("dispatch.json");
-            match read(&path) {
-                Ok(existing) => {
-                    let existing: Record = existing;
-                    if existing.dispatch == *dispatch {
-                        Ok(())
-                    } else {
-                        Err(conflict("dispatch id already belongs to another dispatch"))
+    pub fn create(&self, dispatch: &Dispatch) -> Result<(), crate::Error> {
+        (|| -> io::Result<()> {
+            let dir = self.directory(&dispatch.id)?;
+            self.locked(&dir, true, || {
+                let path = dir.join("dispatch.json");
+                match read(&path) {
+                    Ok(existing) => {
+                        let existing: Record = existing;
+                        if existing.dispatch == *dispatch {
+                            Ok(())
+                        } else {
+                            Err(conflict("dispatch id already belongs to another dispatch"))
+                        }
                     }
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                        publish(&dir.join("brief.md"), dispatch.brief.as_bytes())?;
+                        write_record(
+                            &path,
+                            &Record {
+                                dispatch: dispatch.clone(),
+                                seat: None,
+                                events: Vec::new(),
+                                result: None,
+                            },
+                        )
+                    }
+                    Err(e) => Err(e),
                 }
-                Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                    publish(&dir.join("brief.md"), dispatch.brief.as_bytes())?;
-                    write_record(
-                        &path,
-                        &Record {
-                            dispatch: dispatch.clone(),
-                            seat: None,
-                            events: Vec::new(),
-                            result: None,
-                        },
-                    )
-                }
-                Err(e) => Err(e),
-            }
-        })
+            })
+        })()
+        .map_err(crate::error::io)
     }
 
-    pub fn dispatch(&self, id: &str) -> io::Result<Dispatch> {
+    pub fn dispatch(&self, id: &str) -> Result<Dispatch, crate::Error> {
         self.with_record(id, |record| Ok(record.dispatch.clone()))
+            .map_err(crate::error::io)
     }
-    pub fn brief_path(&self, id: &str) -> io::Result<PathBuf> {
+    pub fn brief_path(&self, id: &str) -> Result<PathBuf, crate::Error> {
         self.with_record(id, |_| Ok(self.directory(id)?.join("brief.md")))
+            .map_err(crate::error::io)
     }
-    pub fn events(&self, id: &str, since: u64) -> io::Result<Vec<SeatEvent>> {
+    pub fn events(&self, id: &str, since: u64) -> Result<Vec<SeatEvent>, crate::Error> {
         self.with_record(id, |record| {
             Ok(record
                 .events
@@ -159,12 +164,15 @@ impl SeatRecords {
                 .cloned()
                 .collect())
         })
+        .map_err(crate::error::io)
     }
-    pub fn result(&self, id: &str) -> io::Result<Option<DispatchResult>> {
+    pub fn result(&self, id: &str) -> Result<Option<DispatchResult>, crate::Error> {
         self.with_record(id, |record| Ok(record.result.clone()))
+            .map_err(crate::error::io)
     }
-    pub fn seat(&self, id: &str) -> io::Result<Option<SeatId>> {
+    pub fn seat(&self, id: &str) -> Result<Option<SeatId>, crate::Error> {
         self.with_record(id, |record| Ok(record.seat.clone()))
+            .map_err(crate::error::io)
     }
     pub(super) fn dispatch_for_seat(&self, seat: &SeatId) -> io::Result<String> {
         let mut matches = Vec::new();
@@ -196,100 +204,104 @@ impl SeatRecords {
             .map(|(_, id)| id)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "unknown seat"))
     }
-    pub fn seats(&self, run_id: &str) -> io::Result<Vec<AgentSeat>> {
-        let entries = match fs::read_dir(&self.root) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(error),
-        };
-        let mut seats = Vec::new();
-        for entry in entries {
-            let entry = entry?;
-            let Some(id) = entry.file_name().to_str().map(str::to_owned) else {
-                continue;
-            };
-            let result = self.with_record(&id, |record| {
-                if record.dispatch.run_id != run_id {
-                    return Ok(None);
-                }
-                let Some(seat) = &record.seat else {
-                    return Ok(None);
-                };
-                let outcome = record
-                    .events
-                    .iter()
-                    .rev()
-                    .find(|event| event.kind == "seat_cleanup")
-                    .and_then(|event| event.data.get("outcome"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                let waiting = record
-                    .events
-                    .iter()
-                    .rev()
-                    .find(|event| {
-                        matches!(
-                            event.kind.as_str(),
-                            "seat_created"
-                                | "seat_prompt_consumed"
-                                | "slot_result"
-                                | "seat_cleanup"
-                                | "seat_state"
-                                | "seat_idle_recovery"
-                        )
-                    })
-                    .filter(|event| {
-                        event.kind == "seat_state"
-                            && event.data.get("state").and_then(Value::as_str) != Some("working")
-                    })
-                    .map(|event| SeatWait {
-                        state: event
-                            .data
-                            .get("state")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .into(),
-                        detail: event
-                            .data
-                            .get("detail")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .into(),
-                        since: event
-                            .data
-                            .get("since")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .into(),
-                        seq: event.seq,
-                    });
-                Ok(Some(AgentSeat {
-                    dispatch_id: record.dispatch.id.clone(),
-                    slot_id: record.dispatch.slot_id.clone(),
-                    node: seat.node.clone(),
-                    session: seat.session.session_id.clone(),
-                    pane: Some(seat.session.pane_id),
-                    session_name: seat.session_name.clone(),
-                    outcome: outcome.into(),
-                    available: outcome.is_empty() || outcome == "left_shutdown",
-                    waiting,
-                }))
-            });
-            match result {
-                Ok(Some(seat)) => seats.push(seat),
-                Ok(None) => (),
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::NotFound | io::ErrorKind::InvalidInput
-                    ) => {}
+    pub fn seats(&self, run_id: &str) -> Result<Vec<AgentSeat>, crate::Error> {
+        (|| -> io::Result<Vec<AgentSeat>> {
+            let entries = match fs::read_dir(&self.root) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
                 Err(error) => return Err(error),
+            };
+            let mut seats = Vec::new();
+            for entry in entries {
+                let entry = entry?;
+                let Some(id) = entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                let result = self.with_record(&id, |record| {
+                    if record.dispatch.run_id != run_id {
+                        return Ok(None);
+                    }
+                    let Some(seat) = &record.seat else {
+                        return Ok(None);
+                    };
+                    let outcome = record
+                        .events
+                        .iter()
+                        .rev()
+                        .find(|event| event.kind == "seat_cleanup")
+                        .and_then(|event| event.data.get("outcome"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    let waiting = record
+                        .events
+                        .iter()
+                        .rev()
+                        .find(|event| {
+                            matches!(
+                                event.kind.as_str(),
+                                "seat_created"
+                                    | "seat_prompt_consumed"
+                                    | "slot_result"
+                                    | "seat_cleanup"
+                                    | "seat_state"
+                                    | "seat_idle_recovery"
+                            )
+                        })
+                        .filter(|event| {
+                            event.kind == "seat_state"
+                                && event.data.get("state").and_then(Value::as_str)
+                                    != Some("working")
+                        })
+                        .map(|event| SeatWait {
+                            state: event
+                                .data
+                                .get("state")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .into(),
+                            detail: event
+                                .data
+                                .get("detail")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .into(),
+                            since: event
+                                .data
+                                .get("since")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .into(),
+                            seq: event.seq,
+                        });
+                    Ok(Some(AgentSeat {
+                        dispatch_id: record.dispatch.id.clone(),
+                        slot_id: record.dispatch.slot_id.clone(),
+                        node: seat.node.clone(),
+                        session: seat.session.session_id.clone(),
+                        pane: Some(seat.session.pane_id),
+                        session_name: seat.session_name.clone(),
+                        outcome: outcome.into(),
+                        available: outcome.is_empty() || outcome == "left_shutdown",
+                        waiting,
+                    }))
+                });
+                match result {
+                    Ok(Some(seat)) => seats.push(seat),
+                    Ok(None) => (),
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::NotFound | io::ErrorKind::InvalidInput
+                        ) => {}
+                    Err(error) => return Err(error),
+                }
             }
-        }
-        seats.sort_by(|a, b| a.dispatch_id.cmp(&b.dispatch_id));
-        Ok(seats)
+            seats.sort_by(|a, b| a.dispatch_id.cmp(&b.dispatch_id));
+            Ok(seats)
+        })()
+        .map_err(crate::error::io)
     }
-    pub fn bind_seat(&self, id: &str, seat: SeatId) -> io::Result<()> {
+    pub fn bind_seat(&self, id: &str, seat: SeatId) -> Result<(), crate::Error> {
         self.change(id, |record| match &record.seat {
             Some(existing) if *existing == seat => Ok(((), false)),
             Some(_) => Err(conflict("dispatch already has a different seat")),
@@ -298,6 +310,7 @@ impl SeatRecords {
                 Ok(((), true))
             }
         })
+        .map_err(crate::error::io)
     }
     pub fn append(
         &self,
@@ -305,29 +318,32 @@ impl SeatRecords {
         key: &str,
         kind: &str,
         data: Map<String, Value>,
-    ) -> io::Result<SeatEvent> {
-        if key.is_empty() || kind.is_empty() {
-            return Err(invalid("event key and kind are required"));
-        }
-        self.change(id, |record| {
-            if let Some(event) = record.events.iter().find(|event| event.key == key) {
-                return if event.kind == kind && event.data == data {
-                    Ok((event.clone(), false))
-                } else {
-                    Err(conflict("event key already used"))
-                };
+    ) -> Result<SeatEvent, crate::Error> {
+        (|| -> io::Result<SeatEvent> {
+            if key.is_empty() || kind.is_empty() {
+                return Err(invalid("event key and kind are required"));
             }
-            let event = SeatEvent {
-                key: key.into(),
-                seq: record.events.len() as u64 + 1,
-                kind: kind.into(),
-                data,
-            };
-            record.events.push(event.clone());
-            Ok((event, true))
-        })
+            self.change(id, |record| {
+                if let Some(event) = record.events.iter().find(|event| event.key == key) {
+                    return if event.kind == kind && event.data == data {
+                        Ok((event.clone(), false))
+                    } else {
+                        Err(conflict("event key already used"))
+                    };
+                }
+                let event = SeatEvent {
+                    key: key.into(),
+                    seq: record.events.len() as u64 + 1,
+                    kind: kind.into(),
+                    data,
+                };
+                record.events.push(event.clone());
+                Ok((event, true))
+            })
+        })()
+        .map_err(crate::error::io)
     }
-    pub fn finish(&self, id: &str, result: DispatchResult) -> io::Result<()> {
+    pub fn finish(&self, id: &str, result: DispatchResult) -> Result<(), crate::Error> {
         self.change(id, |record| match &record.result {
             Some(existing) if *existing == result => Ok(((), false)),
             Some(_) => Err(conflict("dispatch already has a different result")),
@@ -336,6 +352,7 @@ impl SeatRecords {
                 Ok(((), true))
             }
         })
+        .map_err(crate::error::io)
     }
     fn directory(&self, id: &str) -> io::Result<PathBuf> {
         if id.is_empty()

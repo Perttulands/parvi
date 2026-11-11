@@ -220,7 +220,7 @@ pub(crate) fn commit_turn(
     if control.canceled.load(std::sync::atomic::Ordering::Acquire) {
         return Err(io::Error::new(io::ErrorKind::Interrupted, "run canceled"));
     }
-    let events = c.ledger(id)?.read()?;
+    let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
     let turn = |kind: &str| {
         events
             .iter()
@@ -285,7 +285,9 @@ pub(crate) fn commit_turn(
                     "workspace for {node} attempt {attempt} is missing"
                 )));
             }
-            workspaces.commit_turn(&tree, id, node, attempt)?;
+            workspaces
+                .commit_turn(&tree, id, node, attempt)
+                .map_err(crate::error::to_io)?;
             let range = format!("{base}..HEAD");
             let commits = git(
                 &path,

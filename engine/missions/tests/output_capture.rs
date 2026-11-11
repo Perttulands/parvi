@@ -67,32 +67,39 @@ impl Executor for Output {
         &self,
         req: FormationExecution,
         sink: ExecutionSink,
-    ) -> Result<FormationResult, String> {
-        self.count.fetch_add(1, Ordering::SeqCst);
-        let slot = req.formation.slots[0].id.clone();
-        for (kind, data) in [
-            ("slot_dispatch", json!({"dispatchId":"test"})),
-            (
-                "slot_result",
-                json!({"dispatchId":"test","sentinel":{"runId":req.run_id,"status":"ok"}}),
-            ),
-        ] {
-            sink.emit(ExecutionEvent {
-                kind: kind.into(),
-                slot_id: slot.clone(),
-                data: data.as_object().unwrap().clone(),
-            })?;
-        }
-        Ok(FormationResult {
-            status: "done".into(),
-            text: "done".into(),
-            outputs: json!({"port_work_out":{"text":"done","ref":self.source}})
-                .as_object()
-                .unwrap()
-                .clone(),
-        })
+    ) -> Result<FormationResult, parvi_missions::Error> {
+        (|| -> Result<FormationResult, String> {
+            self.count.fetch_add(1, Ordering::SeqCst);
+            let slot = req.formation.slots[0].id.clone();
+            for (kind, data) in [
+                ("slot_dispatch", json!({"dispatchId":"test"})),
+                (
+                    "slot_result",
+                    json!({"dispatchId":"test","sentinel":{"runId":req.run_id,"status":"ok"}}),
+                ),
+            ] {
+                sink.emit(ExecutionEvent {
+                    kind: kind.into(),
+                    slot_id: slot.clone(),
+                    data: data.as_object().unwrap().clone(),
+                })
+                .map_err(|error| error.message)?;
+            }
+            Ok(FormationResult {
+                status: "done".into(),
+                text: "done".into(),
+                outputs: json!({"port_work_out":{"text":"done","ref":self.source}})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            })
+        })()
+        .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
     }
-    fn reattach(&self, _: parvi_missions::OpenDispatch) -> Result<FormationResult, String> {
+    fn reattach(
+        &self,
+        _: parvi_missions::OpenDispatch,
+    ) -> Result<FormationResult, parvi_missions::Error> {
         Ok(FormationResult {
             status: "done".into(),
             text: "done".into(),
@@ -101,6 +108,7 @@ impl Executor for Output {
                 .unwrap()
                 .clone(),
         })
+        .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
     }
 }
 
@@ -164,9 +172,7 @@ fn failed_capture_after_reattach_remains_redispatchable() {
             },
         ) {
             Ok(_) => break,
-            Err(e)
-                if e.kind() == std::io::ErrorKind::AlreadyExists && Instant::now() < deadline =>
-            {
+            Err(e) if e.code == "conflict" && Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(5))
             }
             Err(e) => panic!("resume: {e}"),
@@ -254,7 +260,7 @@ fn over_budget_blocks_then_resume_keeps_without_dispatching_again() {
     loop {
         match c.resume(&id, ResumeRequest::default()) {
             Ok(_) => break,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && Instant::now() < until => {
+            Err(e) if e.code == "conflict" && Instant::now() < until => {
                 std::thread::sleep(Duration::from_millis(10))
             }
             Err(e) => panic!("resume: {e}"),
@@ -312,7 +318,7 @@ fn redispatch_runs_a_new_attempt_instead_of_keeping_the_pending_one() {
             },
         ) {
             Ok(_) => break,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && Instant::now() < until => {
+            Err(e) if e.code == "conflict" && Instant::now() < until => {
                 std::thread::sleep(Duration::from_millis(10))
             }
             Err(e) => panic!("resume: {e}"),
@@ -397,12 +403,18 @@ impl Executor for InvalidOnce {
         &self,
         req: FormationExecution,
         sink: ExecutionSink,
-    ) -> Result<FormationResult, String> {
-        let mut result = self.0.execute_formation(req, sink)?;
-        if self.0.count.load(Ordering::SeqCst) == 1 {
-            result.outputs["port_work_out"]["ref"] = json!("relative");
-        }
-        Ok(result)
+    ) -> Result<FormationResult, parvi_missions::Error> {
+        (|| -> Result<FormationResult, String> {
+            let mut result = self
+                .0
+                .execute_formation(req, sink)
+                .map_err(|error| error.message)?;
+            if self.0.count.load(Ordering::SeqCst) == 1 {
+                result.outputs["port_work_out"]["ref"] = json!("relative");
+            }
+            Ok(result)
+        })()
+        .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
     }
 }
 #[test]
@@ -442,7 +454,7 @@ fn invalid_reference_can_resume_by_running_the_step_again() {
     loop {
         match c.resume(&id, ResumeRequest::default()) {
             Ok(_) => break,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && Instant::now() < until => {
+            Err(e) if e.code == "conflict" && Instant::now() < until => {
                 std::thread::sleep(Duration::from_millis(10))
             }
             Err(e) => panic!("resume: {e}"),

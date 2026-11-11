@@ -228,7 +228,7 @@ fn size(path: &Path) -> io::Result<u64> {
     Ok(total)
 }
 fn used(c: &Coordinator, id: &str, node: &str, attempt: i64) -> io::Result<u64> {
-    let events = c.ledger(id)?.read()?;
+    let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
     let mut seen = HashSet::new();
     let mut total = 0u64;
     for event in events
@@ -266,7 +266,7 @@ pub(crate) fn recover(
     workspace: &Path,
     control: &Control,
 ) -> io::Result<()> {
-    let events = c.ledger(id)?.read()?;
+    let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
     for pending in events.iter().filter(|e| e.kind == "output_capture_pending") {
         let attempt = attempt_dir(c, id, &pending.node_id, pending.attempt)?;
         let accepted = events.iter().any(|e| {

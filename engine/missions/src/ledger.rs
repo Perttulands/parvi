@@ -66,38 +66,45 @@ impl Ledger {
     }
 
     /// Atomically create the ledger and sync its first event before returning.
-    pub fn create(&self, mut event: RunEvent) -> io::Result<()> {
-        if self.run_id.is_empty() || event.kind != "run_started" {
-            return Err(invalid("first event must be run_started"));
-        }
-        event.run_id.clone_from(&self.run_id);
-        event.seq = 1;
-        validate(std::slice::from_ref(&event), &self.run_id)?;
-        let mut options = OpenOptions::new();
-        options.read(true).write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options.open(&self.path)?;
-        let result = write_event(&mut file, &event).and_then(|()| sync_parent(&self.path));
-        if result.is_err() {
-            drop(file);
-            let _ = std::fs::remove_file(&self.path);
-        }
-        result
+    pub fn create(&self, mut event: RunEvent) -> Result<(), crate::Error> {
+        (|| -> io::Result<()> {
+            if self.run_id.is_empty() || event.kind != "run_started" {
+                return Err(invalid("first event must be run_started"));
+            }
+            event.run_id.clone_from(&self.run_id);
+            event.seq = 1;
+            validate(std::slice::from_ref(&event), &self.run_id).map_err(crate::error::to_io)?;
+            let mut options = OpenOptions::new();
+            options.read(true).write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options.open(&self.path)?;
+            let result = write_event(&mut file, &event).and_then(|()| sync_parent(&self.path));
+            if result.is_err() {
+                drop(file);
+                let _ = std::fs::remove_file(&self.path);
+            }
+            result
+        })()
+        .map_err(crate::error::io)
     }
 
-    pub fn read(&self) -> io::Result<Vec<RunEvent>> {
-        let mut file = OpenOptions::new().read(true).open(&self.path)?;
-        file.lock_shared()?;
-        read_file(&mut file, &self.run_id)
+    pub fn read(&self) -> Result<Vec<RunEvent>, crate::Error> {
+        (|| -> io::Result<Vec<RunEvent>> {
+            let mut file = OpenOptions::new().read(true).open(&self.path)?;
+            file.lock_shared()?;
+            read_file(&mut file, &self.run_id)
+        })()
+        .map_err(crate::error::io)
     }
 
     /// Assign the next sequence while holding the lock, and sync before return.
-    pub fn append(&self, event: RunEvent) -> io::Result<RunEvent> {
+    pub fn append(&self, event: RunEvent) -> Result<RunEvent, crate::Error> {
         self.append_checked(event, |_| Ok(()))
+            .map_err(crate::error::io)
     }
 
     /// Validate against the locked ledger before assigning the next sequence.
@@ -188,17 +195,20 @@ impl Ledger {
     }
 }
 
-pub fn validate(events: &[RunEvent], run_id: &str) -> io::Result<()> {
-    if events
-        .first()
-        .is_none_or(|event| event.kind != "run_started")
-    {
-        return Err(invalid("first event must be run_started"));
-    }
-    for (i, event) in events.iter().enumerate() {
-        validate_event(event, run_id, i as u64 + 1)?;
-    }
-    Ok(())
+pub fn validate(events: &[RunEvent], run_id: &str) -> Result<(), crate::Error> {
+    (|| -> io::Result<()> {
+        if events
+            .first()
+            .is_none_or(|event| event.kind != "run_started")
+        {
+            return Err(invalid("first event must be run_started"));
+        }
+        for (i, event) in events.iter().enumerate() {
+            validate_event(event, run_id, i as u64 + 1)?;
+        }
+        Ok(())
+    })()
+    .map_err(crate::error::io)
 }
 fn validate_event(event: &RunEvent, run_id: &str, seq: u64) -> io::Result<()> {
     if event.run_id != run_id
@@ -228,7 +238,7 @@ fn read_file(file: &mut File, run_id: &str) -> io::Result<Vec<RunEvent>> {
         }
         events.push(serde_json::from_slice(line).map_err(|err| invalid(&err.to_string()))?);
     }
-    validate(&events, run_id)?;
+    validate(&events, run_id).map_err(crate::error::to_io)?;
     Ok(events)
 }
 fn write_event(file: &mut File, event: &RunEvent) -> io::Result<()> {

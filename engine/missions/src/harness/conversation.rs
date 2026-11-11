@@ -12,8 +12,8 @@ use std::{
 /// Capture these at dispatch time, along with the selected rollout, so a
 /// later writable user thread can be distinguished from existing descriptors.
 #[cfg(target_os = "linux")]
-pub fn codex_threads(root: &Path, pid: u32) -> io::Result<BTreeSet<PathBuf>> {
-    codex_threads_in(root, pid, Path::new("/proc"))
+pub fn codex_threads(root: &Path, pid: u32) -> Result<BTreeSet<PathBuf>, crate::Error> {
+    codex_threads_in(root, pid, Path::new("/proc")).map_err(crate::error::io)
 }
 #[cfg(target_os = "linux")]
 fn codex_threads_in(root: &Path, pid: u32, proc: &Path) -> io::Result<BTreeSet<PathBuf>> {
@@ -75,8 +75,8 @@ fn codex_user_thread(path: &Path) -> bool {
     s(&row, "type") == "session_meta" && ["", "user"].contains(&s(&row["payload"], "thread_source"))
 }
 #[cfg(not(target_os = "linux"))]
-pub fn codex_threads(_root: &Path, _pid: u32) -> io::Result<BTreeSet<PathBuf>> {
-    Ok(BTreeSet::new())
+pub fn codex_threads(_root: &Path, _pid: u32) -> Result<BTreeSet<PathBuf>, crate::Error> {
+    (|| -> io::Result<BTreeSet<PathBuf>> { Ok(BTreeSet::new()) })().map_err(crate::error::io)
 }
 pub(super) fn replaced(
     h: Harness,
@@ -113,7 +113,7 @@ pub(super) fn replaced(
         Harness::Codex => {
             #[cfg(target_os = "linux")]
             {
-                let threads = codex_threads(&roots.codex, pid)?;
+                let threads = codex_threads(&roots.codex, pid).map_err(crate::error::to_io)?;
                 Ok(Some(threads.iter().any(|path| {
                     !pointer.known_threads.contains(path)
                         && pointer.transcript.as_ref() != Some(path)

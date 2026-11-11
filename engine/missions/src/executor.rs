@@ -53,12 +53,15 @@ pub struct ExecutionSink {
     pub(crate) sender: Sender<PendingEvent>,
 }
 impl ExecutionSink {
-    pub fn emit(&self, event: ExecutionEvent) -> Result<(), String> {
-        let (ack, result) = std::sync::mpsc::sync_channel(1);
-        self.sender
-            .send(PendingEvent { event, ack })
-            .map_err(|e| e.to_string())?;
-        result.recv().map_err(|e| e.to_string())?
+    pub fn emit(&self, event: ExecutionEvent) -> Result<(), crate::Error> {
+        (|| -> Result<(), String> {
+            let (ack, result) = std::sync::mpsc::sync_channel(1);
+            self.sender
+                .send(PendingEvent { event, ack })
+                .map_err(|e| e.to_string())?;
+            result.recv().map_err(|e| e.to_string())?
+        })()
+        .map_err(|message| crate::Error::new("event_delivery_failed", message))
     }
 }
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -107,35 +110,37 @@ pub struct LeftSeat {
 }
 
 pub trait Executor: Send + Sync + 'static {
-    fn seats(&self, _: &str) -> std::io::Result<Vec<crate::AgentSeat>> {
+    fn seats(&self, _: &str) -> Result<Vec<crate::AgentSeat>, crate::Error> {
         Ok(Vec::new())
     }
     fn execute_formation(
         &self,
         execution: FormationExecution,
         events: ExecutionSink,
-    ) -> Result<FormationResult, String>;
-    fn reattach(&self, _: OpenDispatch) -> Result<FormationResult, String> {
+    ) -> Result<FormationResult, crate::Error>;
+    fn reattach(&self, _: OpenDispatch) -> Result<FormationResult, crate::Error> {
         Err("executor cannot reattach this dispatch".into())
+            .map_err(|message: String| crate::Error::new("executor_error", message))
     }
     /// Non-blocking recovery of already completed evidence at startup.
     fn recover_completed(&self, _: OpenDispatch) -> Option<FormationResult> {
         None
     }
     /// Replay seat events saved while the coordinator was disconnected.
-    fn completed_events(&self, _: &OpenDispatch) -> Result<Vec<ExecutionEvent>, String> {
-        Ok(Vec::new())
+    fn completed_events(&self, _: &OpenDispatch) -> Result<Vec<ExecutionEvent>, crate::Error> {
+        Ok(Vec::new()).map_err(|message: String| crate::Error::new("executor_error", message))
     }
     /// End a previously detached seat by its recorded backend identity.
-    fn end_left_seat(&self, _: LeftSeat) -> Result<String, String> {
+    fn end_left_seat(&self, _: LeftSeat) -> Result<String, crate::Error> {
         Err("executor cannot end a detached seat".into())
+            .map_err(|message: String| crate::Error::new("executor_error", message))
     }
     fn correct_judge(
         &self,
         _: JudgeCorrection,
         _: ExecutionSink,
-    ) -> Result<Option<String>, String> {
-        Ok(None)
+    ) -> Result<Option<String>, crate::Error> {
+        Ok(None).map_err(|message: String| crate::Error::new("executor_error", message))
     }
 }
 
@@ -146,8 +151,9 @@ impl Executor for UnavailableExecutor {
         &self,
         _: FormationExecution,
         _: ExecutionSink,
-    ) -> Result<FormationResult, String> {
+    ) -> Result<FormationResult, crate::Error> {
         Err("seat executor is not available".into())
+            .map_err(|message: String| crate::Error::new("executor_error", message))
     }
 }
 
@@ -159,7 +165,8 @@ impl Executor for LabExecutor {
         &self,
         request: FormationExecution,
         events: ExecutionSink,
-    ) -> Result<FormationResult, String> {
+    ) -> Result<FormationResult, crate::Error> {
+        (|| -> Result<FormationResult, String> {
         if !request.cwd.is_dir() {
             return Err("run cwd is unavailable".into());
         }
@@ -224,7 +231,7 @@ impl Executor for LabExecutor {
                     kind: kind.into(),
                     slot_id: slot.id.clone(),
                     data: data.as_object().unwrap().clone(),
-                })
+                }).map_err(|error| error.message)
             };
             let stem = if slot.agent_id.is_empty() {
                 &slot.id
@@ -319,15 +326,19 @@ impl Executor for LabExecutor {
             )?;
         }
         Ok(result)
+     })().map_err(|message: String| crate::Error::new("executor_error", message))
     }
 
-    fn reattach(&self, dispatch: OpenDispatch) -> Result<FormationResult, String> {
-        if dispatch.formation.slots.len() != 1 {
-            return Err("lab evidence cannot recover a multi-slot formation".into());
-        }
-        let path = dispatch.artifact_dir.join("lab-completed.json");
-        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-        serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+    fn reattach(&self, dispatch: OpenDispatch) -> Result<FormationResult, crate::Error> {
+        (|| -> Result<FormationResult, String> {
+            if dispatch.formation.slots.len() != 1 {
+                return Err("lab evidence cannot recover a multi-slot formation".into());
+            }
+            let path = dispatch.artifact_dir.join("lab-completed.json");
+            let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+            serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+        })()
+        .map_err(|message: String| crate::Error::new("executor_error", message))
     }
     fn recover_completed(&self, dispatch: OpenDispatch) -> Option<FormationResult> {
         self.reattach(dispatch).ok()
@@ -373,7 +384,7 @@ fn spend_lab_tokens(request: &FormationExecution, events: &ExecutionSink) -> Res
             .as_object()
             .unwrap()
             .clone(),
-    })?;
+    }).map_err(|error| error.message)?;
     request.limits.count_tokens(&dispatch, tokens);
     if request.limits.is_spent() {
         return Err("the step spent the tokens its Limit card allows".into());

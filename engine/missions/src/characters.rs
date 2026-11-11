@@ -125,7 +125,7 @@ impl CharacterStore {
                 &character.model,
                 &character.effort,
             )
-            .map_err(invalid)?;
+            .map_err(|error| invalid(error.message))?;
         if !character.picture.is_empty()
             && (character.picture.len() > 96 * 1024
                 || ![

@@ -63,6 +63,28 @@ pub fn gated_mission(settings: &str) -> String {
 }
 
 pub fn assert_payload_parity(root: &Scratch, id: &str, expected: &str) {
+    payload_parity(root, id, expected, false);
+}
+
+/// Concurrent branches have independent event order; preserve each node's full
+/// sequence and verify the recorded verdict references the actual request.
+pub fn assert_concurrent_payload_parity(root: &Scratch, id: &str, expected: &str) {
+    payload_parity(root, id, expected, true);
+}
+
+pub fn assert_concurrent_ledger(actual: &[Value], expected: &[Value]) {
+    fn streams(events: &[Value]) -> std::collections::BTreeMap<String, Vec<Value>> {
+        let mut result = std::collections::BTreeMap::<String, Vec<Value>>::new();
+        for event in events {
+            let key = event["nodeId"].as_str().unwrap_or("run").to_owned();
+            result.entry(key).or_default().push(event.clone());
+        }
+        result
+    }
+    assert_eq!(streams(actual), streams(expected));
+}
+
+fn payload_parity(root: &Scratch, id: &str, expected: &str, concurrent: bool) {
     fn stable(value: &mut Value, id: &str) {
         match value {
             Value::String(text) => {
@@ -84,6 +106,15 @@ pub fn assert_payload_parity(root: &Scratch, id: &str, expected: &str) {
         }
     }
     let text = std::fs::read_to_string(root.0.join("runs").join(format!("{id}.ndjson"))).unwrap();
+    let request_seq = if concurrent {
+        let event = text
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .find(|event| event["type"] == "human_input_requested");
+        event.map(|event| event["seq"].as_u64().unwrap())
+    } else {
+        None
+    };
     let actual: Vec<Value> = text
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
@@ -118,6 +149,14 @@ pub fn assert_payload_parity(root: &Scratch, id: &str, expected: &str) {
             ] {
                 if let Some(value) = event["data"].get(key) {
                     let mut value = value.clone();
+                    if concurrent && key == "requestedSeq" {
+                        assert_eq!(
+                            value.as_u64(),
+                            request_seq,
+                            "verdict must reference its actual request"
+                        );
+                        value = Value::String("<request>".into());
+                    }
                     stable(&mut value, id);
                     result.insert(key.into(), value);
                 }
@@ -125,9 +164,18 @@ pub fn assert_payload_parity(root: &Scratch, id: &str, expected: &str) {
             Some(Value::Object(result))
         })
         .collect();
-    let expected: Vec<Value> = expected
+    let mut expected: Vec<Value> = expected
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert_eq!(actual, expected);
+    if concurrent {
+        for event in &mut expected {
+            if let Some(value) = event.get_mut("requestedSeq") {
+                *value = Value::String("<request>".into());
+            }
+        }
+        assert_concurrent_ledger(&actual, &expected);
+    } else {
+        assert_eq!(actual, expected);
+    }
 }

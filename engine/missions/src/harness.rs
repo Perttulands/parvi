@@ -92,45 +92,48 @@ impl Harnesses {
         harness: &str,
         model: &str,
         effort: &str,
-    ) -> Result<(), String> {
-        let ids = HARNESSES
-            .iter()
-            .map(|h| h.id)
-            .collect::<Vec<_>>()
-            .join(" or ");
-        if harness.is_empty() {
-            return Err(format!("{subject} needs a harness: {ids}"));
-        }
-        let Some(known) = HARNESSES.iter().find(|h| h.id == harness) else {
-            return Err(format!(
-                "{subject} harness {harness:?} cannot start seats; use {ids}"
-            ));
-        };
-        if model.chars().any(|c| c.is_whitespace() || c.is_control()) {
-            return Err(format!(
-                "{subject} model {model:?} must be one model name without spaces"
-            ));
-        }
-        if effort.is_empty() {
-            return Err(format!(
-                "{subject} needs an effort; the policy is {EFFORT_POLICY}"
-            ));
-        }
-        // A model whose levels the host knows narrows the harness's efforts.
-        let (efforts, accepts) = match self.model_efforts(harness, model) {
-            Some(efforts) => (efforts, model),
-            None => (
-                known.efforts.iter().map(|e| e.to_string()).collect(),
-                harness,
-            ),
-        };
-        if !efforts.iter().any(|candidate| candidate == effort) {
-            return Err(format!(
-                "{subject} effort {effort:?} is not one {accepts} accepts; use {}",
-                efforts.join(", ")
-            ));
-        }
-        Ok(())
+    ) -> Result<(), crate::Error> {
+        (|| -> Result<(), String> {
+            let ids = HARNESSES
+                .iter()
+                .map(|h| h.id)
+                .collect::<Vec<_>>()
+                .join(" or ");
+            if harness.is_empty() {
+                return Err(format!("{subject} needs a harness: {ids}"));
+            }
+            let Some(known) = HARNESSES.iter().find(|h| h.id == harness) else {
+                return Err(format!(
+                    "{subject} harness {harness:?} cannot start seats; use {ids}"
+                ));
+            };
+            if model.chars().any(|c| c.is_whitespace() || c.is_control()) {
+                return Err(format!(
+                    "{subject} model {model:?} must be one model name without spaces"
+                ));
+            }
+            if effort.is_empty() {
+                return Err(format!(
+                    "{subject} needs an effort; the policy is {EFFORT_POLICY}"
+                ));
+            }
+            // A model whose levels the host knows narrows the harness's efforts.
+            let (efforts, accepts) = match self.model_efforts(harness, model) {
+                Some(efforts) => (efforts, model),
+                None => (
+                    known.efforts.iter().map(|e| e.to_string()).collect(),
+                    harness,
+                ),
+            };
+            if !efforts.iter().any(|candidate| candidate == effort) {
+                return Err(format!(
+                    "{subject} effort {effort:?} is not one {accepts} accepts; use {}",
+                    efforts.join(", ")
+                ));
+            }
+            Ok(())
+        })()
+        .map_err(|message| crate::Error::new("invalid_contract", message))
     }
 
     fn model_efforts(&self, harness: &str, model: &str) -> Option<Vec<String>> {
@@ -173,8 +176,11 @@ mod tests {
             Ok(())
         );
         assert_eq!(
-            harnesses.check("slot", "openai-codex", "gpt-small", "ultra"),
-            Err(r#"slot effort "ultra" is not one gpt-small accepts; use low, medium"#.to_owned())
+            harnesses
+                .check("slot", "openai-codex", "gpt-small", "ultra")
+                .unwrap_err()
+                .message,
+            r#"slot effort "ultra" is not one gpt-small accepts; use low, medium"#
         );
         assert_eq!(
             harnesses.check("slot", "openai-codex", "gpt-other", "ultra"),
@@ -183,7 +189,8 @@ mod tests {
         assert_eq!(
             harnesses
                 .check("slot", "claude-code", "opus", "ultra")
-                .unwrap_err(),
+                .unwrap_err()
+                .message,
             r#"slot effort "ultra" is not one claude-code accepts; use low, medium, high, xhigh, max"#
         );
     }
@@ -195,24 +202,28 @@ mod tests {
             harnesses
                 .check("s", "", "", "low")
                 .unwrap_err()
+                .message
                 .contains("needs a harness")
         );
         assert!(
             harnesses
                 .check("s", "hermes", "", "low")
                 .unwrap_err()
+                .message
                 .contains("cannot start seats")
         );
         assert!(
             harnesses
                 .check("s", "pi", "a b", "low")
                 .unwrap_err()
+                .message
                 .contains("without spaces")
         );
         assert!(
             harnesses
                 .check("s", "pi", "", "")
                 .unwrap_err()
+                .message
                 .contains("needs an effort")
         );
     }

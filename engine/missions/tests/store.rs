@@ -100,6 +100,11 @@ fn a_mission_is_read_only_as_strict_toml_of_schema_one() {
     assert_eq!(code(Mission::parse(&repeated)), "invalid_definition_source");
     let typo = HELLO.replace("effort = \"medium\"", "efort = \"medium\"");
     assert_eq!(code(Mission::parse(&typo)), "invalid_definition_source");
+    let legacy_brief = HELLO.replace("goal = \"Return a short result using the supplied output contract.\"", "goal = \"Return a short result using the supplied output contract.\"\nbeadId = \"example-1\"");
+    assert_eq!(
+        code(Mission::parse(&legacy_brief)),
+        "invalid_definition_source"
+    );
     let tool = format!("{HELLO}\n[[tool]]\nid = \"tool_json\"\n");
     assert_eq!(code(Mission::parse(&tool)), "invalid_definition_source");
     let wrong_type = HELLO.replace("rev = 1", "rev = \"1\"");

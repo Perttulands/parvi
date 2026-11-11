@@ -63,7 +63,9 @@ pub fn execute(
     let canceled = control.canceled.load(Ordering::Acquire);
     let stopping = control.stopping.load(Ordering::Acquire);
     if stopping {
-        let events = c.ledger(&id).and_then(|ledger| ledger.read());
+        let events = c
+            .ledger(&id)
+            .and_then(|ledger| ledger.read().map_err(crate::error::to_io));
         let waiting = events
             .as_ref()
             .ok()
@@ -149,8 +151,8 @@ pub fn execute(
                 let detail = e.to_string();
                 let code = error_code(&detail);
                 let gate_id = detail.strip_prefix("invalid_judge_result[").or_else(|| detail.strip_prefix("invalid_judge_pick[")).and_then(|s| s.split_once(']')).map(|(gate, _)| gate).unwrap_or("").to_owned();
-                let already_recorded = c.ledger(&id).and_then(|ledger| ledger.read()).is_ok_and(|events| events.iter().rev().take_while(|event| event.kind != "run_resumed" && event.kind != "run_started").any(|event| event.kind == "error" && event.data.get("detail").and_then(|value| value.as_str()) == Some(&detail)));
-                let mut blocked_node = if gate_id.is_empty() { c.ledger(&id).and_then(|ledger| ledger.read()).ok().and_then(|events| events.into_iter().rev().find(|event| event.kind == "error" && event.data.get("detail").and_then(|value| value.as_str()) == Some(&detail))).map(|event| event.node_id).unwrap_or_default() } else { gate_id.clone() };
+                let already_recorded = c.ledger(&id).and_then(|ledger| ledger.read().map_err(crate::error::to_io)).is_ok_and(|events| events.iter().rev().take_while(|event| event.kind != "run_resumed" && event.kind != "run_started").any(|event| event.kind == "error" && event.data.get("detail").and_then(|value| value.as_str()) == Some(&detail)));
+                let mut blocked_node = if gate_id.is_empty() { c.ledger(&id).and_then(|ledger| ledger.read().map_err(crate::error::to_io)).ok().and_then(|events| events.into_iter().rev().find(|event| event.kind == "error" && event.data.get("detail").and_then(|value| value.as_str()) == Some(&detail))).map(|event| event.node_id).unwrap_or_default() } else { gate_id.clone() };
                 if !already_recorded && !["invalid_judge_result", "invalid_judge_pick", "reachable_node_starved", "run_work_unfinished"].contains(&code) && let Err(error) = c.append(
                     &id,
                     RunEvent {
@@ -166,7 +168,7 @@ pub fn execute(
                     eprintln!("parvi: cannot record run {id} error: {error}");
                 }
                 let pending = if ["output_not_kept", "invalid_output_ref", "unavailable_output_ref"].contains(&code) {
-                    c.ledger(&id).and_then(|ledger| ledger.read()).ok().and_then(|events| {
+                    c.ledger(&id).and_then(|ledger| ledger.read().map_err(crate::error::to_io)).ok().and_then(|events| {
                         events.iter().rev().find(|event| event.kind == "output_capture_pending"
                             && (blocked_node.is_empty() || event.node_id == blocked_node)
                             && !crate::run_capture::discarded(&events, event)
@@ -178,7 +180,7 @@ pub fn execute(
                 } else { None };
                 let mut data = json!({"code":code,"reason":detail,"detail":e.to_string(),"blockedNodeId":blocked_node,"blockedGateId":gate_id,"resumeAllowed":true,"resumePolicy":"explicit"}).as_object().unwrap().clone();
                 if let Some(pending) = pending { data.insert("pendingOutput".into(), pending); }
-                let open: Vec<_> = c.ledger(&id).and_then(|ledger| ledger.read()).ok().map(|events| crate::run_open_dispatch::unresolved(&events).into_iter().filter(|event| event.node_id == blocked_node && !crate::run_open_dispatch::failed_completion(&events, event)).map(|event| event.data).collect()).unwrap_or_default();
+                let open: Vec<_> = c.ledger(&id).and_then(|ledger| ledger.read().map_err(crate::error::to_io)).ok().map(|events| crate::run_open_dispatch::unresolved(&events).into_iter().filter(|event| event.node_id == blocked_node && !crate::run_open_dispatch::failed_completion(&events, event)).map(|event| event.data).collect()).unwrap_or_default();
                 data.insert("openDispatches".into(), json!(open));
                 RunEvent {
                     kind: "run_blocked".into(),
@@ -281,7 +283,7 @@ fn execute_inner(
     if req.formation_id.is_empty() {
         return crate::run_scheduler::schedule(c, id, mission, req, workspace, control);
     }
-    let events = c.ledger(id)?.read()?;
+    let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
     if events
         .iter()
         .rev()
@@ -309,7 +311,8 @@ fn execute_inner(
     let node = req.formation_id.clone();
     let attempt = c
         .ledger(id)?
-        .read()?
+        .read()
+        .map_err(crate::error::to_io)?
         .iter()
         .filter(|event| event.kind == "node_started" && event.node_id == node)
         .map(|event| event.attempt)

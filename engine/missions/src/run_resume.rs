@@ -4,7 +4,8 @@ use crate::{BindingsSnapshot, Coordinator, ResumeRequest, RunEvent, RunProjectio
 use std::{io, path::PathBuf, sync::Arc};
 
 impl Coordinator {
-    pub fn resume(&self, id: &str, request: ResumeRequest) -> io::Result<RunProjection> {
+    pub fn resume(&self, id: &str, request: ResumeRequest) -> Result<RunProjection, crate::Error> {
+        (|| -> io::Result<RunProjection> {
         let _admission = self.inner.admission.lock().unwrap();
         if self
             .inner
@@ -23,11 +24,11 @@ impl Coordinator {
             ));
         }
         let ledger = self.ledger(id)?;
-        let events = ledger.read()?;
+        let events = ledger.read().map_err(crate::error::to_io)?;
         crate::gate_replay::validate(&events)?;
         crate::human_replay::validate(&events)?;
         crate::code_binding::validate_run(self, id, &events)?;
-        let projection = RunProjection::from_events(&events, id)?;
+        let projection = RunProjection::from_events(&events, id).map_err(crate::error::to_io)?;
         if projection.status != "blocked" || !projection.resume_allowed {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
@@ -179,7 +180,7 @@ impl Coordinator {
             if let Err(error) = resolved {
                 let events = owner
                     .ledger(&run_id)
-                    .and_then(|ledger| ledger.read())
+                    .and_then(|ledger| ledger.read().map_err(crate::error::to_io))
                     .unwrap_or_default();
                 let open = crate::run_open_dispatch::unresolved(&events);
                 let pending = crate::run_recovery::pending_capture(&events);
@@ -192,6 +193,7 @@ impl Coordinator {
             drop(done);
             owner.inner.controls.lock().unwrap().remove(&run_id);
         });
-        self.run(id)
+        self.run(id).map_err(crate::error::to_io)
+     })().map_err(crate::error::io)
     }
 }

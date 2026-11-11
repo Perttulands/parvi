@@ -29,66 +29,75 @@ impl Workspaces {
     pub fn checkout(&self, repository: &str) -> Option<&Path> {
         self.repositories.get(repository).map(PathBuf::as_path)
     }
-    pub fn prepare(&self, run: &str, repository: &str, base: &str) -> io::Result<Worktree> {
-        if !run.starts_with("run_") || !run.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "invalid run id",
-            ));
-        }
-        let checkout = self
-            .checkout(repository)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no checkout"))?
-            .to_path_buf();
-        let branch = format!("parvi/run-{run}");
-        let base = if base.is_empty() {
-            git(&checkout, ["symbolic-ref", "--quiet", "--short", "HEAD"])?
-        } else {
-            base.to_owned()
-        };
-        // Resolve as a commit, and reject option-like values.
-        if base.starts_with('-') {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid base"));
-        }
-        git(
-            &checkout,
-            [
-                "rev-parse",
-                "--verify",
-                &format!("refs/heads/{base}^{{commit}}"),
-            ],
-        )?;
-        fs::create_dir_all(&self.root)?;
-        let path = self.root.join(run);
-        reserve(&path)?;
-        if let Err(error) = git(
-            &checkout,
-            ["branch", &branch, &format!("refs/heads/{base}")],
-        ) {
-            fs::remove_dir(&path)?;
-            return Err(error);
-        }
-        let added = git(
-            &checkout,
-            [
-                OsStr::new("worktree"),
-                OsStr::new("add"),
-                path.as_os_str(),
-                OsStr::new(&branch),
-            ],
-        );
-        if let Err(error) = added {
-            let cleanup = cleanup_failed_add(&checkout, &path)
-                .and_then(|()| git(&checkout, ["branch", "-D", &branch]).map(|_| ()));
-            return Err(with_cleanup(error, cleanup));
-        }
-        Ok(Worktree {
-            path,
-            checkout,
-            branch,
-            base,
-        })
+    pub fn prepare(
+        &self,
+        run: &str,
+        repository: &str,
+        base: &str,
+    ) -> Result<Worktree, crate::Error> {
+        (|| -> io::Result<Worktree> {
+            if !run.starts_with("run_")
+                || !run.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "invalid run id",
+                ));
+            }
+            let checkout = self
+                .checkout(repository)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no checkout"))?
+                .to_path_buf();
+            let branch = format!("parvi/run-{run}");
+            let base = if base.is_empty() {
+                git(&checkout, ["symbolic-ref", "--quiet", "--short", "HEAD"])?
+            } else {
+                base.to_owned()
+            };
+            // Resolve as a commit, and reject option-like values.
+            if base.starts_with('-') {
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid base"));
+            }
+            git(
+                &checkout,
+                [
+                    "rev-parse",
+                    "--verify",
+                    &format!("refs/heads/{base}^{{commit}}"),
+                ],
+            )?;
+            fs::create_dir_all(&self.root)?;
+            let path = self.root.join(run);
+            reserve(&path)?;
+            if let Err(error) = git(
+                &checkout,
+                ["branch", &branch, &format!("refs/heads/{base}")],
+            ) {
+                fs::remove_dir(&path)?;
+                return Err(error);
+            }
+            let added = git(
+                &checkout,
+                [
+                    OsStr::new("worktree"),
+                    OsStr::new("add"),
+                    path.as_os_str(),
+                    OsStr::new(&branch),
+                ],
+            );
+            if let Err(error) = added {
+                let cleanup = cleanup_failed_add(&checkout, &path)
+                    .and_then(|()| git(&checkout, ["branch", "-D", &branch]).map(|_| ()));
+                return Err(with_cleanup(error, cleanup));
+            }
+            Ok(Worktree {
+                path,
+                checkout,
+                branch,
+                base,
+            })
+        })()
+        .map_err(crate::error::io)
     }
     pub fn commit_turn(
         &self,
@@ -96,30 +105,33 @@ impl Workspaces {
         run: &str,
         node: &str,
         attempt: i64,
-    ) -> io::Result<Option<String>> {
-        git(&tree.path, ["add", "-A"])?;
-        let output = Command::new("git")
-            .current_dir(&tree.path)
-            .args(["diff", "--cached", "--quiet", "--exit-code"])
-            .output()?;
-        match output.status.code() {
-            Some(0) => return Ok(None),
-            Some(1) => (),
-            _ => {
-                return Err(io::Error::other(
-                    String::from_utf8_lossy(&output.stderr).into_owned(),
-                ));
+    ) -> Result<Option<String>, crate::Error> {
+        (|| -> io::Result<Option<String>> {
+            git(&tree.path, ["add", "-A"])?;
+            let output = Command::new("git")
+                .current_dir(&tree.path)
+                .args(["diff", "--cached", "--quiet", "--exit-code"])
+                .output()?;
+            match output.status.code() {
+                Some(0) => return Ok(None),
+                Some(1) => (),
+                _ => {
+                    return Err(io::Error::other(
+                        String::from_utf8_lossy(&output.stderr).into_owned(),
+                    ));
+                }
             }
-        }
-        git(
-            &tree.path,
-            [
-                "commit",
-                "-m",
-                &format!("Run {run} step {node} attempt {attempt}"),
-            ],
-        )?;
-        Ok(Some(git(&tree.path, ["rev-parse", "HEAD"])?))
+            git(
+                &tree.path,
+                [
+                    "commit",
+                    "-m",
+                    &format!("Run {run} step {node} attempt {attempt}"),
+                ],
+            )?;
+            Ok(Some(git(&tree.path, ["rev-parse", "HEAD"])?))
+        })()
+        .map_err(crate::error::io)
     }
     /// Removes the run's worktree and branch, and the refs the run shared on
     /// origin: its branch, and each turn ref in `published` (reference to the
@@ -131,103 +143,106 @@ impl Workspaces {
         tree: &Worktree,
         force: bool,
         published: &BTreeMap<String, String>,
-    ) -> io::Result<Vec<String>> {
-        if force {
-            let notes = remove_shared_refs(tree, published)?;
+    ) -> Result<Vec<String>, crate::Error> {
+        (|| -> io::Result<Vec<String>> {
+            if force {
+                let notes = remove_shared_refs(tree, published)?;
+                if tree.path.exists() {
+                    git(
+                        &tree.checkout,
+                        [
+                            OsStr::new("worktree"),
+                            OsStr::new("remove"),
+                            OsStr::new("--force"),
+                            tree.path.as_os_str(),
+                        ],
+                    )?;
+                }
+                git(&tree.checkout, ["branch", "-D", &tree.branch])?;
+                return Ok(notes);
+            }
             if tree.path.exists() {
-                git(
-                    &tree.checkout,
-                    [
-                        OsStr::new("worktree"),
-                        OsStr::new("remove"),
-                        OsStr::new("--force"),
-                        tree.path.as_os_str(),
-                    ],
-                )?;
+                let output = Command::new("git")
+                    .current_dir(&tree.path)
+                    .args([
+                        "status",
+                        "--porcelain=v1",
+                        "--ignored",
+                        "--untracked-files=all",
+                        "-z",
+                    ])
+                    .output()?;
+                if !output.status.success() {
+                    return Err(io::Error::other(format!(
+                        "git status: {}",
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    )));
+                }
+                if !output.stdout.is_empty() {
+                    return Err(io::Error::other(
+                        "worktree contains uncommitted or ignored files",
+                    ));
+                }
             }
-            git(&tree.checkout, ["branch", "-D", &tree.branch])?;
-            return Ok(notes);
-        }
-        if tree.path.exists() {
-            let output = Command::new("git")
-                .current_dir(&tree.path)
-                .args([
-                    "status",
-                    "--porcelain=v1",
-                    "--ignored",
-                    "--untracked-files=all",
-                    "-z",
-                ])
-                .output()?;
-            if !output.status.success() {
-                return Err(io::Error::other(format!(
-                    "git status: {}",
-                    String::from_utf8_lossy(&output.stderr).trim()
-                )));
-            }
-            if !output.stdout.is_empty() {
-                return Err(io::Error::other(
-                    "worktree contains uncommitted or ignored files",
+            let base_ref = format!("refs/heads/{}", tree.base);
+            git(
+                &tree.checkout,
+                ["merge-base", "--is-ancestor", &tree.branch, &base_ref],
+            )?;
+            let notes = remove_shared_refs(tree, published)?;
+            // Branch deletion checks HEAD. A detached temporary worktree puts HEAD on
+            // the recorded base without touching the operator's checkout.
+            let check = self
+                .root
+                .join(format!(".land-{}", tree.branch.replace('/', "-")));
+            reserve(&check)?;
+            if let Err(error) = git(
+                &tree.checkout,
+                [
+                    OsStr::new("worktree"),
+                    OsStr::new("add"),
+                    OsStr::new("--detach"),
+                    check.as_os_str(),
+                    OsStr::new(&base_ref),
+                ],
+            ) {
+                return Err(with_cleanup(
+                    error,
+                    cleanup_failed_add(&tree.checkout, &check),
                 ));
             }
-        }
-        let base_ref = format!("refs/heads/{}", tree.base);
-        git(
-            &tree.checkout,
-            ["merge-base", "--is-ancestor", &tree.branch, &base_ref],
-        )?;
-        let notes = remove_shared_refs(tree, published)?;
-        // Branch deletion checks HEAD. A detached temporary worktree puts HEAD on
-        // the recorded base without touching the operator's checkout.
-        let check = self
-            .root
-            .join(format!(".land-{}", tree.branch.replace('/', "-")));
-        reserve(&check)?;
-        if let Err(error) = git(
-            &tree.checkout,
-            [
-                OsStr::new("worktree"),
-                OsStr::new("add"),
-                OsStr::new("--detach"),
-                check.as_os_str(),
-                OsStr::new(&base_ref),
-            ],
-        ) {
-            return Err(with_cleanup(
-                error,
-                cleanup_failed_add(&tree.checkout, &check),
-            ));
-        }
-        let result = (|| {
-            if tree.path.exists() {
+            let result = (|| {
+                if tree.path.exists() {
+                    git(
+                        &tree.checkout,
+                        [
+                            OsStr::new("worktree"),
+                            OsStr::new("remove"),
+                            OsStr::new("--"),
+                            tree.path.as_os_str(),
+                        ],
+                    )?;
+                }
+                let remote = format!("branch.{}.remote=.", tree.branch);
+                let merge = format!("branch.{}.merge={base_ref}", tree.branch);
                 git(
-                    &tree.checkout,
-                    [
-                        OsStr::new("worktree"),
-                        OsStr::new("remove"),
-                        OsStr::new("--"),
-                        tree.path.as_os_str(),
-                    ],
+                    &check,
+                    ["-c", &remote, "-c", &merge, "branch", "-d", &tree.branch],
                 )?;
-            }
-            let remote = format!("branch.{}.remote=.", tree.branch);
-            let merge = format!("branch.{}.merge={base_ref}", tree.branch);
-            git(
-                &check,
-                ["-c", &remote, "-c", &merge, "branch", "-d", &tree.branch],
-            )?;
-            Ok(())
-        })();
-        let cleanup = git(
-            &tree.checkout,
-            [
-                OsStr::new("worktree"),
-                OsStr::new("remove"),
-                OsStr::new("--"),
-                check.as_os_str(),
-            ],
-        );
-        result.and(cleanup.map(|_| ())).map(|()| notes)
+                Ok(())
+            })();
+            let cleanup = git(
+                &tree.checkout,
+                [
+                    OsStr::new("worktree"),
+                    OsStr::new("remove"),
+                    OsStr::new("--"),
+                    check.as_os_str(),
+                ],
+            );
+            result.and(cleanup.map(|_| ())).map(|()| notes)
+        })()
+        .map_err(crate::error::io)
     }
 }
 /// A run with steps on other environments pushed its branch and their turns

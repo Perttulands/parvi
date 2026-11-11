@@ -2,8 +2,7 @@
 //! directory that stores missions, notes, layouts, role cards and
 //! characters, and the validation that names what stops a run.
 //!
-//! Archon's contract is the behavioural spec (`docs/research/archon-to-parvi.md`):
-//! its mission files load unchanged, and validation emits its finding codes.
+//! Mission definitions and run state use Parvi's schema and validation codes.
 
 mod arrange;
 mod attempt_limits;
@@ -109,7 +108,7 @@ pub use harness::{
     Claude, Codex, HarnessAdapter, Harnesses, Keys, Launch, Pi, Pointer, Shell, SlotBinding,
     TokenUsage, TranscriptRoots, Turn, TurnState, codex_threads,
 };
-pub use kept_copy::{Budget, KeptCopy, NotKept};
+pub use kept_copy::{Budget, KeptCopy};
 pub use layout::{Layout, LayoutEdge, LayoutNode};
 pub use layout_authoring::{LayoutEdit, LayoutPatch};
 pub use layout_placement::free_layout_position;

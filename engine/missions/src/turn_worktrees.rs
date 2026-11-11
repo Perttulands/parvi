@@ -114,104 +114,110 @@ impl TurnWorktrees {
 
     /// The turn's worktree, detached at the named commit after fetching the
     /// run branch. Preparing again returns the same worktree.
-    pub fn prepare(&self, turn: &TurnWorkspace) -> io::Result<PathBuf> {
-        turn.check()?;
-        let lock = self.lock(turn);
-        let _turn = lock.lock().unwrap_or_else(|e| e.into_inner());
-        let path = self.path(turn);
-        if self.published_path(turn).exists() {
-            return Err(io::Error::other("turn workspace is already published"));
-        }
-        if path.exists() {
-            return Ok(path);
-        }
-        let checkout = self.repositories.get(&turn.repository).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("no_checkout: no checkout of {} here", turn.repository),
-            )
-        })?;
-        git(
-            checkout,
-            [
-                "fetch",
-                "--quiet",
-                "origin",
-                &format!("refs/heads/{}", turn.branch()),
-            ],
-        )?;
-        git(
-            checkout,
-            ["cat-file", "-e", &format!("{}^{{commit}}", turn.commit)],
-        )?;
-        fs::create_dir_all(path.parent().unwrap_or(&self.root))?;
-        git(
-            checkout,
-            [
-                OsStr::new("worktree"),
-                OsStr::new("add"),
-                OsStr::new("--detach"),
-                path.as_os_str(),
-                OsStr::new(&turn.commit),
-            ],
-        )?;
-        Ok(path)
+    pub fn prepare(&self, turn: &TurnWorkspace) -> Result<PathBuf, crate::Error> {
+        (|| -> io::Result<PathBuf> {
+            turn.check()?;
+            let lock = self.lock(turn);
+            let _turn = lock.lock().unwrap_or_else(|e| e.into_inner());
+            let path = self.path(turn);
+            if self.published_path(turn).exists() {
+                return Err(io::Error::other("turn workspace is already published"));
+            }
+            if path.exists() {
+                return Ok(path);
+            }
+            let checkout = self.repositories.get(&turn.repository).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("no_checkout: no checkout of {} here", turn.repository),
+                )
+            })?;
+            git(
+                checkout,
+                [
+                    "fetch",
+                    "--quiet",
+                    "origin",
+                    &format!("refs/heads/{}", turn.branch()),
+                ],
+            )?;
+            git(
+                checkout,
+                ["cat-file", "-e", &format!("{}^{{commit}}", turn.commit)],
+            )?;
+            fs::create_dir_all(path.parent().unwrap_or(&self.root))?;
+            git(
+                checkout,
+                [
+                    OsStr::new("worktree"),
+                    OsStr::new("add"),
+                    OsStr::new("--detach"),
+                    path.as_os_str(),
+                    OsStr::new(&turn.commit),
+                ],
+            )?;
+            Ok(path)
+        })()
+        .map_err(crate::error::io)
     }
 
     /// Commits what the turn changed, pushes it to the turn's ref and
     /// removes the worktree. Publishing again returns the first answer, and
     /// removes the worktree if an earlier call stopped before it could.
-    pub fn publish(&self, turn: &TurnWorkspace) -> io::Result<PublishedTurn> {
-        turn.check()?;
-        let lock = self.lock(turn);
-        let _turn = lock.lock().unwrap_or_else(|e| e.into_inner());
-        let marker = self.published_path(turn);
-        let path = self.path(turn);
-        if let Ok(text) = fs::read_to_string(&marker) {
-            let published = serde_json::from_str(&text).map_err(io::Error::other)?;
-            self.remove(turn, &path)?;
-            return Ok(published);
-        }
-        if !path.exists() {
-            return Err(io::Error::other("turn workspace is missing"));
-        }
-        git(&path, ["add", "-A"])?;
-        let staged = Command::new("git")
-            .current_dir(&path)
-            .args(["diff", "--cached", "--quiet", "--exit-code"])
-            .status()?;
-        if !staged.success() {
+    pub fn publish(&self, turn: &TurnWorkspace) -> Result<PublishedTurn, crate::Error> {
+        (|| -> io::Result<PublishedTurn> {
+            turn.check()?;
+            let lock = self.lock(turn);
+            let _turn = lock.lock().unwrap_or_else(|e| e.into_inner());
+            let marker = self.published_path(turn);
+            let path = self.path(turn);
+            if let Ok(text) = fs::read_to_string(&marker) {
+                let published = serde_json::from_str(&text).map_err(io::Error::other)?;
+                self.remove(turn, &path)?;
+                return Ok(published);
+            }
+            if !path.exists() {
+                return Err(io::Error::other("turn workspace is missing"));
+            }
+            git(&path, ["add", "-A"])?;
+            let staged = Command::new("git")
+                .current_dir(&path)
+                .args(["diff", "--cached", "--quiet", "--exit-code"])
+                .status()?;
+            if !staged.success() {
+                git(
+                    &path,
+                    [
+                        "commit",
+                        "--quiet",
+                        "-m",
+                        &format!(
+                            "Run {} step {} attempt {}",
+                            turn.run_id, turn.node_id, turn.attempt
+                        ),
+                    ],
+                )?;
+            }
+            let published = PublishedTurn {
+                commit: git(&path, ["rev-parse", "HEAD"])?,
+                reference: turn.reference(),
+            };
             git(
                 &path,
                 [
-                    "commit",
+                    "push",
                     "--quiet",
-                    "-m",
-                    &format!(
-                        "Run {} step {} attempt {}",
-                        turn.run_id, turn.node_id, turn.attempt
-                    ),
+                    "--force",
+                    "origin",
+                    &format!("HEAD:{}", published.reference),
                 ],
             )?;
-        }
-        let published = PublishedTurn {
-            commit: git(&path, ["rev-parse", "HEAD"])?,
-            reference: turn.reference(),
-        };
-        git(
-            &path,
-            [
-                "push",
-                "--quiet",
-                "--force",
-                "origin",
-                &format!("HEAD:{}", published.reference),
-            ],
-        )?;
-        let text = serde_json::to_string(&published).map_err(io::Error::other)?;
-        crate::write::atomic(&marker, text.as_bytes())?;
-        self.remove(turn, &path)?;
-        Ok(published)
+            let text = serde_json::to_string(&published).map_err(io::Error::other)?;
+            crate::write::atomic(&marker, text.as_bytes())?;
+            self.remove(turn, &path)?;
+            Ok(published)
+        })()
+        .map_err(crate::error::io)
     }
 
     fn remove(&self, turn: &TurnWorkspace, path: &Path) -> io::Result<()> {

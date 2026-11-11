@@ -30,7 +30,7 @@ pub(crate) fn run_judges(
     let mut final_slot = String::new();
     let mut final_ports = Vec::new();
     let mut final_output: Option<crate::FormationResult> = None;
-    let ledger = c.ledger(id)?.read()?;
+    let ledger = c.ledger(id)?.read().map_err(crate::error::to_io)?;
     let anchor = ledger
         .iter()
         .rev()
@@ -46,7 +46,7 @@ pub(crate) fn run_judges(
     let count = chain.len();
     let mut replaying = true;
     for (index, judge) in chain.into_iter().enumerate() {
-        let events = c.ledger(id)?.read()?;
+        let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
         let previous = if replaying && !(invalidated && index + 1 == count) {
             events.iter().rev().find(|e| {
                 e.seq > anchor
@@ -152,6 +152,7 @@ pub(crate) fn run_judges(
             Ok(verdict)
         }
         Err(error) => {
+            let error = error.message;
             let rejected = |text: &str| -> String {
                 let marker = format!("```{}", crate::contract_names::VERDICT);
                 text.lines()
@@ -172,7 +173,7 @@ pub(crate) fn run_judges(
                     node_id: final_node.clone(),
                     attempt: final_attempt,
                     rejected: final_text.clone(),
-                    error: error.clone(),
+                    error: error.to_string(),
                 },
             )
             .map_err(|e| io::Error::other(format!("invalid_judge_result[{}]: {e}", gate.id)))?;
@@ -215,7 +216,7 @@ pub(crate) fn run_judges(
                 Ok(verdict) => {
                     if let Some(mut output) = final_output {
                         let (_, payloads) = crate::parse_outputs(&corrected).map_err(|e| {
-                            io::Error::other(format!("invalid_output_payloads: {e}"))
+                            io::Error::other(format!("invalid_output_payloads: {}", e.message))
                         })?;
                         if payloads.len() != final_ports.len()
                             || final_ports.iter().any(|port| !payloads.contains_key(port))
@@ -243,6 +244,7 @@ pub(crate) fn run_judges(
                     Ok(verdict)
                 }
                 Err(error) => {
+                    let error = error.message;
                     let mut failed = event(
                         "judge_attempt_failed",
                         &gate.id,
@@ -273,7 +275,7 @@ fn correct_judge(
     let attempt = correction.attempt;
     let prior = c
         .ledger(id)
-        .and_then(|ledger| ledger.read())
+        .and_then(|ledger| ledger.read().map_err(crate::error::to_io))
         .map_err(|e| e.to_string())?;
     let worker = std::thread::spawn(move || {
         executor.correct_judge(correction, crate::ExecutionSink { sender: tx })
@@ -329,7 +331,7 @@ fn correct_judge(
     if let Some(error) = failure {
         return Err(error);
     }
-    result
+    result.map_err(|error| error.message)
 }
 
 #[allow(clippy::too_many_arguments)]

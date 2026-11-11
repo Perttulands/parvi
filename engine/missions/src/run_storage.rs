@@ -118,7 +118,9 @@ pub fn create(
         write_new(&binding_file, bindings_data.as_bytes())?;
         binding_created = true;
         if !req.repository.is_empty() {
-            let prepared = workspaces.prepare(id, &req.repository, &req.base)?;
+            let prepared = workspaces
+                .prepare(id, &req.repository, &req.base)
+                .map_err(crate::error::to_io)?;
             workspace = prepared.path.clone();
             tree = Some(prepared);
         }
@@ -138,7 +140,7 @@ pub fn create(
             &req.actor
         };
         let event=RunEvent{kind:"run_started".into(),timestamp:now(),actor:actor.into(),mission_id:mission.id.clone(),mission_rev:mission.rev,input_card_id:req.input_card_id.clone(),work:req.work.clone(),data:json!({"missionSlug":mission.slug,"missionRev":mission.rev,"inputCardId":req.input_card_id,"formationId":req.formation_id,"work":req.work,"snapshot":snapshot,"bindingsSnapshot":binding_file,"cwd":workspace,"repository":req.repository,"requestId":req.request_id,"base":tree.as_ref().map(|t| t.base.as_str()).unwrap_or(""),"checkout":tree.as_ref().map(|t| t.checkout.as_path()),"contextPaths":req.context_paths,"inputs":resolve_run_inputs(mission,&req.inputs)}).as_object().unwrap().clone(),..Default::default()};
-        c.ledger(id)?.create(event)
+        c.ledger(id)?.create(event).map_err(crate::error::to_io)
     })();
     if let Err(e) = result {
         if let Some(tree) = &tree {

@@ -4,7 +4,7 @@ use serde_json::json;
 use std::{collections::BTreeMap, io};
 
 pub(crate) fn end(c: &Coordinator, id: &str, node: Option<&str>, cause: &str) -> io::Result<()> {
-    let events = c.ledger(id)?.read()?;
+    let events = c.ledger(id)?.read().map_err(crate::error::to_io)?;
     let mut created = BTreeMap::<(String, String, String), RunEvent>::new();
     let mut left = BTreeMap::<(String, String, String), RunEvent>::new();
     for event in events {
@@ -52,7 +52,10 @@ pub(crate) fn end(c: &Coordinator, id: &str, node: Option<&str>, cause: &str) ->
             .and_then(|v| v.as_str())
             .is_none_or(str::is_empty)
         {
-            Err("detached seat has no immutable session id".into())
+            Err(crate::Error::new(
+                "invalid_seat",
+                "detached seat has no immutable session id",
+            ))
         } else {
             c.inner.executor.end_left_seat(LeftSeat {
                 run_id: id.into(),
@@ -64,7 +67,7 @@ pub(crate) fn end(c: &Coordinator, id: &str, node: Option<&str>, cause: &str) ->
         };
         let (outcome, detail) = match result {
             Ok(outcome) => (outcome, String::new()),
-            Err(error) => ("left_cleanup_failed".into(), error),
+            Err(error) => ("left_cleanup_failed".into(), error.to_string()),
         };
         let mut event = crate::run_worker::event(
             "seat_cleanup",

@@ -8,6 +8,112 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// The test controls dispatch and completion independently. No wall-clock
+/// delay decides which of two concurrent branches writes its next event.
+type BranchGates = (
+    std::sync::Mutex<BTreeMap<String, (bool, bool)>>,
+    std::sync::Condvar,
+);
+#[derive(Clone, Default)]
+struct BranchControl(std::sync::Arc<BranchGates>);
+impl BranchControl {
+    fn hold(&self, node: &str) {
+        self.0.0.lock().unwrap().insert(node.into(), (false, false));
+    }
+    fn release(&self, node: &str, dispatch: bool, finish: bool) {
+        let mut gates = self.0.0.lock().unwrap();
+        let gate = gates.get_mut(node).unwrap();
+        gate.0 |= dispatch;
+        gate.1 |= finish;
+        self.0.1.notify_all();
+    }
+    fn wait(&self, node: &str, finish: bool) {
+        let gates = self.0.0.lock().unwrap();
+        let (gates, timeout) = self
+            .0
+            .1
+            .wait_timeout_while(gates, Duration::from_secs(20), |gates| {
+                gates
+                    .get(node)
+                    .is_some_and(|gate| if finish { !gate.1 } else { !gate.0 })
+            })
+            .unwrap();
+        assert!(
+            !timeout.timed_out(),
+            "branch {node} was not released: {gates:?}"
+        );
+    }
+}
+struct ControlledLab(BranchControl);
+impl parvi_missions::Executor for ControlledLab {
+    fn execute_formation(
+        &self,
+        request: parvi_missions::FormationExecution,
+        sink: parvi_missions::ExecutionSink,
+    ) -> Result<parvi_missions::FormationResult, parvi_missions::Error> {
+        let node = &request.formation.id;
+        let slot = &request.formation.slots[0];
+        self.0.wait(node, false);
+        let dispatch = format!("dsp_{}_{}_{}", request.run_id, slot.id, request.attempt);
+        sink.emit(parvi_missions::ExecutionEvent {
+            kind: "slot_dispatch".into(),
+            slot_id: slot.id.clone(),
+            data: serde_json::json!({"dispatchId":dispatch,"nodeId":node,"slotId":slot.id})
+                .as_object()
+                .unwrap()
+                .clone(),
+        })?;
+        self.0.wait(node, true);
+        sink.emit(parvi_missions::ExecutionEvent { kind: "slot_result".into(), slot_id: slot.id.clone(), data: serde_json::json!({"dispatchId":dispatch,"nodeId":node,"slotId":slot.id,"status":"ok","sentinel":{"runId":request.run_id,"status":"ok"}}).as_object().unwrap().clone() })?;
+        let text = format!(
+            "lab-fake output from {} using {} for {}\nslot: {}\ninput:{}{}",
+            if slot.agent_id.is_empty() {
+                "vanilla"
+            } else {
+                &slot.agent_id
+            },
+            slot.harness,
+            request.formation.title,
+            slot.id,
+            if request.input_text.starts_with("```") {
+                "\n"
+            } else {
+                " "
+            },
+            request.input_text
+        );
+        let outputs = request
+            .formation
+            .outputs
+            .iter()
+            .map(|port| (port.id.clone(), serde_json::json!({"text":text})))
+            .collect();
+        Ok(parvi_missions::FormationResult {
+            status: "done".into(),
+            text,
+            outputs,
+        })
+    }
+}
+fn wait_for(c: &Coordinator, id: &str, kind: &str, node: &str, deadline: Instant) -> u64 {
+    loop {
+        let projection = c.run(id).unwrap();
+        if let Some(event) = projection
+            .events
+            .iter()
+            .find(|event| event.kind == kind && event.node_id == node)
+        {
+            return event.seq;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "missing {kind} for {node}: {:?}",
+            projection.events
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 #[test]
 fn reattach_keeps_other_completed_dispatches_when_one_fails() {
     use parvi_missions::{
@@ -27,14 +133,15 @@ fn reattach_keeps_other_completed_dispatches_when_one_fails() {
             &self,
             req: FormationExecution,
             sink: ExecutionSink,
-        ) -> Result<FormationResult, String> {
+        ) -> Result<FormationResult, parvi_missions::Error> {
+            (|| -> Result<FormationResult, String> {
             let slot = &req.formation.slots[0];
             let dispatch = format!("dsp_{}_{}", req.formation.id, req.attempt);
-            sink.emit(ExecutionEvent { kind:"slot_dispatch".into(), slot_id:slot.id.clone(), data:serde_json::json!({"dispatchId":dispatch,"nodeId":req.formation.id,"slotId":slot.id}).as_object().unwrap().clone() })?;
+            sink.emit(ExecutionEvent { kind:"slot_dispatch".into(), slot_id:slot.id.clone(), data:serde_json::json!({"dispatchId":dispatch,"nodeId":req.formation.id,"slotId":slot.id}).as_object().unwrap().clone() }).map_err(|error| error.message)?;
             while !self.release.load(Ordering::Acquire) {
                 std::thread::sleep(Duration::from_millis(5));
             }
-            sink.emit(ExecutionEvent { kind:"slot_result".into(), slot_id:slot.id.clone(), data:serde_json::json!({"dispatchId":dispatch,"status":"ok","sentinel":{"runId":req.run_id}}).as_object().unwrap().clone() })?;
+            sink.emit(ExecutionEvent { kind:"slot_result".into(), slot_id:slot.id.clone(), data:serde_json::json!({"dispatchId":dispatch,"status":"ok","sentinel":{"runId":req.run_id}}).as_object().unwrap().clone() }).map_err(|error| error.message)?;
             Ok(FormationResult {
                 status: "done".into(),
                 text: "done".into(),
@@ -45,21 +152,25 @@ fn reattach_keeps_other_completed_dispatches_when_one_fails() {
                     .map(|p| (p.id.clone(), serde_json::json!({"text":"done"})))
                     .collect(),
             })
+         })().map_err(|message: String| parvi_missions::Error::new("executor_error", message))
         }
-        fn reattach(&self, req: OpenDispatch) -> Result<FormationResult, String> {
-            if self.fail && req.node_id == "fmn_other" {
-                return Err("capture unavailable".into());
-            }
-            Ok(FormationResult {
-                status: "done".into(),
-                text: "done".into(),
-                outputs: req
-                    .formation
-                    .outputs
-                    .iter()
-                    .map(|p| (p.id.clone(), serde_json::json!({"text":"done"})))
-                    .collect(),
-            })
+        fn reattach(&self, req: OpenDispatch) -> Result<FormationResult, parvi_missions::Error> {
+            (|| -> Result<FormationResult, String> {
+                if self.fail && req.node_id == "fmn_other" {
+                    return Err("capture unavailable".into());
+                }
+                Ok(FormationResult {
+                    status: "done".into(),
+                    text: "done".into(),
+                    outputs: req
+                        .formation
+                        .outputs
+                        .iter()
+                        .map(|p| (p.id.clone(), serde_json::json!({"text":"done"})))
+                        .collect(),
+                })
+            })()
+            .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
         }
     }
     let root = Scratch::new();
@@ -171,9 +282,7 @@ fn reattach_keeps_other_completed_dispatches_when_one_fails() {
             },
         ) {
             Ok(_) => break,
-            Err(e)
-                if e.kind() == std::io::ErrorKind::AlreadyExists && Instant::now() < deadline =>
-            {
+            Err(e) if e.code == "conflict" && Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(5))
             }
             Err(e) => panic!("resume: {e}"),
@@ -198,11 +307,12 @@ fn restart_cuts_preserve_branch_and_human_gate_outcomes() {
             &self,
             request: parvi_missions::FormationExecution,
             sink: parvi_missions::ExecutionSink,
-        ) -> Result<parvi_missions::FormationResult, String> {
+        ) -> Result<parvi_missions::FormationResult, parvi_missions::Error> {
+            (|| -> Result<parvi_missions::FormationResult, String> {
             let judge = request.formation.id == "fmn_judge";
             let pass = request.input_text.contains("needs work");
             let mut result =
-                parvi_missions::Executor::execute_formation(&LabExecutor, request, sink)?;
+                parvi_missions::Executor::execute_formation(&LabExecutor, request, sink).map_err(|error| error.message)?;
             if judge {
                 result.text = if pass { "```parvi-verdict\n{\"verdict\":\"pass\",\"reason\":\"fixed\",\"evidence\":[]}\n```" } else { "```parvi-verdict\n{\"verdict\":\"fail\",\"reason\":\"needs work\",\"evidence\":[]}\n```" }.into();
                 for output in result.outputs.values_mut() {
@@ -210,6 +320,7 @@ fn restart_cuts_preserve_branch_and_human_gate_outcomes() {
                 }
             }
             Ok(result)
+         })().map_err(|message: String| parvi_missions::Error::new("executor_error", message))
         }
     }
     fn drive(c: &Coordinator, id: &str, retry: bool) -> parvi_missions::RunProjection {
@@ -229,7 +340,7 @@ fn restart_cuts_preserve_branch_and_human_gate_outcomes() {
                     },
                 ) {
                     Ok(_) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(e) if e.code == "conflict" => {}
                     Err(e) => panic!("resume: {e}"),
                 }
             } else if let Some(gate) = p.waiting_gates.first() {
@@ -252,7 +363,7 @@ fn restart_cuts_preserve_branch_and_human_gate_outcomes() {
                     },
                 ) {
                     Ok(_) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(e) if e.code == "conflict" => {}
                     Err(e) => panic!("verdict: {e}"),
                 }
             }
@@ -357,101 +468,122 @@ fn restart_cuts_preserve_branch_and_human_gate_outcomes() {
 
 #[test]
 fn fan_out_runs_concurrently_and_join_waits_for_both() {
-    let root = Scratch::new();
-    let solo = include_str!("parity/runs/missions/solo-lab.mission.toml");
-    let formation = solo
-        .split("[[formation]]")
-        .nth(1)
-        .unwrap()
-        .split("[[end]]")
-        .next()
-        .unwrap();
-    let first = formation
-        .replace("fmn_work", "fmn_a")
-        .replace("slot_work", "slot_a")
-        .replace(
-            "Return a short result",
-            "archon-lab-work:200ms Return a short result",
-        );
-    let second = first
-        .replace("fmn_a", "fmn_b")
-        .replace("slot_a", "slot_b")
-        .replace("200ms", "500ms");
-    let join = formation
+    for b_first in [false, true] {
+        let root = Scratch::new();
+        let solo = include_str!("parity/runs/missions/solo-lab.mission.toml");
+        let formation = solo
+            .split("[[formation]]")
+            .nth(1)
+            .unwrap()
+            .split("[[end]]")
+            .next()
+            .unwrap();
+        let first = formation
+            .replace("fmn_work", "fmn_a")
+            .replace("slot_work", "slot_a");
+        let second = first.replace("fmn_a", "fmn_b").replace("slot_a", "slot_b");
+        let join = formation
         .replace("fmn_work", "fmn_join")
         .replace("slot_work", "slot_join")
         .replace(
             "[[formation.output]]",
             "[[formation.input]]\nid = \"port_second\"\nlabel = \"Second\"\n[[formation.output]]",
         );
-    let prefix = solo.split("[[formation]]").next().unwrap();
-    let end = solo
-        .split("[[end]]")
-        .nth(1)
-        .unwrap()
-        .split("[[connection]]")
-        .next()
-        .unwrap();
-    let edges = [
-        ("inp_hello:out", "fmn_a:port_in"),
-        ("inp_hello:out", "fmn_b:port_in"),
-        ("fmn_a:port_out", "fmn_join:port_in"),
-        ("fmn_b:port_out", "fmn_join:port_second"),
-        ("fmn_join:port_out", "end_done:in"),
-    ];
-    let mut mission =
-        format!("{prefix}[[formation]]{first}[[formation]]{second}[[formation]]{join}[[end]]{end}");
-    for (i, (from, to)) in edges.iter().enumerate() {
-        mission.push_str(&format!(
-            "\n[[connection]]\nid = \"edge_{i}\"\nfrom = \"{from}\"\nto = \"{to}\"\n"
-        ));
-    }
-    std::fs::write(root.0.join("missions/hello.mission.toml"), mission).unwrap();
-    let c = Coordinator::open(&root.0, RunSettings::default(), Box::new(LabExecutor)).unwrap();
-    let start = Instant::now();
-    let id = c
-        .start_mission(RunStart {
-            mission: "hello".into(),
-            input_card_id: "inp_hello".into(),
-            expected_rev: 1,
-            inputs: BTreeMap::from([("brief".into(), "hello".into())]),
-            ..Default::default()
-        })
-        .unwrap();
-    let deadline = start + Duration::from_secs(10);
-    let projection = loop {
-        let p = c.run(&id).unwrap();
-        if p.r#final || p.status == "blocked" {
-            break p;
-        }
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(5));
-    };
-    assert_eq!(projection.status, "succeeded");
-    let events = &projection.events;
-    let seq = |kind: &str, node: &str| {
-        events
-            .iter()
-            .find(|e| e.kind == kind && e.node_id == node)
+        let prefix = solo.split("[[formation]]").next().unwrap();
+        let end = solo
+            .split("[[end]]")
+            .nth(1)
             .unwrap()
-            .seq
-    };
-    assert!(seq("node_started", "fmn_a") < seq("node_output", "fmn_b"));
-    assert!(seq("node_started", "fmn_b") < seq("node_output", "fmn_a"));
-    assert!(
-        seq("node_started", "fmn_join")
-            > seq("node_output", "fmn_a").max(seq("node_output", "fmn_b"))
-    );
-    let expected: Vec<Value> = include_str!("parity/runs/archon-ledgers/fan-out-join.ndjson")
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
-    assert_eq!(normalized_ledger(&root, &id), expected);
-    run_support::assert_payload_parity(
-        &root,
-        &id,
-        include_str!("parity/runs/archon-ledgers/fan-out-join.payload.ndjson"),
-    );
+            .split("[[connection]]")
+            .next()
+            .unwrap();
+        let edges = [
+            ("inp_hello:out", "fmn_a:port_in"),
+            ("inp_hello:out", "fmn_b:port_in"),
+            ("fmn_a:port_out", "fmn_join:port_in"),
+            ("fmn_b:port_out", "fmn_join:port_second"),
+            ("fmn_join:port_out", "end_done:in"),
+        ];
+        let mut mission = format!(
+            "{prefix}[[formation]]{first}[[formation]]{second}[[formation]]{join}[[end]]{end}"
+        );
+        for (i, (from, to)) in edges.iter().enumerate() {
+            mission.push_str(&format!(
+                "\n[[connection]]\nid = \"edge_{i}\"\nfrom = \"{from}\"\nto = \"{to}\"\n"
+            ));
+        }
+        std::fs::write(root.0.join("missions/hello.mission.toml"), mission).unwrap();
+        let control = BranchControl::default();
+        control.hold("fmn_a");
+        control.hold("fmn_b");
+        let c = Coordinator::open(
+            &root.0,
+            RunSettings::default(),
+            Box::new(ControlledLab(control.clone())),
+        )
+        .unwrap();
+        let start = Instant::now();
+        let id = c
+            .start_mission(RunStart {
+                mission: "hello".into(),
+                input_card_id: "inp_hello".into(),
+                expected_rev: 1,
+                inputs: BTreeMap::from([("brief".into(), "hello".into())]),
+                ..Default::default()
+            })
+            .unwrap();
+        let deadline = start + Duration::from_secs(10);
+        wait_for(&c, &id, "node_started", "fmn_a", deadline);
+        wait_for(&c, &id, "node_started", "fmn_b", deadline);
+        let (first, second) = if b_first {
+            ("fmn_b", "fmn_a")
+        } else {
+            ("fmn_a", "fmn_b")
+        };
+        control.release(first, true, true);
+        wait_for(&c, &id, "node_output", first, deadline);
+        wait_for(&c, &id, "node_waiting", "fmn_join", deadline);
+        control.release(second, true, true);
+        let projection = loop {
+            let p = c.run(&id).unwrap();
+            if p.r#final || p.status == "blocked" {
+                break p;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(projection.status, "succeeded");
+        let events = &projection.events;
+        let seq = |kind: &str, node: &str| {
+            events
+                .iter()
+                .find(|e| e.kind == kind && e.node_id == node)
+                .unwrap()
+                .seq
+        };
+        assert!(seq("run_started", "") < seq("node_started", "inp_hello"));
+        assert!(seq("node_output", "inp_hello") < seq("node_started", "fmn_a"));
+        assert!(seq("node_output", "inp_hello") < seq("node_started", "fmn_b"));
+        assert!(seq("node_output", first) < seq("node_waiting", "fmn_join"));
+        assert!(seq("node_waiting", "fmn_join") < seq("node_output", second));
+        assert!(seq("node_output", "fmn_join") < seq("run_succeeded", ""));
+        assert!(seq("node_started", "fmn_a") < seq("node_output", "fmn_b"));
+        assert!(seq("node_started", "fmn_b") < seq("node_output", "fmn_a"));
+        assert!(
+            seq("node_started", "fmn_join")
+                > seq("node_output", "fmn_a").max(seq("node_output", "fmn_b"))
+        );
+        let expected: Vec<Value> = include_str!("parity/runs/archon-ledgers/fan-out-join.ndjson")
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        run_support::assert_concurrent_ledger(&normalized_ledger(&root, &id), &expected);
+        run_support::assert_concurrent_payload_parity(
+            &root,
+            &id,
+            include_str!("parity/runs/archon-ledgers/fan-out-join.payload.ndjson"),
+        );
+    }
 }
 
 #[test]
@@ -522,169 +654,134 @@ fn human_gate_records_and_routes_the_exact_request() {
 #[test]
 fn human_answer_routes_while_another_branch_runs_and_rejection_waits() {
     use parvi_missions::HumanVerdict;
-    let root = Scratch::new();
-    let solo = include_str!("parity/runs/missions/solo-lab.mission.toml");
-    let other = solo
-        .split("[[formation]]")
-        .nth(1)
-        .unwrap()
-        .split("[[end]]")
-        .next()
-        .unwrap()
-        .replace("fmn_work", "fmn_other")
-        .replace("slot_work", "slot_other")
-        .replace(
-            "Return a short result",
-            "archon-lab-work:700ms Return a short result",
-        );
-    let mission = format!(
-        "{}\n[[formation]]{other}\n[[connection]]\nid = \"edge_other\"\nfrom = \"inp_hello:out\"\nto = \"fmn_other:port_in\"\n[[connection]]\nid = \"edge_other_done\"\nfrom = \"fmn_other:port_out\"\nto = \"end_done:in\"\n",
-        gated_mission("kinds = [\"human\"]").replace(
-            "Return a short result",
-            "archon-lab-work:50ms Return a short result"
-        )
-    );
-    std::fs::write(root.0.join("missions/hello.mission.toml"), mission).unwrap();
-    let c = Coordinator::open(&root.0, RunSettings::default(), Box::new(LabExecutor)).unwrap();
-    let id = c
-        .start_mission(RunStart {
-            mission: "hello".into(),
-            input_card_id: "inp_hello".into(),
-            expected_rev: 1,
-            inputs: BTreeMap::from([("brief".into(), "hello".into())]),
-            ..Default::default()
-        })
-        .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let seq = loop {
-        let p = c.run(&id).unwrap();
-        if let Some(gate) = p.waiting_gates.first() {
-            break gate.requested_seq;
+    for verdict in ["fail", "pass"] {
+        for dispatch_before in [false, true] {
+            let root = Scratch::new();
+            let solo = include_str!("parity/runs/missions/solo-lab.mission.toml");
+            let other = solo
+                .split("[[formation]]")
+                .nth(1)
+                .unwrap()
+                .split("[[end]]")
+                .next()
+                .unwrap()
+                .replace("fmn_work", "fmn_other")
+                .replace("slot_work", "slot_other");
+            let mission = format!(
+                "{}\n[[formation]]{other}\n[[connection]]\nid = \"edge_other\"\nfrom = \"inp_hello:out\"\nto = \"fmn_other:port_in\"\n[[connection]]\nid = \"edge_other_done\"\nfrom = \"fmn_other:port_out\"\nto = \"end_done:in\"\n",
+                gated_mission("kinds = [\"human\"]")
+            );
+            std::fs::write(root.0.join("missions/hello.mission.toml"), mission).unwrap();
+            let control = BranchControl::default();
+            control.hold("fmn_other");
+            let c = Coordinator::open(
+                &root.0,
+                RunSettings::default(),
+                Box::new(ControlledLab(control.clone())),
+            )
+            .unwrap();
+            let id = c
+                .start_mission(RunStart {
+                    mission: "hello".into(),
+                    input_card_id: "inp_hello".into(),
+                    expected_rev: 1,
+                    inputs: BTreeMap::from([("brief".into(), "hello".into())]),
+                    ..Default::default()
+                })
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(20);
+            wait_for(&c, &id, "node_started", "fmn_other", deadline);
+            let requested = wait_for(&c, &id, "human_input_requested", "gate_review", deadline);
+            if dispatch_before {
+                control.release("fmn_other", true, false);
+                wait_for(&c, &id, "slot_dispatch", "fmn_other", deadline);
+            }
+            c.record_verdict(
+                &id,
+                "gate_review",
+                HumanVerdict {
+                    requested_seq: requested,
+                    verdict: verdict.into(),
+                    response: if verdict == "fail" {
+                        "needs work"
+                    } else {
+                        "yes"
+                    }
+                    .into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let decision = wait_for(&c, &id, "gate_verdict", "gate_review", deadline);
+            if !dispatch_before {
+                control.release("fmn_other", true, false);
+            }
+            let dispatch = wait_for(&c, &id, "slot_dispatch", "fmn_other", deadline);
+            assert_eq!(dispatch < decision, dispatch_before);
+            control.release("fmn_other", false, true);
+            let output = wait_for(&c, &id, "node_output", "fmn_other", deadline);
+            assert!(decision < output);
+            let terminal = wait_for(
+                &c,
+                &id,
+                if verdict == "fail" {
+                    "run_failed"
+                } else {
+                    "run_succeeded"
+                },
+                if verdict == "fail" {
+                    "end_rejected"
+                } else {
+                    ""
+                },
+                deadline,
+            );
+            assert!(output < terminal);
+            let input_start = wait_for(&c, &id, "node_started", "inp_hello", deadline);
+            let input_output = wait_for(&c, &id, "node_output", "inp_hello", deadline);
+            let work_start = wait_for(&c, &id, "node_started", "fmn_work", deadline);
+            let work_output = wait_for(&c, &id, "node_output", "fmn_work", deadline);
+            let gate_start = wait_for(&c, &id, "gate_evaluating", "gate_review", deadline);
+            assert!(input_start < input_output && input_output < work_start);
+            assert!(input_output < wait_for(&c, &id, "node_started", "fmn_other", deadline));
+            assert!(work_output < gate_start && gate_start < requested && requested < decision);
+            if verdict == "fail" {
+                let lines =
+                    std::fs::read_to_string(root.0.join("runs").join(format!("{id}.ndjson")))
+                        .unwrap();
+                let last: Value = serde_json::from_str(lines.lines().last().unwrap()).unwrap();
+                assert_eq!(last["data"]["code"], "path_rejected");
+                assert_eq!(last["data"]["reason"], "needs work");
+                assert_eq!(last["actor"], "human:operator");
+                let end_ids = last["data"]["endIds"].as_array().unwrap();
+                assert!(end_ids.contains(&"end_done".into()));
+                assert!(end_ids.contains(&"end_rejected".into()));
+            }
+            let (expected, payload) = if verdict == "fail" {
+                (
+                    include_str!("parity/runs/archon-ledgers/rejected-end-on-one-branch.ndjson"),
+                    include_str!(
+                        "parity/runs/archon-ledgers/rejected-end-on-one-branch.payload.ndjson"
+                    ),
+                )
+            } else {
+                (
+                    include_str!(
+                        "parity/runs/archon-ledgers/human-approve-while-other-step-works.ndjson"
+                    ),
+                    include_str!(
+                        "parity/runs/archon-ledgers/human-approve-while-other-step-works.payload.ndjson"
+                    ),
+                )
+            };
+            let expected: Vec<Value> = expected
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            run_support::assert_concurrent_ledger(&normalized_ledger(&root, &id), &expected);
+            run_support::assert_concurrent_payload_parity(&root, &id, payload);
         }
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(5));
-    };
-    c.record_verdict(
-        &id,
-        "gate_review",
-        HumanVerdict {
-            requested_seq: seq,
-            verdict: "fail".into(),
-            response: "needs work".into(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    let projection = loop {
-        let p = c.run(&id).unwrap();
-        if p.r#final {
-            break p;
-        }
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(5));
-    };
-    assert_eq!(projection.status, "failed");
-    let seq = |kind: &str, node: &str| {
-        projection
-            .events
-            .iter()
-            .find(|e| e.kind == kind && e.node_id == node)
-            .unwrap()
-            .seq
-    };
-    assert!(seq("gate_verdict", "gate_review") < seq("node_output", "fmn_other"));
-    assert!(seq("run_failed", "end_rejected") > seq("node_output", "fmn_other"));
-    let lines = std::fs::read_to_string(root.0.join("runs").join(format!("{id}.ndjson"))).unwrap();
-    let last: Value = serde_json::from_str(lines.lines().last().unwrap()).unwrap();
-    assert_eq!(last["data"]["code"], "path_rejected");
-    assert_eq!(last["data"]["reason"], "needs work");
-    assert_eq!(last["actor"], "human:operator");
-    assert!(
-        last["data"]["endIds"]
-            .as_array()
-            .unwrap()
-            .contains(&"end_done".into())
-    );
-    assert!(
-        last["data"]["endIds"]
-            .as_array()
-            .unwrap()
-            .contains(&"end_rejected".into())
-    );
-    let expected: Vec<Value> =
-        include_str!("parity/runs/archon-ledgers/rejected-end-on-one-branch.ndjson")
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
-    assert_eq!(normalized_ledger(&root, &id), expected);
-    run_support::assert_payload_parity(
-        &root,
-        &id,
-        include_str!("parity/runs/archon-ledgers/rejected-end-on-one-branch.payload.ndjson"),
-    );
-    let id = c
-        .start_mission(RunStart {
-            mission: "hello".into(),
-            input_card_id: "inp_hello".into(),
-            expected_rev: 1,
-            inputs: BTreeMap::from([("brief".into(), "hello".into())]),
-            ..Default::default()
-        })
-        .unwrap();
-    let requested = loop {
-        let p = c.run(&id).unwrap();
-        if let Some(gate) = p.waiting_gates.first() {
-            break gate.requested_seq;
-        }
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(5));
-    };
-    c.record_verdict(
-        &id,
-        "gate_review",
-        HumanVerdict {
-            requested_seq: requested,
-            verdict: "pass".into(),
-            response: "yes".into(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    let projection = loop {
-        let p = c.run(&id).unwrap();
-        if p.r#final {
-            break p;
-        }
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(5));
-    };
-    assert_eq!(projection.status, "succeeded");
-    let decision = projection
-        .events
-        .iter()
-        .find(|e| e.kind == "gate_verdict")
-        .unwrap()
-        .seq;
-    let output = projection
-        .events
-        .iter()
-        .find(|e| e.kind == "node_output" && e.node_id == "fmn_other")
-        .unwrap()
-        .seq;
-    assert!(decision < output);
-    let expected: Vec<Value> =
-        include_str!("parity/runs/archon-ledgers/human-approve-while-other-step-works.ndjson")
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
-    assert_eq!(normalized_ledger(&root, &id), expected);
-    run_support::assert_payload_parity(
-        &root,
-        &id,
-        include_str!(
-            "parity/runs/archon-ledgers/human-approve-while-other-step-works.payload.ndjson"
-        ),
-    );
+    }
 }
 
 #[test]
@@ -752,7 +849,7 @@ fn a_newer_human_request_makes_the_old_sequence_stale() {
             },
         )
         .unwrap_err();
-    assert_eq!(stale.kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(stale.code, "conflict");
     c.record_verdict(
         &id,
         "gate_review",
@@ -923,7 +1020,7 @@ fn a_blocked_run_accepts_another_gates_verdict_and_routes_it_on_resume() {
             },
         ) {
             Ok(_) => break,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(e) if e.code == "conflict" => {
                 assert!(Instant::now() < deadline);
                 std::thread::sleep(Duration::from_millis(5));
             }
@@ -974,7 +1071,7 @@ fn a_blocked_run_accepts_another_gates_verdict_and_routes_it_on_resume() {
             },
         ) {
             Ok(_) => break,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(error) if error.code == "conflict" => {
                 assert!(Instant::now() < deadline);
                 std::thread::sleep(Duration::from_millis(5));
             }
@@ -1145,14 +1242,18 @@ impl parvi_missions::Executor for FailingLab {
         &self,
         request: parvi_missions::FormationExecution,
         events: parvi_missions::ExecutionSink,
-    ) -> Result<parvi_missions::FormationResult, String> {
-        let fail = request.formation.id == "fmn_work" && request.attempt == 1;
-        let result = parvi_missions::Executor::execute_formation(&LabExecutor, request, events)?;
-        if fail {
-            Err("deliberate step error".into())
-        } else {
-            Ok(result)
-        }
+    ) -> Result<parvi_missions::FormationResult, parvi_missions::Error> {
+        (|| -> Result<parvi_missions::FormationResult, String> {
+            let fail = request.formation.id == "fmn_work" && request.attempt == 1;
+            let result = parvi_missions::Executor::execute_formation(&LabExecutor, request, events)
+                .map_err(|error| error.message)?;
+            if fail {
+                Err("deliberate step error".into())
+            } else {
+                Ok(result)
+            }
+        })()
+        .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
     }
 }
 
@@ -1216,7 +1317,7 @@ fn a_step_error_is_recorded_while_other_work_finishes_and_resume_retries_it() {
     loop {
         match c.resume(&id, Default::default()) {
             Ok(_) => break,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(error) if error.code == "conflict" => {
                 assert!(Instant::now() < deadline);
                 std::thread::sleep(Duration::from_millis(5));
             }

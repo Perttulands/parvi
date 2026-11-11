@@ -15,7 +15,8 @@ impl LocalSeats {
         id: &str,
         canceled: &AtomicBool,
         mut report: impl FnMut(&SeatEvent) -> Result<(), String> + Send,
-    ) -> Result<DispatchResult, String> {
+    ) -> Result<DispatchResult, crate::Error> {
+        (async {
         let records = self.records().clone();
         let lock_id = id.to_owned();
         let _guard = tokio::task::spawn_blocking(move || records.execution_guard(&lock_id))
@@ -177,7 +178,7 @@ impl LocalSeats {
             let kind = if state == "seat_idle_recovery" { "seat_idle_recovery" } else { "seat_state" };
             let event = records.append(id, &key, kind, data.as_object().cloned().unwrap_or_default()).map_err(|e| e.to_string())?;
             report.lock().map_err(|e| e.to_string())?(&event)
-        }).await?;
+        }).await.map_err(|error| error.message)?;
         if answer.len() > 1024 * 1024 {
             return Err("oversized_output: native seat output exceeds 1 MiB".into());
         }
@@ -203,6 +204,7 @@ impl LocalSeats {
             report.lock().map_err(|e| e.to_string())?(&event)?;
         }
         Ok(result)
+     }).await.map_err(|message: String| crate::Error::new("seat_error", message))
     }
 }
 fn public(event: &SeatEvent) -> bool {

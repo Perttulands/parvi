@@ -5,7 +5,6 @@ use parvi_term::{
 };
 use std::{
     collections::BTreeSet,
-    io,
     path::{Path, PathBuf},
 };
 
@@ -127,19 +126,24 @@ pub trait HarnessAdapter: Send + Sync {
         cwd: &Path,
         shell: Shell,
         roots: &TranscriptRoots,
-    ) -> io::Result<Launch>;
+    ) -> Result<Launch, crate::Error>;
     fn ready(&self, screen: &Screen) -> bool;
     fn working(&self, screen: &Screen) -> bool;
     /// Recognition is valid only before a brief is sent and when no input is active.
     fn trust_dialog(&self, screen: &Screen) -> Option<Keys>;
-    fn turn(&self, roots: &TranscriptRoots, pointer: &Pointer, sentinel: &str) -> io::Result<Turn>;
+    fn turn(
+        &self,
+        roots: &TranscriptRoots,
+        pointer: &Pointer,
+        sentinel: &str,
+    ) -> Result<Turn, crate::Error>;
     /// `None` means the process cannot be inspected on this platform.
     fn conversation_replaced(
         &self,
         roots: &TranscriptRoots,
         pointer: &Pointer,
-    ) -> io::Result<Option<bool>>;
-    fn tokens_since(&self, pointer: &Pointer) -> io::Result<TokenUsage>;
+    ) -> Result<Option<bool>, crate::Error>;
+    fn tokens_since(&self, pointer: &Pointer) -> Result<TokenUsage, crate::Error>;
 }
 pub struct Claude;
 pub struct Codex;
@@ -153,8 +157,8 @@ macro_rules! adapter {
                 cwd: &Path,
                 shell: Shell,
                 roots: &TranscriptRoots,
-            ) -> io::Result<Launch> {
-                launch::render($kind, binding, cwd, shell, roots)
+            ) -> Result<Launch, crate::Error> {
+                launch::render($kind, binding, cwd, shell, roots).map_err(crate::error::io)
             }
             fn ready(&self, screen: &Screen) -> bool {
                 harness::ready($kind, screen)
@@ -201,18 +205,18 @@ macro_rules! adapter {
                 roots: &TranscriptRoots,
                 pointer: &Pointer,
                 sentinel: &str,
-            ) -> io::Result<Turn> {
-                transcript::find($kind, roots, pointer, sentinel)
+            ) -> Result<Turn, crate::Error> {
+                transcript::find($kind, roots, pointer, sentinel).map_err(crate::error::io)
             }
             fn conversation_replaced(
                 &self,
                 roots: &TranscriptRoots,
                 pointer: &Pointer,
-            ) -> io::Result<Option<bool>> {
-                conversation::replaced($kind, roots, pointer)
+            ) -> Result<Option<bool>, crate::Error> {
+                conversation::replaced($kind, roots, pointer).map_err(crate::error::io)
             }
-            fn tokens_since(&self, pointer: &Pointer) -> io::Result<TokenUsage> {
-                tokens::read($kind, pointer)
+            fn tokens_since(&self, pointer: &Pointer) -> Result<TokenUsage, crate::Error> {
+                tokens::read($kind, pointer).map_err(crate::error::io)
             }
         }
     };

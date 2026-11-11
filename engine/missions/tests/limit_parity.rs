@@ -11,7 +11,6 @@ use run_support::Scratch;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, HashMap},
-    io::ErrorKind,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -105,35 +104,40 @@ impl Executor for Scripted {
         &self,
         request: FormationExecution,
         events: ExecutionSink,
-    ) -> Result<FormationResult, String> {
-        let node = request.formation.id.clone();
-        let attempt = request.attempt;
-        self.calls.lock().unwrap().push(Call {
-            node: node.clone(),
-            attempt,
-            input: request.input_text.clone(),
-            picks: request.pick_attempts.clone(),
-            judge: request.judge,
-        });
-        if self
-            .stall
-            .is_some_and(|(stall, at)| stall == node && at == attempt)
-        {
-            while !request.limits.is_spent() {
-                std::thread::sleep(Duration::from_millis(10));
+    ) -> Result<FormationResult, parvi_missions::Error> {
+        (|| -> Result<FormationResult, String> {
+            let node = request.formation.id.clone();
+            let attempt = request.attempt;
+            self.calls.lock().unwrap().push(Call {
+                node: node.clone(),
+                attempt,
+                input: request.input_text.clone(),
+                picks: request.pick_attempts.clone(),
+                judge: request.judge,
+            });
+            if self
+                .stall
+                .is_some_and(|(stall, at)| stall == node && at == attempt)
+            {
+                while !request.limits.is_spent() {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                return Err("stopped at the limit".into());
             }
-            return Err("stopped at the limit".into());
-        }
-        let text = (self.responses.lock().unwrap().get(node.as_str()))
-            .and_then(|script| script.get(&attempt).cloned());
-        let mut result = LabExecutor.execute_formation(request, events)?;
-        if let Some(text) = text {
-            result.text.clone_from(&text);
-            for output in result.outputs.values_mut() {
-                output["text"] = text.clone().into();
+            let text = (self.responses.lock().unwrap().get(node.as_str()))
+                .and_then(|script| script.get(&attempt).cloned());
+            let mut result = LabExecutor
+                .execute_formation(request, events)
+                .map_err(|error| error.message)?;
+            if let Some(text) = text {
+                result.text.clone_from(&text);
+                for output in result.outputs.values_mut() {
+                    output["text"] = text.clone().into();
+                }
             }
-        }
-        Ok(result)
+            Ok(result)
+        })()
+        .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
     }
 }
 impl Scripted {
@@ -232,14 +236,11 @@ impl Run {
         }
     }
     /// Resume once the worker that blocked the run has let go of it.
-    fn resume(&self, request: ResumeRequest) -> std::io::Result<RunProjection> {
+    fn resume(&self, request: ResumeRequest) -> Result<RunProjection, parvi_missions::Error> {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             match self.c.resume(&self.id, request.clone()) {
-                Err(e)
-                    if e.kind() == ErrorKind::AlreadyExists
-                        && e.to_string() == "run is working" =>
-                {
+                Err(e) if e.code == "conflict" && e.message == "run is working" => {
                     assert!(Instant::now() < deadline, "the run's worker never stopped");
                     std::thread::sleep(Duration::from_millis(5));
                 }
@@ -278,9 +279,9 @@ fn resume_with(grant: bool, pick_best: bool) -> ResumeRequest {
     }
 }
 
-fn refused(result: std::io::Result<RunProjection>, words: &str) {
+fn refused(result: Result<RunProjection, parvi_missions::Error>, words: &str) {
     match result {
-        Err(e) if e.kind() == ErrorKind::InvalidInput && e.to_string().contains(words) => {}
+        Err(e) if e.code == "invalid_input" && e.to_string().contains(words) => {}
         other => panic!("expected a refusal naming {words:?}, got {other:?}"),
     }
 }
@@ -621,7 +622,7 @@ fn a_best_card_picks_the_best_judged_attempt_and_goes_on() {
     assert_eq!(only.steps.len(), 1);
     assert_eq!(only.steps[0].attempts[0].status, "done");
     let missing = run.c.attempts(&run.id, Some("fmn_nowhere")).unwrap_err();
-    assert_eq!(missing.kind(), ErrorKind::NotFound);
+    assert_eq!(missing.code, "not_found");
 }
 
 /// A waiting human gate quotes the output that feeds it, and the attempts
@@ -978,36 +979,46 @@ impl Executor for Lost {
         &self,
         request: FormationExecution,
         events: ExecutionSink,
-    ) -> Result<FormationResult, String> {
-        if request.formation.id != "fmn_work" || request.attempt != 1 {
-            return LabExecutor.execute_formation(request, events);
-        }
-        let slot = request.formation.slots[0].id.clone();
-        events.emit(ExecutionEvent {
-            kind: "slot_dispatch".into(),
-            slot_id: slot.clone(),
-            data: json!({"dispatchId":"dsp_lost","nodeId":"fmn_work","slotId":slot})
-                .as_object()
-                .unwrap()
-                .clone(),
-        })?;
-        Err("the node went down".into())
-    }
-    fn reattach(&self, dispatch: OpenDispatch) -> Result<FormationResult, String> {
-        let began = Instant::now();
-        if self.tokens > 0 {
-            dispatch
-                .limits
-                .count_tokens(&dispatch.dispatch_id, self.tokens);
-        }
-        while !dispatch.limits.is_spent() {
-            if began.elapsed() > Duration::from_secs(15) {
-                return Err("the Limit card never cut the seat off".into());
+    ) -> Result<FormationResult, parvi_missions::Error> {
+        (|| -> Result<FormationResult, String> {
+            if request.formation.id != "fmn_work" || request.attempt != 1 {
+                return LabExecutor
+                    .execute_formation(request, events)
+                    .map_err(|error| error.message);
             }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        *self.cut_after.lock().unwrap() = Some(began.elapsed());
-        Err("stopped at the limit".into())
+            let slot = request.formation.slots[0].id.clone();
+            events
+                .emit(ExecutionEvent {
+                    kind: "slot_dispatch".into(),
+                    slot_id: slot.clone(),
+                    data: json!({"dispatchId":"dsp_lost","nodeId":"fmn_work","slotId":slot})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                })
+                .map_err(|error| error.message)?;
+            Err("the node went down".into())
+        })()
+        .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
+    }
+    fn reattach(&self, dispatch: OpenDispatch) -> Result<FormationResult, parvi_missions::Error> {
+        (|| -> Result<FormationResult, String> {
+            let began = Instant::now();
+            if self.tokens > 0 {
+                dispatch
+                    .limits
+                    .count_tokens(&dispatch.dispatch_id, self.tokens);
+            }
+            while !dispatch.limits.is_spent() {
+                if began.elapsed() > Duration::from_secs(15) {
+                    return Err("the Limit card never cut the seat off".into());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            *self.cut_after.lock().unwrap() = Some(began.elapsed());
+            Err("stopped at the limit".into())
+        })()
+        .map_err(|message: String| parvi_missions::Error::new("executor_error", message))
     }
 }
 

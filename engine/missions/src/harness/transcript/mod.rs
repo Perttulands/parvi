@@ -247,6 +247,18 @@ pub(super) fn find(
 mod tests {
     use super::*;
     #[test]
+    fn completion_requires_a_parvi_marker_for_the_run() {
+        assert!(matches_sentinel(
+            "<<<PARVI-DONE run-id=run_1 status=ok>>>",
+            "run_1"
+        ));
+        assert!(!matches_sentinel(
+            "<<<ARCHON-DONE run-id=run_1 status=ok>>>",
+            "run_1"
+        ));
+        assert!(!matches_sentinel("<<<ARBITRARY>>>", "<<<ARBITRARY>>>"));
+    }
+    #[test]
     fn partial_utf8_record_is_left_for_the_next_read() {
         let path =
             std::env::temp_dir().join(format!("parvi-104-partial-{}.jsonl", std::process::id()));
