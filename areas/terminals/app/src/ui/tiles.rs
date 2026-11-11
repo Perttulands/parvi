@@ -509,7 +509,17 @@ impl Terminals {
                 self.detached_body(last, note.into_any_element(), &t)
             }
             TileState::Ended(name) => {
-                let note = format!("{name} has ended.");
+                let note = match binding
+                    .as_ref()
+                    .and_then(|b| self.settings.restarts.get(&b.key.text()))
+                {
+                    Some(saved) if saved.harness.is_some() => format!("{name} has ended."),
+                    Some(saved) if !saved.folder.is_empty() => format!(
+                        "{name} has ended. Restart opens a shell in {}.",
+                        saved.folder
+                    ),
+                    _ => format!("{name} has ended. Restart opens a shell in its home folder."),
+                };
                 let last = binding
                     .as_ref()
                     .and_then(|b| self.fleet.ended_screen(&b.key, b.pane));
@@ -986,6 +996,7 @@ impl Terminals {
             let kind = if n == 0 { Kind::Primary } else { Kind::Plain };
             buttons = buttons.child(
                 kit::button(t, ("detached", i * 10 + n), label.to_string(), kind)
+                    .debug_selector(move || format!("ended-{i}-{n}"))
                     .on_click(cx.listener(move |s, _, window, cx| s.act(act.clone(), window, cx))),
             );
         }
@@ -997,7 +1008,10 @@ impl Terminals {
             .items_center()
             .gap(px(12.))
             .max_w(px(360.))
-            .child(kit::note(t, note.to_string(), None))
+            .child(kit::note(t, note.to_string(), None).debug_selector({
+                let note = note.to_string();
+                move || format!("ended-note-{i}-{note}")
+            }))
             .child(buttons)
             .into_any_element()
     }
