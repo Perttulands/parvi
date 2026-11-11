@@ -534,6 +534,10 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
             .unwrap();
     });
     until(cx, "mission after run", |cx| {
+        cx.debug_bounds("mission-mode-flow").is_some()
+    });
+    click(cx, "mission-mode-flow");
+    until(cx, "mission notes in Flow", |cx| {
         cx.debug_bounds("mission-note-draft").is_some()
     });
     click(cx, "mission-note-draft");
@@ -550,6 +554,7 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
             .read_with(cx, |s, cx| s.hub().read(cx).unsaved(cx))
             .is_empty()
     });
+    click(cx, "mission-mode-canvas");
     let bad = format!("mission-{}-admission-findings", running.id);
     click(cx, &bad);
     until(cx, "bad mission", |cx| {

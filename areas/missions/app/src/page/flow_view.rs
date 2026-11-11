@@ -64,7 +64,11 @@ impl MissionsPage {
                             t,
                             SharedString::from(format!("flow-start-{id}")),
                             "Run",
-                            Kind::Primary,
+                            if self.mission_input_runnable(id) {
+                                Kind::Primary
+                            } else {
+                                Kind::Quiet
+                            },
                         )
                         .debug_selector({
                             let id = id.clone();

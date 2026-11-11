@@ -10,6 +10,7 @@ pub mod run_state;
 pub mod seats;
 pub mod staffing;
 pub mod undo;
+pub mod validation;
 pub mod words;
 
 use parvi_missions_contract::{
