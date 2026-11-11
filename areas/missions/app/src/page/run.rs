@@ -30,6 +30,7 @@ pub(super) struct RunUi {
     attempts: Option<AttemptsResponse>,
     attempt_window: Option<crate::store::attempts::AttemptsWindow>,
     attempts_at: Option<usize>,
+    evidence: crate::store::evidence::Store,
     gates: BTreeMap<String, (u64, Option<parvi_missions_contract::GateRequest>)>,
 }
 impl RunUi {
@@ -56,6 +57,7 @@ impl RunUi {
             attempts: None,
             attempt_window: None,
             attempts_at: None,
+            evidence: Default::default(),
             gates: BTreeMap::new(),
         }
     }
@@ -130,6 +132,7 @@ impl MissionsPage {
         self.run.attempts = None;
         self.run.attempt_window = None;
         self.run.attempts_at = None;
+        self.run.evidence = Default::default();
         self.run.gates.clear();
         self.run.responses.clear();
         self.run.error = None;
@@ -185,6 +188,14 @@ impl MissionsPage {
                 .iter()
                 .any(|g| g.gate_id == *id && g.requested_seq == *seq)
         });
+        if self
+            .run
+            .evidence
+            .read_at
+            .is_none_or(|at| at < run.event_count)
+        {
+            self.read_evidence(&node, &run_id, run.event_count, cx);
+        }
         if self.run.attempts_at.is_some_and(|at| at < run.event_count) {
             self.attempts(cx);
         }
@@ -456,6 +467,110 @@ impl MissionsPage {
         let body = json!({"requestedSeq":seq, "attempt":attempt, "reason":self.run.responses.get(gate).map(|f| f.read(cx).text.clone()).unwrap_or_default(), "actor":"human:operator"});
         self.run_post(format!("/gates/{}/pick", segment(gate)), body, cx);
     }
+    fn read_evidence(&mut self, node: &str, run: &str, at: usize, cx: &mut Context<Self>) {
+        self.run.evidence.read_at = Some(at);
+        let node = node.to_owned();
+        let run = run.to_owned();
+        let asked = self.host.request(
+            Request::get(
+                NodeId(node.clone()),
+                format!("/api/runs/{}/evidence", segment(&run)),
+            ),
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            let result = asked.await;
+            let _ = this.update(cx, |page, cx| {
+                if page.run.selected.as_deref() != Some(&run)
+                    || page.state.selected.as_ref().is_none_or(|(n, _)| n != &node)
+                    || page.run.evidence.read_at != Some(at)
+                {
+                    return;
+                }
+                match result {
+                    Ok(answer) if answer.ok() => match serde_json::from_slice::<
+                        crate::store::evidence::Response,
+                    >(&answer.body)
+                    {
+                        Ok(response) => {
+                            page.run.evidence.evidence = Some(response.evidence);
+                            page.run.evidence.error = None;
+                        }
+                        Err(error) => page.run.evidence.error = Some(error.to_string()),
+                    },
+                    Ok(answer) => page.run.evidence.error = Some(answer.error_text()),
+                    Err(error) => page.run.evidence.error = Some(error.message),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+    /// Read image bytes through Files on the node that owns the run.
+    fn load_attempt_images(&mut self, cx: &mut Context<Self>) {
+        let Some(window) = self.run.attempt_window.as_ref() else {
+            return;
+        };
+        let node = window.node.clone();
+        let run = window.run.clone();
+        let paths: Vec<_> = window
+            .attempts()
+            .iter()
+            .flat_map(|a| &a.outputs)
+            .filter_map(|o| {
+                crate::store::evidence::image_format(&o.path).map(|format| (o.path.clone(), format))
+            })
+            .collect();
+        for (path, format) in paths {
+            if self.run.evidence.images.contains_key(&path) {
+                continue;
+            }
+            self.run
+                .evidence
+                .images
+                .insert(path.clone(), crate::store::evidence::Image::Loading);
+            let asked = self.host.request(
+                Request::get(
+                    NodeId(node.clone()),
+                    format!("/api/files/file?path={}", segment(&path)),
+                ),
+                cx,
+            );
+            let svg = cx.svg_renderer();
+            let selected_node = node.clone();
+            let selected_run = run.clone();
+            cx.spawn(async move |this, cx| {
+                let result = asked.await;
+                let image = match result {
+                    Ok(answer) if answer.ok() => {
+                        let task = cx.background_executor().spawn(async move {
+                            gpui::Image::from_bytes(format, answer.body).to_image_data(svg)
+                        });
+                        match task.await {
+                            Ok(image) => crate::store::evidence::Image::Ready(image),
+                            Err(error) => crate::store::evidence::Image::Failed(error.to_string()),
+                        }
+                    }
+                    Ok(answer) => crate::store::evidence::Image::Failed(answer.error_text()),
+                    Err(error) => crate::store::evidence::Image::Failed(error.message),
+                };
+                let _ = this.update(cx, |page, cx| {
+                    if page.run.selected.as_deref() != Some(&selected_run)
+                        || page
+                            .state
+                            .selected
+                            .as_ref()
+                            .is_none_or(|(n, _)| n != &selected_node)
+                    {
+                        return;
+                    }
+                    page.run.evidence.images.insert(path, image);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+    }
     fn attempts(&mut self, cx: &mut Context<Self>) {
         let (Some((node, _)), Some(run)) = (self.state.selected.clone(), self.run.selected.clone())
         else {
@@ -490,6 +605,7 @@ impl MissionsPage {
                                 window.read_at = at;
                             }
                             page.run.attempts = Some(v);
+                            page.load_attempt_images(cx);
                         }
                         Err(e) => page.run.error = Some(format!("{e}")),
                     },
@@ -520,6 +636,7 @@ impl MissionsPage {
             crate::store::attempts::AttemptsWindow::new(node, run, step_id, &step.title, 0);
         window.read(step, None);
         self.run.attempt_window = Some(window);
+        self.load_attempt_images(cx);
         cx.notify();
     }
     pub(super) fn run_view(&self, t: &Theme, cx: &mut Context<Self>) -> Option<Div> {
@@ -731,6 +848,107 @@ impl MissionsPage {
             }
             view = view.child(row);
         }
+        if let Some(evidence) = &self.run.evidence.evidence {
+            if !evidence.problems.is_empty() {
+                view = view.child("Problems");
+                for problem in &evidence.problems {
+                    let selector = format!("run-problem-{}-{}", problem.seq, problem.reason.text);
+                    let name = self
+                        .run
+                        .frozen
+                        .as_ref()
+                        .map(|m| m.node_name(&problem.node_id))
+                        .unwrap_or(&problem.node_id);
+                    view = view.child(
+                        div()
+                            .debug_selector(move || selector.clone())
+                            .text_color(t.error)
+                            .child(format!("{name}: {}", problem.reason.text)),
+                    );
+                }
+            }
+            if !evidence.files.is_empty() {
+                view = view.child("Produced files");
+            }
+            for (index, file) in evidence.files.iter().enumerate() {
+                let path = file.path.clone();
+                let owner = node.clone();
+                let selector = format!("run-file-{index}");
+                let name = self
+                    .run
+                    .frozen
+                    .as_ref()
+                    .map(|m| m.node_name(&file.node_id))
+                    .unwrap_or(&file.node_id);
+                view = view.child(
+                    kit::button(
+                        t,
+                        SharedString::from(selector.clone()),
+                        format!("{} · {} · {} bytes", name, file.path, file.size),
+                        Kind::Quiet,
+                    )
+                    .debug_selector(move || selector.clone())
+                    .on_click(cx.listener(move |p, _, _, cx| {
+                        if let Err(error) = p.host.ask(
+                            Ask::OpenPath {
+                                node: NodeId(owner.clone()),
+                                path: path.clone(),
+                                beside: true,
+                            },
+                            cx,
+                        ) {
+                            p.run.error = Some(error.message);
+                            cx.notify();
+                        }
+                    })),
+                );
+            }
+            if evidence.truncated {
+                view = view.child("Some files are not shown.");
+            }
+            if !evidence.briefs.is_empty() {
+                view = view.child("Briefs");
+            }
+            for brief in &evidence.briefs {
+                let path = brief.path.clone();
+                let owner = node.clone();
+                let selector = format!("run-brief-{}", brief.dispatch_seq);
+                let name = self
+                    .run
+                    .frozen
+                    .as_ref()
+                    .map(|m| m.node_name(&brief.node_id))
+                    .unwrap_or(&brief.node_id);
+                view = view.child(
+                    kit::button(
+                        t,
+                        SharedString::from(selector.clone()),
+                        format!("{} · {}", name, brief.path),
+                        Kind::Quiet,
+                    )
+                    .debug_selector(move || selector.clone())
+                    .on_click(cx.listener(move |p, _, _, cx| {
+                        if let Err(error) = p.host.ask(
+                            Ask::OpenPath {
+                                node: NodeId(owner.clone()),
+                                path: path.clone(),
+                                beside: true,
+                            },
+                            cx,
+                        ) {
+                            p.run.error = Some(error.message);
+                            cx.notify();
+                        }
+                    })),
+                );
+            }
+        } else if let Some(error) = &self.run.evidence.error {
+            view = view.child(
+                div()
+                    .text_color(t.error)
+                    .child(format!("Could not load evidence: {error}")),
+            );
+        }
         let reference = crate::store::words::run_reference(&run, &place);
         view = view.child(
             kit::button(t, "run-send", "Send", Kind::Quiet).on_click(cx.listener(
@@ -932,6 +1150,7 @@ impl MissionsPage {
         }
         view = view.child(
             kit::button(t, "attempts", "Attempts", Kind::Quiet)
+                .debug_selector(|| "run-attempts".into())
                 .on_click(cx.listener(|p, _, _, cx| p.attempts(cx))),
         );
         if let Some(attempts) = &self.run.attempts {
@@ -945,6 +1164,7 @@ impl MissionsPage {
                         format!("Attempts: {}", step.title),
                         Kind::Quiet,
                     )
+                    .debug_selector(move || format!("attempt-step-{id}"))
                     .on_click(cx.listener(move |p, _, _, cx| p.show_attempt_step(&chosen, cx))),
                 );
             }
@@ -973,14 +1193,14 @@ impl MissionsPage {
                     )),
                 )
                 .child(
-                    kit::button(t, "attempt-compare", "Compare", Kind::Quiet).on_click(
-                        cx.listener(|p, _, _, cx| {
+                    kit::button(t, "attempt-compare", "Compare", Kind::Quiet)
+                        .debug_selector(|| "attempt-compare".into())
+                        .on_click(cx.listener(|p, _, _, cx| {
                             if let Some(w) = &mut p.run.attempt_window {
                                 w.toggle_compare();
                             }
                             cx.notify();
-                        }),
-                    ),
+                        })),
                 );
             if window.compare.is_some() {
                 view = view.child(
@@ -1027,6 +1247,26 @@ impl MissionsPage {
                     }
                     for output in &attempt.outputs {
                         card = card.child(format!("{}: {}", output.label, output.text.text));
+                        match self.run.evidence.images.get(&output.path) {
+                            Some(crate::store::evidence::Image::Ready(image)) => {
+                                let selector = format!("attempt-image-{}", attempt.attempt);
+                                card = card.child(
+                                    div().debug_selector(move || selector.clone()).child(
+                                        gpui::img(image.clone())
+                                            .w_full()
+                                            .max_h(px(size::NOTICE))
+                                            .object_fit(gpui::ObjectFit::Contain),
+                                    ),
+                                );
+                            }
+                            Some(crate::store::evidence::Image::Loading) => {
+                                card = card.child("Loading image…");
+                            }
+                            Some(crate::store::evidence::Image::Failed(error)) => {
+                                card = card.child(format!("Image unavailable: {error}"));
+                            }
+                            None => (),
+                        }
                         if !output.path.is_empty() {
                             let path = output.path.clone();
                             let node = node.clone();

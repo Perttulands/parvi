@@ -1,6 +1,7 @@
 //! Channel state and the selected mission, independent of the page's views.
 pub mod attempts;
 pub mod canvas;
+pub mod evidence;
 pub mod flow;
 pub mod gate;
 pub mod placement;
