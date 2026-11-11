@@ -4,6 +4,17 @@ use parvi_mission_model::Slot;
 use std::fmt::Write;
 
 pub(super) fn render(request: &FormationExecution, slot: &Slot) -> String {
+    render_for(request, slot, true)
+}
+
+/// A worker has the same context, but the controller owns the final output.
+pub(super) fn render_worker(request: &FormationExecution, slot: &Slot) -> String {
+    let mut brief = render_for(request, slot, false);
+    brief.push_str("You are a worker on this team. Work on the controller's assigned task, and report your findings to the controller. The controller owns the formation's final output.\n");
+    brief
+}
+
+fn render_for(request: &FormationExecution, slot: &Slot, final_output: bool) -> String {
     let mut brief = String::new();
     let _ = writeln!(
         brief,
@@ -56,7 +67,7 @@ pub(super) fn render(request: &FormationExecution, slot: &Slot) -> String {
         "\nRouted input and feedback:\n{}\n",
         request.input_text
     );
-    if !request.formation.outputs.is_empty() {
+    if final_output && !request.formation.outputs.is_empty() {
         brief.push_str("Return all and only these output ports in one fenced `parvi-outputs` JSON block. Each port maps to an object with `text`; file and folder outputs must also carry an absolute `ref` path.\n");
         for port in &request.formation.outputs {
             let _ = writeln!(brief, "- {} ({})", port.id, port.kind());
@@ -80,12 +91,12 @@ pub(super) fn render(request: &FormationExecution, slot: &Slot) -> String {
             serde_json::Value::Object(example)
         );
     }
-    if !request.pick_attempts.is_empty() {
+    if final_output && !request.pick_attempts.is_empty() {
         brief.push_str(&crate::run_pick::contract(
             request.judge,
             &request.pick_attempts,
         ));
-    } else if request.judge {
+    } else if final_output && request.judge {
         brief.push_str("Return exactly one fenced `parvi-verdict` block containing JSON with exactly `verdict` (pass or fail), `reason` (string), and `evidence` (array of strings).\n");
     }
     let _ = writeln!(
