@@ -151,6 +151,7 @@ mod tests {
             coordinator,
             changes: broadcast::channel(32).0,
             resolver: std::sync::Arc::new(NoResolver),
+            node: "test".into(),
         };
         let mut socket = Connection::new(missions.clone());
         socket.receive(&[WATCH, 1]).unwrap();
