@@ -131,6 +131,12 @@ reserves, or whose `everywhere` chords share a key, naming both;
   window's side (`Host::show_dock`, `close_dock`, `docked`), toggled by an
   `everywhere` chord it declares. While its dock is open the page's channels
   stay on, as while it shows.
+- **Unsaved work.** The shell owns the window's one close handler. A page
+  guards itself, or a view it shows beside another page or in a dock, with
+  `Host::guard_close`, which names what that view holds unsaved; while any
+  guarded view names something, closing the window brings its page forward
+  and asks over the window whether to leave it or keep editing. A view that
+  is gone guards nothing.
 - **Settings.** A page declares its settings beside it (`Page::SETTINGS`: key,
   label, control, default). The shell's Settings page lists the shell's own
   (node, keys) and each page's under its title, keeps a change under its key in
