@@ -1321,7 +1321,7 @@ impl Page for MissionsPage {
             .text_color(if shown { t.text } else { t.text2 })
             .when(shown, |d| d.border_b_2().border_color(t.accent))
             .hover(|d| d.text_color(t.text))
-            .child("Missions");
+            .child(kit::tab_label(Self::TITLE));
         if count > 0 {
             tab = tab.child(
                 div()

@@ -467,6 +467,7 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
     until(cx, "hidden missions count", |cx| {
         cx.debug_bounds("missions-count-1").is_some()
     });
+    assert!(cx.debug_bounds("tab-label-M I S S I O N S").is_some());
     until(cx, "desktop notification", |cx| {
         !cx.shown_system_notifications().is_empty()
     });
