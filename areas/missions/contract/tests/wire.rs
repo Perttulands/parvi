@@ -143,3 +143,18 @@ fn notes_group_by_target_and_keep_order() {
     );
     assert_eq!(document.updated_at, "0001-01-01T00:00:00Z");
 }
+
+#[test]
+fn gate_profiles_keep_the_old_response() {
+    let value: Value = serde_json::from_str(include_str!("fixtures/gate_profiles.json")).unwrap();
+    round::<GateProfiles>(value);
+}
+
+#[test]
+fn character_requests_and_responses_round_trip() {
+    let character =
+        json!({"id":"c","name":"Reviewer","agentId":"reviewer","harness":"codex","effort":"high"});
+    round::<Character>(character.clone());
+    round::<Characters>(json!({"characters":[character]}));
+    round::<Deleted>(json!({"deleted":"c"}));
+}
