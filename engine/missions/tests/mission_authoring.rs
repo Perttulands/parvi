@@ -132,7 +132,7 @@ fn create_nodes_with_default_shapes() {
             Patch::CreateFormation {
                 x: 30,
                 y: 40,
-                kind: "peer".into(),
+                kind: "orchestrated".into(),
                 title: String::new(),
             },
             "human:ui",
@@ -169,7 +169,7 @@ fn create_nodes_with_default_shapes() {
             "human:ui",
         )
         .unwrap();
-    assert_eq!(edit.mission.formations[0].slots.len(), 2);
+    assert_eq!(edit.mission.formations[0].slots.len(), 3);
     assert_eq!(edit.mission.gates[0].kinds, ["formation"]);
     assert_eq!(edit.mission.ends[0].outcome, "done");
     let formation_id = edit.mission.formations[0].id.clone();
@@ -471,7 +471,7 @@ fn type_changes_require_an_explicit_choice_before_dropping_staffed_slots() {
             "work",
             pre(&edit),
             Patch::CreateFormation {
-                kind: "peer".into(),
+                kind: "orchestrated".into(),
                 title: "Team".into(),
                 x: 0,
                 y: 0,
@@ -491,7 +491,7 @@ fn type_changes_require_an_explicit_choice_before_dropping_staffed_slots() {
             pre(&edit),
             Patch::SetFormationType {
                 id: formation.id.clone(),
-                kind: "peer".into(),
+                kind: "orchestrated".into(),
                 keep_slot_id: String::new(),
                 slots: Some(slots.clone()),
             },
