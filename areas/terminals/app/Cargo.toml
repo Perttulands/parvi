@@ -13,6 +13,7 @@ workspace = true
 parvi-app-kit = { path = "../../../kit/app-kit" }
 parvi-core = { path = "../../../kit/core" }
 parvi-terminals-contract = { path = "../contract" }
+parvi-work-contract = { path = "../../work/contract" }
 gpui = { package = "gpui-pre", version = "=0.3.12" }
 alacritty_terminal = "0.26"
 async-channel = "2"

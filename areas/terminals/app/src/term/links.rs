@@ -18,6 +18,7 @@ use alacritty_terminal::term::cell::Flags;
 pub enum Target {
     Url(String),
     Path(String),
+    WorkItem(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -152,6 +153,21 @@ impl Text {
             }
         }
         links.extend(joined.into_iter().map(|(_, _, l)| l));
+        // A URL or path takes precedence over a work-like substring.
+        for (i, n) in work_items(&self.chars) {
+            let cut = (i == 0 && self.cut_before) || (i + n == end && self.cut_after);
+            let cells = self.cells(i, n);
+            if !cut
+                && !links
+                    .iter()
+                    .any(|link| cells.iter().any(|cell| link.cells.contains(cell)))
+            {
+                links.push(Link {
+                    target: Target::WorkItem(self.chars[i..i + n].iter().collect()),
+                    cells,
+                });
+            }
+        }
         links
     }
 
@@ -301,6 +317,44 @@ fn paths(t: &[char]) -> Vec<(usize, usize)> {
     out
 }
 
+/// Recognize complete tokens, so a path or a larger word is never offered as
+/// a partial item id. Soft-wrapped rows have already been joined by `Text`.
+fn work_items(t: &[char]) -> Vec<(usize, usize)> {
+    use parvi_work_contract::work_ref::{is_bead_id, is_repo_part};
+    let token = |c: char| c.is_ascii_alphanumeric() || "_./-#".contains(c);
+    let mut found = Vec::new();
+    let mut i = 0;
+    while i < t.len() {
+        if !token(t[i]) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < t.len() && token(t[i]) {
+            i += 1;
+        }
+        let mut end = i;
+        while end > start && t[end - 1] == '.' {
+            end -= 1;
+        }
+        let candidate: String = t[start..end].iter().collect();
+        let issue = candidate.rsplit_once('#').is_some_and(|(repo, n)| {
+            let number = !n.is_empty()
+                && n.bytes().all(|b| b.is_ascii_digit())
+                && n.parse::<u64>().is_ok_and(|n| n > 0);
+            number
+                && (repo.is_empty()
+                    || repo
+                        .split_once('/')
+                        .is_some_and(|(owner, name)| is_repo_part(owner) && is_repo_part(name)))
+        });
+        if is_bead_id(&candidate) || issue {
+            found.push((start, end - start));
+        }
+    }
+    found
+}
+
 /// The web addresses in `t`, as (start, length), by xterm's web-links rule:
 /// `http(s)://`, then anything but spaces, quotes and brackets, ending on a
 /// character that does not end a sentence.
@@ -428,9 +482,35 @@ mod tests {
         assert_eq!(link(&s, 1, 2).unwrap().target, want);
     }
 
+    #[test]
+    fn work_item_ids_and_issues_are_links_including_soft_wraps() {
+        let s = screen(
+            80,
+            3,
+            "parvi-abc parvi-pnu.7.3 #42 octo/repo#42 word /srv/parvi-abc",
+        );
+        for (col, id) in [
+            (0, "parvi-abc"),
+            (11, "parvi-pnu.7.3"),
+            (25, "#42"),
+            (30, "octo/repo#42"),
+        ] {
+            assert_eq!(
+                link(&s, 0, col).unwrap().target,
+                Target::WorkItem(id.into())
+            );
+        }
+        assert!(link(&s, 0, 43).is_none());
+        assert!(matches!(link(&s, 0, 50).unwrap().target, Target::Path(_)));
+        let s = screen(12, 3, "x parvi-pnu.7.3");
+        let want = Target::WorkItem("parvi-pnu.7.3".into());
+        assert_eq!(link(&s, 0, 4).unwrap().target, want);
+        assert_eq!(link(&s, 1, 1).unwrap().target, want);
+    }
+
     fn want_len(t: &Target) -> usize {
         match t {
-            Target::Path(p) | Target::Url(p) => p.chars().count(),
+            Target::Path(p) | Target::Url(p) | Target::WorkItem(p) => p.chars().count(),
         }
     }
 }
