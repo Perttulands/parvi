@@ -957,6 +957,9 @@ async fn follow_inner(
     // the session has gone quiet. Shared state changes only when it does.
     let mut active = false;
     let mut last_output = tokio::time::Instant::now();
+    // tmux reports a layout change before an interactive shell redraws its
+    // existing prompt in response to the resize.
+    let mut layout_changed: Option<tokio::time::Instant> = None;
     let quiet = tokio::time::sleep(ACTIVE_FOR);
     tokio::pin!(quiet);
     // A look at our panes' screens for a waiting prompt is due.
@@ -1049,15 +1052,24 @@ async fn follow_inner(
                         if pane.owner != session {
                             continue;
                         }
+                        let possible_redraw = pane.synced
+                            && layout_changed.is_some_and(|at| at.elapsed() < Duration::from_secs(2))
+                            && data.starts_with(b"\r\x1b[K\r");
+                        let before = possible_redraw.then(|| pane.screen.screen().contents());
+                        let mut unchanged_redraw = false;
                         if pane.synced {
                             let data = pane.utf8.pass(data);
                             pane.screen.process(&data);
+                            unchanged_redraw = before.is_some_and(|text| text == pane.screen.screen().contents());
                             pane.changes += 1;
                             pane.tell_viewers(|_| PaneUpdate::Output(data.into()));
                         } else if pane.capture.is_some() {
                             // This output is later than the captured cells and
                             // cannot be discarded when that capture is applied.
                             pane.late_output = true;
+                        }
+                        if unchanged_redraw {
+                            continue;
                         }
                         last_output = tokio::time::Instant::now();
                         if !looking {
@@ -1092,6 +1104,7 @@ async fn follow_inner(
                             }
                     }
                     Event::Notification(Notification::WindowsChanged) => {
+                        layout_changed = Some(tokio::time::Instant::now());
                         send(&mut out, &mut pending, list_panes(session), Pending::ListPanes);
                         send(&mut out, &mut pending, facts_command(), Pending::Facts);
                     }

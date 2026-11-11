@@ -142,10 +142,16 @@ fn start_with_harness(label: &str, harness: bool) -> Option<Running> {
 }
 
 fn start_with_restart_harness(label: &str, harness: bool, restart: bool) -> Option<Running> {
-    start_config(label, harness, restart, false)
+    start_config(label, harness, restart, false, false)
 }
 
-fn start_config(label: &str, harness: bool, restart: bool, files: bool) -> Option<Running> {
+fn start_config(
+    label: &str,
+    harness: bool,
+    restart: bool,
+    files: bool,
+    bash: bool,
+) -> Option<Running> {
     let label = label.to_string();
     let (ready, wait) = mpsc::channel();
     let (stop, stopped) = mpsc::channel();
@@ -158,6 +164,11 @@ fn start_config(label: &str, harness: bool, restart: bool, files: bool) -> Optio
             };
             tmux.new_session("alpha", 100, 30);
             tmux.new_session("beta", 100, 30);
+            if bash {
+                for session in ["alpha", "beta"] {
+                    tmux.run(&["respawn-pane", "-k", "-t", session, "env PS1='$ ' /bin/bash --noprofile --norc -i"]);
+                }
+            }
             let dir = parvi_testkit::fresh_dir("flags-ui");
             let binary = dir.join("fake");
             let launch = dir.join("launch.conf");
@@ -1518,7 +1529,8 @@ fn leader_and_escape_route_around_an_attached_terminal(cx: &mut TestAppContext) 
 /// and the originating reference are delivered to the session.
 #[gpui::test]
 fn pasted_attachment_reaches_the_node_and_session(cx: &mut TestAppContext) {
-    let Some(running) = start_config("terminals-pasted-attachment", false, false, true) else {
+    let Some(running) = start_config("terminals-pasted-attachment", false, false, true, false)
+    else {
         return;
     };
     let received = running.fixture.join("received");
@@ -1961,5 +1973,119 @@ fn terminal_send_carries_source_reference_to_another_session(cx: &mut TestAppCon
     until(cx, "source reference delivered to beta", |_| {
         std::fs::read_to_string(&received).is_ok_and(|s| s.contains(&expected))
     });
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+/// Opening the app and following idle sessions must not make them look busy.
+#[gpui::test]
+fn connecting_the_app_preserves_idle_session_activity(cx: &mut TestAppContext) {
+    let Some(running) = start_config("terminals-idle-journey", false, false, false, true) else {
+        return;
+    };
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let read = || {
+        let args = ["list", "--json", "--node", &running.url].map(str::to_owned);
+        let mut output = Vec::new();
+        assert_eq!(
+            runtime
+                .block_on(parvi_node_kit::cli::run("session", &args, &mut output))
+                .unwrap(),
+            0
+        );
+        serde_json::from_slice::<serde_json::Value>(&output).unwrap()
+    };
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let baseline = loop {
+        let value = read();
+        let sessions = value["sessions"].as_array().unwrap();
+        if sessions.len() == 2
+            && sessions
+                .iter()
+                .all(|s| s["active"] == false && s["last_output"].is_number())
+        {
+            break sessions
+                .iter()
+                .map(|s| {
+                    (
+                        s["name"].as_str().unwrap().to_string(),
+                        s["last_output"].clone(),
+                    )
+                })
+                .collect::<std::collections::BTreeMap<_, _>>();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "sessions did not become idle: {value}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    // Make a changed activity timestamp observable even though the CLI
+    // reports whole seconds.
+    let newest = baseline
+        .values()
+        .filter_map(serde_json::Value::as_u64)
+        .max()
+        .unwrap();
+    while std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        <= newest + 1
+    {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let config = format!(
+        "[terminals]\nsocket = {:?}\nlaunch = {:?}\n",
+        running.socket,
+        running.fixture.join("no-launch.conf")
+    );
+    let second = runtime.block_on(Node::start(AREAS, &config)).unwrap();
+    runtime.block_on(parvi_testkit::tmux::eventually(
+        "second node follows both sessions",
+        || (second.sessions().list().len() == 2).then_some(()),
+    ));
+    let (_shell, cx, settings) = open_with_alpha(&running, "idle-journey", cx);
+    // Exercise a resize even when another follower makes automatic claim wait.
+    cx.simulate_keystrokes("alt-c");
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    until(cx, "app follows the session", |cx| {
+        page.read_with(cx, |p, _| {
+            p.fleet
+                .all
+                .iter()
+                .any(|s| s.name == "alpha" && s.seat == Some(parvi_terminals_contract::Seat::Mine))
+        })
+    });
+    let after = read();
+    for session in after["sessions"].as_array().unwrap() {
+        let name = session["name"].as_str().unwrap();
+        assert_eq!(
+            session["last_output"], baseline[name],
+            "{name} changed idle time on connect: {after}"
+        );
+        assert_eq!(
+            session["active"], false,
+            "{name} became active on connect: {after}"
+        );
+    }
+    tmux(
+        &running,
+        &[
+            "send-keys",
+            "-t",
+            "alpha",
+            "printf 'real-output\\n'",
+            "Enter",
+        ],
+    );
+    until(cx, "actual output marks the session active", |cx| {
+        page.read_with(cx, |p, _| {
+            p.fleet
+                .all
+                .iter()
+                .any(|s| s.name == "alpha" && s.active == Some(true))
+        })
+    });
+    runtime.block_on(second.stop());
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }

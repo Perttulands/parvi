@@ -1069,3 +1069,71 @@ async fn ready_with_no_server_lists_nothing() {
     assert!(engine.sessions().is_empty());
     engine.stop().await;
 }
+
+/// Starting a follower on an idle session reads the pre-existing activity
+/// timestamp; a later real write still marks it active.
+#[tokio::test(flavor = "multi_thread")]
+async fn following_idle_sessions_preserves_their_old_activity() {
+    let Some(server) = Server::start_in("terminal-idle-activity") else {
+        return;
+    };
+    server.new_session("alpha", 100, 30);
+    server.new_session("beta", 100, 30);
+    let before: std::collections::BTreeMap<String, u64> = ["alpha", "beta"]
+        .into_iter()
+        .map(|name| {
+            (
+                name.to_string(),
+                server.display(name, "#{window_activity}").parse().unwrap(),
+            )
+        })
+        .collect();
+    let latest = *before.values().max().unwrap();
+    while std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        <= latest + 1
+    {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let engine = Engine::start(server.socket());
+    eventually("idle sessions seeded", || {
+        let sessions = engine.sessions();
+        (sessions.len() == 2
+            && sessions
+                .iter()
+                .all(|s| s.activity.last_output.is_some() && !s.panes.is_empty()))
+        .then_some(())
+    })
+    .await;
+    for session in engine.sessions() {
+        let last = session
+            .activity
+            .last_output
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert_eq!(
+            last, before[&session.name],
+            "{} acquired a new activity timestamp",
+            session.name
+        );
+        assert!(
+            !session.activity.active,
+            "{} became active while followed",
+            session.name
+        );
+    }
+    server.run(&["send-keys", "-t", "alpha", "echo real-output", "Enter"]);
+    eventually("real output marks active", || {
+        engine
+            .sessions()
+            .iter()
+            .find(|s| s.name == "alpha" && s.activity.active)
+            .map(|_| ())
+    })
+    .await;
+    engine.stop().await;
+}
