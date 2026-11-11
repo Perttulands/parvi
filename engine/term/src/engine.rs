@@ -8,9 +8,9 @@
 //! sessions is fed once.
 //!
 //! A pane is seeded from `capture-pane` and then fed every `%output` byte.
-//! Output that arrives while a pane is being seeded is dropped: tmux keeps
-//! command replies and pane output in one ordered stream, so anything before
-//! the capture's reply is already in the capture.
+//! Output before a capture reply is already in that capture. If output arrives
+//! between the capture and cursor replies, the capture is stale: seed again
+//! until a capture and its cursor have no intervening output.
 //!
 //! Clients also attach with `pause-after`, so falling behind a flood costs
 //! tmux nothing: it pauses the pane for us instead of buffering its output or
@@ -141,6 +141,8 @@ struct Pane {
     seeding: bool,
     /// The capture waiting for its cursor reply.
     capture: Option<Vec<String>>,
+    /// Output after the capture made that capture stale before its cursor.
+    late_output: bool,
     /// Updates for whoever is watching this pane. `None` while nobody is.
     viewers: Option<broadcast::Sender<PaneUpdate>>,
     /// Counts changes to the screen, so the overview sends only what moved.
@@ -1052,6 +1054,10 @@ async fn follow_inner(
                             pane.screen.process(&data);
                             pane.changes += 1;
                             pane.tell_viewers(|_| PaneUpdate::Output(data.into()));
+                        } else if pane.capture.is_some() {
+                            // This output is later than the captured cells and
+                            // cannot be discarded when that capture is applied.
+                            pane.late_output = true;
                         }
                         last_output = tokio::time::Instant::now();
                         if !looking {
@@ -1329,7 +1335,8 @@ fn list_panes(session: &str) -> String {
 }
 
 /// Starts a pane over from tmux's copy: asks for its screen and cursor, and
-/// drops its output until they arrive, because the capture already holds it.
+/// drops output before the capture reply, which already holds it. Output
+/// after that reply invalidates the capture, so the cursor reply retries it.
 /// The capture joins the rows tmux wrapped (`-J`), so the seeded screen wraps
 /// them again and they stay one line to a viewer (#186).
 fn reseed(pane: &mut Pane, id: PaneId, out: &mut String, pending: &mut VecDeque<Pending>) {
@@ -1337,6 +1344,7 @@ fn reseed(pane: &mut Pane, id: PaneId, out: &mut String, pending: &mut VecDeque<
     pane.utf8.reset();
     pane.seeding = true;
     pane.capture = None;
+    pane.late_output = false;
     send(
         out,
         pending,
@@ -1425,6 +1433,7 @@ fn on_reply(
                         synced: false,
                         seeding: false,
                         capture: None,
+                        late_output: false,
                         viewers: None,
                         changes: 0,
                         utf8: Utf8Gate::new(replace_invalid_utf8),
@@ -1471,6 +1480,13 @@ fn on_reply(
             let Some(pane) = state.panes.get_mut(&id) else {
                 return;
             };
+            if pane.late_output {
+                // The output is not in the capture, and the cursor reply may
+                // already include it. Retry rather than replaying it at the
+                // wrong cursor position; only publish a coherent snapshot.
+                reseed(pane, id, out, pending);
+                return;
+            }
             let Some(capture) = pane.capture.take() else {
                 return;
             };
