@@ -1526,6 +1526,67 @@ fn leader_and_escape_route_around_an_attached_terminal(cx: &mut TestAppContext) 
 }
 
 #[gpui::test]
+fn peek_keyboard_dismisses_and_restores_focus_after_a_leader_action(cx: &mut TestAppContext) {
+    let Some(running) = start("peek-keyboard-focus") else {
+        return;
+    };
+    let (_shell, cx, settings) = open_with_alpha(&running, "peek-keyboard-focus", cx);
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    until(cx, "beta listed", |cx| {
+        page.read_with(cx, |p, _| p.fleet.all.iter().any(|s| s.name == "beta"))
+    });
+    cx.simulate_keystrokes("ctrl-shift-space /");
+    cx.simulate_input("beta");
+    cx.simulate_keystrokes("enter");
+    until(cx, "keyboard opens Peek", |cx| {
+        cx.debug_bounds("peek-attach").is_some()
+    });
+    cx.simulate_keystrokes("escape");
+    until(cx, "Escape closes Peek", |cx| {
+        cx.debug_bounds("peek-attach").is_none()
+    });
+    cx.simulate_input("echo peek-escape-restored");
+    cx.simulate_keystrokes("enter");
+    until(cx, "typing returns to the terminal", |cx| {
+        shown(cx).contains("peek-escape-restored")
+    });
+
+    cx.simulate_keystrokes("ctrl-shift-space /");
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("beta");
+    cx.simulate_keystrokes("enter");
+    until(cx, "keyboard reopens Peek", |cx| {
+        cx.debug_bounds("peek-attach").is_some()
+    });
+    cx.simulate_keystrokes("ctrl-shift-space s");
+    until(cx, "leader opens Send over Peek", |cx| {
+        cx.debug_bounds("send-drawer").is_some()
+    });
+    cx.simulate_keystrokes("escape");
+    until(cx, "Escape returns to Peek", |cx| {
+        cx.debug_bounds("send-drawer").is_none() && cx.debug_bounds("peek-attach").is_some()
+    });
+    cx.simulate_keystrokes("ctrl-shift-space v");
+    until(cx, "leader opens Overview over Peek", |cx| {
+        cx.debug_bounds("overview-grid").is_some()
+    });
+    cx.simulate_keystrokes("escape");
+    until(cx, "Overview returns focus to Peek", |cx| {
+        cx.debug_bounds("overview-grid").is_none() && cx.debug_bounds("peek-attach").is_some()
+    });
+    cx.simulate_keystrokes("escape");
+    until(cx, "second Escape closes Peek", |cx| {
+        cx.debug_bounds("peek-attach").is_none()
+    });
+    cx.simulate_input("echo peek-leader-restored");
+    cx.simulate_keystrokes("enter");
+    until(cx, "typing returns after nested layer", |cx| {
+        shown(cx).contains("peek-leader-restored")
+    });
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+#[gpui::test]
 fn overview_keyboard_dismisses_selects_and_routes_leader(cx: &mut TestAppContext) {
     let Some(running) = start("terminals-overview-keys") else {
         return;

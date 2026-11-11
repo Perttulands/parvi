@@ -556,6 +556,7 @@ impl Terminals {
             div()
                 .absolute()
                 .inset_0()
+                .track_focus(&self.peek_focus)
                 .flex()
                 .items_center()
                 .justify_center()

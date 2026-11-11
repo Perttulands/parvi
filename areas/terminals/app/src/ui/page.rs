@@ -223,6 +223,8 @@ pub struct Terminals {
     pub me: WeakEntity<Self>,
     pub focus: FocusHandle,
     pub term_focus: FocusHandle,
+    /// Peek needs its own focus while another surface is underneath it.
+    pub peek_focus: FocusHandle,
     pub fleet: Remotes,
     pub settings: Settings,
     /// The fleet as the app last saw it, by node.
@@ -354,6 +356,7 @@ impl Terminals {
             me: weak,
             focus: cx.focus_handle(),
             term_focus: cx.focus_handle(),
+            peek_focus: cx.focus_handle(),
             fleet,
             settings,
             places,
@@ -932,7 +935,7 @@ impl Terminals {
                     .update(cx, |f, cx| f.set(&f.text.clone(), true, cx));
                 self.find_query.focus_handle(cx)
             }
-            Surface::Peek => self.focus.clone(),
+            Surface::Peek => self.peek_focus.clone(),
             Surface::RenameTab(_) | Surface::RenameSession(_) | Surface::PresetName(_) => {
                 self.rename_field.focus_handle(cx)
             }
