@@ -59,9 +59,12 @@ pub fn mount(
         .collect();
     let declaring: Vec<Meta> = pages.iter().map(|p| p.meta).collect();
     let settings_hub = hub.clone();
-    pages.push(mount_page(Host::new(hub), window, cx, |_, window, cx| {
-        SettingsPage::new(settings_hub, declaring, window, cx)
-    }));
+    pages.push(mount_page(
+        Host::new(hub),
+        window,
+        cx,
+        |host, window, cx| SettingsPage::new(settings_hub, host, declaring, window, cx),
+    ));
     let metas: Vec<Meta> = pages.iter().map(|p| p.meta).collect();
     check(&metas)?;
     let chords: Vec<_> = pages.iter().map(|p| (p.meta.id, p.chords(cx))).collect();
@@ -258,6 +261,15 @@ impl Shell {
             HubEvent::SettingChanged(id) => {
                 if let Some(i) = self.index_of(id) {
                     self.pages[i].settings_changed(window, cx);
+                }
+            }
+            HubEvent::SettingsReloaded(changed) => {
+                // The Settings page shows what the file holds now.
+                let settings = std::iter::once(&crate::settings_page::ID);
+                for id in changed.iter().chain(settings) {
+                    if let Some(i) = self.index_of(id) {
+                        self.pages[i].settings_changed(window, cx);
+                    }
                 }
             }
             HubEvent::Layers { closed } => {

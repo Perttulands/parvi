@@ -78,6 +78,20 @@ real list, and `parvi kinds` prints who owns which kinds.
 - **Config.** `config.toml` in the node's folder has a `[node]` section and one
   section per area, read by that area. `enabled = false` leaves an area unbuilt
   and listed as off in `/api/health`; a section no area reads refuses to start.
+  `parvi config show [--section]` and `GET /api/config` answer the file's
+  path and each section as the node loaded it, and the Settings page shows
+  the connected node's read-only; an agent edits the file and a restart
+  applies it.
+- **The node's own commands.** Every node has a few commands whatever areas
+  it serves (`node-kit`'s `own::COMMANDS`: `config_show`, `view_show`,
+  `view_open`); a listing that names one is refused.
+- **View control.** The node keeps the view-control kinds itself: a client
+  that reports the page it shows (0xb0) is an app until it goes. `parvi view
+  show` lists what each app shows; `parvi view open --page <id> [--path|item|
+  run|mission|document|session <id>] [--step]` sends the apps a view command
+  (0xb8) and answers the first answer (0xb1): `no_app` with none connected,
+  `timeout` after 5 s. The app shows the page and hands it the thing as an
+  `Ask::Reveal`, on this node.
 - **Provided interfaces.** What one area offers others is a narrow trait that
   lives with its provider's contract or engine crate, never in `node-kit`. The
   provider fills the slot keyed by that trait (`setup.provided.provide`) while
@@ -127,7 +141,8 @@ reserves, or whose `everywhere` chords share a key, naming both;
   a path, reveal a thing, launch a session in a folder on a node) is plain data that goes to the page declaring it
   answers it; when none does, the asker gets an `unanswered` error and the
   status line says so. View control's `open` reaches pages the same way. A
-  beside ask (open a path beside) leaves the asker shown: the answering page
+  beside ask (open a path beside, or a reveal marked `beside`, as a work item
+  named in a terminal opens its card) leaves the asker shown: the answering page
   hands it a view (`Host::show_beside`), which the asker draws where its
   layout has room (`Host::beside`), as the terminals draw a file a link
   named.
@@ -145,7 +160,11 @@ reserves, or whose `everywhere` chords share a key, naming both;
   label, control, default). The shell's Settings page lists the shell's own
   (node, keys) and each page's under its title, keeps a change under its key in
   the page's section of `app.json`, and tells the page
-  (`Page::settings_changed`). A key declared twice refuses to start.
+  (`Page::settings_changed`). A key declared twice refuses to start. The app
+  watches `app.json` (`Hub::watch`): an edit made outside it, as an agent
+  makes, applies at once and each page whose section changed hears
+  `settings_changed`; the app's own writes are not edits, and a file that
+  does not read is reported while the last good settings stay.
 - **Read models.** What one page knows that others show (the terminals' session
   list) is a plain type in its area's `contract`, published by that page
   (`Host::publish`) and read and observed by any page (`Host::model`), built in

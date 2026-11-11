@@ -163,6 +163,7 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
                 id: "gated".into(),
                 node: Some(NodeId(running.id.clone())),
                 part: None,
+                beside: false,
             },
             cx,
         )
@@ -224,6 +225,7 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
                     id: "gated".into(),
                     node: None,
                     part: Some("fmn_work".into()),
+                    beside: false,
                 },
                 cx,
             )
@@ -287,6 +289,7 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
                 id: run_id.clone(),
                 node: Some(NodeId(running.id.clone())),
                 part: Some("fmn_work".into()),
+                beside: false,
             },
             cx,
         )
@@ -327,6 +330,7 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
                     id: "gated".into(),
                     node: None,
                     part: None,
+                    beside: false,
                 },
                 cx,
             )

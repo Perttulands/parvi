@@ -22,12 +22,14 @@ pub enum Ask {
     },
     /// Show a thing where it lives: `what` names its kind (a path, an item,
     /// a run, a document), `id` which one, on `node` if
-    /// one is named, at `part` of it if one is (a run's step).
+    /// one is named, at `part` of it if one is (a run's step); `beside` the
+    /// page that asked, or as the answering page.
     Reveal {
         what: String,
         id: String,
         node: Option<NodeId>,
         part: Option<String>,
+        beside: bool,
     },
     /// Start a session on `node` in the `folder` checked out there, named
     /// `name` or the next free name after it. The answering page launches
@@ -73,7 +75,10 @@ impl Ask {
     /// Whether it is answered beside the page that asked (see
     /// [`crate::Host::show_beside`]), leaving that page shown.
     pub fn beside(&self) -> bool {
-        matches!(self, Ask::OpenPath { beside: true, .. })
+        matches!(
+            self,
+            Ask::OpenPath { beside: true, .. } | Ask::Reveal { beside: true, .. }
+        )
     }
 
     /// What it asks, in words for the status line.
@@ -102,6 +107,7 @@ mod tests {
             id: "r1".into(),
             node: None,
             part: None,
+            beside: false,
         };
         assert!(send.answered_by(&Answers::Send));
         assert!(!send.answered_by(&Answers::OpenPath));
@@ -117,5 +123,18 @@ mod tests {
         assert!(!launch.answered_by(&Answers::Send));
         assert!(!send.answered_by(&Answers::Launch));
         assert_eq!(launch.describe(), "start a session in /srv/x");
+    }
+
+    #[test]
+    fn a_reveal_marked_beside_is_answered_beside_the_asker() {
+        let reveal = |beside| Ask::Reveal {
+            what: "item".into(),
+            id: "parvi-1".into(),
+            node: None,
+            part: None,
+            beside,
+        };
+        assert!(reveal(true).beside());
+        assert!(!reveal(false).beside());
     }
 }

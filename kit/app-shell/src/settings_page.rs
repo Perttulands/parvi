@@ -2,19 +2,24 @@
 //! the settings each registered page declares ([`Page::SETTINGS`]), under
 //! the page's title. Settings is not an area: what is listed comes from the
 //! pages, and a change goes into the declaring page's section, which then
-//! hears [`Page::settings_changed`].
+//! hears [`Page::settings_changed`]. Below them, read-only, is the connected
+//! node's `config.toml` as the node loaded it (`/api/config`), read each time
+//! the page comes forward or the node's link opens while it shows.
 
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, SharedString, Subscription, Window, div,
     prelude::*, px,
 };
+use parvi_app_kit::host::Request;
+use parvi_app_kit::link::client::LinkState;
 use parvi_app_kit::page::Meta;
 use parvi_app_kit::settings::DEFAULT_NODE;
 use parvi_app_kit::theme::{Theme, size, theme};
 use parvi_app_kit::widgets::field::{FieldEvent, TextField};
 use parvi_app_kit::widgets::kit::{self, Kind};
 use parvi_app_kit::widgets::pages::{line, page, section};
-use parvi_app_kit::{Control, Hub, Page, Setting};
+use parvi_app_kit::{Control, Host, Hub, Page, Setting};
+use parvi_core::NodeId;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -47,6 +52,10 @@ impl Owner {
 
 pub struct SettingsPage {
     hub: Entity<Hub>,
+    host: Host,
+    shown: bool,
+    /// The connected node's config as it last answered, or why it did not.
+    node_config: Option<Result<Value, String>>,
     /// The pages that declare settings, in the app's order.
     pages: Vec<Meta>,
     /// A field for each text setting.
@@ -58,21 +67,38 @@ impl Page for SettingsPage {
     const ID: &'static str = ID;
     const TITLE: &'static str = "Settings";
 
-    /// The fields show what is kept now.
+    /// The fields show what is kept now, and the node's config is read.
     fn shown(&mut self, shown: bool, _: &mut Window, cx: &mut Context<Self>) {
+        self.shown = shown;
         if shown {
-            for (&(owner, key), field) in &self.fields {
-                let kept = self.value(owner, key, cx);
-                let text = kept.as_str().unwrap_or_default().to_string();
-                field.update(cx, |f, cx| f.set(&text, false, cx));
-            }
+            self.refresh(cx);
+            self.read_node_config(cx);
         }
+    }
+
+    fn link(
+        &mut self,
+        _: &NodeId,
+        state: Option<LinkState>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.shown && state == Some(LinkState::Open) {
+            self.read_node_config(cx);
+        }
+    }
+
+    /// The settings were read again from the file.
+    fn settings_changed(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.refresh(cx);
+        cx.notify();
     }
 }
 
 impl SettingsPage {
     pub fn new(
         hub: Entity<Hub>,
+        host: Host,
         pages: Vec<Meta>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -108,9 +134,77 @@ impl SettingsPage {
         }
         Self {
             hub,
+            host,
+            shown: false,
+            node_config: None,
             pages,
             fields,
             _fields: subscriptions,
+        }
+    }
+
+    /// Asks the connected node for its config.
+    fn read_node_config(&mut self, cx: &mut Context<Self>) {
+        let asked = self
+            .host
+            .request(Request::get(NodeId::default(), "/api/config"), cx);
+        cx.spawn(async move |this, cx| {
+            let got = match asked.await {
+                Ok(a) if a.ok() => serde_json::from_slice(&a.body).map_err(|e| e.to_string()),
+                Ok(a) => Err(a.error_text()),
+                Err(e) => Err(e.message),
+            };
+            let _ = this.update(cx, |p, cx| {
+                p.node_config = Some(got);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// The connected node's config file and each of its sections, read-only.
+    fn node_rows(&self, t: &Theme) -> AnyElement {
+        // Each named for tests by where it is and what it says.
+        let text = |at: &str, text: String| {
+            let selector = format!("node-config:{at}:{text}");
+            div()
+                .debug_selector(move || selector)
+                .text_color(t.text)
+                .child(text)
+        };
+        let mut part = section(t, "Node");
+        match &self.node_config {
+            None => part = part.child(kit::note(t, "Reading the node's config…", None)),
+            Some(Err(why)) => {
+                let why = format!("The node's config did not read: {why}");
+                part = part.child(kit::note(t, why, Some(t.dim)));
+            }
+            Some(Ok(config)) => {
+                let path = config["path"].as_str().unwrap_or_default().to_string();
+                part = part.child(line(t, "File", text("path", path)));
+                for (name, keys) in config["sections"].as_object().into_iter().flatten() {
+                    let mut lines = div().flex().flex_col();
+                    for (key, value) in keys.as_object().into_iter().flatten() {
+                        lines = lines.child(text(name, format!("{key} = {value}")));
+                    }
+                    part = part.child(line(t, &format!("[{name}]"), lines));
+                }
+            }
+        }
+        part.child(kit::note(
+            t,
+            "An agent edits this file; restarting the node applies it, and sessions survive.",
+            Some(t.dim),
+        ))
+        .into_any_element()
+    }
+
+    /// Each field shows what is kept now.
+    fn refresh(&mut self, cx: &mut Context<Self>) {
+        for (&(owner, key), field) in &self.fields {
+            let kept = self.value(owner, key, cx);
+            let text = kept.as_str().unwrap_or_default().to_string();
+            field.update(cx, |f, cx| f.set(&text, false, cx));
         }
     }
 
@@ -253,6 +347,6 @@ impl Render for SettingsPage {
         for meta in self.pages.clone() {
             all = all.child(self.rows(Owner::Page(meta.id), meta.title, meta.settings, &t, cx));
         }
-        all
+        all.child(self.node_rows(&t))
     }
 }

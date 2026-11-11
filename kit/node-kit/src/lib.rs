@@ -14,9 +14,11 @@ pub mod hook;
 pub mod identity;
 pub mod listing;
 pub mod mcp;
+pub mod own;
 mod ring;
 pub mod serve;
 mod setup;
+mod view;
 
 pub use area::{Area, BoxFuture, Build, Built, Channel, Client, Command, Finish};
 pub use client::{NodeClient, NodeError};

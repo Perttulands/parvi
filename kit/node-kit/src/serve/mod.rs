@@ -1,6 +1,7 @@
 //! Serving a node: its areas, built from the config, behind the trust check
 //! and the refusal of requests for other nodes, with the node's own
-//! `/api/health`, `/api/version`, `/ws` and `/mcp`.
+//! `/api/health`, `/api/version`, `/api/config`, `/ws` and `/mcp`, and its own
+//! commands ([`crate::own`]).
 //! Areas are checked before anything is served: two that share a name, a
 //! frame kind or a command refuse to start, naming both
 //! ([`crate::listing::check`]), as does one whose commands are not those it
@@ -38,6 +39,8 @@ use crate::config::Config;
 use crate::events::{self, Log};
 use crate::identity::{Identity, Ports};
 use crate::mcp::Mcp;
+use crate::own::{self, Own};
+use crate::view::Views;
 use crate::{Area, Built, Command, Listing, Provided, Setup, address, listing};
 
 /// How a node is started.
@@ -55,6 +58,8 @@ struct Shared {
     off: Vec<&'static str>,
     /// Each built area, with how it is listed.
     areas: Vec<(Listing, Arc<dyn Area>)>,
+    /// View control's side of every connection.
+    views: Arc<Views>,
 }
 
 /// A node serving until stopped.
@@ -132,7 +137,14 @@ pub async fn start(options: Options, areas: &[Listing]) -> Result<Running> {
         };
         built.push((listed, area));
     }
-    let commands = commands(&built)?;
+    let own = Arc::new(Own {
+        config: setup.config.clone(),
+        areas: names.clone(),
+        node: node.id.clone(),
+        views: Arc::default(),
+    });
+    let mut commands = commands(&built)?;
+    commands.extend(own::commands(&own));
     let here = format!("{} · {}", node.device, node.environment.name());
     events.record(
         events::NODE,
@@ -143,6 +155,7 @@ pub async fn start(options: Options, areas: &[Listing]) -> Result<Running> {
         node: node.clone(),
         off,
         areas: built,
+        views: own.views.clone(),
     });
     let trust = Arc::new(Trust::local(section.names));
     let mut app = Router::new()
@@ -150,6 +163,7 @@ pub async fn start(options: Options, areas: &[Listing]) -> Result<Running> {
         .route("/api/health", get(health))
         .route("/api/version", get(version))
         .with_state(shared.clone())
+        .merge(own::routes(own))
         .merge(Mcp::new(node.id.clone(), commands).routes());
     for (_, area) in &shared.areas {
         app = app.merge(area.routes());
