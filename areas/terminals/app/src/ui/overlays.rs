@@ -8,7 +8,7 @@ use super::surface::{self, Surface};
 use super::tiles::CLAIM_EXPLANATION;
 use crate::store::sessions::{self, Key};
 use crate::store::workspace::{MAX_WINDOWS, Workspace, tab_label};
-use crate::theme::{alpha, size, theme};
+use crate::theme::{size, theme};
 use gpui::{
     AnyElement, Context, FontWeight, KeyDownEvent, MouseButton, MouseDownEvent, Window, anchored,
     canvas, deferred, div, point, prelude::*, px,
@@ -420,7 +420,7 @@ impl Terminals {
 
     pub(super) fn render_find(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = theme(cx).clone();
@@ -456,6 +456,7 @@ impl Terminals {
                 results = results.child(
                     div()
                         .id(("match", i))
+                        .debug_selector(move || format!("find-match-{i}"))
                         .px(px(12.))
                         .py(px(6.))
                         .flex()
@@ -512,11 +513,15 @@ impl Terminals {
         }
         let drawer = div()
             .id("find")
+            .debug_selector(|| "find-drawer".into())
             .absolute()
             .top_0()
             .bottom_0()
             .right_0()
-            .w(px(460.))
+            .w(px(crate::store::send::width(
+                Some(size::FIND_DRAWER),
+                window.viewport_size().width / px(1.),
+            )))
             .flex()
             .flex_col()
             .bg(t.surface)
@@ -558,7 +563,7 @@ impl Terminals {
         div()
             .absolute()
             .inset_0()
-            .child(self.scrim(surface::FIND, cx).bg(alpha(t.bg, 0.3)))
+            .child(self.scrim(surface::FIND, cx))
             .child(drawer)
             .into_any_element()
     }

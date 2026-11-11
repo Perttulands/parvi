@@ -35,6 +35,8 @@ use std::path::PathBuf;
 pub struct Draft {
     /// The one line naming the object handed over.
     pub reference: Option<String>,
+    /// The originating session, excluded from this handoff's targets.
+    pub source: Option<Key>,
     /// Files from this computer, written on the target's node on send.
     pub files: Vec<Attachment>,
     /// Why the last send did not simply arrive, shown above the actions.
@@ -78,6 +80,24 @@ impl Terminals {
         self.handoff(reference, target, window, cx);
     }
 
+    /// Sends the named window's session as the source to a different target.
+    pub fn send_from(&mut self, source: Key, window: &mut Window, cx: &mut Context<Self>) {
+        let reference = Some(format!("session {}", source.text()));
+        self.handoff_from(reference, None, Some(source), window, cx);
+    }
+
+    pub(super) fn send_targets(&self, query: &str) -> Vec<&parvi_terminals_contract::Session> {
+        sessions::targets(&self.fleet.all, &self.settings.recent_targets, query)
+            .into_iter()
+            .filter(|s| {
+                self.send
+                    .source
+                    .as_ref()
+                    .is_none_or(|source| !sessions::is(s, source))
+            })
+            .collect()
+    }
+
     /// Opens Send to Session with `reference`, the line naming what the
     /// operator was looking at, aimed at `target`. A fresh opening is a
     /// fresh message: the last note belonged to something else.
@@ -85,6 +105,17 @@ impl Terminals {
         &mut self,
         reference: Option<String>,
         target: Option<Key>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.handoff_from(reference, target, None, window, cx);
+    }
+
+    fn handoff_from(
+        &mut self,
+        reference: Option<String>,
+        target: Option<Key>,
+        source: Option<Key>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -97,6 +128,7 @@ impl Terminals {
         let launch_grid = self.launch_grids.borrow()[self.settings.workspace.focus];
         self.send = Draft {
             reference,
+            source,
             launch_grid,
             opener,
             ..Default::default()
@@ -625,7 +657,7 @@ impl Terminals {
                     .child(div().flex_1().text_color(t.text2).child("New agent…"))
                     .on_click(cx.listener(|s, _, window, cx| s.pick(None, window, cx))),
             );
-        let list = sessions::targets(&self.fleet.all, &self.settings.recent_targets, &query);
+        let list = self.send_targets(&query);
         let cursor = self.send_cursor.min(list.len().saturating_sub(1));
         for (i, s) in list.iter().enumerate() {
             let key = Key::of(s);

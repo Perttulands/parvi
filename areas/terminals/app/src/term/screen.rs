@@ -43,6 +43,8 @@ pub struct Screen {
     pub dirty: bool,
     /// A screen frame has arrived since subscribing.
     pub ready: bool,
+    /// Each captured logical line's first physical row, oldest first.
+    history_lines: Vec<usize>,
 }
 
 fn config(history: usize) -> Config {
@@ -66,6 +68,7 @@ impl Screen {
             rows,
             dirty: false,
             ready: false,
+            history_lines: Vec::new(),
         }
     }
 
@@ -87,19 +90,24 @@ impl Screen {
     /// (counted from the oldest) is in view, or to the bottom.
     pub fn history(text: &str, cols: usize, rows: usize, line: Option<usize>) -> Self {
         let lines = text.split('\n').count();
-        let mut s = Self::with_history(cols, rows, lines + rows);
+        // A joined tmux line may wrap to many physical rows in this grid.
+        let capacity = lines
+            .saturating_add(rows)
+            .saturating_add(text.len().saturating_mul(4));
+        let mut s = Self::with_history(cols, rows, capacity);
         s.ready = true;
-        let mut bytes = Vec::with_capacity(text.len() + lines);
         for (i, l) in text.split('\n').enumerate() {
             if i > 0 {
-                bytes.extend_from_slice(b"\x1b[0m\r\n");
+                s.feed(b"\x1b[0m\r\n");
             }
-            bytes.extend_from_slice(l.as_bytes());
+            let grid = s.term.grid();
+            s.history_lines
+                .push(grid.history_size() + grid.cursor.point.line.0.max(0) as usize);
+            s.feed(l.as_bytes());
         }
-        s.feed(&bytes);
         // Park the cursor out of the way: a history has no cursor.
         s.feed(b"\x1b[0m\x1b[?25l");
-        if let Some(line) = line {
+        if let Some(line) = line.and_then(|line| s.history_lines.get(line).copied()) {
             let total = s.term.grid().history_size() + rows;
             // Display offset counts back from the bottom; centre the line.
             let from_bottom = total.saturating_sub(line + 1);
@@ -107,6 +115,18 @@ impl Screen {
             s.term.scroll_display(Scroll::Delta(offset as i32));
         }
         s
+    }
+
+    pub fn history_rows(&self, line: usize) -> Option<(usize, usize)> {
+        let start = *self.history_lines.get(line)?;
+        let grid = self.term.grid();
+        let end = self
+            .history_lines
+            .get(line + 1)
+            .copied()
+            .map(|next| next.saturating_sub(1))
+            .unwrap_or(grid.history_size() + grid.cursor.point.line.0.max(0) as usize);
+        Some((start, end.max(start)))
     }
 
     pub fn mode(&self) -> TermMode {

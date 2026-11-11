@@ -34,6 +34,10 @@ mod drag;
 pub const CLAIM_EXPLANATION: &str =
     "Set the tmux window to this device's size. Other devices keep watching, at that size.";
 
+fn tag_label(name: &str, active: bool) -> String {
+    sessions::elide_head(name, if active { 10 } else { 9 })
+}
+
 /// Why a pane cannot be claimed: tmux keeps its window at a fixed size.
 fn pinned(s: &parvi_terminals_contract::Session, pane: u32) -> Option<String> {
     if s.pinned != Some(true) {
@@ -208,10 +212,16 @@ impl Terminals {
             self.dragging_over = None;
         }
         let tiles: Vec<AnyElement> = (0..n).map(|i| self.render_tile(i, window, cx)).collect();
-        let send_room = self.is_open(super::surface::SEND).then(|| {
-            let room = window.viewport_size().width / px(1.);
-            crate::store::send::width(self.settings.send_width, room)
-        });
+        let drawer_room =
+            (self.is_open(super::surface::SEND) || self.is_open(super::surface::FIND)).then(|| {
+                let room = window.viewport_size().width / px(1.);
+                let width = if self.is_open(super::surface::FIND) {
+                    Some(size::FIND_DRAWER)
+                } else {
+                    self.settings.send_width
+                };
+                crate::store::send::width(width, room)
+            });
         let mut grid = div()
             .id("grid")
             .track_focus(&self.term_focus)
@@ -221,7 +231,9 @@ impl Terminals {
             .flex_col()
             .gap(px(size::TILE_GAP))
             .p(px(size::TILE_GAP))
-            .when_some(send_room, |grid, width| grid.pr(px(size::TILE_GAP + width)))
+            .when_some(drawer_room, |grid, width| {
+                grid.pr(px(size::TILE_GAP + width))
+            })
             .bg(t.raised)
             .on_key_down(cx.listener(Self::term_key))
             .on_mouse_move(cx.listener(Self::term_mouse_move))
@@ -653,11 +665,13 @@ impl Terminals {
                         .items_center()
                         .gap(px(2.))
                         .pb(px(3.))
-                        .child(kit::button(t, ("send", i), "Send", Kind::Quiet).on_click(
-                            cx.listener(move |s, _, window, cx| {
-                                s.open_send(Some(send_key.clone()), window, cx);
-                            }),
-                        ))
+                        .child(
+                            kit::button(t, ("send", i), "Send", Kind::Quiet)
+                                .debug_selector(move || format!("window-send-{i}"))
+                                .on_click(cx.listener(move |s, _, window, cx| {
+                                    s.send_from(send_key.clone(), window, cx);
+                                })),
+                        )
                         .child(kit::button(t, ("menu", i), "…", Kind::Quiet).on_click(
                             cx.listener(move |s, e: &gpui::ClickEvent, window, cx| {
                                 let items = s.session_menu(i, &menu_key);
@@ -713,9 +727,7 @@ impl Terminals {
             None => None,
         });
         let history = active && self.histories.contains_key(&i);
-        // Elided here by characters, keeping the tail; the label itself
-        // never shrinks, since a clip would cut the tail instead.
-        let label = sessions::elide_head(&key.name, if active { 24 } else { 12 });
+        let label = tag_label(&key.name, active);
         let id = i * 100 + n;
         let (k_show, k_menu, k_remove) = (key.clone(), key.clone(), key.clone());
         let name = key.name.clone();
@@ -1769,6 +1781,18 @@ impl EntityInputHandler for Terminals {
 mod tests {
     use super::*;
     use parvi_terminals_contract::{Pane, Session};
+
+    #[test]
+    fn window_tags_keep_the_distinguishing_suffix() {
+        for active in [true, false] {
+            let first = tag_label("w2-beta-very-long-worker-one", active);
+            let second = tag_label("w2-beta-very-long-worker-two", active);
+            assert!(first.contains('…') && first.ends_with("one"), "{first}");
+            assert!(second.contains('…') && second.ends_with("two"), "{second}");
+            assert_ne!(first, second);
+        }
+        assert_eq!(tag_label("shell", true), "shell");
+    }
 
     #[test]
     fn a_drop_lands_only_where_it_would_change_something() {

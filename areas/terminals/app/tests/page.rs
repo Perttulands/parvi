@@ -2052,6 +2052,212 @@ fn terminal_send_carries_source_reference_to_another_session(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+fn window_send_uses_the_clicked_window_as_source(cx: &mut TestAppContext) {
+    let Some(running) = start("window-send-source") else {
+        return;
+    };
+    let received = running.fixture.join("window-source");
+    tmux(
+        &running,
+        &[
+            "send-keys",
+            "-t",
+            "beta",
+            &format!("cat > '{}'", received.display()),
+            "Enter",
+        ],
+    );
+    let (_shell, cx, settings) = open_with_alpha(&running, "window-send-source", cx);
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    let beta = Key {
+        node: running.node.clone(),
+        user: String::new(),
+        name: "beta".into(),
+    };
+    until(cx, "beta is listed", |cx| {
+        page.read_with(cx, |p, _| p.fleet.all.iter().any(|s| s.name == "beta"))
+    });
+    cx.update(|window, cx| page.update(cx, |p, cx| p.place(beta.clone(), window, cx)));
+    until(cx, "beta focused beside alpha", |cx| {
+        page.read_with(cx, |p, _| p.settings.workspace.focus == 1)
+    });
+    click(cx, "window-send-0".into());
+    until(cx, "source picker", |cx| {
+        cx.debug_bounds("send-go").is_some()
+    });
+    page.read_with(cx, |p, _| {
+        assert_eq!(
+            p.send.reference.as_deref(),
+            Some(format!("session {}::alpha", running.node).as_str())
+        );
+        assert!(
+            p.send_target.is_none(),
+            "a window must not target itself by default"
+        );
+    });
+    let alpha = format!("send-target-{}::alpha", running.node);
+    let selector: &'static str = Box::leak(alpha.into_boxed_str());
+    assert!(
+        cx.debug_bounds(selector).is_none(),
+        "the source is not offered as a target"
+    );
+    let target = format!("send-target-{}::beta", running.node);
+    click(cx, target);
+    click(cx, "send-go".into());
+    let expected = format!("session {}::alpha", running.node);
+    until(cx, "source reference reaches beta", |_| {
+        std::fs::read_to_string(&received).is_ok_and(|s| s.contains(&expected))
+    });
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+#[gpui::test]
+fn absent_tab_chord_does_not_reach_the_terminal(cx: &mut TestAppContext) {
+    let Some(running) = start("absent-tab-key") else {
+        return;
+    };
+    let (shell, cx, settings) = open_with_alpha(&running, "absent-tab-key", cx);
+    let received = running.fixture.join("key-byte");
+    tmux(
+        &running,
+        &[
+            "send-keys",
+            "-t",
+            "alpha",
+            &format!(
+                "stty raw -echo; dd bs=1 count=1 of='{}' 2>/dev/null; stty sane",
+                received.display()
+            ),
+            "Enter",
+        ],
+    );
+    until(cx, "terminal waiting for one byte", |_| {
+        tmux(
+            &running,
+            &[
+                "display-message",
+                "-p",
+                "-t",
+                "alpha",
+                "#{pane_current_command}",
+            ],
+        )
+        .trim()
+            == "dd"
+    });
+    cx.simulate_keystrokes("alt-2");
+    cx.simulate_input("x");
+    until(cx, "ordinary input reaches terminal", |_| {
+        std::fs::read(&received).is_ok_and(|b| b == b"x")
+    });
+    until(cx, "shell restored", |_| {
+        tmux(
+            &running,
+            &[
+                "display-message",
+                "-p",
+                "-t",
+                "alpha",
+                "#{pane_current_command}",
+            ],
+        )
+        .trim()
+            == "sh"
+    });
+    let raw = running.fixture.join("keys-off-byte");
+    tmux(
+        &running,
+        &[
+            "send-keys",
+            "-t",
+            "alpha",
+            &format!(
+                "stty raw -echo; dd bs=1 count=1 of='{}' 2>/dev/null; stty sane",
+                raw.display()
+            ),
+            "Enter",
+        ],
+    );
+    until(cx, "terminal waiting again", |_| {
+        tmux(
+            &running,
+            &[
+                "display-message",
+                "-p",
+                "-t",
+                "alpha",
+                "#{pane_current_command}",
+            ],
+        )
+        .trim()
+            == "dd"
+    });
+    cx.simulate_keystrokes("ctrl-shift-space k");
+    until(cx, "keys off", |cx| {
+        shell.read_with(cx, |s, cx| !s.hub().read(cx).settings.keys)
+    });
+    cx.simulate_keystrokes("alt-2");
+    until(cx, "keys off passes Alt to terminal", |_| {
+        std::fs::read(&raw).is_ok_and(|b| b == [27])
+    });
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+#[gpui::test]
+fn search_shows_and_marks_a_wrapped_history_match(cx: &mut TestAppContext) {
+    let Some(running) = start("search-marked-history") else {
+        return;
+    };
+    let (_shell, cx, settings) = open_with_alpha(&running, "search-marked-history", cx);
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    tmux(
+        &running,
+        &[
+            "send-keys",
+            "-t",
+            "alpha",
+            "printf '%0300d\\n' 0; printf '%0300dmatch%s\\n' 0 'needle'",
+            "Enter",
+        ],
+    );
+    until(cx, "output reached the terminal", |cx| {
+        shown(cx).contains("matchneedle")
+    });
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    cx.simulate_keystrokes("alt-h");
+    until(cx, "search drawer opened beside the terminal", |cx| {
+        let Some(drawer) = cx.debug_bounds("find-drawer") else {
+            return false;
+        };
+        page.read_with(cx, |p, _| {
+            p.geo.borrow()[0]
+                .body
+                .is_some_and(|body| body.origin.x + body.size.width <= drawer.origin.x)
+        })
+    });
+    cx.simulate_input("matchneedle");
+    until(cx, "search result", |cx| {
+        cx.debug_bounds("find-match-0").is_some()
+    });
+    click(cx, "find-match-0".into());
+    until(cx, "matched line selected in the terminal", |cx| {
+        page.read_with(cx, |p, _| {
+            p.histories
+                .get(&p.settings.workspace.focus)
+                .is_some_and(|h| {
+                    let screen = h.screen.lock();
+                    screen.text().contains("matchneedle")
+                        && screen
+                            .term
+                            .selection_to_string()
+                            .is_some_and(|text| text.contains("matchneedle"))
+                })
+        })
+    });
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+#[gpui::test]
 fn send_drawer_keeps_the_terminal_visible_beside_it(cx: &mut TestAppContext) {
     let Some(running) = start("terminals-send-layout") else {
         return;

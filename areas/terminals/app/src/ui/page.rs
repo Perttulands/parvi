@@ -180,6 +180,12 @@ pub struct History {
     pub screen: Arc<Mutex<Screen>>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum HistoryTarget {
+    Window { index: usize, line: Option<usize> },
+    Peek,
+}
+
 /// Peek: one session, observed, never sized.
 pub struct Peek {
     pub key: Key,
@@ -243,7 +249,7 @@ pub struct Terminals {
     pub link_hover: Option<(usize, usize, usize)>,
     pub histories: HashMap<usize, History>,
     /// History requests in flight: request id → window, or Peek.
-    pub history_wanted: HashMap<u32, Option<usize>>,
+    pub history_wanted: HashMap<u32, HistoryTarget>,
     pub peek: Option<Peek>,
     pub launchers: Vec<Entity<Launcher>>,
     pub rail_search: Entity<TextField>,
@@ -445,13 +451,13 @@ impl Terminals {
         .detach();
         cx.subscribe_in(&self.send_query.clone(), window, |s, _, ev, window, cx| {
             let q = s.send_query.read(cx).text.clone();
-            let n = sessions::targets(&s.fleet.all, &s.settings.recent_targets, &q).len();
+            let n = s.send_targets(&q).len();
             match ev {
                 FieldEvent::Changed => s.send_cursor = 0,
                 FieldEvent::Up => s.send_cursor = s.send_cursor.saturating_sub(1),
                 FieldEvent::Down => s.send_cursor = (s.send_cursor + 1).min(n.saturating_sub(1)),
                 FieldEvent::Submit | FieldEvent::Tab => {
-                    let t = sessions::targets(&s.fleet.all, &s.settings.recent_targets, &q);
+                    let t = s.send_targets(&q);
                     if let Some(x) = t.get(s.send_cursor) {
                         let target = Key::of(x);
                         if s.send_target.as_ref() != Some(&target) {
@@ -1414,7 +1420,7 @@ impl Terminals {
         if let Some((p, _)) = line
             && let Some(id) = self.fleet.history(&node, p)
         {
-            self.history_wanted.insert(id, None);
+            self.history_wanted.insert(id, HistoryTarget::Peek);
         }
         self.open(Surface::Peek, window, cx);
         self.sync(cx);
@@ -1432,7 +1438,21 @@ impl Terminals {
             return;
         };
         let k = Key::of(s);
-        self.open_peek(k, Some((m.pane, m.line)), window, cx);
+        self.place(k, window, cx);
+        let w = self.settings.workspace.focus;
+        self.settings.workspace.choose_pane(w, m.pane);
+        self.histories.remove(&w);
+        if let Some(id) = self.fleet.history(&m.node, m.pane) {
+            self.history_wanted.insert(
+                id,
+                HistoryTarget::Window {
+                    index: w,
+                    line: Some(m.line as usize),
+                },
+            );
+        }
+        self.sync(cx);
+        cx.notify();
     }
 
     // ---- history ----
@@ -1442,12 +1462,21 @@ impl Terminals {
             return;
         };
         if self.histories.get(&w).is_some_and(|h| h.pane == pane)
-            || self.history_wanted.values().any(|x| *x == Some(w))
+            || self
+                .history_wanted
+                .values()
+                .any(|x| matches!(x, HistoryTarget::Window { index, .. } if *index == w))
         {
             return;
         }
         if let Some(id) = self.fleet.history(&pane.node, pane.pane) {
-            self.history_wanted.insert(id, Some(w));
+            self.history_wanted.insert(
+                id,
+                HistoryTarget::Window {
+                    index: w,
+                    line: None,
+                },
+            );
         }
         cx.notify();
     }
@@ -1480,13 +1509,21 @@ impl Terminals {
                     .map(|p| (p.cols as usize, p.rows as usize))
             })
             .unwrap_or((80, 24));
+        let query = self.find_query.read(cx).text.clone();
         match target {
-            Some(w) => {
-                let mut screen = Screen::history(&text, cols, rows, None);
-                // Open one screen up from the bottom: the wheel asked to go back.
-                screen
-                    .term
-                    .scroll_display(alacritty_terminal::grid::Scroll::Delta(3));
+            HistoryTarget::Window { index: w, line } => {
+                if self.window_panes().get(w).and_then(Option::as_ref) != Some(&pane) {
+                    return;
+                }
+                let mut screen = Screen::history(&text, cols, rows, line);
+                if let Some(line) = line {
+                    select_line(&mut screen, line, &query);
+                } else {
+                    // Open one screen up from the bottom: the wheel asked to go back.
+                    screen
+                        .term
+                        .scroll_display(alacritty_terminal::grid::Scroll::Delta(3));
+                }
                 self.histories.insert(
                     w,
                     History {
@@ -1495,13 +1532,13 @@ impl Terminals {
                     },
                 );
             }
-            None => {
+            HistoryTarget::Peek => {
                 if let Some(p) = &mut self.peek {
                     let line = p.line.map(|l| l as usize);
                     let rows = rows.max(self.peek_rows);
                     let mut screen = Screen::history(&text, cols, rows, line);
                     if let Some(l) = line {
-                        select_line(&mut screen, l);
+                        select_line(&mut screen, l, &query);
                     }
                     p.history = Some(Arc::new(Mutex::new(screen)));
                     p.loading = false;
@@ -1651,20 +1688,41 @@ fn restart_launch(k: &Key, saved: Option<&crate::store::settings::Restart>) -> L
 }
 
 /// Marks a history line as selected, so a search result is found at once.
-fn select_line(s: &mut Screen, line: usize) {
+fn select_line(s: &mut Screen, line: usize, query: &str) {
     use alacritty_terminal::grid::Dimensions;
+    use alacritty_terminal::grid::Scroll;
     use alacritty_terminal::index::{Column, Line, Point as GP, Side};
     use alacritty_terminal::selection::{Selection, SelectionType};
+    let Some((start, end)) = s.history_rows(line) else {
+        return;
+    };
     let history = s.term.grid().history_size();
-    let l = line as i32 - history as i32;
     let cols = s.term.grid().columns();
+    // A joined tmux line can span several rows. Bring the row containing the
+    // query into view while selecting the whole logical line.
+    let needle = query.to_lowercase();
+    let target = (start..=end)
+        .find(|&row| {
+            let text: String = (0..cols)
+                .map(|col| s.term.grid()[GP::new(Line(row as i32 - history as i32), Column(col))].c)
+                .collect();
+            !needle.is_empty() && text.to_lowercase().contains(&needle)
+        })
+        .unwrap_or(start);
+    let total = history + s.rows;
+    let desired = total.saturating_sub(target + 1).saturating_sub(s.rows / 2);
+    let current = s.term.grid().display_offset();
+    s.term
+        .scroll_display(Scroll::Delta(desired as i32 - current as i32));
+    let start = start as i32 - history as i32;
+    let end = end as i32 - history as i32;
     let mut sel = Selection::new(
         SelectionType::Lines,
-        GP::new(Line(l), Column(0)),
+        GP::new(Line(start), Column(0)),
         Side::Left,
     );
     sel.update(
-        GP::new(Line(l), Column(cols.saturating_sub(1))),
+        GP::new(Line(end), Column(cols.saturating_sub(1))),
         Side::Right,
     );
     s.term.selection = Some(sel);

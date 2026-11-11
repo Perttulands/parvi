@@ -33,11 +33,16 @@ fn chords(page: &WeakEntity<Terminals>, tabs: usize) -> Vec<Chord> {
         })
         .everywhere()
     };
-    let mut all: Vec<Chord> = TAB_KEYS[..tabs]
+    let mut all: Vec<Chord> = TAB_KEYS
         .iter()
         .enumerate()
         .map(|(i, key)| {
-            chord(key, &format!("Terminal tab {}", i + 1), Action::Tab(i)).alt(key, None)
+            let label = if i < tabs {
+                format!("Terminal tab {}", i + 1)
+            } else {
+                format!("Terminal tab {} (not open)", i + 1)
+            };
+            chord(key, &label, Action::Tab(i)).alt(key, None)
         })
         .collect();
     all.extend([
@@ -51,7 +56,7 @@ fn chords(page: &WeakEntity<Terminals>, tabs: usize) -> Vec<Chord> {
         chord("/", "Session search", Action::SearchSessions),
         chord("n", "Launcher in the focused window", Action::Launcher).alt("n", Some(false)),
         chord("tab", "Sessions panel", Action::Sessions).alt("a", Some(false)),
-        chord("s", "Send to the tile's session", Action::Send).alt("s", Some(false)),
+        chord("s", "Send from the focused session", Action::Send).alt("s", Some(false)),
         // Parvi's own, on letters CHROTE leaves free: V for view, H for
         // history (Alt+F is the shell's forward-word).
         chord("v", "Overview of every session", Action::Overview).alt("v", Some(false)),
@@ -73,6 +78,9 @@ impl Terminals {
         let ws = &mut self.settings.workspace;
         match action {
             Action::Tab(i) => {
+                if i >= ws.count {
+                    return;
+                }
                 if ws.show_tab(i) {
                     self.histories.clear();
                 }
@@ -134,8 +142,11 @@ impl Terminals {
                 return;
             }
             Action::Send => {
-                let k = self.focused_key();
-                self.open_send(k, window, cx);
+                if let Some(source) = self.focused_key() {
+                    self.send_from(source, window, cx);
+                } else {
+                    self.handoff(None, None, window, cx);
+                }
                 return;
             }
             Action::ClaimAll => {
@@ -215,7 +226,7 @@ mod tests {
             ("-", false, Some("Remove the last empty window")),
             ("n", false, Some("Launcher in the focused window")),
             ("a", false, Some("Sessions panel")),
-            ("s", false, Some("Send to the tile's session")),
+            ("s", false, Some("Send from the focused session")),
             ("2", false, Some("Terminal tab 2")),
             ("6", false, Some("Terminal tab 6")),
             // Alt+F is the shell's forward-word.
@@ -238,7 +249,7 @@ mod tests {
             ("-", Some("Remove the last empty window")),
             ("/", Some("Session search")),
             ("n", Some("Launcher in the focused window")),
-            ("s", Some("Send to the tile's session")),
+            ("s", Some("Send from the focused session")),
             ("3", Some("Terminal tab 3")),
             ("i", None),
             ("r", None),
@@ -260,9 +271,12 @@ mod tests {
     }
 
     #[test]
-    fn a_tab_past_the_shown_ones_has_no_chord() {
+    fn a_tab_past_the_shown_ones_is_a_no_op_chord() {
         let all = chords(&WeakEntity::new_invalid(), 1);
-        assert!(direct(&alt("2", "2", false), &all).is_none());
+        assert_eq!(
+            direct(&alt("2", "2", false), &all).unwrap().label,
+            "Terminal tab 2 (not open)"
+        );
         assert_eq!(
             direct(&alt("1", "1", false), &all).unwrap().caps,
             ["ALT", "1"]
