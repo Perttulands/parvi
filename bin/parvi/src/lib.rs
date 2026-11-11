@@ -1,4 +1,7 @@
-//! The node's list of areas, which `main` serves and tests check.
+//! The node's list of areas, which `main` serves and tests check, and
+//! installing and upgrading the binary that serves them.
+
+pub mod install;
 
 use parvi_node_kit::Listing;
 
@@ -15,4 +18,6 @@ pub const AREAS: &[Listing] = &[
 ];
 
 /// The binary's own first words, which no area's command noun may take.
-pub const VERBS: &[&str] = &["serve", "mcp", "hook", "kinds", "help"];
+pub const VERBS: &[&str] = &[
+    "serve", "mcp", "hook", "kinds", "help", "install", "upgrade", "version",
+];

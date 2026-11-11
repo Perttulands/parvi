@@ -36,7 +36,7 @@ pub use trust::Trust;
 
 use crate::config::Config;
 use crate::events::{self, Log};
-use crate::identity::{Identity, Ports};
+use crate::identity::Identity;
 use crate::mcp::Mcp;
 use crate::{Area, Built, Command, Listing, Provided, Setup, address, listing};
 
@@ -83,13 +83,10 @@ pub async fn start(options: Options, areas: &[Listing]) -> Result<Running> {
     config.known(&names)?;
     let section = config.node()?;
     let node = Identity::load(&dir, section.device.clone())?;
-    let mut ports = Ports::default();
-    for (environment, port) in &section.ports {
-        ports.set(&format!("{environment}={port}"))?;
-    }
-    let listen = listen
-        .or(section.listen.clone())
-        .unwrap_or_else(|| format!("127.0.0.1:{}", ports.of(node.environment)));
+    let listen = match listen {
+        Some(listen) => listen,
+        None => section.address(node.environment)?,
+    };
     let listener = TcpListener::bind(&listen)
         .await
         .with_context(|| format!("listening on {listen}"))?;
@@ -137,7 +134,7 @@ pub async fn start(options: Options, areas: &[Listing]) -> Result<Running> {
     events.record(
         events::NODE,
         false,
-        format!("Parvi {} started on {here}", env!("CARGO_PKG_VERSION")),
+        format!("Parvi {} started on {here}", crate::VERSION),
     );
     let shared = Arc::new(Shared {
         node: node.clone(),
@@ -247,7 +244,7 @@ fn commands(areas: &[(Listing, Arc<dyn Area>)]) -> Result<Vec<Command>, Error> {
 async fn health(State(shared): State<Arc<Shared>>) -> Response {
     axum::Json(serde_json::json!({
         "status": "ok",
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": crate::VERSION,
         "protocol": PROTOCOL,
         "node": shared.node.id,
         "device": shared.node.device,
@@ -260,7 +257,7 @@ async fn health(State(shared): State<Arc<Shared>>) -> Response {
 
 /// `GET /api/version`, as CHROTE's.
 async fn version() -> Response {
-    axum::Json(serde_json::json!({ "version": env!("CARGO_PKG_VERSION") })).into_response()
+    axum::Json(serde_json::json!({ "version": crate::VERSION })).into_response()
 }
 
 async fn upgrade(ws: WebSocketUpgrade, State(shared): State<Arc<Shared>>) -> Response {

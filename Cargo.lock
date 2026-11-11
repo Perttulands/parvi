@@ -4266,6 +4266,7 @@ name = "parvi"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "axum",
  "jiff",
  "parvi-agents",
  "parvi-brain",

@@ -15,7 +15,7 @@ pub fn hello(node: &Identity, off: &[&str]) -> Vec<u8> {
     json.push_str(",\"environment\":");
     push_json_string(&mut json, node.environment.name());
     json.push_str(",\"version\":");
-    push_json_string(&mut json, env!("CARGO_PKG_VERSION"));
+    push_json_string(&mut json, crate::VERSION);
     json.push_str(&format!(",\"protocol\":{PROTOCOL}"));
     // Listed only when some are off, so an older reader sees all on.
     if !off.is_empty() {
@@ -63,7 +63,7 @@ mod tests {
             std::str::from_utf8(&frame[1..]).unwrap(),
             format!(
                 r#"{{"node":"0123abcd","device":"rig \"main\"","environment":"wsl","version":"{}","protocol":16}}"#,
-                env!("CARGO_PKG_VERSION")
+                crate::VERSION
             )
         );
     }

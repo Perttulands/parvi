@@ -24,3 +24,7 @@ pub use config::Config;
 pub use listing::Listing;
 pub use serve::{Failure, Options, Running, start};
 pub use setup::{Provided, Setup};
+
+/// This build: the package version and, built from Git, its commit
+/// (`0.0.1+8cdb58b`). `/api/health`, the hello and `parvi --version` say it.
+pub const VERSION: &str = env!("PARVI_VERSION");
