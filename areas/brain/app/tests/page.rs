@@ -11,12 +11,31 @@ use std::{
 fn page_renders_a_collection_from_a_node(cx: &mut TestAppContext) {
     let (ready, wait) = mpsc::channel();
     let (stop, stopped) = mpsc::channel();
+    let (saved, saved_text) = mpsc::channel();
     let thread = std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             let corpus = fresh_dir("brain-page-corpus");
             std::fs::create_dir(corpus.join("notes")).unwrap();
             std::fs::write(corpus.join("notes/page.md"), "# Test page\n").unwrap();
+            let git = |args: &[&str]| {
+                let output = std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&corpus)
+                    .args(args)
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            };
+            git(&["init", "-q"]);
+            git(&["config", "user.name", "Test Author"]);
+            git(&["config", "user.email", "author@example.org"]);
+            git(&["add", "."]);
+            git(&["commit", "-qm", "Initial page"]);
             let config = format!("[brain]\ncorpus = {:?}\n", corpus.to_str().unwrap());
             let node = Node::start(&[parvi_brain::LISTING], &config).await.unwrap();
             ready.send(node.url()).unwrap();
@@ -24,6 +43,9 @@ fn page_renders_a_collection_from_a_node(cx: &mut TestAppContext) {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
             node.stop().await;
+            saved
+                .send(std::fs::read_to_string(corpus.join("notes/page.md")).unwrap())
+                .unwrap();
             std::fs::remove_dir_all(corpus).unwrap();
         });
     });
@@ -58,8 +80,19 @@ fn page_renders_a_collection_from_a_node(cx: &mut TestAppContext) {
     until(cx, "page reader", |cx| {
         cx.debug_bounds("brain-page-title").is_some()
     });
+    let edit = cx.debug_bounds("brain-edit").unwrap().center();
+    cx.simulate_click(edit, Modifiers::none());
+    until(cx, "editor", |cx| cx.debug_bounds("brain-save").is_some());
+    cx.simulate_keystrokes("ctrl-end");
+    cx.simulate_input("Saved from Brain");
+    let save = cx.debug_bounds("brain-save").unwrap().center();
+    cx.simulate_click(save, Modifiers::none());
+    until(cx, "save to finish", |cx| {
+        cx.debug_bounds("brain-edit").is_some()
+    });
     stop.send(()).unwrap();
     thread.join().unwrap();
+    assert!(saved_text.recv().unwrap().contains("Saved from Brain"));
     std::fs::remove_dir_all(settings).unwrap();
 }
 

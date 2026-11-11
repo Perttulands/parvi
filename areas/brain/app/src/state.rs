@@ -410,6 +410,9 @@ pub fn marks(snippet: &str) -> Vec<(String, bool)> {
 }
 
 fn words(status: u16, body: &[u8]) -> String {
+    if status == 0 {
+        return String::from_utf8_lossy(body).into_owned();
+    }
     parvi_app_kit::link::http::error_text(status, body)
 }
 
