@@ -317,9 +317,17 @@ impl Launcher {
                 notify: s.settings.notify
                     && notify_offered(&command, &user)
                     && conf.as_ref().is_some_and(|l| l.notify_off.is_none()),
-                // The window's own grid, so the session starts at the size
-                // it is seen at (#161); Send to Session's launch has none.
-                size: s.launch_grids.borrow().get(index).copied().flatten(),
+                // Send's launcher targets the focused tile.
+                size: s
+                    .launch_grids
+                    .borrow()
+                    .get(if index == SEND {
+                        s.settings.workspace.focus
+                    } else {
+                        index
+                    })
+                    .copied()
+                    .flatten(),
             };
             let id = s.fleet.launch_on(&node, l)?;
             let tab = s.settings.workspace.active;
@@ -806,6 +814,7 @@ impl Render for Launcher {
             .child(
                 div().mt(px(6.)).flex().justify_end().child(
                     kit::button(&t, ("launch", i), button_label, Kind::Primary)
+                        .debug_selector(move || format!("launch-{i}"))
                         .on_click(cx.listener(|l, _, window, cx| l.launch(window, cx))),
                 ),
             )

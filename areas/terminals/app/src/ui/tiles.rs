@@ -425,29 +425,15 @@ impl Terminals {
         let body: AnyElement = match state {
             TileState::Empty => {
                 let launcher = self.launchers[i].clone();
-                let grids = self.launch_grids.clone();
-                let font = self.settings.font_size;
-                // The grid a terminal here would hold: its box less the pad.
-                let measure = canvas(
-                    |_, _, _| (),
-                    move |b, _, window, _| {
-                        let pad = px(2. * size::TERM_PAD);
-                        let inner = gpui::size(b.size.width - pad, b.size.height - pad);
-                        let grid = paint::grid_for(inner, paint::metrics(window, font));
-                        grids.borrow_mut()[i] = Some(grid);
-                    },
-                )
-                .absolute()
-                .inset_0();
                 div()
                     .flex_1()
                     .min_h_0()
                     .relative()
                     .bg(t.term_bg)
-                    .child(measure)
                     .child(
                         div()
                             .id(("launcher-scroll", i))
+                            .debug_selector(move || format!("launcher-scroll-{i}"))
                             .absolute()
                             .inset_0()
                             .overflow_y_scroll()
@@ -546,6 +532,18 @@ impl Terminals {
                 self.detached_body(last, panel, &t)
             }
         };
+        let grids = self.launch_grids.clone();
+        let font = self.settings.font_size;
+        let measure = canvas(
+            |_, _, _| (),
+            move |b, _, window, _| {
+                let pad = px(2. * size::TERM_PAD);
+                let inner = gpui::size(b.size.width - pad, b.size.height - pad);
+                grids.borrow_mut()[i] = Some(paint::grid_for(inner, paint::metrics(window, font)));
+            },
+        )
+        .absolute()
+        .inset_0();
         // Only the body focuses the window and reaches the terminal; the
         // head is the tags'.
         let body = div()
@@ -572,6 +570,7 @@ impl Terminals {
                     s.tile_mouse_down(i, e, window, cx)
                 }),
             )
+            .child(measure)
             .child(body)
             .when(drop_over, |d| d.child(drop_note(&t)));
         frame.child(head).child(body).into_any_element()

@@ -119,6 +119,8 @@ pub(crate) fn commands(ctx: &Arc<Ctx>) -> Vec<Command> {
                             "enum": ctx.hub.users(),
                             "description": "Whose tmux server runs it; the node's own if absent.",
                         },
+                        "cols": { "type": "integer", "minimum": 1, "maximum": 65535, "description": "Initial terminal columns; supply with rows." },
+                        "rows": { "type": "integer", "minimum": 1, "maximum": 65535, "description": "Initial terminal rows; supply with cols." },
                         "notify": {
                             "type": "boolean",
                             "default": false,
@@ -369,6 +371,24 @@ async fn launch_agent(ctx: &Ctx, args: &Value) -> Result<Value> {
     let harness = text(args, "harness")?;
     let folder = text(args, "folder")?;
     let launcher = ctx.launcher.get();
+    let dimension = |key: &str| -> Result<Option<u16>> {
+        match args.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(value) => {
+                let n = value
+                    .as_u64()
+                    .and_then(|n| u16::try_from(n).ok())
+                    .filter(|n| *n > 0)
+                    .with_context(|| format!("{key} must be between 1 and 65535"))?;
+                Ok(Some(n))
+            }
+        }
+    };
+    let size = match (dimension("cols")?, dimension("rows")?) {
+        (None, None) => None,
+        (Some(cols), Some(rows)) => Some((cols, rows)),
+        _ => bail!("cols and rows must be supplied together"),
+    };
     let launch = Launch {
         harness: harness.to_owned(),
         // The launcher resolves ~ and checks the folder, as for the app.
@@ -385,7 +405,7 @@ async fn launch_agent(ctx: &Ctx, args: &Value) -> Result<Value> {
         },
         user: maybe_text(args, "user")?.unwrap_or_default().to_owned(),
         notify: flag(args, "notify", false)?,
-        size: None,
+        size,
     };
     let (session, warning) = ctx.hub.launch(&launcher, &launch).await?;
     Ok(json!({ "node": ctx.node, "session": session, "warning": warning }))
