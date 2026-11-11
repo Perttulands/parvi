@@ -260,6 +260,15 @@ impl Shell {
                     self.pages[i].settings_changed(window, cx);
                 }
             }
+            HubEvent::SettingsReloaded(changed) => {
+                // The Settings page shows what the file holds now.
+                let settings = std::iter::once(&crate::settings_page::ID);
+                for id in changed.iter().chain(settings) {
+                    if let Some(i) = self.index_of(id) {
+                        self.pages[i].settings_changed(window, cx);
+                    }
+                }
+            }
             HubEvent::Layers { closed } => {
                 for s in closed {
                     if let Surface::Layer(Layer {

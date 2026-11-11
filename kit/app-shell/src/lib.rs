@@ -61,6 +61,7 @@ pub fn start(
             h.settings.node = n;
         }
         h.connect(cx);
+        h.watch(cx);
     });
     window.focus(&shell.focus, cx);
     shell

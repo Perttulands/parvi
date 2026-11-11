@@ -61,12 +61,14 @@ impl Page for SettingsPage {
     /// The fields show what is kept now.
     fn shown(&mut self, shown: bool, _: &mut Window, cx: &mut Context<Self>) {
         if shown {
-            for (&(owner, key), field) in &self.fields {
-                let kept = self.value(owner, key, cx);
-                let text = kept.as_str().unwrap_or_default().to_string();
-                field.update(cx, |f, cx| f.set(&text, false, cx));
-            }
+            self.refresh(cx);
         }
+    }
+
+    /// The settings were read again from the file.
+    fn settings_changed(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.refresh(cx);
+        cx.notify();
     }
 }
 
@@ -111,6 +113,15 @@ impl SettingsPage {
             pages,
             fields,
             _fields: subscriptions,
+        }
+    }
+
+    /// Each field shows what is kept now.
+    fn refresh(&mut self, cx: &mut Context<Self>) {
+        for (&(owner, key), field) in &self.fields {
+            let kept = self.value(owner, key, cx);
+            let text = kept.as_str().unwrap_or_default().to_string();
+            field.update(cx, |f, cx| f.set(&text, false, cx));
         }
     }
 
