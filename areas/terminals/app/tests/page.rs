@@ -1019,3 +1019,179 @@ async fn cli_send_accepts_an_explicit_pane_id() {
     );
     node.stop().await;
 }
+
+#[gpui::test]
+fn reveal_session_shows_the_requested_session_and_pane(cx: &mut TestAppContext) {
+    let Some(running) = start("terminals-reveal") else {
+        return;
+    };
+    let (shell, cx, settings) = open_with_alpha(&running, "reveal", cx);
+    tmux(
+        &running,
+        &["split-window", "-d", "-t", "beta:0", "env PS1='$ ' sh"],
+    );
+    let ids = tmux(
+        &running,
+        &["list-panes", "-t", "beta:0", "-F", "#{pane_id}"],
+    );
+    let panes: Vec<u32> = ids
+        .lines()
+        .map(|s| s.trim_start_matches('%').parse().unwrap())
+        .collect();
+    assert_eq!(panes.len(), 2);
+    assert_eq!(panes[0], 1, "the test's first beta pane is %1");
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    let beta = Key {
+        node: running.node.clone(),
+        user: String::new(),
+        name: "beta".into(),
+    };
+    until(cx, "beta's two panes", |cx| {
+        page.read_with(cx, |p, _| {
+            p.fleet.session(&beta).is_some_and(|s| s.panes.len() == 2)
+        })
+    });
+    let beta_id = page.read_with(cx, |p, _| p.fleet.session(&beta).unwrap().id.clone());
+    click(cx, "tab-toy".into());
+    until(cx, "toy page", |cx| {
+        shell.read_with(cx, |s, _| s.shown_page()) == Some("toy")
+    });
+    let host = shell.read_with(cx, |s, _| Host::new(s.hub()).for_page("toy", &[]));
+    cx.update(|_, cx| {
+        host.ask(
+            Ask::Reveal {
+                what: "session".into(),
+                id: "beta".into(),
+                node: None,
+                part: None,
+            },
+            cx,
+        )
+    })
+    .unwrap();
+    until(cx, "beta revealed without a pane", |cx| {
+        shell.read_with(cx, |s, _| s.shown_page()) == Some("terminals")
+            && page.read_with(cx, |p, _| {
+                p.settings.workspace.shown(0).is_some_and(|b| b.key == beta)
+            })
+    });
+    cx.update(|_, cx| {
+        host.ask(
+            Ask::Reveal {
+                what: "session".into(),
+                id: "beta".into(),
+                node: None,
+                part: Some("1".into()),
+            },
+            cx,
+        )
+    })
+    .unwrap();
+    until(cx, "beta on the terminals page", |cx| {
+        shell.read_with(cx, |s, _| s.shown_page()) == Some("terminals")
+            && page.read_with(cx, |p, _| {
+                p.settings
+                    .workspace
+                    .shown(0)
+                    .is_some_and(|b| b.key == beta && b.pane == Some(1))
+            })
+    });
+    until(cx, "beta pane painted", |cx| {
+        page.read_with(cx, |p, _| p.window_text(0).is_some())
+    });
+    assert!(cx.update(|window, cx| page.read(cx).term_focus.is_focused(window)));
+    cx.simulate_input("echo revealed-pane-$((40+2))");
+    cx.simulate_keystrokes("enter");
+    until(cx, "typing reaches pane 1", |_| {
+        tmux(&running, &["capture-pane", "-p", "-t", "%1"]).contains("revealed-pane-42")
+    });
+    assert!(
+        !tmux(
+            &running,
+            &["capture-pane", "-p", "-t", &format!("%{}", panes[1])]
+        )
+        .contains("revealed-pane-42")
+    );
+
+    // A bound session in a hidden tile is restored there, not moved into
+    // the focused tile; an id and a %pane work as well as a name and number.
+    cx.update(|_, cx| {
+        page.update(cx, |p, cx| {
+            p.settings.workspace.bind_in(0, 1, beta.clone(), Some(1));
+            p.settings.workspace.set_windows(0, 1);
+            p.settings.workspace.focus = 0;
+            cx.notify();
+        })
+    });
+    cx.update(|_, cx| {
+        host.ask(
+            Ask::Reveal {
+                what: "session".into(),
+                id: beta_id,
+                node: Some(NodeId(running.node.clone())),
+                part: Some(format!("%{}", panes[1])),
+            },
+            cx,
+        )
+    })
+    .unwrap();
+    until(cx, "hidden bound tile restored", |cx| {
+        page.read_with(cx, |p, _| {
+            p.settings.workspace.focus == 1
+                && p.settings
+                    .workspace
+                    .shown(1)
+                    .is_some_and(|b| b.key == beta && b.pane == Some(panes[1]))
+        })
+    });
+    let before = page.read_with(cx, |p, _| p.settings.workspace.clone());
+    cx.update(|_, cx| {
+        host.ask(
+            Ask::Reveal {
+                what: "session".into(),
+                id: "missing".into(),
+                node: Some(NodeId(running.node.clone())),
+                part: None,
+            },
+            cx,
+        )
+    })
+    .unwrap();
+    until(cx, "missing session reported", |cx| {
+        shell.read_with(cx, |s, cx| {
+            s.hub().read(cx).status.as_ref().is_some_and(|status| {
+                status.failure && status.text == format!("no session missing on {}", running.node)
+            })
+        })
+    });
+    assert_eq!(
+        page.read_with(cx, |p, _| p.settings.workspace.clone()),
+        before
+    );
+    cx.update(|_, cx| {
+        host.ask(
+            Ask::Reveal {
+                what: "session".into(),
+                id: "beta".into(),
+                node: Some(NodeId(running.node.clone())),
+                part: Some("99999".into()),
+            },
+            cx,
+        )
+    })
+    .unwrap();
+    until(cx, "missing pane reported", |cx| {
+        shell.read_with(cx, |s, cx| {
+            s.hub()
+                .read(cx)
+                .status
+                .as_ref()
+                .is_some_and(|status| status.failure && status.text.contains("no pane 99999"))
+        })
+    });
+    assert_eq!(
+        page.read_with(cx, |p, _| p.settings.workspace.clone()),
+        before
+    );
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
