@@ -202,7 +202,13 @@ impl Replay {
                                     gate_id: event.gate_id.clone(),
                                     gate_attempt: event.attempt,
                                     requested_seq: seq,
-                                    decided_by: "human:operator".into(),
+                                    decided_by: decision
+                                        .data
+                                        .get("decidedBy")
+                                        .and_then(|v| v.as_str())
+                                        .filter(|s| !s.is_empty())
+                                        .unwrap_or(&decision.actor)
+                                        .to_owned(),
                                     text: text.into(),
                                     original_ref: input.r#ref.clone(),
                                     original_text: input.text.clone(),
@@ -460,6 +466,48 @@ mod tests {
         verdict.gate_id = "gate".into();
         let replay = Replay::read(&mission, &[verdict]);
         assert_eq!(replay.ended[0].3, "");
+    }
+    #[test]
+    fn routed_human_response_keeps_the_recorded_actor() {
+        let mission = Mission {
+            gates: vec![Gate {
+                id: "gate".into(),
+                ..Default::default()
+            }],
+            formations: vec![Formation {
+                id: "work".into(),
+                inputs: vec![Port {
+                    id: "in".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            connections: vec![Connection {
+                id: "edge".into(),
+                from: "gate:pass".into(),
+                to: "work:in".into(),
+            }],
+            ..Default::default()
+        };
+        let mut decision = ev(
+            2,
+            "human_verdict_recorded",
+            "gate",
+            json!({"requestedSeq":1,"reason":"approved","decidedBy":"agent:alice"}),
+        );
+        decision.gate_id = "gate".into();
+        decision.actor = "agent:alice".into();
+        let mut verdict = ev(
+            3,
+            "gate_verdict",
+            "gate",
+            json!({"requestedSeq":1,"routePort":"pass","routedEdges":["edge"],"inputRef":{"text":"work"}}),
+        );
+        verdict.gate_id = "gate".into();
+        let replay = Replay::read(&mission, &[decision, verdict]);
+        let response = replay.ports["work"]["in"].0.response.as_ref().unwrap();
+        assert_eq!(response.decided_by, "agent:alice");
+        assert_eq!(response.text, "approved");
     }
     #[test]
     fn routing_an_old_human_verdict_keeps_a_newer_evaluation_open() {

@@ -269,10 +269,32 @@ async fn gate_and_abort_commands_act_on_pending_runs() {
         timestamp: "2026-01-01T00:00:00Z".into(),
         ..Default::default()
     };
-    for (run, command, pick) in [
-        ("run_approve", "gate_approve", false),
-        ("run_reject", "gate_reject", false),
-        ("run_pick", "gate_pick", true),
+    for (run, verb, pick, actor_arg, expected) in [
+        (
+            "run_approve",
+            "approve",
+            false,
+            Some("agent:alice"),
+            "agent:alice",
+        ),
+        (
+            "run_reject",
+            "reject",
+            false,
+            Some("agent:bob"),
+            "agent:bob",
+        ),
+        ("run_pick", "pick", true, Some("agent:carol"), "agent:carol"),
+        ("run_approve_default", "approve", false, None, "agent:parvi"),
+        ("run_reject_default", "reject", false, None, "agent:parvi"),
+        ("run_pick_default", "pick", true, None, "agent:parvi"),
+        (
+            "run_approve_empty",
+            "approve",
+            false,
+            Some(""),
+            "agent:parvi",
+        ),
     ] {
         let ledger = Ledger::new(
             node.dir()
@@ -293,12 +315,42 @@ async fn gate_and_abort_commands_act_on_pending_runs() {
                 .clone();
         }
         ledger.append(request).unwrap();
-        let args = if pick {
-            json!({"run":run,"gate":"review","requested_seq":3,"attempt":1})
-        } else {
-            json!({"run":run,"gate":"review","requested_seq":3})
-        };
-        assert_eq!(node.call(command, args).await.unwrap()["runId"], run);
+        let mut args: Vec<String> = [verb, run, "review", "--requested-seq", "3"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        if pick {
+            args.extend(["--attempt".into(), "1".into()]);
+        }
+        if let Some(actor) = actor_arg {
+            args.extend(["--actor".into(), actor.into()]);
+        }
+        args.extend(["--node".into(), format!("{}/", node.url()), "--json".into()]);
+        let mut output = Vec::new();
+        assert_eq!(
+            parvi_node_kit::cli::run("gate", &args, &mut output)
+                .await
+                .unwrap(),
+            0,
+            "{args:?}"
+        );
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&output).unwrap()["runId"],
+            run
+        );
+        let events = ledger.read().unwrap();
+        let decision = events
+            .iter()
+            .find(|e| e.kind == "human_verdict_recorded")
+            .unwrap();
+        assert_eq!(decision.actor, expected, "{verb}");
+        assert_eq!(decision.data["decidedBy"], expected, "{verb}");
+        if !pick {
+            assert_eq!(
+                decision.data["verdict"],
+                if verb == "approve" { "pass" } else { "fail" }
+            );
+        }
     }
     let ledger = Ledger::new(
         node.dir().join("missions/runs/run_abort.ndjson"),
