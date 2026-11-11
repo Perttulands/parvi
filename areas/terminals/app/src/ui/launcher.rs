@@ -329,11 +329,10 @@ impl Launcher {
                     .copied()
                     .flatten(),
             };
-            let id = s.fleet.launch_on(&node, l)?;
+            let id = s.fleet.launch_on(&node, l.clone())?;
             let tab = s.settings.workspace.active;
             let window = (index != SEND).then_some(index);
-            s.launches
-                .insert((node.clone(), id), (name.clone(), window, tab));
+            s.launches.insert((node.clone(), id), (l, window, tab));
             if index == SEND {
                 s.send_launching(&node, id);
             }

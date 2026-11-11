@@ -249,9 +249,9 @@ pub struct Terminals {
     pub rename_field: Entity<TextField>,
     pub overview_cursor: usize,
     pub hover_row: Option<String>,
-    /// Launches asked of a node, by node and request: the name, the window
+    /// Launches asked of a node, by node and request: the recipe, the window
     /// it goes to and that window's tab.
-    pub launches: HashMap<(String, u32), (String, Option<usize>, usize)>,
+    pub launches: HashMap<(String, u32), (Launch, Option<usize>, usize)>,
     /// Kills asked of nodes, answered together (`store::selection`).
     pub kills: crate::store::selection::Kills,
     /// Rail rows picked to kill together; on this device only, never kept.
@@ -613,7 +613,25 @@ impl Terminals {
         if !self.places.is_empty() {
             kept.retain(|n, _| self.places.contains_key(n));
         }
-        if *kept != before {
+        let changed = *kept != before;
+        let before_restarts = self.settings.restarts.clone();
+        for session in &self.fleet.all {
+            let key = Key::of(session).text();
+            let record = self.settings.restarts.entry(key).or_default();
+            if record.id != session.id {
+                *record = crate::store::settings::Restart {
+                    id: session.id.clone(),
+                    ..Default::default()
+                };
+            }
+            if record.harness.is_none()
+                && let Some(cwd) = &session.cwd
+                && !cwd.is_empty()
+            {
+                record.folder.clone_from(cwd);
+            }
+        }
+        if changed || self.settings.restarts != before_restarts {
             self.save(cx);
         }
     }
@@ -630,14 +648,32 @@ impl Terminals {
             }
             Notice::Launched { id, ok, text } => {
                 self.send_launched(node, id, ok, &text, cx);
-                let Some((name, window_index, tab)) = self.launches.remove(&(node.to_string(), id))
+                let Some((launch, window_index, tab)) =
+                    self.launches.remove(&(node.to_string(), id))
                 else {
                     return;
                 };
+                let name = launch.name.clone();
                 // A restart answered: its windows were bound all along.
                 self.restarting
                     .retain(|k| !(k.node == node && k.name == name));
                 if ok {
+                    let key = Key {
+                        node: node.to_string(),
+                        user: launch.user.clone(),
+                        name: name.clone(),
+                    };
+                    self.settings.restarts.insert(
+                        key.text(),
+                        crate::store::settings::Restart {
+                            id: text.split('\0').next().unwrap_or_default().to_string(),
+                            folder: launch.folder.clone(),
+                            harness: Some(launch.harness.clone()),
+                            flags: launch.flags.clone(),
+                            notify: launch.notify,
+                        },
+                    );
+                    self.save(cx);
                     if let Some(w) = window_index {
                         let node = node.to_string();
                         let user = self
@@ -688,6 +724,9 @@ impl Terminals {
                         name: name.clone(),
                         ..old.clone()
                     };
+                    if let Some(record) = self.settings.restarts.remove(&old.text()) {
+                        self.settings.restarts.insert(new.text(), record);
+                    }
                     for k in [
                         self.peek.as_mut().map(|p| &mut p.key),
                         self.send_target.as_mut(),
@@ -1103,10 +1142,8 @@ impl Terminals {
         }
     }
 
-    /// Makes an ended session again as CHROTE does: the same name on the
-    /// same node and Unix user, a shell in the home folder, and every window
-    /// it was bound to shows it once it is there. What ran in it is not
-    /// guessed: tmux names only the program in front, not how it was run.
+    /// Makes an ended session again under the same name and user. A witnessed
+    /// launch keeps its recipe; other sessions use a shell in their last folder.
     fn restart(&mut self, k: Key) {
         if self.restarting.contains(&k) {
             return;
@@ -1116,13 +1153,13 @@ impl Terminals {
             .bound(&k)
             .filter(|(tab, _)| *tab == ws.active)
             .map_or(ws.focus, |(_, w)| w);
-        let mut launch = restart_launch(&k);
+        let mut launch = restart_launch(&k, self.settings.restarts.get(&k.text()));
         launch.size = self.launch_grids.borrow()[target];
-        match self.fleet.launch_on(&k.node, launch) {
+        match self.fleet.launch_on(&k.node, launch.clone()) {
             Some(id) => {
                 let tab = self.settings.workspace.active;
                 self.launches
-                    .insert((k.node.clone(), id), (k.name.clone(), None, tab));
+                    .insert((k.node.clone(), id), (launch, None, tab));
                 self.report(&format!("Restarting {}…", k.name), false, None);
                 self.restarting.insert(k);
             }
@@ -1430,16 +1467,21 @@ impl Render for Terminals {
     }
 }
 
-/// What Restart asks the node for, as CHROTE's Restart does: the session
-/// again under its name and Unix user, a shell in the home folder.
-fn restart_launch(k: &Key) -> Launch {
+/// What Restart asks the node for, retaining a witnessed launch recipe or
+/// falling back to a shell in the last observed folder.
+fn restart_launch(k: &Key, saved: Option<&crate::store::settings::Restart>) -> Launch {
     Launch {
-        harness: "shell".into(),
-        folder: String::new(),
+        harness: saved
+            .and_then(|s| s.harness.clone())
+            .unwrap_or_else(|| "shell".into()),
+        folder: saved.map(|s| s.folder.clone()).unwrap_or_default(),
         name: k.name.clone(),
-        flags: String::new(),
+        flags: saved
+            .filter(|s| s.harness.is_some())
+            .map(|s| s.flags.clone())
+            .unwrap_or_default(),
         user: k.user.clone(),
-        notify: false,
+        notify: saved.is_some_and(|s| s.harness.is_some() && s.notify),
         size: None,
     }
 }
@@ -1475,12 +1517,43 @@ mod tests {
             user: "alice".into(),
             name: "build".into(),
         };
-        let l = restart_launch(&k);
+        let l = restart_launch(&k, None);
         assert_eq!((l.name.as_str(), l.user.as_str()), ("build", "alice"));
         assert_eq!(
             (l.harness.as_str(), l.folder.as_str(), l.flags.as_str()),
             ("shell", "", "")
         );
         assert!(!l.notify);
+        let saved = crate::store::settings::Restart {
+            id: "$1".into(),
+            folder: "/tmp/work".into(),
+            harness: Some("fake".into()),
+            flags: "--chosen".into(),
+            notify: true,
+        };
+        let l = restart_launch(&k, Some(&saved));
+        assert_eq!(
+            (
+                l.harness.as_str(),
+                l.folder.as_str(),
+                l.flags.as_str(),
+                l.notify
+            ),
+            ("fake", "/tmp/work", "--chosen", true)
+        );
+        let fallback = crate::store::settings::Restart {
+            harness: None,
+            ..saved
+        };
+        let l = restart_launch(&k, Some(&fallback));
+        assert_eq!(
+            (
+                l.harness.as_str(),
+                l.folder.as_str(),
+                l.flags.as_str(),
+                l.notify
+            ),
+            ("shell", "/tmp/work", "", false)
+        );
     }
 }
