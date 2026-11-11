@@ -111,3 +111,106 @@ fn search_open_and_follow_a_link_in_the_reader(cx: &mut TestAppContext) {
     });
     std::fs::remove_dir_all(settings).unwrap();
 }
+
+thread_local! {
+    static SENT: std::cell::RefCell<Option<parvi_app_kit::Ask>> = const { std::cell::RefCell::new(None) };
+}
+
+struct Toy;
+impl parvi_app_kit::Page for Toy {
+    const ID: &'static str = "toy";
+    const TITLE: &'static str = "Toy";
+    const ANSWERS: &'static [parvi_app_kit::Answers] = &[parvi_app_kit::Answers::Send];
+    fn answer(
+        &mut self,
+        ask: parvi_app_kit::Ask,
+        _: &'static str,
+        _: &mut gpui::Window,
+        _: &mut gpui::Context<Self>,
+    ) {
+        SENT.with(|sent| *sent.borrow_mut() = Some(ask));
+    }
+}
+impl gpui::Render for Toy {
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        _: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::prelude::*;
+        gpui::div()
+            .size_full()
+            .debug_selector(|| "toy-page".into())
+            .child("Toy")
+    }
+}
+fn toy(
+    host: parvi_app_kit::Host,
+    window: &mut gpui::Window,
+    cx: &mut gpui::App,
+) -> parvi_app_kit::Mounted {
+    parvi_app_kit::mount(host, window, cx, |_, _, _| Toy)
+}
+
+#[gpui::test]
+fn dock_search_send_and_toggle_from_another_page(cx: &mut TestAppContext) {
+    let running = start();
+    let settings = fresh_dir("brain-dock-settings");
+    SENT.with(|sent| *sent.borrow_mut() = None);
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        parvi_app_shell::start(
+            &[toy, parvi_brain_app::build],
+            Some(running.url.clone()),
+            Some(settings.join("app.json")),
+            window,
+            cx,
+        )
+    });
+    until(cx, "node link", |cx| {
+        shell.read_with(cx, |s, cx| {
+            s.hub().read(cx).fleet.here().state == LinkState::Open
+        })
+    });
+    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy"));
+    let chords = shell.update_in(cx, |shell, _, cx| shell.chords(cx));
+    assert!(
+        parvi_app_kit::chords::rows(&chords)
+            .iter()
+            .any(|row| row.label == "Brain")
+    );
+    cx.simulate_keystrokes("alt-l");
+    until(cx, "brain dock", |cx| {
+        cx.debug_bounds("dock-brain").is_some()
+    });
+    assert!(cx.debug_bounds("toy-page").is_some());
+    let search = cx.debug_bounds("brain-search").unwrap().center();
+    cx.simulate_click(search, Modifiers::none());
+    cx.simulate_input("first");
+    cx.executor().advance_clock(Duration::from_millis(250));
+    until(cx, "search result", |cx| {
+        cx.debug_bounds("brain-result-0").is_some()
+    });
+    let result = cx.debug_bounds("brain-result-0").unwrap().center();
+    cx.simulate_click(result, Modifiers::none());
+    until(cx, "page in dock", |cx| {
+        cx.debug_bounds("brain-reading-notes/first.md").is_some()
+    });
+    let send = cx.debug_bounds("brain-send").unwrap().center();
+    cx.simulate_click(send, Modifiers::none());
+    assert_eq!(
+        SENT.with(|sent| sent.borrow().clone()),
+        Some(parvi_app_kit::Ask::Send {
+            reference: "library notes/first.md".into(),
+            target: None
+        })
+    );
+    cx.simulate_keystrokes("alt-l");
+    until(cx, "dock closed", |cx| {
+        cx.debug_bounds("dock-brain").is_none()
+    });
+    assert!(cx.debug_bounds("toy-page").is_some());
+    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy"));
+    std::fs::remove_dir_all(settings).unwrap();
+}

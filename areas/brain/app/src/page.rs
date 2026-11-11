@@ -1,6 +1,8 @@
 //! Brain's page entity and its requests; state and drawing stay separate.
 use crate::state::{self, Brain, SETTLE_MS};
-use gpui::{App, AppContext, Context, Entity, FocusHandle, Focusable, ScrollHandle, Window};
+use gpui::{
+    App, AppContext, Context, Entity, FocusHandle, Focusable, ScrollHandle, WeakEntity, Window,
+};
 use parvi_app_kit::widgets::select::Selectable;
 use parvi_app_kit::{
     Answers, Ask, Host, Page,
@@ -22,6 +24,7 @@ struct Settings {
 
 pub struct BrainPage {
     pub(crate) host: Host,
+    me: WeakEntity<BrainPage>,
     pub(crate) state: Brain,
     pub(crate) field: Entity<TextField>,
     pub(crate) editor: Entity<Code>,
@@ -40,6 +43,17 @@ impl Page for BrainPage {
     const AREA: Option<&'static str> = Some("brain");
     const ANSWERS: &'static [Answers] = &[Answers::Reveal("brain")];
 
+    fn chords(&self, _: &App) -> Vec<parvi_app_kit::chords::Chord> {
+        let me = self.me.clone();
+        vec![
+            parvi_app_kit::chords::Chord::new("l", "Brain", move |_, cx| {
+                let _ = me.update(cx, |page, cx| page.toggle_dock(cx));
+            })
+            .alt("l", Some(false))
+            .everywhere(),
+        ]
+    }
+
     fn focus(&self, cx: &App) -> Option<FocusHandle> {
         Some(self.field.read(cx).focus_handle(cx))
     }
@@ -56,7 +70,7 @@ impl Page for BrainPage {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.shown
+        if (self.shown || self.host.docked(cx))
             && state == Some(LinkState::Open)
             && (self.node.as_str().is_empty() || &self.node == node)
         {
@@ -114,6 +128,7 @@ impl BrainPage {
         state.hidden = settings.hidden.into_iter().collect();
         Self {
             host,
+            me: cx.weak_entity(),
             state,
             field,
             editor,
@@ -124,6 +139,15 @@ impl BrainPage {
             reader_focus: cx.focus_handle(),
             node: NodeId(String::new()),
             shown: false,
+        }
+    }
+    fn toggle_dock(&mut self, cx: &mut Context<Self>) {
+        if self.host.docked(cx) {
+            self.host.close_dock(cx);
+        } else if let Some(page) = self.me.upgrade() {
+            self.brain_read_rail(cx);
+            let dock = cx.new(|cx| crate::view::Dock::new(page, cx));
+            self.host.show_dock(dock.into(), cx);
         }
     }
     pub(crate) fn save_hidden(&self, cx: &mut Context<Self>) {

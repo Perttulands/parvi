@@ -2,8 +2,8 @@
 use crate::page::BrainPage;
 use crate::tokens::*;
 use gpui::{
-    Context, Div, FontWeight, HighlightStyle, KeyDownEvent, MouseButton, SharedString, StyledText,
-    Window, div, prelude::*, px,
+    Context, Div, Entity, FontWeight, HighlightStyle, KeyDownEvent, MouseButton, SharedString,
+    StyledText, Window, div, prelude::*, px,
 };
 use parvi_app_kit::Ask;
 use parvi_app_kit::theme::{alpha, board, size, theme};
@@ -11,6 +11,26 @@ use parvi_app_kit::widgets::{
     kit::{self, Kind},
     markdown, select,
 };
+
+pub(crate) struct Dock {
+    page: Entity<BrainPage>,
+}
+
+impl Dock {
+    pub(crate) fn new(page: Entity<BrainPage>, cx: &mut Context<Self>) -> Self {
+        cx.observe(&page, |_, _, cx| cx.notify()).detach();
+        Self { page }
+    }
+}
+
+impl Render for Dock {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div().w(px(DOCK_WIDTH)).h_full().child(
+            self.page
+                .update(cx, |page, cx| page.render(window, cx).into_any_element()),
+        )
+    }
+}
 
 impl Render for BrainPage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -160,17 +180,19 @@ impl Render for BrainPage {
                             ),
                         )
                     })
-                    .child(kit::button(&t, "brain-send", "Send", Kind::Plain).on_click(
-                        cx.listener(move |page, _, _, cx| {
-                            let _ = page.host.ask(
-                                Ask::Send {
-                                    reference: send.clone(),
-                                    target: None,
-                                },
-                                cx,
-                            );
-                        }),
-                    ))
+                    .child(
+                        kit::button(&t, "brain-send", "Send", Kind::Plain)
+                            .debug_selector(|| "brain-send".into())
+                            .on_click(cx.listener(move |page, _, _, cx| {
+                                let _ = page.host.ask(
+                                    Ask::Send {
+                                        reference: send.clone(),
+                                        target: None,
+                                    },
+                                    cx,
+                                );
+                            })),
+                    )
                     .child(
                         kit::button(&t, "brain-close", "Close", Kind::Quiet).on_click(cx.listener(
                             |page, _, _, cx| {
