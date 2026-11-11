@@ -29,3 +29,13 @@ pub use config::Config;
 pub use github::Gh;
 pub use poller::Work;
 pub use routes::routes;
+
+/// An item known to be absent, as opposed to a tracker that failed to answer.
+#[derive(Debug)]
+pub(crate) struct MissingItem(pub String);
+impl std::fmt::Display for MissingItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for MissingItem {}

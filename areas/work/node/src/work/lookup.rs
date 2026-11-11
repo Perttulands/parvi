@@ -64,10 +64,7 @@ impl Work {
                     .iter()
                     .find(|item| item.id == *id)
                     .cloned()
-                    .ok_or_else(|| {
-                        parvi_core::Error::new("not_found", format!("no Bead {id} in {folder}"))
-                            .into()
-                    })
+                    .ok_or_else(|| super::MissingItem(format!("no Bead {id} in {folder}")).into())
             }
         }
     }

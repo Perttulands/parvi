@@ -22,7 +22,7 @@ pub fn routes<S: Clone + Send + Sync + 'static>(work: Work) -> Router<S> {
 
 /// `GET /api/work/item?ref=<reference>`: `{"item": …, "line": …}`, where
 /// `line` names the item to an agent; 400 for a reference that does not
-/// resolve, 502 for a tracker that failed to answer.
+/// resolve, 404 for a missing item, 502 for a tracker that failed to answer.
 async fn item(State(work): State<Work>, Query(params): Query<HashMap<String, String>>) -> Response {
     let written = params.get("ref").map(String::as_str).unwrap_or("");
     let reference = match work.resolve(written).await {
@@ -41,16 +41,12 @@ async fn item(State(work): State<Work>, Query(params): Query<HashMap<String, Str
             Json(json!({ "item": item, "line": line })).into_response()
         }
         Err(error) => {
-            if let Some(not_found) = error.downcast_ref::<parvi_core::Error>()
-                && not_found.code == "not_found"
-            {
-                return (StatusCode::NOT_FOUND, Json(json!({"error": not_found}))).into_response();
-            }
-            refuse(
-                StatusCode::BAD_GATEWAY,
-                parvi_work_contract::TRACKER_ERROR,
-                error,
-            )
+            let (status, code) = if error.downcast_ref::<super::MissingItem>().is_some() {
+                (StatusCode::NOT_FOUND, "not_found")
+            } else {
+                (StatusCode::BAD_GATEWAY, parvi_work_contract::TRACKER_ERROR)
+            };
+            refuse(status, code, error)
         }
     }
 }
