@@ -83,7 +83,7 @@ impl Model {
                         .material()
                         .pbr_metallic_roughness()
                         .base_color_factor();
-                    for ix in indices.chunks_exact(3) {
+                    for ix in indices.as_chunks::<3>().0 {
                         let [a, b, c] = [ix[0] as usize, ix[1] as usize, ix[2] as usize];
                         if a >= positions.len() || b >= positions.len() || c >= positions.len() {
                             return Err("Invalid triangle indices".into());
