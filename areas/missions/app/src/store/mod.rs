@@ -6,6 +6,7 @@ pub mod flow;
 pub mod gate;
 pub mod placement;
 pub mod run_state;
+pub mod seats;
 pub mod staffing;
 pub mod undo;
 pub mod words;
