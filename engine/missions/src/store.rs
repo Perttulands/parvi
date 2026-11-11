@@ -31,16 +31,10 @@ impl Store {
         Store { root: root.into() }
     }
 
-    /// The node's own mission state directory, under LOCALAPPDATA on Windows
-    /// and XDG_DATA_HOME (or ~/.local/share) on Unix.
-    pub fn default_root() -> Option<PathBuf> {
-        let data = if cfg!(windows) {
-            nonempty(std::env::var_os("LOCALAPPDATA"))?
-        } else {
-            nonempty(std::env::var_os("XDG_DATA_HOME"))
-                .or_else(|| home_dir().map(|home| home.join(".local").join("share")))?
-        };
-        Some(data.join("parvi").join("missions"))
+    /// Where a node keeps its missions, roles and runs: `missions` in the
+    /// node's own folder, the one place every area reads it from.
+    pub fn root_in(node_dir: &Path) -> PathBuf {
+        node_dir.join("missions")
     }
 
     pub fn root(&self) -> &Path {
@@ -150,8 +144,4 @@ pub(crate) fn check_slug(slug: &str) -> Result<(), Error> {
 pub(crate) fn home_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
     (!home.is_empty()).then(|| PathBuf::from(home))
-}
-
-fn nonempty(value: Option<std::ffi::OsString>) -> Option<PathBuf> {
-    value.filter(|v| !v.is_empty()).map(PathBuf::from)
 }
