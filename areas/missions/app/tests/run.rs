@@ -552,6 +552,20 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
             .read_with(cx, |s, cx| s.hub().read(cx).unsaved(cx))
             .is_empty()
     });
+    click(cx, "run-again");
+    until(cx, "start form for the same mission", |cx| {
+        cx.debug_bounds("run-start").is_some()
+    });
+    assert!(
+        !shell
+            .read_with(cx, |s, cx| s.hub().read(cx).unsaved(cx))
+            .is_empty(),
+        "Run again carries the finished run's inputs into the start form"
+    );
+    click(cx, "run-cancel");
+    until(cx, "start form closed", |cx| {
+        cx.debug_bounds("run-start").is_none()
+    });
     shell.update(cx, |s, cx| {
         Host::new(s.hub())
             .for_page("test", &[])

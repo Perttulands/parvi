@@ -374,6 +374,24 @@ impl MissionsPage {
         self.run.starting = true;
         cx.notify();
     }
+    /// The start form for a finished run's mission, holding its inputs.
+    fn run_again(&mut self, card: &str, inputs: &[(String, String)], cx: &mut Context<Self>) {
+        let known = self
+            .state
+            .mission
+            .as_ref()
+            .is_some_and(|m| m.input_cards.iter().any(|c| c.id == card));
+        if known {
+            self.prepare_card_run(card, cx);
+        } else {
+            self.prepare_run(cx);
+        }
+        for (name, field) in &self.run.fields {
+            if let Some((_, value)) = inputs.iter().find(|(given, _)| given == name) {
+                field.update(cx, |field, cx| field.set(value, false, cx));
+            }
+        }
+    }
     pub(super) fn prepare_step_run(&mut self, id: String, cx: &mut Context<Self>) {
         if self.start_uncertain() {
             return;
@@ -1638,6 +1656,23 @@ impl MissionsPage {
                     .on_click(cx.listener(|p, _, _, cx| {
                         p.run_post("/land".into(), json!({"force":false}), cx)
                     })),
+            );
+        }
+        if run.r#final
+            && self.state.mission.is_some()
+            && self.state.selected.as_ref().map(|(_, slug)| slug) == Some(&run.mission_slug)
+        {
+            let inputs: Vec<(String, String)> = run
+                .inputs
+                .iter()
+                .map(|value| (value.name.clone(), value.value.clone()))
+                .collect();
+            let card = run.input_card_id.clone();
+            actions = actions.child(
+                kit::button(t, "run-again", "Run again…", Kind::Plain)
+                    .debug_selector(|| "run-again".into())
+                    .tooltip(kit::tip("Start this mission again with the same inputs"))
+                    .on_click(cx.listener(move |p, _, _, cx| p.run_again(&card, &inputs, cx))),
             );
         }
         let status_selector = format!("run-finished-{}", run.status);
