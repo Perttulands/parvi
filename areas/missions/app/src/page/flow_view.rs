@@ -6,6 +6,43 @@ use parvi_app_kit::theme::Theme;
 use parvi_missions_contract::Mission;
 
 impl MissionsPage {
+    /// What an empty mission says in Flow and on the canvas: how to begin.
+    pub(super) fn empty_mission(
+        &self,
+        t: &Theme,
+        selector: &'static str,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let button = format!("{selector}-input");
+        card(t)
+            .debug_selector(move || selector.into())
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("This mission is empty"),
+            )
+            .child(div().text_color(t.text2).child(
+                "Start with an Input: what you hand the mission when you run it. \
+                 Then add a step with the + on its card, and an End where the work is done.",
+            ))
+            .child(
+                div().flex().gap(px(TAB_GAP)).child(
+                    kit::button(
+                        t,
+                        SharedString::from(button.clone()),
+                        "Add the Input",
+                        Kind::Primary,
+                    )
+                    .debug_selector(move || button.clone())
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(|page, _, _, cx| {
+                        page.mission_canvas_mode = true;
+                        page.add_card(board::Kind::Input, cx);
+                    })),
+                ),
+            )
+    }
+
     pub(super) fn render_mission_flow(
         &self,
         t: &Theme,
@@ -15,25 +52,7 @@ impl MissionsPage {
         let flow = flow::build(mission);
         let mut body = div().flex().flex_col().gap(px(PAD)).p(px(PAD)).w_full();
         if mission.input_cards.is_empty() && mission.formations.is_empty() {
-            return body.child(
-                card(t)
-                    .debug_selector(|| "flow-empty".into())
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child("This mission is empty"))
-                    .child(div().text_color(t.text2).child(
-                        "Start with an Input: what you hand the mission when you run it. \
-                         Then add a step with the + on its card, and an End where the work is done.",
-                    ))
-                    .child(
-                        div().flex().gap(px(TAB_GAP)).child(
-                            kit::button(t, "flow-empty-input", "Add the Input", Kind::Primary)
-                                .debug_selector(|| "flow-empty-input".into())
-                                .on_click(cx.listener(|page, _, _, cx| {
-                                    page.mission_canvas_mode = true;
-                                    page.add_card(board::Kind::Input, cx);
-                                })),
-                        ),
-                    ),
-            );
+            return body.child(self.empty_mission(t, "flow-empty", cx));
         }
         for section in &flow.sections {
             if let Some(id) = &section.input

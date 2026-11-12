@@ -744,7 +744,13 @@ async fn wait(m: Missions, a: &Value) -> Result<Value, Error> {
                 commands.push(format!("parvi run resume {run_arg} --pick-best"));
             }
         }
-        asks.push(json!({"step":event.node_id,"what":run.block_code,"commands":commands}));
+        let why = match wire::plain_reason(&event.detail) {
+            why if why.is_empty() => run.block_code.replace('_', " "),
+            why => why,
+        };
+        asks.push(
+            json!({"step":event.node_id,"what":run.block_code,"why":why,"commands":commands}),
+        );
     }
     let next: Vec<_> = asks
         .iter()

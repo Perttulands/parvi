@@ -33,6 +33,8 @@ const START_FORM_MAX: f32 = 680.;
 const TAB_GAP: f32 = 6.;
 const EDGE: f32 = 2.;
 const EDITOR_W: f32 = 360.;
+/// How long after the last keystroke the drawer applies an edit.
+const APPLY_AFTER: std::time::Duration = std::time::Duration::from_millis(600);
 /// A file opened from a run, beside it.
 const BESIDE_W: f32 = 560.;
 /// How much a dialog's backdrop dims the page behind it.
@@ -96,6 +98,8 @@ pub struct MissionsPage {
     /// The operator asked to run this mission while it could not: what it
     /// still lacks now reads as a problem rather than as a to-do.
     run_tried: bool,
+    /// The blocked step's recorded output is shown.
+    block_details: bool,
     /// The to-do list over the canvas is open.
     findings_open: bool,
     /// A staffing pick made while another write was in flight.
@@ -147,6 +151,10 @@ struct Editor {
     deleting: bool,
     baseline: Option<EditorSnapshot>,
     outputs: Vec<OutputDraft>,
+    /// The save under way applies an edit and leaves the drawer open.
+    keep_open: bool,
+    /// Counts edits, so only the last of a burst saves.
+    edits: u64,
 }
 impl MissionsPage {
     pub fn new(host: Host, _: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -203,6 +211,7 @@ impl MissionsPage {
             reveal_card: None,
             new_step: None,
             run_tried: false,
+            block_details: false,
             findings_open: false,
             staff_pending: false,
             seen_run_snapshots: Default::default(),
@@ -353,12 +362,52 @@ impl MissionsPage {
         }
     }
     fn watch_editor_field(field: &Entity<TextField>, cx: &mut Context<Self>) {
-        cx.subscribe(field, |page, _, event: &FieldEvent, cx| {
+        cx.subscribe(field, |page, field, event: &FieldEvent, cx| {
             if matches!(event, FieldEvent::Changed) && page.wanted.is_some() {
                 page.resolve_wanted(cx);
             }
+            if matches!(event, FieldEvent::Changed) && field != page.note {
+                page.apply_soon(cx);
+            }
         })
         .detach();
+    }
+    /// The drawer applies what is typed at once, as staffing does: shortly
+    /// after the last keystroke, without closing.
+    fn apply_soon(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = &mut self.editor else {
+            return;
+        };
+        editor.edits += 1;
+        let (id, edits) = (editor.id.clone(), editor.edits);
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(APPLY_AFTER).await;
+            let _ = this.update(cx, |page, cx| page.apply_now(&id, edits, cx));
+        })
+        .detach();
+    }
+    fn apply_now(&mut self, id: &str, edits: u64, cx: &mut Context<Self>) {
+        let Some(editor) = &self.editor else {
+            return;
+        };
+        if editor.id != id || editor.edits != edits || editor.deleting {
+            return;
+        }
+        if editor.busy || self.writing {
+            // A save is under way; try again once it has had time to land.
+            self.apply_soon(cx);
+            return;
+        }
+        let dirty = editor
+            .baseline
+            .as_ref()
+            .is_some_and(|base| *base != self.editor_snapshot(editor, cx));
+        if dirty {
+            if let Some(editor) = &mut self.editor {
+                editor.keep_open = true;
+            }
+            self.save_editor_merged(cx);
+        }
     }
     fn unsaved(&self, cx: &gpui::App) -> Option<String> {
         if let Some(reason) = self.manage_unsaved(cx) {
@@ -719,6 +768,8 @@ impl MissionsPage {
             deleting: false,
             baseline: None,
             outputs,
+            keep_open: false,
+            edits: 0,
         });
         self.slot = m
             .formations
@@ -1288,6 +1339,9 @@ impl MissionsPage {
         self.write_board(patch, WriteMode::Edit, cx);
     }
     fn save_step(&mut self, cx: &mut Context<Self>) {
+        if let Some(editor) = &mut self.editor {
+            editor.keep_open = false;
+        }
         self.save_editor_merged(cx);
     }
 }
@@ -1520,10 +1574,32 @@ impl Render for MissionsPage {
             let mut empty = div().p(px(PAD)).flex().flex_col().gap(px(TAB_GAP));
             empty = match self.state.error.clone() {
                 Some(error) => empty.child(div().text_color(t.error).child(error)),
-                None => empty
-                    .child(kit::label(&t, "Missions"))
-                    .child("Pick a mission on the left to see its steps, or a run to see what it did.")
-                    .child(kit::note(&t, "+ Mission starts a new one; parvi mission --help does the same from a terminal.", None)),
+                None => {
+                    // Before any mission exists there is nothing on the left
+                    // to pick.
+                    let none = !self.state.nodes.is_empty()
+                        && self.state.nodes.values().all(|feed| {
+                            feed.missions.as_ref().is_some_and(Vec::is_empty)
+                                && feed.runs.is_empty()
+                        });
+                    let lead = if none {
+                        "No missions yet. A mission is a plan of steps that agents carry out; + Mission starts one."
+                    } else {
+                        "Pick a mission on the left to see its steps, or a run to see what it did."
+                    };
+                    empty
+                        .child(kit::label(&t, "Missions"))
+                        .child(
+                            div()
+                                .debug_selector(|| "missions-landing".into())
+                                .child(lead),
+                        )
+                        .child(kit::note(
+                            &t,
+                            "From a terminal: parvi mission --help.",
+                            None,
+                        ))
+                }
             };
             if self.state.error.is_some() && self.state.selected.is_some() {
                 empty = empty.child(
@@ -1639,7 +1715,7 @@ impl Render for MissionsPage {
                             }))
                             .when(!ed.deleting, |d| d.child(left(kit::button(&t, "step-delete", "Delete", Kind::Quiet).debug_selector(|| "step-delete".into()).on_click(cx.listener(|p, _, _, cx| p.delete_card(cx))))))
                             .child(
-                                kit::button(&t, "step-save", "Save", Kind::Primary)
+                                kit::button(&t, "step-save", "Done", Kind::Primary)
                                     .debug_selector(|| "step-save".into())
                                     .on_click(cx.listener(|p, _, _, cx| p.save_step(cx))),
                             ))

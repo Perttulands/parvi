@@ -31,12 +31,13 @@ impl Coordinator {
                 .clone()
                 .unwrap_or_else(|| root.join("workspaces"))
                 .join(id);
+            // Kept outputs are sealed read-only, so plain removal would fail.
             for dir in [root.join("artifacts").join(id), made] {
-                match std::fs::remove_dir_all(&dir) {
-                    Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
-                    _ => {}
-                }
+                crate::kept_copy::remove_tree(&dir)?;
             }
+            crate::SeatRecords::new(root)
+                .forget_run(id)
+                .map_err(crate::error::to_io)?;
             // The record goes last: until then the run still lists and a
             // failed delete can be tried again.
             for end in ["bindings.toml", "snapshot.toml", "ndjson"] {

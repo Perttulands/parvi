@@ -55,6 +55,8 @@ pub(super) struct View {
     menu: Option<(f32, f32)>,
     bounds: Rc<Cell<(f32, f32, f32, f32)>>,
     fitted: bool,
+    /// Panned or zoomed by hand: the board is framed again only by Fit.
+    touched: bool,
     /// The card being edited, kept in view until the view is moved by hand.
     follow: Option<String>,
 }
@@ -67,6 +69,7 @@ impl Default for View {
             menu: None,
             bounds: Rc::new(Cell::new((0., 0., 0., 0.))),
             fitted: false,
+            touched: false,
             follow: None,
         }
     }
@@ -84,6 +87,13 @@ impl View {
     pub(super) fn invalidate_fit(&mut self) {
         self.fitted = false;
     }
+    /// Frame the whole board again after it changed, unless the operator
+    /// has moved the view by hand since.
+    pub(super) fn refit(&mut self) {
+        if !self.touched {
+            self.fitted = false;
+        }
+    }
     pub(super) fn close_menu(&mut self) -> bool {
         self.menu.take().is_some()
     }
@@ -97,6 +107,7 @@ impl View {
         );
         self.zoom = z;
         self.fitted = true;
+        self.touched = true;
     }
     fn world(&self, p: Point<Pixels>) -> (f32, f32) {
         let (x, y, _, _) = self.bounds.get();
@@ -140,7 +151,11 @@ impl View {
         };
         self.pan.0 += shift(x, w, vx, vw) * self.zoom;
         self.pan.1 += shift(y, h, vy, vh) * self.zoom;
-        self.fitted = true;
+        // A framed board is framed again; this only keeps the card in view
+        // meanwhile.
+        if self.touched {
+            self.fitted = true;
+        }
     }
     fn center(&self) -> (f32, f32) {
         let (_, _, w, h) = self.bounds.get();
@@ -154,7 +169,6 @@ impl View {
         if w <= 0. || h <= 0. {
             return;
         }
-        self.follow = None;
         let (x, y, bw, bh) = board::extent(board);
         let z = ((w - FIT_MARGIN) / bw)
             .min((h - FIT_MARGIN) / bh)
@@ -247,6 +261,7 @@ impl MissionsPage {
                         let d = e.position - *from;
                         p.canvas.pan = (pan.0 + f32::from(d.x), pan.1 + f32::from(d.y));
                         p.canvas.fitted = true;
+                        p.canvas.touched |= f32::from(d.x).hypot(f32::from(d.y)) > DRAG_SLOP;
                     }
                     Some(Drag::Card {
                         at,
@@ -307,6 +322,7 @@ impl MissionsPage {
                     p.canvas.pan.0 += f32::from(delta.x);
                     p.canvas.pan.1 += f32::from(delta.y);
                     p.canvas.fitted = true;
+                    p.canvas.touched = true;
                 }
                 p.canvas.menu = None;
                 cx.notify();
@@ -348,6 +364,17 @@ impl MissionsPage {
             {
                 layer = layer.child(self.canvas_next(t, card, &view, cx));
             }
+        }
+        if !running && mission.input_cards.is_empty() && mission.formations.is_empty() {
+            // Top left, clear of the notes card that fitting centres.
+            layer = layer.child(
+                div()
+                    .absolute()
+                    .top(px(PAD))
+                    .left(px(PAD))
+                    .w(px(size::NOTICE))
+                    .child(self.empty_mission(t, "canvas-empty", cx)),
+            );
         }
         for note in self.canvas_notes(t, mission, &board, &view, cx) {
             layer = layer.child(note);
@@ -544,6 +571,10 @@ impl MissionsPage {
                 kit::button(t, "canvas-fit", "Fit", Kind::Plain)
                     .debug_selector(|| "canvas-fit".into())
                     .on_click(cx.listener(move |p, _, _, cx| {
+                        // The view is the operator's again: it stops
+                        // following an edited card and frames each change.
+                        p.canvas.follow = None;
+                        p.canvas.touched = false;
                         p.canvas.fit(&fit);
                         cx.notify();
                     })),
@@ -610,8 +641,10 @@ impl MissionsPage {
                 .id(SharedString::from(selector.clone()))
                 .debug_selector(move || selector.clone())
                 .absolute()
-                .left(px(x - side / 2.))
-                .top(px(y - side / 2.))
+                // Above the card's far corner: clear of its ports and
+                // header, whichever part the finding is about.
+                .left(px(x + card.w * z - side))
+                .top(px(y - side - EDGE * z))
                 .size(px(side))
                 .rounded_full()
                 .bg(self.finding_color(t, issues.iter().any(|(_, error)| *error)))
@@ -1041,10 +1074,15 @@ fn wires(
             ));
             // A panel opening beside the canvas narrows it: draw again so
             // the card being edited is brought back into view.
-            if view.follow.is_some() && (before.2, before.3) != (bounds.get().2, bounds.get().3) {
+            // One the operator has not moved is framed again.
+            let resized = (before.2, before.3) != (bounds.get().2, bounds.get().3);
+            if resized && (view.follow.is_some() || !view.touched) {
                 let entity = entity.clone();
                 cx.defer(move |cx| {
-                    let _ = entity.update(cx, |_, cx| cx.notify());
+                    let _ = entity.update(cx, |page, cx| {
+                        page.canvas.refit();
+                        cx.notify()
+                    });
                 });
             }
             if ready_to_fit && !view.fitted {
@@ -1243,7 +1281,9 @@ fn card_face(
                         div()
                             .text_size(px(size::SMALL * z))
                             .text_color(t.text2)
+                            .min_w_0()
                             .line_clamp(2)
+                            .text_ellipsis()
                             .child(brief.to_owned()),
                     )
                 });
@@ -1752,6 +1792,7 @@ impl MissionsPage {
         let Some((kind, from)) = self.new_step.take() else {
             return;
         };
+        self.canvas.refit();
         if kind == board::Kind::End {
             let end = self.state.mission.as_ref().and_then(|m| {
                 m.ends

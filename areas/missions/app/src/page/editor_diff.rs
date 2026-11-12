@@ -417,7 +417,8 @@ impl MissionsPage {
                             .editor
                             .as_ref()
                             .is_none_or(|editor| page.editor_snapshot(editor, cx) == draft);
-                        if unchanged {
+                        let keep = page.editor.as_ref().is_some_and(|e| e.keep_open);
+                        if unchanged && !keep {
                             page.editor = None;
                             page.resolve_wanted(cx);
                         } else if let Some(editor) = &mut page.editor {

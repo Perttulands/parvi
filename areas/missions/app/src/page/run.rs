@@ -56,6 +56,9 @@ pub(super) struct RunUi {
 }
 impl RunUi {
     pub fn new(cx: &mut Context<MissionsPage>) -> Self {
+        let cwd = cx.new(|cx| TextField::new(cx, "Working folder"));
+        // The start form says where files will go as the folder is typed.
+        cx.observe(&cwd, |_, _, cx| cx.notify()).detach();
         Self {
             selected: None,
             reveal_step: None,
@@ -68,7 +71,7 @@ impl RunUi {
             start_definition: None,
             request_id: uuid::Uuid::new_v4().to_string(),
             uncertain: None,
-            cwd: cx.new(|cx| TextField::new(cx, "Working directory")),
+            cwd,
             repository: cx.new(|cx| TextField::new(cx, "Repository")),
             base: cx.new(|cx| TextField::new(cx, "Base")),
             work: cx.new(|cx| TextField::new(cx, "Work reference")),
@@ -106,8 +109,8 @@ impl MissionsPage {
                 .fields
                 .values()
                 .any(|f| !f.read(cx).text.is_empty())
+                || self.run.cwd.read(cx).text != self.last_folder().unwrap_or_default()
                 || [
-                    &self.run.cwd,
                     &self.run.repository,
                     &self.run.base,
                     &self.run.work,
@@ -302,13 +305,63 @@ impl MissionsPage {
     }
     fn clear_start_context(&mut self, cx: &mut Context<Self>) {
         for field in [
-            &self.run.cwd,
             &self.run.repository,
             &self.run.base,
             &self.run.work,
             &self.run.paths,
         ] {
             field.update(cx, |field, cx| field.set("", false, cx));
+        }
+        let folder = self.last_folder().unwrap_or_default();
+        self.run
+            .cwd
+            .update(cx, |field, cx| field.set(&folder, false, cx));
+    }
+    /// The open node's runs, newest first.
+    fn node_runs(&self) -> Vec<&RunProjection> {
+        let mut runs: Vec<&RunProjection> = self
+            .state
+            .selected
+            .as_ref()
+            .and_then(|(node, _)| self.state.nodes.get(node))
+            .map(|feed| feed.runs.values().collect())
+            .unwrap_or_default();
+        runs.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+        runs
+    }
+    /// The folder last chosen for a run of this mission, else for any run.
+    fn last_folder(&self) -> Option<String> {
+        let here = self.state.selected.as_ref().map(|(_, slug)| slug.as_str());
+        let runs = self.node_runs();
+        let chosen = |run: &&&RunProjection| !run.cwd.is_empty() && !made_for(run);
+        runs.iter()
+            .filter(chosen)
+            .find(|run| Some(run.mission_slug.as_str()) == here)
+            .or_else(|| runs.iter().find(chosen))
+            .map(|run| run.cwd.clone())
+    }
+    /// Where a run's files go, said before it starts.
+    fn files_go(&self, cx: &gpui::App) -> String {
+        let repository = self.run.repository.read(cx).text.trim().to_owned();
+        let folder = self.run.cwd.read(cx).text.trim().to_owned();
+        if !repository.is_empty() {
+            return format!(
+                "Files go to a new branch of {repository}, in a checkout Parvi makes for this run."
+            );
+        }
+        if !folder.is_empty() {
+            return format!("Files go to {folder}.");
+        }
+        // Parvi makes a folder named after the run; where earlier ones are
+        // shows where.
+        match self
+            .node_runs()
+            .into_iter()
+            .find(|run| made_for(run))
+            .and_then(|run| run.cwd.rsplit_once('/').map(|(root, _)| root.to_owned()))
+        {
+            Some(root) => format!("Files go to a new folder for this run in {root}."),
+            None => "Files go to a new folder Parvi makes for this run.".into(),
         }
     }
     pub(super) fn prepare_run(&mut self, cx: &mut Context<Self>) {
@@ -1099,7 +1152,14 @@ impl MissionsPage {
             .selected
             .as_ref()
             .and_then(|(node, _)| self.state.nodes.get(node))
-            .map(|feed| crate::store::run_state::earlier_outputs(feed.runs.values(), kind, 4))
+            .map(|feed| {
+                let here = self
+                    .state
+                    .selected
+                    .as_ref()
+                    .map_or("", |(_, slug)| slug.as_str());
+                crate::store::run_state::earlier_outputs(feed.runs.values(), kind, here, 6)
+            })
             .unwrap_or_default();
         if !runs.is_empty() {
             any = true;
@@ -1180,13 +1240,50 @@ impl MissionsPage {
                 }
                 form = form.children(self.input_sources(t, name, kind, field, cx));
             }
+            let cwd = self.run.cwd.clone();
             form = form
-                .child("Working directory")
-                .child(div().child(self.run.cwd.clone()))
+                .child("Working folder")
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(TAB_GAP))
+                        .child(div().flex_1().min_w_0().child(self.run.cwd.clone()))
+                        .child(
+                            kit::button(t, "run-cwd-choose", "Choose…", Kind::Quiet)
+                                .debug_selector(|| "run-cwd-choose".into())
+                                .on_click(cx.listener(move |p, _, window, cx| {
+                                    let cwd = cwd.clone();
+                                    parvi_app_kit::widgets::path_picker::pick_folder(
+                                        p.host.clone(),
+                                        "Choose the working folder",
+                                        window,
+                                        cx,
+                                        move |_, paths, cx| {
+                                            if let Some(path) = paths.first() {
+                                                let path = path.to_string_lossy().into_owned();
+                                                cwd.update(cx, |f, cx| f.set(&path, false, cx));
+                                            }
+                                            cx.notify();
+                                        },
+                                    );
+                                })),
+                        ),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "run-files-go".into())
+                        .text_color(t.text2)
+                        .child(self.files_go(cx)),
+                )
                 .child("Repository")
-                .child(self.repository_picker(t, &self.run.repository, "run-repository", cx))
-                .child("Base")
-                .child(div().child(self.run.base.clone()))
+                .child(self.repository_picker(t, &self.run.repository, "run-repository", cx));
+            // A base names where a repository's branch starts; without one
+            // it means nothing.
+            if !self.run.repository.read(cx).text.trim().is_empty() {
+                form = form.child("Base").child(div().child(self.run.base.clone()));
+            }
+            form = form
                 .child("Work reference")
                 .child(div().child(self.run.work.clone()))
                 .child("Context paths")
@@ -2426,7 +2523,35 @@ impl MissionsPage {
                         .iter()
                         .find(|point| point.node == step.id && !point.reason.is_empty())
                     {
-                        card = card.child(div().text_color(t.error).child(point.reason.clone()));
+                        // The run bar says why in plain words; the card
+                        // keeps what was recorded, on asking.
+                        if !point.raw.is_empty() {
+                            let open = self.block_details;
+                            card = card.child(
+                                div().flex().child(
+                                    kit::button(
+                                        t,
+                                        SharedString::from(format!("block-details-{}", step.id)),
+                                        if open { "Hide details" } else { "Details" },
+                                        Kind::Quiet,
+                                    )
+                                    .on_click(cx.listener(
+                                        |p, _, _, cx| {
+                                            p.block_details = !p.block_details;
+                                            cx.notify();
+                                        },
+                                    )),
+                                ),
+                            );
+                            if open {
+                                card = card.child(
+                                    div()
+                                        .debug_selector(|| "block-details-text".into())
+                                        .text_color(t.text2)
+                                        .child(point.raw.clone()),
+                                );
+                            }
+                        }
                     }
                     if status == Some(run_state::NodeState::Running)
                         && let Some(note) = run_state::seat_note(&run.events, &step.id)
@@ -2684,7 +2809,6 @@ impl MissionsPage {
                 let name = name.clone();
                 move || format!("use-output-{name}")
             })
-            .tooltip(kit::tip("Start a mission with this as its first input"))
             .on_click(cx.listener(move |p, _, _, cx| {
                 p.run.using = if p.run.using.as_deref() == Some(name.as_str()) {
                     None
@@ -3003,6 +3127,10 @@ fn start_answer(result: Result<parvi_app_kit::host::Answer, parvi_core::Error>) 
         Ok(answer) => StartAnswer::Refused(answer),
         Err(error) => StartAnswer::Unknown(error.message),
     }
+}
+/// A run in the folder Parvi made for it, named after the run.
+fn made_for(run: &RunProjection) -> bool {
+    run.repository.is_empty() && run.cwd.ends_with(&format!("/{}", run.run_id))
 }
 #[cfg(test)]
 mod tests {

@@ -21,11 +21,33 @@ pub fn pick<T: 'static>(
     cx: &mut Context<T>,
     selected: impl FnOnce(&mut T, Vec<PathBuf>, &mut Context<T>) + 'static,
 ) {
+    pick_paths(host, prompt, false, window, cx, selected)
+}
+
+/// [`pick`] for one folder.
+pub fn pick_folder<T: 'static>(
+    host: Host,
+    prompt: &'static str,
+    window: &mut Window,
+    cx: &mut Context<T>,
+    selected: impl FnOnce(&mut T, Vec<PathBuf>, &mut Context<T>) + 'static,
+) {
+    pick_paths(host, prompt, true, window, cx, selected)
+}
+
+fn pick_paths<T: 'static>(
+    host: Host,
+    prompt: &'static str,
+    folders: bool,
+    window: &mut Window,
+    cx: &mut Context<T>,
+    selected: impl FnOnce(&mut T, Vec<PathBuf>, &mut Context<T>) + 'static,
+) {
     let page = cx.weak_entity();
     let picked = cx.prompt_for_paths(PathPromptOptions {
-        files: true,
-        directories: false,
-        multiple: true,
+        files: !folders,
+        directories: folders,
+        multiple: !folders,
         prompt: Some(prompt.into()),
     });
     window
@@ -38,7 +60,7 @@ pub fn pick<T: 'static>(
                 match choice(answer) {
                     Choice::Selected(paths) => callback(paths, cx),
                     Choice::Cancelled => {}
-                    Choice::Fallback => open(host, prompt, callback, window, cx),
+                    Choice::Fallback => open(host, prompt, folders, callback, window, cx),
                 }
             });
         })
@@ -59,9 +81,16 @@ fn choice<E, C>(answer: Result<Result<Option<Vec<PathBuf>>, E>, C>) -> Choice {
     }
 }
 
-fn open(host: Host, prompt: &'static str, picked: Picked, window: &mut Window, cx: &mut App) {
+fn open(
+    host: Host,
+    prompt: &'static str,
+    folders: bool,
+    picked: Picked,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let opener = window.focused(cx);
-    let view = cx.new(|cx| Picker::new(host.clone(), prompt, picked, window, cx));
+    let view = cx.new(|cx| Picker::new(host.clone(), prompt, folders, picked, window, cx));
     let focus = view.read(cx).field.focus_handle(cx);
     host.layer(
         Layer::new(LAYER, view)
@@ -79,6 +108,7 @@ fn open(host: Host, prompt: &'static str, picked: Picked, window: &mut Window, c
 struct Picker {
     host: Host,
     title: &'static str,
+    folders: bool,
     field: Entity<TextField>,
     error: Option<String>,
     picked: Option<Picked>,
@@ -88,6 +118,7 @@ impl Picker {
     fn new(
         host: Host,
         title: &'static str,
+        folders: bool,
         picked: Picked,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -110,6 +141,7 @@ impl Picker {
         Self {
             host,
             title,
+            folders,
             field,
             error: None,
             picked: Some(picked),
@@ -118,7 +150,12 @@ impl Picker {
 
     fn submit(&mut self, cx: &mut Context<Self>) {
         let path = PathBuf::from(self.field.read(cx).text.trim());
-        if !path.is_file() {
+        if self.folders && !path.is_dir() {
+            self.error = Some("Enter a path to a folder on this device.".into());
+            cx.notify();
+            return;
+        }
+        if !self.folders && !path.is_file() {
             self.error = Some("Enter a path to a file on this device.".into());
             cx.notify();
             return;
@@ -217,7 +254,11 @@ impl Render for Picker {
                     .child(kit::label(&t, self.title))
                     .child(kit::note(
                         &t,
-                        "Enter a file path, or drop files here. Tab completes.",
+                        if self.folders {
+                            "Enter a folder path, or drop a folder here. Tab completes."
+                        } else {
+                            "Enter a file path, or drop files here. Tab completes."
+                        },
                         Some(t.dim),
                     ))
                     .child(
@@ -302,6 +343,7 @@ mod tests {
             Picker::new(
                 host,
                 "Attach",
+                false,
                 Box::new(move |paths, _| *selected.borrow_mut() = paths),
                 window,
                 cx,

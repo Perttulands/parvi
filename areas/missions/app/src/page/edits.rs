@@ -284,13 +284,21 @@ impl MissionsPage {
                     .editor
                     .as_ref()
                     .is_some_and(|editor| self.editor_snapshot(editor, cx) != submitted);
-                if changed_since {
+                let keep = self.editor.as_ref().is_some_and(|editor| editor.keep_open);
+                if changed_since || keep {
                     if let Some(editor) = &mut self.editor {
                         editor.busy = false;
                         editor.baseline = Some(submitted);
-                        editor.error = Some(
-                            "Saved the submitted changes. Your newer edits are still here.".into(),
-                        );
+                        // Edits typed meanwhile are applied in turn.
+                        if changed_since && !keep {
+                            editor.error = Some(
+                                "Saved the submitted changes. Your newer edits are still here."
+                                    .into(),
+                            );
+                        }
+                    }
+                    if changed_since && keep {
+                        self.apply_soon(cx);
                     }
                 } else {
                     self.editor = None;

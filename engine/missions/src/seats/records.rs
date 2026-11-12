@@ -304,6 +304,31 @@ impl SeatRecords {
         })()
         .map_err(crate::error::io)
     }
+    /// Remove every dispatch folder (brief, record, locks) of a deleted run.
+    /// A folder whose record cannot be read is not this run's to remove.
+    pub fn forget_run(&self, run_id: &str) -> Result<(), crate::Error> {
+        (|| -> io::Result<()> {
+            let entries = match fs::read_dir(&self.root) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => return Err(error),
+            };
+            for entry in entries {
+                let entry = entry?;
+                let Some(id) = entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                if self
+                    .with_record(&id, |record| Ok(record.dispatch.run_id == run_id))
+                    .unwrap_or(false)
+                {
+                    crate::kept_copy::remove_tree(&entry.path())?;
+                }
+            }
+            Ok(())
+        })()
+        .map_err(crate::error::io)
+    }
     pub fn bind_seat(&self, id: &str, seat: SeatId) -> Result<(), crate::Error> {
         self.change(id, |record| match &record.seat {
             Some(existing) if *existing == seat => Ok(((), false)),
@@ -513,6 +538,26 @@ mod tests {
             place: String::new(),
             turn: None,
         }
+    }
+    #[test]
+    fn forgetting_a_run_removes_only_its_dispatch_folders() {
+        let dir = scratch();
+        let store = SeatRecords::new(&dir);
+        let mine = request();
+        let other = Dispatch {
+            id: "dsp_other".into(),
+            run_id: "run_2".into(),
+            ..request()
+        };
+        store.create(&mine).unwrap();
+        store.create(&other).unwrap();
+        let brief = store.brief_path(&mine.id).unwrap();
+        crate::kept_copy::readonly(&brief).unwrap();
+        store.forget_run("run_1").unwrap();
+        assert!(!dir.join("seats").join("dsp_test").exists());
+        assert!(store.dispatch("dsp_other").is_ok());
+        store.forget_run("run_1").unwrap();
+        crate::kept_copy::remove_tree(&dir).unwrap();
     }
     #[test]
     fn records_survive_reopen_and_retries_are_idempotent() {

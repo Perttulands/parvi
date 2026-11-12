@@ -240,7 +240,19 @@ pub(crate) fn error_code(detail: &str) -> &'static str {
     ]
     .into_iter()
     .find(|code| detail.contains(code))
+    .or_else(|| agent_status(detail))
     .unwrap_or("executor_failed")
+}
+/// An agent that ended its turn with a done line other than ok: it said
+/// itself that the step is blocked, or failed.
+fn agent_status(detail: &str) -> Option<&'static str> {
+    let done = &detail[detail.find("<<<PARVI-DONE")?..];
+    let line = done.lines().next().unwrap_or(done);
+    Some(if line.contains("status=blocked") {
+        "agent_blocked"
+    } else {
+        "agent_failed"
+    })
 }
 pub(crate) fn event(kind: &str, node: &str, attempt: i64, data: serde_json::Value) -> RunEvent {
     RunEvent {

@@ -217,6 +217,12 @@ impl Coordinator {
         ))
     }
     pub fn run(&self, id: &str) -> Result<RunProjection, crate::Error> {
+        if self.ledger(id).is_ok_and(|ledger| !ledger.path().exists()) {
+            return Err(crate::Error::new(
+                "not_found",
+                format!("there is no run {id:?} on this node; parvi run list shows its runs"),
+            ));
+        }
         (|| -> io::Result<RunProjection> {
             crate::project_run(&self.ledger(id)?.read().map_err(crate::error::to_io)?, id)
                 .map_err(crate::error::to_io)

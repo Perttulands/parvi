@@ -245,8 +245,11 @@ pub struct Point {
     pub node: String,
     pub gate: bool,
     pub attempt: i64,
-    /// The block's recorded detail, for a block.
+    /// The block's reason in plain words, for a block.
     pub reason: String,
+    /// What the ledger recorded, when that says more than `reason` (an
+    /// agent's whole answer): shown on asking.
+    pub raw: String,
     /// A running gate whose operator verdict the run is about to route.
     pub answered: bool,
     pub picking: bool,
@@ -260,6 +263,7 @@ impl Point {
             gate,
             attempt: 0,
             reason: String::new(),
+            raw: String::new(),
             answered: false,
             picking: false,
         }
@@ -355,6 +359,11 @@ pub fn points(run: &Run) -> Vec<Point> {
                     }
                 })
                 .unwrap_or_else(|| run.block_code.replace('_', " "));
+            if let Some(b) = block
+                && b.detail.trim().lines().count() > 1
+            {
+                pt.raw = b.detail.trim().to_owned();
+            }
             std::iter::once(pt)
                 .chain(waiting.into_iter().filter(|w| w.node != node))
                 .collect()
@@ -420,18 +429,46 @@ pub fn phrase(point: &Point, title: &str) -> String {
 
 /// What earlier runs produced that could fill an input of `kind`: the
 /// latest first, each value once, at most `most`, as (label, value).
+/// What finished runs produced of `kind`, newest first and each value once,
+/// labelled so two alike read apart: the run's number and time and the
+/// value's excerpt, and its mission when not `here`.
 pub fn earlier_outputs<'a>(
     runs: impl IntoIterator<Item = &'a Run>,
     kind: &str,
+    here: &str,
     most: usize,
 ) -> Vec<(String, String)> {
-    let mut runs: Vec<&Run> = runs.into_iter().filter(|run| run.r#final).collect();
-    runs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    let runs: Vec<&Run> = runs.into_iter().collect();
+    // A run's number is its place in its mission, as the navigator counts.
+    let started = |run: &Run| {
+        crate::store::words::parse_time(&run.started_at).map(|time| time.unix_timestamp_nanos())
+    };
+    let number = |run: &Run| {
+        runs.iter()
+            .filter(|other| {
+                other.mission_slug == run.mission_slug
+                    && (started(other), &other.run_id) <= (started(run), &run.run_id)
+            })
+            .count()
+    };
+    let mut done: Vec<&Run> = runs.iter().copied().filter(|run| run.r#final).collect();
+    done.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    let now = time::OffsetDateTime::now_utc();
     let mut found: Vec<(String, String)> = Vec::new();
-    for run in runs {
+    for run in done {
         for output in run.outputs.iter().filter(|o| o.kind == kind) {
             if found.len() < most && !found.iter().any(|(_, value)| value == &output.value) {
-                let label = format!("{} · {}", output.name, run.mission_slug);
+                let mission = if run.mission_slug == here {
+                    String::new()
+                } else {
+                    format!("{} ", run.mission_slug)
+                };
+                let label = format!(
+                    "{mission}run {} · {} · {}",
+                    number(run),
+                    crate::store::words::short_time(&run.updated_at, now),
+                    crate::store::words::output_excerpt(output)
+                );
                 found.push((label, output.value.clone()));
             }
         }
@@ -572,15 +609,24 @@ mod tests {
         let mut going = test_run("running");
         going.outputs = new.outputs.clone();
         going.outputs[0].value = "/w/partial.txt".into();
-        let files = earlier_outputs([&old, &new, &going], "file", 5);
-        assert_eq!(
-            files,
-            [
-                ("review · review".to_owned(), "/w/review.txt".to_owned()),
-                ("plan · review".to_owned(), "/w/plan.txt".to_owned())
-            ]
-        );
-        assert_eq!(earlier_outputs([&old, &new], "text", 5).len(), 1);
-        assert_eq!(earlier_outputs([&old, &new], "file", 1).len(), 1);
+        old.run_id = "r-old".into();
+        old.started_at = "2026-11-10T09:59:00Z".into();
+        new.started_at = "2026-11-11T09:59:00Z".into();
+        let files = earlier_outputs([&old, &new, &going], "file", "m", 5);
+        let values: Vec<_> = files.iter().map(|(_, value)| value.as_str()).collect();
+        assert_eq!(values, ["/w/review.txt", "/w/plan.txt"]);
+        // Each reads apart: another mission's run says whose, with its
+        // number, time and the file's name.
+        assert!(files[0].0.starts_with("review run 1 · "), "{}", files[0].0);
+        assert!(files[0].0.ends_with(" · review.txt"), "{}", files[0].0);
+        let mut again = old.clone();
+        again.run_id = "r-again".into();
+        again.started_at = "2026-11-10T10:30:00Z".into();
+        again.outputs[1].value = "hello again".into();
+        let texts = earlier_outputs([&old, &again], "text", "m", 5);
+        assert!(texts.iter().any(|(label, _)| label.starts_with("run 1 · ")));
+        assert!(texts.iter().any(|(label, _)| label.starts_with("run 2 · ")));
+        assert_eq!(earlier_outputs([&old, &new], "text", "m", 5).len(), 1);
+        assert_eq!(earlier_outputs([&old, &new], "file", "m", 1).len(), 1);
     }
 }
