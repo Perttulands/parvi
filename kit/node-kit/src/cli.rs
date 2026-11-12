@@ -356,7 +356,8 @@ fn typed(key: &str, spec: &Value, raw: &str) -> Result<Value> {
 /// indented under its key. A list of objects is one row per item, its plain
 /// fields as tab-separated `key=value`, and whatever an item nests indented
 /// under its row. Text of several lines follows its key as it is. Nulls and
-/// empty values are left out. `--json` prints the value itself instead.
+/// empty values are left out. Epoch milliseconds in timestamp fields are
+/// rendered in local time. `--json` prints the value itself instead.
 fn render(value: &Value) -> String {
     let mut text = String::new();
     render_value(value, 0, &mut text);
@@ -390,6 +391,18 @@ fn scalar(value: &Value) -> String {
     }
 }
 
+/// Render timestamp fields without changing the value sent to JSON clients.
+fn field_scalar(key: &str, value: &Value) -> String {
+    if (matches!(key, "at" | "started" | "updated" | "modified" | "synced") || key.ends_with("_at"))
+        && let Some(ms) = value.as_i64()
+        && let Ok(at) = jiff::Timestamp::from_millisecond(ms)
+    {
+        let local = at.to_zoned(jiff::tz::TimeZone::system());
+        return format!("{}{}", local.datetime(), local.offset());
+    }
+    scalar(value)
+}
+
 fn pad(indent: usize, out: &mut String) {
     out.push_str(&" ".repeat(indent));
 }
@@ -412,7 +425,7 @@ fn render_value(value: &Value, indent: usize, out: &mut String) {
                             .partition(|(_, v)| plain(v));
                         let row: Vec<String> = row
                             .iter()
-                            .map(|(key, value)| format!("{key}={}", scalar(value)))
+                            .map(|(key, value)| format!("{key}={}", field_scalar(key, value)))
                             .collect();
                         out.push_str(if row.is_empty() { "-" } else { "" });
                         out.push_str(&row.join("\t"));
@@ -446,7 +459,7 @@ fn render_field(key: &str, value: &Value, indent: usize, out: &mut String) {
     out.push_str(key);
     if plain(value) {
         out.push_str(": ");
-        out.push_str(&scalar(value));
+        out.push_str(&field_scalar(key, value));
         out.push('\n');
     } else if value.is_string() {
         // Text of several lines (a diff, a file) stays as it was written,
@@ -594,6 +607,51 @@ mod tests {
             ""
         );
         assert_eq!(render(&json!("hello")), "hello\n");
+    }
+
+    #[test]
+    fn timestamp_fields_render_as_local_times_in_objects_and_rows() {
+        let ms = 1_700_000_000_123_i64;
+        let local = jiff::Timestamp::from_millisecond(ms)
+            .unwrap()
+            .to_zoned(jiff::tz::TimeZone::system());
+        let expected = format!("{}{}", local.datetime(), local.offset());
+        assert_eq!(
+            expected
+                .parse::<jiff::Timestamp>()
+                .unwrap()
+                .as_millisecond(),
+            ms
+        );
+        let answer = json!({
+            "host": {"at": ms, "started": ms, "updated": ms, "modified": ms,
+                     "synced": ms, "created_at": ms, "count": ms},
+            "tasks": [{"finished_at": ms, "next_run": "2026-11-12T12:00:00Z"}],
+            "invalid": {"at": u64::MAX, "started": 9223372036854775807_i64,
+                        "updated": 1.5, "modified": "not a timestamp"}
+        });
+        let rendered = render(&answer);
+        for key in [
+            "at",
+            "started",
+            "updated",
+            "modified",
+            "synced",
+            "created_at",
+        ] {
+            assert!(
+                rendered.contains(&format!("{key}: {expected}\n")),
+                "{rendered}"
+            );
+        }
+        assert!(rendered.contains(&format!(
+            "finished_at={expected}\tnext_run=2026-11-12T12:00:00Z"
+        )));
+        assert!(rendered.contains(&format!("count: {ms}\n")));
+        assert!(rendered.contains("at: 18446744073709551615\n"));
+        assert!(rendered.contains("started: 9223372036854775807\n"));
+        assert!(rendered.contains("updated: 1.5\n"));
+        assert!(rendered.contains("modified: not a timestamp\n"));
     }
 
     #[test]
