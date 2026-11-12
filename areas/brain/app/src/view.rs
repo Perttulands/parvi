@@ -90,28 +90,45 @@ impl Render for BrainPage {
                     }))
                     .child(
                         div()
-                            .debug_selector(move || hit_selector.clone())
-                            .child(hit.title.clone()),
+                            .flex()
+                            .items_start()
+                            .gap(px(GAP))
+                            .child(
+                                div()
+                                    .debug_selector(move || hit_selector.clone())
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(hit.title.clone()),
+                            )
+                            .when(!kind.is_empty(), |d| {
+                                let selector = format!("brain-result-kind-{kind}");
+                                d.child(
+                                    div()
+                                        .debug_selector(move || selector.clone())
+                                        .flex_none()
+                                        .text_size(px(size::SMALL))
+                                        .text_color(t.dim)
+                                        .child(kind),
+                                )
+                            }),
                     )
-                    .when(!kind.is_empty(), |d| {
-                        let selector = format!("brain-result-kind-{kind}");
-                        d.child(
-                            div()
-                                .debug_selector(move || selector.clone())
-                                .text_color(t.dim)
-                                .child(kind),
-                        )
-                    })
                     .when(!summary.is_empty(), |d| {
                         let selector = format!("brain-result-summary-{summary}");
                         d.child(
                             div()
                                 .debug_selector(move || selector.clone())
                                 .text_color(t.text2)
+                                .line_clamp(2)
+                                .text_ellipsis()
                                 .child(summary),
                         )
                     })
-                    .child(StyledText::new(snippet).with_highlights(highlights)),
+                    .child(
+                        div()
+                            .line_clamp(3)
+                            .text_ellipsis()
+                            .child(StyledText::new(snippet).with_highlights(highlights)),
+                    ),
             );
         }
         let count = if self.state.query.is_empty() {
@@ -162,13 +179,16 @@ impl Render for BrainPage {
             .h_full()
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
-            .p(px(READER_PAD))
+            .p(px(READER_PAD));
+        let mut content = div()
+            .w_full()
+            .max_w(px(board::READER_MAX))
             .flex()
             .flex_col()
             .gap(px(PAD));
         if let Some(page) = &self.state.page {
             let send = self.state.reference();
-            main = main.child(
+            content = content.child(
                 div()
                     .flex()
                     .items_center()
@@ -177,6 +197,8 @@ impl Render for BrainPage {
                         div()
                             .debug_selector(|| "brain-page-title".into())
                             .flex_1()
+                            .min_w_0()
+                            .text_size(px(board::HEADING))
                             .font_weight(FontWeight::BOLD)
                             .child(page.title.clone()),
                     )
@@ -261,7 +283,7 @@ impl Render for BrainPage {
             };
             let selector = format!("brain-meta-{meta}");
             let page_selector = format!("brain-reading-{}", page.path);
-            main = main.child(
+            content = content.child(
                 div()
                     .debug_selector(move || page_selector.clone())
                     .flex()
@@ -285,7 +307,7 @@ impl Render for BrainPage {
                     }),
             );
             if let Some(error) = &self.state.page_error {
-                main = main.child(kit::note(&t, error.clone(), Some(t.error)));
+                content = content.child(kit::note(&t, error.clone(), Some(t.error)));
             }
             if self.state.history_open && !page.history.is_empty() {
                 let mut history = div()
@@ -300,10 +322,10 @@ impl Render for BrainPage {
                         Some(t.dim),
                     ));
                 }
-                main = main.child(history);
+                content = content.child(history);
             }
             if !page.summary.is_empty() {
-                main = main.child(kit::note(&t, page.summary.clone(), Some(t.text2)));
+                content = content.child(kit::note(&t, page.summary.clone(), Some(t.text2)));
             }
             let weak = cx.weak_entity();
             let links = page.links.clone();
@@ -350,7 +372,7 @@ impl Render for BrainPage {
                 select: Some(self.select.clone()),
             };
             if self.state.edit.is_some() {
-                main = main.child(self.summary.clone()).child(
+                content = content.child(self.summary.clone()).child(
                     div()
                         .flex_1()
                         .min_h(px(EDITOR_HEIGHT))
@@ -402,15 +424,16 @@ impl Render for BrainPage {
                         ));
                         window.defer(cx, |window, _| window.refresh());
                     });
-                main = main.child(select::track(body, &self.select, cx.entity_id(), |_, _| {}));
+                content =
+                    content.child(select::track(body, &self.select, cx.entity_id(), |_, _| {}));
             }
             if !page.related.is_empty() {
-                main =
-                    main.child(kit::label(&t, "Related").debug_selector(|| "brain-related".into()));
+                content = content
+                    .child(kit::label(&t, "Related").debug_selector(|| "brain-related".into()));
                 for (i, related) in page.related.iter().enumerate() {
                     let path = related.path.clone();
                     let selector = format!("brain-related-{}", path);
-                    main = main.child(
+                    content = content.child(
                         div()
                             .id(SharedString::from(format!("brain-related-{i}")))
                             .debug_selector(move || selector.clone())
@@ -421,17 +444,18 @@ impl Render for BrainPage {
                 }
             }
             if page.links.iter().any(|link| link.page.is_some()) {
-                main = main.child(kit::label(&t, "Links").debug_selector(|| "brain-links".into()));
-                main = main.child(links_section(&page.links, cx));
+                content =
+                    content.child(kit::label(&t, "Links").debug_selector(|| "brain-links".into()));
+                content = content.child(links_section(&page.links, cx));
             }
             if !page.backlinks.is_empty() {
-                main = main.child(
+                content = content.child(
                     kit::label(&t, "Linked from").debug_selector(|| "brain-backlinks".into()),
                 );
                 for (i, backlink) in page.backlinks.iter().enumerate() {
                     let path = backlink.path.clone();
                     let selector = format!("brain-backlink-{path}");
-                    main = main.child(
+                    content = content.child(
                         div()
                             .debug_selector(move || selector.clone())
                             .id(SharedString::from(format!("brain-backlink-{i}")))
@@ -444,38 +468,65 @@ impl Render for BrainPage {
         } else if let Some(error) = &self.state.page_error {
             main = main.child(kit::note(&t, error.clone(), Some(t.error)));
         } else {
-            main = main.child(kit::note(&t, "Select a page to read.", Some(t.dim)));
+            main = main.child(kit::note(
+                &t,
+                "Search on the left, or open a page from a collection or the new arrivals.",
+                Some(t.dim),
+            ));
         }
-        let mut trail = div()
-            .h(px(size::TAB_BAR))
-            .flex_none()
-            .px(px(PAD))
-            .flex()
-            .items_center()
-            .gap(px(GAP_TINY))
-            .border_b_1()
-            .border_color(t.divider);
-        for (i, (path, title)) in self.state.trail.iter().enumerate() {
-            let path = path.clone();
-            let selector = format!("brain-trail-{path}");
-            trail = trail.child(
-                kit::button(
-                    &t,
-                    SharedString::from(format!("brain-trail-{i}")),
-                    title.clone(),
-                    Kind::Quiet,
-                )
-                .debug_selector(move || selector.clone())
-                .on_click(cx.listener(move |page, _, _, cx| page.brain_open(&path, cx))),
-            );
-        }
+        let main = main.child(content);
+        // The way back, once a link has been followed: Back, then every page
+        // read since the trail began, the one in the reader last.
+        let trail = (self.state.trail.len() > 1).then(|| {
+            let last = self.state.trail.len() - 1;
+            let mut trail = div()
+                .h(px(size::TAB_BAR))
+                .flex_none()
+                .px(px(PAD))
+                .flex()
+                .items_center()
+                .gap(px(GAP_TINY))
+                .overflow_hidden()
+                .border_b_1()
+                .border_color(t.divider)
+                .child(
+                    kit::button(&t, "brain-back", "Back", Kind::Plain)
+                        .debug_selector(|| "brain-back".into())
+                        .flex_none()
+                        .on_click(cx.listener(|page, _, _, cx| page.brain_back(cx))),
+                );
+            for (i, (path, title)) in self.state.trail.iter().enumerate() {
+                let path = path.clone();
+                let selector = format!("brain-trail-{path}");
+                if i > 0 {
+                    trail = trail.child(div().flex_none().text_color(t.dim).child("›"));
+                }
+                trail = trail.child(
+                    kit::button(
+                        &t,
+                        SharedString::from(format!("brain-trail-{i}")),
+                        title.clone(),
+                        Kind::Quiet,
+                    )
+                    .debug_selector(move || selector.clone())
+                    .min_w_0()
+                    .flex_shrink_1()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .when(i == last, |d| d.text_color(t.text))
+                    .on_click(cx.listener(move |page, _, _, cx| page.brain_open(&path, cx))),
+                );
+            }
+            trail
+        });
         let reader = div()
             .flex_1()
             .min_w_0()
             .h_full()
             .flex()
             .flex_col()
-            .child(trail)
+            .children(trail)
             .child(main);
         let selected = self.select.clone();
         let can_copy = self.state.edit.is_none();
@@ -495,6 +546,16 @@ impl Render for BrainPage {
                     } else {
                         window.focus(&page.reader_focus, cx);
                     }
+                    cx.stop_propagation();
+                    return;
+                }
+                if event.keystroke.key == "left"
+                    && event.keystroke.modifiers.alt
+                    && !event.keystroke.modifiers.control
+                    && page.state.edit.is_none()
+                    && !page.field.read(cx).is_focused(window)
+                {
+                    page.brain_back(cx);
                     cx.stop_propagation();
                     return;
                 }

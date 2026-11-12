@@ -236,6 +236,14 @@ impl BrainPage {
             self.brain_open(&path, cx);
         }
     }
+    /// Goes back one page along the trail, if there is one to go back to.
+    pub(crate) fn brain_back(&mut self, cx: &mut Context<Self>) {
+        let trail = &self.state.trail;
+        if let Some((path, _)) = trail.len().checked_sub(2).and_then(|at| trail.get(at)) {
+            let path = path.clone();
+            self.brain_open(&path, cx);
+        }
+    }
     pub(crate) fn brain_open(&mut self, path: &str, cx: &mut Context<Self>) {
         self.brain_open_at(path, None, cx);
     }

@@ -124,7 +124,9 @@ impl BrainPage {
     ) -> Div {
         let (to_open, to_hide) = (name.to_string(), name.to_string());
         let toggle = if hidden { "Show" } else { "Hide" };
+        let group = SharedString::from(format!("brain-collection-row-{i}"));
         div()
+            .group(group.clone())
             .flex()
             .items_center()
             .px(px(PAD))
@@ -165,6 +167,11 @@ impl BrainPage {
                     Kind::Quiet,
                 )
                 .debug_selector(move || format!("brain-hide-{i}"))
+                // Hide waits for the pointer; a hidden collection keeps Show.
+                .when(!hidden, |d| {
+                    d.text_color(gpui::transparent_black())
+                        .group_hover(group, |s| s.text_color(t.text2))
+                })
                 .on_click(
                     cx.listener(move |s, _: &ClickEvent, _, cx| {
                         s.brain_toggle_hidden(&to_hide, cx)

@@ -148,15 +148,28 @@ fn search_open_and_follow_a_link_in_the_reader(cx: &mut TestAppContext) {
     until(cx, "the trail back to the first page", |cx| {
         cx.debug_bounds("brain-trail-notes/first.md").is_some()
     });
-    let back = cx
-        .debug_bounds("brain-trail-notes/first.md")
-        .unwrap()
-        .center();
+    let back = cx.debug_bounds("brain-back").unwrap().center();
     cx.simulate_click(back, Modifiers::none());
     until(cx, "back along trail", |cx| {
         cx.debug_bounds("brain-reading-notes/first.md").is_some()
     });
+    // With nothing left to go back to, the trail steps aside.
     assert!(cx.debug_bounds("brain-trail-notes/second.md").is_none());
+    assert!(cx.debug_bounds("brain-back").is_none());
+    // The trail's own entries lead back too.
+    let prose = cx.debug_bounds("brain-prose").unwrap();
+    cx.simulate_click(prose.origin + point(px(8.), px(8.)), Modifiers::none());
+    until(cx, "linked page again", |cx| {
+        cx.debug_bounds("brain-reading-notes/second.md").is_some()
+    });
+    let first = cx
+        .debug_bounds("brain-trail-notes/first.md")
+        .unwrap()
+        .center();
+    cx.simulate_click(first, Modifiers::none());
+    until(cx, "back by the trail", |cx| {
+        cx.debug_bounds("brain-reading-notes/first.md").is_some()
+    });
     std::fs::remove_dir_all(settings).unwrap();
 }
 
