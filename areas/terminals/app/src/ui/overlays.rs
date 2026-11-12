@@ -8,7 +8,7 @@ use super::surface::{self, Surface};
 use super::tiles::CLAIM_EXPLANATION;
 use crate::store::sessions::{self, Key};
 use crate::store::workspace::{MAX_WINDOWS, Workspace, tab_label};
-use crate::theme::{size, theme};
+use crate::theme::{Theme, size, theme};
 use gpui::{
     AnyElement, Context, FontWeight, KeyDownEvent, MouseButton, MouseDownEvent, Window, anchored,
     canvas, deferred, div, point, prelude::*, px,
@@ -451,6 +451,7 @@ impl Terminals {
                 ),
             },
         };
+        let query = self.find_query.read(cx).text.clone();
         if let Some((matches, _)) = &found {
             let cursor = self.find_cursor.min(matches.len().saturating_sub(1));
             for (i, m) in matches.iter().enumerate().take(500) {
@@ -495,14 +496,7 @@ impl Terminals {
                                 .overflow_hidden()
                                 .child(m.context[0].clone()),
                         )
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(t.text)
-                                .whitespace_nowrap()
-                                .overflow_hidden()
-                                .child(m.context[1].clone()),
-                        )
+                        .child(hit_line(&t, &m.context[1], &query))
                         .child(
                             div()
                                 .text_size(px(11.))
@@ -575,6 +569,34 @@ impl Terminals {
             .into_any_element()
     }
 }
+
+/// A hit's line with the match in view and marked: the line from a little
+/// before the match, which a long line would otherwise cut off.
+fn hit_line(t: &Theme, line: &str, query: &str) -> gpui::Div {
+    let row = div()
+        .text_size(px(12.))
+        .text_color(t.text)
+        .whitespace_nowrap()
+        .overflow_hidden();
+    let Some((before, hit, after)) = crate::store::find::hit_parts(line, query, FIND_LEAD) else {
+        return row.child(line.to_string());
+    };
+    row.flex()
+        .child(div().flex_none().child(before))
+        .child(
+            div()
+                .flex_none()
+                .debug_selector(|| "find-hit".into())
+                .bg(t.accent_light())
+                .text_color(t.accent)
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(hit),
+        )
+        .child(div().min_w_0().overflow_hidden().child(after))
+}
+
+/// Characters of a hit's line shown before the match.
+const FIND_LEAD: usize = 24;
 
 #[cfg(test)]
 mod tests {

@@ -1400,6 +1400,17 @@ impl Terminals {
             cx.stop_propagation();
             return;
         }
+        // Ctrl+=, Ctrl+- and Ctrl+0 size the font, as browsers do.
+        // At the end of the range the key is still the font's.
+        if m.control && !m.alt && !m.platform && matches!(k.key.as_str(), "=" | "+" | "-" | "0") {
+            if let Some(font) = self.settings.font_for_key(&k.key) {
+                self.settings.font_size = font;
+                self.save(cx);
+                cx.notify();
+            }
+            cx.stop_propagation();
+            return;
+        }
         // Shift+PageUp/PageDown read the history, as terminals do.
         if m.shift && !m.control && (k.key == "pageup" || k.key == "pagedown") {
             self.scroll_window(w, if k.key == "pageup" { 20 } else { -20 }, cx);

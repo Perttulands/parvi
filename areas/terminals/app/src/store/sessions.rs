@@ -281,12 +281,29 @@ pub fn news(s: &Session) -> Option<&AgentEvent> {
     s.event.as_ref().filter(|e| !e.seen)
 }
 
-/// The session whose agent reported last and has not been looked at.
-pub fn newest_news(all: &[Session]) -> Option<&Session> {
+/// Whether the session asks the operator something now: a question on its
+/// screen, or a needs-input report not yet looked at. A finished report
+/// before it is old news.
+pub fn asks(s: &Session) -> bool {
+    waiting(s).is_some() || news(s).is_some_and(|e| e.kind == EventKind::NeedsInput)
+}
+
+/// Where Alt+J goes: a session that asks, the latest to ask first, then the
+/// one whose agent reported last and has not been looked at. Never the
+/// session the operator is on, `here`.
+pub fn next_news<'a>(all: &'a [Session], here: Option<&Key>) -> Option<&'a Session> {
+    let elsewhere = |s: &&Session| here.is_none_or(|k| *k != Key::of(s));
+    let latest = |s: &&Session| news(s).map_or(0, |e| e.at);
     all.iter()
-        .filter_map(|s| news(s).map(|e| (e.at, s)))
-        .max_by_key(|(at, _)| *at)
-        .map(|(_, s)| s)
+        .filter(elsewhere)
+        .filter(|s| asks(s))
+        .max_by_key(latest)
+        .or_else(|| {
+            all.iter()
+                .filter(elsewhere)
+                .filter(|s| news(s).is_some())
+                .max_by_key(latest)
+        })
 }
 
 /// The sessions in `after` whose agent reported since `before`: an unseen
@@ -345,9 +362,10 @@ pub fn targets<'a>(sessions: &'a [Session], recent: &[String], query: &str) -> V
             .position(|r| *r == Key::of(s).text())
             .unwrap_or(recent.len())
     };
-    let mut list: Vec<(usize, &Session)> = sessions.iter().enumerate().collect();
-    list.sort_by_key(|(i, s)| (rank(s), *i));
-    list.into_iter().map(|(_, s)| s).collect()
+    // Then by name, as the rail reads, not in the order nodes listed them.
+    let mut list: Vec<&Session> = sessions.iter().collect();
+    list.sort_by(|a, b| (rank(a), &a.name, &a.node).cmp(&(rank(b), &b.name, &b.node)));
+    list
 }
 
 /// `recent` with `id` moved to the front, at most `limit` long.
@@ -605,21 +623,38 @@ mod tests {
             report_title(&again[0], again[0].event.as_ref().unwrap()),
             "a finished"
         );
-        assert_eq!(newest_news(&again).unwrap().name, "a", "b's is seen");
+        assert_eq!(next_news(&again, None).unwrap().name, "a", "b's is seen");
         again[1].event = event(12, false);
-        assert_eq!(newest_news(&again).unwrap().name, "b", "the latest");
-        assert!(newest_news(&before).is_none());
+        assert_eq!(next_news(&again, None).unwrap().name, "b", "the latest");
+        assert!(next_news(&before, None).is_none());
+
+        // A session that asks comes before any report, newer or not, and
+        // the one the operator is on is passed over.
+        let mut asking = again.to_vec();
+        asking.push(s("c"));
+        asking[2].panes[0].waiting = Some("Tea or coffee?".into());
+        assert_eq!(next_news(&asking, None).unwrap().name, "c");
+        let here = Key::of(&asking[2]);
+        assert_eq!(next_news(&asking, Some(&here)).unwrap().name, "b");
+        asking[2].panes[0].waiting = None;
+        asking[0].event = Some(AgentEvent {
+            kind: EventKind::NeedsInput,
+            at: 1,
+            seen: false,
+            summary: String::new(),
+        });
+        assert_eq!(next_news(&asking, None).unwrap().name, "a", "it asked");
     }
 
     #[test]
     fn send_ranks_recent_first_and_remembers_five() {
-        let list = [s("a"), s("b"), s("c")];
-        let recent = vec![Key::of(&list[2]).text()];
+        let list = [s("b"), s("c"), s("a")];
+        let recent = vec![Key::of(&list[1]).text()];
         let t: Vec<&str> = targets(&list, &recent, "")
             .iter()
             .map(|s| s.name.as_str())
             .collect();
-        assert_eq!(t, ["c", "a", "b"]);
+        assert_eq!(t, ["c", "a", "b"], "the recent, then by name");
         let mut r = vec![];
         for i in 0..7 {
             remember(&mut r, &i.to_string(), 5);

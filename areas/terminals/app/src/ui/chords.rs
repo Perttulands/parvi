@@ -64,7 +64,12 @@ fn chords(page: &WeakEntity<Terminals>, tabs: usize) -> Vec<Chord> {
         chord("v", "Overview of every session", Action::Overview).alt("v", Some(false)),
         chord("h", "Search every scrollback", Action::Find).alt("h", Some(false)),
         // J for jump: answering a toast without finding its row.
-        chord("j", "Go to the session that reported", Action::Reported).alt("j", Some(false)),
+        chord(
+            "j",
+            "Go to the session that asks or reported",
+            Action::Reported,
+        )
+        .alt("j", Some(false)),
     ]);
     all
 }
@@ -187,9 +192,13 @@ impl Terminals {
                 return;
             }
             Action::Reported => {
-                match sessions::newest_news(&self.fleet.all) {
+                match sessions::next_news(&self.fleet.all, self.focused_key().as_ref()) {
                     Some(s) => self.place(Key::of(s), window, cx),
-                    None => self.report("No agent has reported since you looked.", false, None),
+                    None => self.report(
+                        "No session asks for you, and no agent has reported since you looked.",
+                        false,
+                        None,
+                    ),
                 }
                 return;
             }
@@ -261,7 +270,7 @@ mod tests {
             ("s", false, Some("Send from the focused session")),
             ("2", false, Some("Terminal tab 2")),
             ("6", false, Some("Terminal tab 6")),
-            ("j", false, Some("Go to the session that reported")),
+            ("j", false, Some("Go to the session that asks or reported")),
             // Alt+F is the shell's forward-word.
             ("f", false, None),
         ];
@@ -284,7 +293,7 @@ mod tests {
             ("n", Some("Launcher in the focused window")),
             ("s", Some("Send from the focused session")),
             ("3", Some("Terminal tab 3")),
-            ("j", Some("Go to the session that reported")),
+            ("j", Some("Go to the session that asks or reported")),
             ("i", None),
             ("r", None),
         ];

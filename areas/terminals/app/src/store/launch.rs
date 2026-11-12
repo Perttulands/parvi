@@ -280,16 +280,27 @@ pub fn step(lit: Option<usize>, rows: usize, down: bool, list: &FolderList) -> O
 /// How many folders of live sessions the launcher offers.
 const RECENT: usize = 5;
 
-/// The folders the launcher offers, as CHROTE's does: the node's own
-/// first, then the folders `user`'s live sessions sit in, the newest first,
-/// at most five of them.
-pub fn folders(pinned: &[String], sessions: &[Session], user: &str) -> Vec<String> {
+/// The folders the launcher offers: those launched in on this device, the
+/// latest first, so the first is where the next launch goes; then the
+/// node's own; then the folders `user`'s live sessions sit in, the newest
+/// first, at most five of them.
+pub fn folders(
+    launched: &[String],
+    pinned: &[String],
+    sessions: &[Session],
+    user: &str,
+) -> Vec<String> {
     let mut mine: Vec<&Session> = sessions
         .iter()
         .filter(|s| s.user.as_deref().unwrap_or("") == user)
         .collect();
     mine.sort_by_key(|s| std::cmp::Reverse(s.last.unwrap_or(0)));
-    let mut out: Vec<String> = pinned.to_vec();
+    let mut out: Vec<String> = Vec::new();
+    for folder in launched.iter().chain(pinned) {
+        if !out.contains(folder) {
+            out.push(folder.clone());
+        }
+    }
     let mut recent = 0;
     for cwd in mine.iter().filter_map(|s| s.cwd.as_deref().map(str::trim)) {
         if recent == RECENT {
@@ -504,7 +515,17 @@ mod tests {
             at("~", None, 2),
             at("/home/alice", Some("alice"), 9),
         ];
-        assert_eq!(folders(&["~".into()], &live, ""), ["~", "/srv/b", "/srv/a"]);
-        assert_eq!(folders(&[], &live, "alice"), ["/home/alice"]);
+        assert_eq!(
+            folders(&[], &["~".into()], &live, ""),
+            ["~", "/srv/b", "/srv/a"]
+        );
+        assert_eq!(folders(&[], &[], &live, "alice"), ["/home/alice"]);
+        // Where this device launched last comes first, so it is where the
+        // next launch goes, then the rest in the order they were used.
+        let launched = ["/srv/a".to_string(), "/tmp/proj".to_string()];
+        assert_eq!(
+            folders(&launched, &["~".into()], &live, ""),
+            ["/srv/a", "/tmp/proj", "~", "/srv/b"]
+        );
     }
 }

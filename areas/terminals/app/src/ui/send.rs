@@ -411,6 +411,17 @@ impl Terminals {
             .child(kit::label(&t, "Target"))
             .child(self.send_query.clone())
             .child(self.render_send_targets(cx));
+        // The list shows whole rows; say what lies past its end.
+        let query = self.send_query.read(cx).text.clone();
+        let past =
+            (self.send_targets(&query).len() + 1).saturating_sub(size::SEND_TARGET_ROWS as usize);
+        if past > 0 {
+            body = body.child(kit::note(
+                &t,
+                format!("{past} more below; scroll, or type to find one"),
+                Some(t.dim),
+            ));
+        }
         if !self.send.new_agent
             && let Some(key) = self.send_target.as_ref()
             && let Some(session) = self.fleet.session(key)
@@ -626,6 +637,9 @@ impl Terminals {
         let row = |id: (&'static str, usize), chosen: bool| {
             div()
                 .id(id)
+                // Rows keep their height; the list scrolls instead of
+                // squeezing them.
+                .flex_none()
                 .h(px(size::ROW))
                 .px(px(8.))
                 .flex()
@@ -640,7 +654,8 @@ impl Terminals {
         let mut targets = div()
             .id("send-targets")
             .flex_none()
-            .max_h(px(260.))
+            // Whole rows, so the last one shown is never cut through.
+            .max_h(px(size::SEND_TARGET_ROWS * size::ROW))
             .overflow_y_scroll()
             .flex()
             .flex_col()

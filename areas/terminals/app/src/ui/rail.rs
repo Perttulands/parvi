@@ -269,8 +269,15 @@ impl Terminals {
             tab == self.settings.workspace.active && w == self.settings.workspace.focus
         });
         let picked = self.pick.has(&key.text());
-        let waiting = sessions::waiting(s);
         let mark = self.marked(s).cloned();
+        // What it asks outranks what it last reported: a question on its
+        // screen, else the needs-input report's.
+        let asks = sessions::waiting(s).map(str::to_owned).or_else(|| {
+            mark.as_ref()
+                .filter(|e| e.kind == EventKind::NeedsInput)
+                .map(|e| e.summary.clone())
+        });
+        let mark = mark.filter(|_| asks.is_none());
         let activity = if live {
             sessions::activity(s, super::page::now_ms())
         } else {
@@ -280,127 +287,157 @@ impl Terminals {
         let name = s.name.clone();
         let id = gpui::SharedString::from(format!("row-{}", key.text()));
         let selector = id.to_string();
-        place::edge(div().id(id).debug_selector(move || selector), device)
-            .min_h(px(size::ROW))
-            .pl(px(2.))
-            .pr(px(4.))
-            .flex()
-            .items_center()
-            .gap(px(6.))
-            .cursor_pointer()
-            .text_color(if shown.is_some() { t.text } else { t.text2 })
-            // CHROTE: the focused tile's row on the raised surface, a picked
-            // row on the accent wash; both carry the accent bar, inside the
-            // device edge and over the row, so nothing in it moves.
-            .relative()
-            .when(in_focused || picked, |d| {
-                d.child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .top_0()
-                        .bottom_0()
-                        .w(px(2.))
-                        .bg(t.accent),
-                )
-            })
-            .when(in_focused, |d| d.bg(t.raised))
-            .when(picked, |d| d.bg(t.accent_soft()))
-            .hover(|d| d.bg(t.accent_light()))
-            // The news dot keeps its room on every row, so the names stand
-            // in one column; what a session runs is said on the right.
-            .child(
+        let group = id.clone();
+        place::edge(
+            div()
+                .id(id.clone())
+                .group(group.clone())
+                .debug_selector(move || selector),
+            device,
+        )
+        .min_h(px(size::ROW))
+        .pl(px(2.))
+        .pr(px(4.))
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .cursor_pointer()
+        .text_color(if shown.is_some() { t.text } else { t.text2 })
+        // CHROTE: the focused tile's row on the raised surface, a picked
+        // row on the accent wash; both carry the accent bar, inside the
+        // device edge and over the row, so nothing in it moves.
+        .relative()
+        .when(in_focused || picked, |d| {
+            d.child(
                 div()
-                    .flex_none()
-                    .w(px(size::DOT_SLOT))
-                    .flex()
-                    .justify_center()
-                    .map(|d| match &mark {
-                        Some(e) => d.child(event_dot(t, &key, e)),
-                        None if waiting.is_some() => d.child(kit::waiting_dot(t)),
-                        None => d,
-                    }),
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(2.))
+                    .bg(t.accent),
             )
-            .when_some(s.user.clone(), |d, u| d.child(kit::user_square(t, &u)))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .py(px(3.))
-                    .flex()
-                    .flex_col()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .child(name_label(&s.name))
-                    .children(mark.as_ref().filter(|e| !e.summary.is_empty()).map(|e| {
-                        div()
-                            .text_size(px(11.))
-                            .text_color(t.dim)
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .child(e.summary.clone())
-                    })),
-            )
-            .children(running_mark(t, s, cx).filter(
-                |_| !matches!(sessions::running(s), sessions::Running::Command(c) if c == s.name),
-            ))
-            .children(
-                glyphs(s)
-                    .into_iter()
-                    .enumerate()
-                    .map(|(n, (mark, why))| glyph(t, format!("{}-{n}", key.text()), mark, why)),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_size(px(10.))
-                    .text_color(if activity == "active" {
-                        t.accent
-                    } else {
-                        t.dim
-                    })
-                    .child(activity),
-            )
-            .child(
-                div()
-                    .id(gpui::SharedString::from(format!("rowmenu-{}", key.text())))
-                    .flex_none()
-                    .w(px(20.))
-                    .h(px(20.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(3.))
-                    .text_color(t.dim)
-                    .hover(|d| d.text_color(t.text))
-                    .child("…")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |sh, e: &MouseDownEvent, window, cx| {
-                            cx.stop_propagation();
-                            let items = sh.menu_for(&k1);
-                            sh.menu(items, e.position, window, cx);
-                        }),
-                    ),
-            )
-            .on_click(cx.listener(move |sh, e: &gpui::ClickEvent, window, cx| {
-                sh.rail_click(&k2, Gesture::of(&e.modifiers()), window, cx)
-            }))
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |sh, e: &MouseDownEvent, window, cx| {
-                    let items = sh.menu_for(&k3);
-                    sh.menu(items, e.position, window, cx);
+        })
+        .when(in_focused, |d| d.bg(t.raised))
+        .when(picked, |d| d.bg(t.accent_soft()))
+        .hover(|d| d.bg(t.accent_light()))
+        // The news dot keeps its room on every row, so the names stand
+        // in one column; what a session runs is said on the right.
+        .child(
+            div()
+                .flex_none()
+                .w(px(size::DOT_SLOT))
+                .flex()
+                .justify_center()
+                .map(|d| match (&asks, &mark) {
+                    (Some(_), _) => d.child(ask_mark(t, &key)),
+                    (None, Some(e)) => d.child(event_dot(t, &key, e)),
+                    (None, None) => d,
                 }),
-            )
-            .on_drag(
-                Dragged {
-                    key: key.clone(),
-                    from: None,
-                },
-                move |_, _, _, cx| cx.new(|_| DragPreview::named(name.clone())),
-            )
-            .into_any_element()
+        )
+        .when_some(s.user.clone(), |d, u| d.child(kit::user_square(t, &u)))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .py(px(3.))
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .child(
+                    name_label(&s.name)
+                        .id(gpui::SharedString::from(format!("name-{}", key.text())))
+                        .tooltip(kit::tip(name.clone())),
+                )
+                .children(asks.as_ref().map(|question| {
+                    let question = question.lines().find(|l| !l.trim().is_empty());
+                    div()
+                        .debug_selector(|| "row-asks".into())
+                        .text_size(px(11.))
+                        .text_color(t.accent)
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(match question {
+                            Some(q) => format!("Asks: {}", q.trim()),
+                            None => "Asks for your answer".to_string(),
+                        })
+                }))
+                .children(mark.as_ref().filter(|e| !e.summary.is_empty()).map(|e| {
+                    div()
+                        .text_size(px(11.))
+                        .text_color(t.dim)
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(e.summary.clone())
+                })),
+        )
+        .children(running_mark(t, s, cx).filter(
+            |_| !matches!(sessions::running(s), sessions::Running::Command(c) if c == s.name),
+        ))
+        .children(
+            glyphs(s)
+                .into_iter()
+                .enumerate()
+                .map(|(n, (mark, why))| glyph(t, format!("{}-{n}", key.text()), mark, why)),
+        )
+        .child(
+            div()
+                .flex_none()
+                .text_size(px(10.))
+                .text_color(if activity == "active" {
+                    t.accent
+                } else {
+                    t.dim
+                })
+                .child(activity),
+        )
+        // The menu shows over the row's end on hover, so its room goes
+        // to the name; a right click opens it too.
+        .child(
+            div()
+                .id(gpui::SharedString::from(format!("rowmenu-{}", key.text())))
+                .absolute()
+                .right(px(4.))
+                .w(px(size::ROW_MENU))
+                .h(px(size::ROW_MENU))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(3.))
+                .bg(t.raised)
+                .text_color(t.dim)
+                .opacity(0.)
+                .group_hover(group.clone(), |d| d.opacity(1.))
+                .hover(|d| d.text_color(t.text))
+                .child("…")
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |sh, e: &MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        let items = sh.menu_for(&k1);
+                        sh.menu(items, e.position, window, cx);
+                    }),
+                ),
+        )
+        .on_click(cx.listener(move |sh, e: &gpui::ClickEvent, window, cx| {
+            sh.rail_click(&k2, Gesture::of(&e.modifiers()), window, cx)
+        }))
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |sh, e: &MouseDownEvent, window, cx| {
+                let items = sh.menu_for(&k3);
+                sh.menu(items, e.position, window, cx);
+            }),
+        )
+        .on_drag(
+            Dragged {
+                key: key.clone(),
+                from: None,
+            },
+            move |_, _, _, cx| cx.new(|_| DragPreview::named(name.clone())),
+        )
+        .into_any_element()
     }
 
     /// A picked row's menu is the pick's, as in CHROTE; any other row's
@@ -697,6 +734,33 @@ fn event_dot(t: &Theme, key: &Key, e: &AgentEvent) -> AnyElement {
         .flex_none()
         .child(kit::waiting_dot(t))
         .tooltip(move |_, cx| cx.new(|_| kit::Tip(why.into())).into())
+        .into_any_element()
+}
+
+/// A session waiting for the operator's answer: a question mark on the
+/// accent, unlike a finished report's dot.
+fn ask_mark(t: &Theme, key: &Key) -> AnyElement {
+    div()
+        .id(gpui::SharedString::from(format!("asks-{}", key.text())))
+        .debug_selector({
+            let selector = format!("asks-{}", key.text());
+            move || selector
+        })
+        .flex_none()
+        .size(px(size::ASK_MARK))
+        .rounded_full()
+        .bg(t.accent)
+        .text_color(t.on_accent())
+        .text_size(px(10.))
+        .font_weight(gpui::FontWeight::BOLD)
+        .flex()
+        .items_center()
+        .justify_center()
+        .child("?")
+        .tooltip(|_, cx| {
+            cx.new(|_| kit::Tip("It waits for your answer".into()))
+                .into()
+        })
         .into_any_element()
 }
 

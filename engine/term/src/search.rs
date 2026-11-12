@@ -148,13 +148,13 @@ async fn scan(target: &Target, needle: &Needle, found: &mpsc::Sender<Match>) -> 
                 return Ok(());
             }
         }
-        if needle.matches(&text) {
+        if let Some(at) = needle.find(&text) {
             waiting = Some(Match {
                 pane: target.id,
                 line: index,
                 context: [
                     clip(&String::from_utf8_lossy(&before)),
-                    clip(&text),
+                    clip_around(&text, at),
                     String::new(),
                 ],
             });
@@ -192,6 +192,17 @@ fn clip(line: &str) -> String {
     }
 }
 
+/// A long line cut to [`MAX_LINE`] characters with the hit, at character
+/// `at`, kept in: from a little before it, marked `…` where cut.
+fn clip_around(line: &str, at: usize) -> String {
+    let from = at.saturating_sub(MAX_LINE / 4);
+    if from == 0 {
+        return clip(line);
+    }
+    let rest: String = line.chars().skip(from).collect();
+    format!("…{}", clip(&rest))
+}
+
 /// Smart case: a query with a capital letter matches case and all.
 struct Needle {
     text: String,
@@ -211,15 +222,23 @@ impl Needle {
         }
     }
 
+    #[cfg(test)]
     fn matches(&self, line: &str) -> bool {
+        self.find(line).is_some()
+    }
+
+    /// The character the first hit in `line` starts at.
+    fn find(&self, line: &str) -> Option<usize> {
         if self.text.is_empty() {
-            return false;
+            return None;
         }
-        if self.exact {
-            line.contains(&self.text)
+        let byte = if self.exact {
+            line.find(&self.text)?
         } else {
-            line.to_lowercase().contains(&self.text)
-        }
+            line.to_lowercase().find(&self.text)?
+        };
+        let lowered = (!self.exact).then(|| line.to_lowercase());
+        Some(lowered.as_deref().unwrap_or(line)[..byte].chars().count())
     }
 }
 
@@ -242,5 +261,15 @@ mod tests {
         let long = "é".repeat(MAX_LINE + 10);
         assert_eq!(clip(&long).chars().count(), MAX_LINE + 1);
         assert_eq!(clip("short"), "short");
+    }
+
+    #[test]
+    fn a_long_line_keeps_its_hit() {
+        let line = format!("{}needle{}", "x".repeat(MAX_LINE * 2), "y".repeat(50));
+        let at = Needle::new("needle").find(&line).unwrap();
+        assert_eq!(at, MAX_LINE * 2);
+        let kept = clip_around(&line, at);
+        assert!(kept.starts_with('…') && kept.contains("needle"), "{kept}");
+        assert_eq!(clip_around("short needle", 6), "short needle");
     }
 }

@@ -6,8 +6,9 @@ use super::folder_field::{FolderEvent, FolderField};
 use super::page::Terminals;
 use super::place;
 use crate::remote::Remote;
+use crate::store::settings::launched_in;
 use crate::store::workspace::LinkState;
-use crate::store::{devices, launch, launch_flags};
+use crate::store::{devices, launch, launch_flags, sessions};
 use crate::theme::{size, theme};
 use gpui::{Context, Entity, WeakEntity, Window, div, prelude::*, px};
 use parvi_app_kit::host::{Host, Request};
@@ -15,6 +16,9 @@ use parvi_app_kit::widgets::field::{FieldEvent, TextField};
 use parvi_app_kit::widgets::kit::{self, Kind};
 use parvi_core::NodeId;
 use parvi_terminals_contract::Launch;
+
+/// How many launched-in folders a node keeps.
+const LAUNCHED_KEPT: usize = 5;
 
 /// The launcher in the Send drawer, after the windows': its session is
 /// pasted into rather than put in a window.
@@ -146,6 +150,14 @@ impl Launcher {
         })
     }
 
+    /// The folders this device launched in on `node` for the chosen user,
+    /// the latest first.
+    fn launched<'a>(&self, shell: &'a Terminals, node: &str) -> &'a [String] {
+        (shell.settings.launched_folders)
+            .get(&launched_in(node, &self.user))
+            .map_or(&[], Vec::as_slice)
+    }
+
     fn client<'a>(&self, shell: &'a Terminals) -> Option<&'a Remote> {
         shell.fleet.get(&self.node(shell)?)
     }
@@ -249,10 +261,15 @@ impl Launcher {
         let h = l.harnesses.iter().find(|x| x.id == harness)?;
         let typed_folder = self.folder.read(cx).chosen(cx);
         let folder = if typed_folder.is_empty() {
-            launch::folders(&l.folders, &node.sessions, &self.user)
-                .into_iter()
-                .next()
-                .unwrap_or_else(|| "~".into())
+            launch::folders(
+                self.launched(shell, &node.node),
+                &l.folders,
+                &node.sessions,
+                &self.user,
+            )
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "~".into())
         } else {
             typed_folder
         };
@@ -311,7 +328,7 @@ impl Launcher {
             let conf = s.fleet.get(&node).and_then(|c| c.launcher.clone());
             let l = Launch {
                 harness: harness.clone(),
-                folder,
+                folder: folder.clone(),
                 name: name.clone(),
                 flags: flags.clone(),
                 user: user.clone(),
@@ -334,6 +351,12 @@ impl Launcher {
                 s.send_launching(&node, id);
             }
             s.settings.last_harness = Some(harness.clone());
+            let launched = s
+                .settings
+                .launched_folders
+                .entry(launched_in(&node, &user))
+                .or_default();
+            sessions::remember(launched, &folder, LAUNCHED_KEPT);
             let default = conf
                 .as_ref()
                 .and_then(|l| l.harnesses.iter().find(|h| h.id == harness))
@@ -457,7 +480,10 @@ impl Render for Launcher {
         let sessions = client.map(|c| &c.sessions[..]).unwrap_or_default();
         let offered = conf
             .as_ref()
-            .map(|c| launch::folders(&c.folders, sessions, &self.user))
+            .map(|c| {
+                let launched = client.map_or(&[][..], |n| self.launched(shell, &n.node));
+                launch::folders(launched, &c.folders, sessions, &self.user)
+            })
             .unwrap_or_default();
         let notify_on = shell.settings.notify;
         let values = self.values(shell, cx);

@@ -19,6 +19,10 @@ pub mod size {
     pub const RAIL_NAME_COLUMNS: usize = 22;
     /// The room a rail row keeps for its news dot.
     pub const DOT_SLOT: f32 = 12.;
+    /// A session that waits for an answer: its mark, filling the dot slot.
+    pub const ASK_MARK: f32 = 12.;
+    /// A rail row's menu button, shown over the row's end on hover.
+    pub const ROW_MENU: f32 = 20.;
     /// What another page opens beside the windows (a file a link named).
     pub const BESIDE: f32 = 560.;
     /// The least a view beside the windows narrows to, to leave them room.
@@ -58,6 +62,8 @@ pub mod size {
     /// the floor, and clips instead.
     /// Space between a window's edge and its terminal grid.
     pub const TERM_PAD: f32 = 4.;
+    /// Send's target list shows at most this many whole rows, then scrolls.
+    pub const SEND_TARGET_ROWS: f32 = 9.;
     pub const TERM_DEFAULT: f32 = 14.;
     pub const TERM_MIN: f32 = 12.;
     pub const TERM_MAX: f32 = 20.;

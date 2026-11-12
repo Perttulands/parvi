@@ -2,6 +2,7 @@
 //! and rules, tested without a window.
 
 pub mod devices;
+pub mod find;
 pub mod launch;
 pub mod launch_flags;
 pub mod presets;

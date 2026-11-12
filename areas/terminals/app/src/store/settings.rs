@@ -20,6 +20,9 @@ pub struct Settings {
     /// The Send drawer's width, as last dragged on this device.
     pub send_width: Option<f32>,
     pub last_harness: Option<String>,
+    /// The folders launched in, the latest first, by node and user
+    /// ([`launched_in`]).
+    pub launched_folders: BTreeMap<String, Vec<String>>,
     /// Flags typed per harness, when they differ from the node's.
     pub flags: BTreeMap<String, String>,
     /// The launcher asks a harness to report when it finishes.
@@ -92,6 +95,7 @@ impl Default for Settings {
             recent_targets: vec![],
             send_width: None,
             last_harness: None,
+            launched_folders: Default::default(),
             flags: Default::default(),
             notify: true,
             event_marks: true,
@@ -124,6 +128,20 @@ impl Settings {
         self.event_desktop = fresh.event_desktop;
     }
 
+    /// The font size Ctrl and `key` set, as browsers and terminals do:
+    /// `=` (or `+`) a point larger, `-` a point smaller, `0` the default.
+    /// `None` for another key, or at the end of the range.
+    pub fn font_for_key(&self, key: &str) -> Option<f32> {
+        let to = match key {
+            "=" | "+" => self.font_size + 1.,
+            "-" => self.font_size - 1.,
+            "0" => size::TERM_DEFAULT,
+            _ => return None,
+        }
+        .clamp(size::TERM_MIN, size::TERM_MAX);
+        (to != self.font_size).then_some(to)
+    }
+
     /// Brings what was read within bounds.
     pub fn mend(mut self) -> Self {
         self.font_size = self.font_size.clamp(size::TERM_MIN, size::TERM_MAX);
@@ -131,9 +149,34 @@ impl Settings {
     }
 }
 
+/// Where [`Settings::launched_folders`] keeps a node's folders for `user`
+/// (empty: the node's own).
+pub fn launched_in(node: &str, user: &str) -> String {
+    if user.is_empty() {
+        node.to_string()
+    } else {
+        format!("{node}@{user}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ctrl_keys_step_the_font_within_its_range() {
+        let at = |font_size| Settings {
+            font_size,
+            ..Settings::default()
+        };
+        assert_eq!(at(14.).font_for_key("="), Some(15.));
+        assert_eq!(at(14.).font_for_key("+"), Some(15.));
+        assert_eq!(at(14.).font_for_key("-"), Some(13.));
+        assert_eq!(at(18.).font_for_key("0"), Some(size::TERM_DEFAULT));
+        assert_eq!(at(size::TERM_MAX).font_for_key("="), None);
+        assert_eq!(at(size::TERM_MIN).font_for_key("-"), None);
+        assert_eq!(at(14.).font_for_key("x"), None);
+    }
 
     fn parse(text: &str) -> Option<Settings> {
         serde_json::from_str::<Settings>(text)
