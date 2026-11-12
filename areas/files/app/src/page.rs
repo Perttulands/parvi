@@ -407,7 +407,31 @@ impl FilesPage {
                 view
             }
         };
+        // Beside a terminal the dock starts at that session's folder.
+        if let Some((node, folder)) = self.session_folder(cx) {
+            view.update(cx, |page, cx| {
+                if page.side.pane.node != node || page.side.pane.path.as_deref() != Some(&folder) {
+                    page.side.opened = None;
+                    page.side.pane.node = node;
+                    page.list(folder, None, cx);
+                }
+            });
+        }
         self.host.show_dock(view.into(), cx);
+    }
+
+    /// The node and folder of the session in the focused terminal tile.
+    fn session_folder(&self, cx: &App) -> Option<(String, String)> {
+        let list = self.sessions.as_ref()?.read(cx);
+        let focused = list.focused.as_ref()?;
+        list.sessions
+            .iter()
+            .find(|s| {
+                s.node == focused.node
+                    && s.name == focused.name
+                    && s.user.as_deref().unwrap_or_default() == focused.user
+            })
+            .and_then(|s| Some((s.node.clone(), s.cwd.clone()?)))
     }
     fn open_beside(
         &mut self,

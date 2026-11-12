@@ -222,7 +222,20 @@ fn terminal_dock_search_and_printed_path_open_beside(cx: &mut TestAppContext) {
         ),
     )
     .unwrap();
-    tmux.new_session("alpha", 100, 30);
+    let sub = root.join("sub").to_string_lossy().into_owned();
+    tmux.run(&[
+        "new-session",
+        "-d",
+        "-s",
+        "alpha",
+        "-x",
+        "100",
+        "-y",
+        "30",
+        "-c",
+        &sub,
+        "env PS1='$ ' sh",
+    ]);
     let running = start_with_terminal(root.clone(), Some(tmux.socket_path()));
     cx.executor().allow_parking();
     cx.update(parvi_app_shell::prepare);
@@ -245,18 +258,15 @@ fn terminal_dock_search_and_printed_path_open_beside(cx: &mut TestAppContext) {
     until(cx, "terminal painted", |cx| {
         terminal.read_with(cx, |p, _| p.geo.borrow()[0].origin.is_some())
     });
+    // The dock opens at the session's folder.
     cx.simulate_keystrokes("alt-o");
-    until(cx, "dock folder", |cx| {
-        cx.debug_bounds("file-row-sub").is_some()
+    until(cx, "dock at the session's folder", |cx| {
+        cx.debug_bounds("file-row-note.txt").is_some()
     });
     assert_eq!(
         shell.read_with(cx, |s, _| s.shown_page()),
         Some("terminals")
     );
-    click(cx, "file-row-sub");
-    until(cx, "browsed folder", |cx| {
-        cx.debug_bounds("file-row-note.txt").is_some()
-    });
     click(cx, "files-up");
     until(cx, "back at root", |cx| {
         cx.debug_bounds("file-row-sub").is_some()
