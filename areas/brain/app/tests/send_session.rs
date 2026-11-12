@@ -147,7 +147,8 @@ fn brain_send_reaches_a_real_session(cx: &mut TestAppContext) {
     until(cx, "send drawer", |cx| cx.debug_bounds("send-go").is_some());
     click(cx, "send-go");
     until(cx, "reference in session", |cx| {
-        shown(cx).contains("library notes/page.md")
+        let text = shown(cx);
+        text.contains("brain page /") && text.contains("/notes/page.md")
     });
     std::fs::remove_dir_all(settings).unwrap();
 }

@@ -137,6 +137,13 @@ fn page_renders_a_collection_from_a_node(cx: &mut TestAppContext) {
     let edit = cx.debug_bounds("brain-edit").unwrap().center();
     cx.simulate_click(edit, Modifiers::none());
     until(cx, "editor", |cx| cx.debug_bounds("brain-save").is_some());
+    let editor = cx
+        .debug_bounds("code")
+        .expect("the page's text in an editor");
+    assert!(
+        editor.size.height >= gpui::px(200.),
+        "the editor has room to show the page: {editor:?}"
+    );
     cx.simulate_keystrokes("ctrl-end");
     cx.simulate_input("Saved from Brain");
     let save = cx.debug_bounds("brain-save").unwrap().center();

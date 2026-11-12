@@ -314,11 +314,13 @@ impl Brain {
         }
     }
 
-    /// What Alt+S pastes: CHROTE's reference to the page, or the Brain.
+    /// What Alt+S pastes: the page's file, which an agent can open, or
+    /// the Brain.
     pub fn reference(&self) -> String {
         match &self.page {
-            Some(p) => format!("library {}", p.path),
-            None => "library".into(),
+            Some(p) if !p.file.is_empty() => format!("brain page {}", p.file),
+            Some(p) => format!("brain page {}", p.path),
+            None => "the brain".into(),
         }
     }
 }
@@ -543,7 +545,7 @@ mod tests {
             200,
             br#"{"path":"preferences/workflow.md","title":"Workflow"}"#,
         );
-        assert_eq!(b.reference(), "library preferences/workflow.md");
+        assert_eq!(b.reference(), "brain page preferences/workflow.md");
         b.history_open = true;
         let pending = b.open();
         b.close();
@@ -555,7 +557,14 @@ mod tests {
         assert!(b.page.is_none());
         assert!(b.trail.is_empty());
         assert!(!b.history_open);
-        assert_eq!(b.reference(), "library");
+        assert_eq!(b.reference(), "the brain");
+        let page = b.open();
+        b.read(
+            page,
+            200,
+            br#"{"path":"a/b.md","file":"/srv/data/context/a/b.md","title":"B"}"#,
+        );
+        assert_eq!(b.reference(), "brain page /srv/data/context/a/b.md");
     }
 
     #[test]

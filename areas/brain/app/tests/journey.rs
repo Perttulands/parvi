@@ -294,12 +294,11 @@ fn dock_search_send_and_toggle_from_another_page(cx: &mut TestAppContext) {
     });
     let send = cx.debug_bounds("brain-send").unwrap().center();
     cx.simulate_click(send, Modifiers::none());
-    assert_eq!(
-        SENT.with(|sent| sent.borrow().clone()),
-        Some(parvi_app_kit::Ask::Send {
-            reference: "library notes/first.md".into(),
-            target: None
-        })
+    let sent = SENT.with(|sent| sent.borrow().clone());
+    assert!(
+        matches!(&sent, Some(parvi_app_kit::Ask::Send { reference, target: None })
+            if reference.starts_with("brain page /") && reference.ends_with("/notes/first.md")),
+        "{sent:?}"
     );
     cx.simulate_keystrokes("alt-l");
     until(cx, "dock closed", |cx| {

@@ -1017,6 +1017,7 @@ impl Render for Code {
         let t = theme(cx);
         div()
             .id("code")
+            .debug_selector(|| "code".into())
             .key_context("Code")
             .track_focus(&self.focus)
             .size_full()

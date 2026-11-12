@@ -208,7 +208,7 @@ pub fn commands(
                         .active_pane(&session.id)
                         .await
                         .map_err(|e| Error::new(BRAIN_ERROR, e.to_string()))?;
-                    let reference = format!("library {}", page.path);
+                    let reference = format!("brain page {}", page.file);
                     sessions
                         .deliver(pane, reference.clone(), true)
                         .await

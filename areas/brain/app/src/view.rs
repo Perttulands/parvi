@@ -180,12 +180,18 @@ impl Render for BrainPage {
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
             .p(px(READER_PAD));
+        // While editing, the editor fills the reader's height.
+        let editing = self.state.edit.is_some();
         let mut content = div()
             .w_full()
             .max_w(px(board::READER_MAX))
             .flex()
             .flex_col()
             .gap(px(PAD));
+        if editing {
+            main = main.flex().flex_col();
+            content = content.flex_1().min_h_0();
+        }
         if let Some(page) = &self.state.page {
             let send = self.state.reference();
             content = content.child(
@@ -371,7 +377,7 @@ impl Render for BrainPage {
                 on_link: Some(on_link),
                 select: Some(self.select.clone()),
             };
-            if self.state.edit.is_some() {
+            if editing {
                 content = content.child(self.summary.clone()).child(
                     div()
                         .flex_1()
@@ -427,7 +433,7 @@ impl Render for BrainPage {
                 content =
                     content.child(select::track(body, &self.select, cx.entity_id(), |_, _| {}));
             }
-            if !page.related.is_empty() {
+            if !editing && !page.related.is_empty() {
                 content = content
                     .child(kit::label(&t, "Related").debug_selector(|| "brain-related".into()));
                 for (i, related) in page.related.iter().enumerate() {
@@ -443,12 +449,12 @@ impl Render for BrainPage {
                     );
                 }
             }
-            if page.links.iter().any(|link| link.page.is_some()) {
+            if !editing && page.links.iter().any(|link| link.page.is_some()) {
                 content =
                     content.child(kit::label(&t, "Links").debug_selector(|| "brain-links".into()));
                 content = content.child(links_section(&page.links, cx));
             }
-            if !page.backlinks.is_empty() {
+            if !editing && !page.backlinks.is_empty() {
                 content = content.child(
                     kit::label(&t, "Linked from").debug_selector(|| "brain-backlinks".into()),
                 );

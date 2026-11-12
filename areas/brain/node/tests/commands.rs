@@ -84,11 +84,12 @@ async fn brain_commands_save_and_read_changes() {
     sessions.add("alpha");
     let (status, sent) = run(&node, &["send", "notes/page.md", "alpha"]).await;
     assert_eq!(status, 0, "{sent}");
+    let file = root.canonicalize().unwrap().join("notes/page.md");
     assert_eq!(
         sessions.delivered(),
         vec![parvi_testkit::sessions::Delivered {
             session: "alpha".into(),
-            text: "library notes/page.md".into(),
+            text: format!("brain page {}", file.display()),
             enter: true,
         }]
     );

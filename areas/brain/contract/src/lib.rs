@@ -30,6 +30,8 @@ pub struct Found {
 #[serde(default)]
 pub struct Page {
     pub path: String,
+    /// The page's file on its node, which an agent there can open.
+    pub file: String,
     pub title: String,
     pub kind: String,
     pub summary: String,

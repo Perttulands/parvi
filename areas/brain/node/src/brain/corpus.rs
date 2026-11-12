@@ -114,6 +114,7 @@ impl Corpus {
         related.sort_by_key(|p| p.title.to_lowercase());
         Ok(Page {
             path: path.to_owned(),
+            file: self.root.join(path).display().to_string(),
             title: parsed.title,
             kind: parsed.kind,
             summary: parsed.summary,
