@@ -117,8 +117,8 @@ impl View {
             )
         })
     }
-    /// Bring a place on the board (x, y, width, height) into the middle of
-    /// the view when any of it is out of view.
+    /// Bring a place on the board (x, y, width, height) into view, moving
+    /// the board no further than needed so the rest stays where it was.
     pub(super) fn show(&mut self, (x, y, w, h): (f32, f32, f32, f32)) {
         let Some((vx, vy, vw, vh)) = self.visible() else {
             return;
@@ -126,11 +126,18 @@ impl View {
         if x >= vx && y >= vy && x + w <= vx + vw && y + h <= vy + vh {
             return;
         }
-        let (_, _, bw, bh) = self.bounds.get();
-        self.pan = (
-            (bw - CONTROLS_W) / 2. - (x + w / 2.) * self.zoom,
-            bh / 2. - (y + h / 2.) * self.zoom,
-        );
+        let margin = FIT_MARGIN / 2. / self.zoom;
+        let shift = |at: f32, len: f32, view: f32, span: f32| {
+            if at < view || len + 2. * margin > span {
+                view + margin - at
+            } else if at + len > view + span {
+                view + span - margin - (at + len)
+            } else {
+                0.
+            }
+        };
+        self.pan.0 += shift(x, w, vx, vw) * self.zoom;
+        self.pan.1 += shift(y, h, vy, vh) * self.zoom;
         self.fitted = true;
     }
     fn center(&self) -> (f32, f32) {
@@ -152,7 +159,8 @@ impl View {
             .clamp(ZOOM_MIN, 1.);
         self.zoom = z;
         self.pan = ((w - bw * z) / 2. - x * z, (h - bh * z) / 2. - y * z);
-        self.fitted = true;
+        // An empty board fits again once its first card lands.
+        self.fitted = !board.cards.is_empty();
     }
 }
 
@@ -1682,6 +1690,8 @@ impl MissionsPage {
         }) else {
             return;
         };
+        // Open it before wiring: the editor waits for no write.
+        self.edit_step(&step.id, cx);
         if let (Some(from), Some(port)) = (from, step.inputs.first()) {
             let to = format!("{}:{}", step.id, port.id);
             self.write_board(
@@ -1690,7 +1700,6 @@ impl MissionsPage {
                 cx,
             );
         }
-        self.edit_step(&step.id, cx);
     }
 
     /// The "+" beside a card: add the step that comes next.

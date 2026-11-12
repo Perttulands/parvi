@@ -129,10 +129,12 @@ impl MissionsPage {
             }
         }
         // A pick staffs the slot at once: no separate Assign, nothing for
-        // Save. One made during another write follows when that lands.
-        if self.writing {
+        // Save. One made during another write follows when that lands; a
+        // harness waits for its effort, which the node requires with it.
+        let complete = staff[1].is_empty() || !staff[3].is_empty();
+        if complete && self.writing {
             self.staff_pending = true;
-        } else {
+        } else if complete {
             self.assign_slot(cx);
         }
         cx.notify();
