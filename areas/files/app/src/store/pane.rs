@@ -119,15 +119,13 @@ impl Pane {
     /// The folder to open once the roots are known: the one this pane last
     /// showed if it is under them, else its own root (the second pane takes
     /// the second root when there are several).
-    pub fn start_path(&self, index: usize) -> Option<String> {
+    pub fn start_path(&self) -> Option<String> {
         if let Some(p) = &self.path
             && paths::root_of(&self.roots, p).is_some()
         {
             return Some(p.clone());
         }
-        self.roots
-            .get(index.min(self.roots.len().saturating_sub(1)))
-            .map(|r| r.path.clone())
+        self.roots.first().map(|r| r.path.clone())
     }
 
     /// A listing arrived. A new folder starts unfiltered and unselected; the
@@ -368,9 +366,9 @@ mod tests {
                 path: "/srv".into(),
             },
         ];
-        assert_eq!(p.start_path(0).as_deref(), Some("/srv/x"));
+        assert_eq!(p.start_path().as_deref(), Some("/srv/x"));
         p.path = Some("/etc".into());
-        assert_eq!(p.start_path(1).as_deref(), Some("/srv"));
+        assert_eq!(p.start_path().as_deref(), Some("/home/p"));
         p.choose_node("n3");
         assert!(p.path.is_none() && p.roots.is_empty());
     }

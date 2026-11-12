@@ -6,7 +6,7 @@ use gpui::{
     prelude::*, px,
 };
 use parvi_app_kit::theme::{
-    board::{GAP, PAD},
+    board::{GAP, HEADING, LIST_W, PAD, READER_MAX},
     size, theme,
 };
 use parvi_app_kit::widgets::kit::{self, Kind};
@@ -14,6 +14,7 @@ use parvi_app_kit::widgets::kit::{self, Kind};
 const ROW_INSET: f32 = 6.;
 const SIZE_COLUMN: f32 = 70.;
 const MODIFIED_COLUMN: f32 = 100.;
+const CARD_W: f32 = 336.;
 
 impl FilesPage {
     fn projects_landing(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -27,41 +28,49 @@ impl FilesPage {
             .flex()
             .flex_col()
             .gap(px(ROW_INSET));
-        let node = self.sides[0].pane.node.clone();
-        for (index, root) in self.sides[0].pane.roots.iter().enumerate() {
+        let node = self.side.pane.node.clone();
+        let mut roots = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(ROW_INSET))
+            .child(div().pr(px(ROW_INSET)).child(kit::label(&t, "Browse")));
+        for (index, root) in self.side.pane.roots.iter().enumerate() {
             let folder = root.path.clone();
             let node = node.clone();
-            body = body.child(
-                kit::button(
-                    &t,
-                    ("browse-root", index),
-                    format!("Browse {}", root.name),
-                    Kind::Plain,
-                )
-                .debug_selector({
-                    let id = format!("files-browse-root-{index}");
-                    move || id.clone()
-                })
-                .on_click(cx.listener(move |p, _, w, cx| {
-                    p.browse_project(node.clone(), folder.clone(), None, w, cx)
-                })),
+            roots = roots.child(
+                kit::button(&t, ("browse-root", index), root.name.clone(), Kind::Plain)
+                    .debug_selector({
+                        let id = format!("files-browse-root-{index}");
+                        move || id.clone()
+                    })
+                    .on_click(cx.listener(move |p, _, w, cx| {
+                        p.browse_project(node.clone(), folder.clone(), None, w, cx)
+                    })),
             );
         }
+        body = body.child(roots);
         for (node, result) in &self.projects {
             for group in &result.groups {
-                body = body.child(kit::label(&t, group.parent.clone()));
+                body = body.child(
+                    div()
+                        .pt(px(GAP))
+                        .child(kit::label(&t, group.parent.clone())),
+                );
+                let mut grid = div().flex().flex_wrap().gap(px(ROW_INSET));
                 for project in &group.projects {
                     let node_id = node.clone();
                     let folder = project.path.clone();
                     let selector = format!("files-project-{}", project.name);
                     let mut card = div()
+                        .w(px(CARD_W))
                         .flex()
                         .flex_wrap()
                         .items_center()
-                        .gap(px(ROW_INSET))
                         .border_1()
                         .border_color(t.divider)
-                        .px(px(ROW_INSET))
+                        .rounded(px(size::RADIUS))
+                        .p(px(ROW_INSET / 2.))
                         .child(
                             kit::button(
                                 &t,
@@ -69,6 +78,9 @@ impl FilesPage {
                                 project.name.clone(),
                                 Kind::Quiet,
                             )
+                            .w_full()
+                            .justify_start()
+                            .text_color(t.text)
                             .debug_selector(move || selector.clone())
                             .on_click(cx.listener(
                                 move |p, _, w, cx| {
@@ -109,6 +121,7 @@ impl FilesPage {
                                 doc.clone(),
                                 Kind::Quiet,
                             )
+                            .text_size(px(size::SMALL))
                             .debug_selector(move || selector.clone())
                             .on_click(cx.listener(
                                 move |p, _, w, cx| {
@@ -123,24 +136,26 @@ impl FilesPage {
                             )),
                         );
                     }
-                    body = body.child(card);
+                    grid = grid.child(card);
                 }
+                body = body.child(grid);
             }
         }
         body
     }
-    fn pane(&self, i: usize, cx: &mut Context<Self>) -> Div {
+    fn pane(&self, cx: &mut Context<Self>) -> Div {
         let t = theme(cx).clone();
-        let side = &self.sides[i];
+        let side = &self.side;
         let path = side.pane.path.clone().unwrap_or_default();
-        let mut separators = path.rmatch_indices(paths::separator(&path));
+        let header = paths::shown(&side.pane.roots, &path);
+        let mut separators = header.rmatch_indices(paths::separator(&path));
         let last = separators.next().map(|(at, _)| at).unwrap_or(0);
         let previous = separators.next().map(|(at, _)| at).unwrap_or(0);
-        let path_start = path[..previous].to_owned();
-        let path_middle = path[previous..last].to_owned();
-        let path_end = path[last..].to_owned();
+        let path_start = header[..previous].to_owned();
+        let path_middle = header[previous..last].to_owned();
+        let path_end = header[last..].to_owned();
         let mut list = div()
-            .id(("files-list", i))
+            .id("files-list")
             .flex_1()
             .min_h_0()
             .overflow_y_scroll();
@@ -162,33 +177,35 @@ impl FilesPage {
                 let path = item.path.clone();
                 let line = item.line;
                 let name = item.name.clone();
-                let selector = format!("find-result-{i}-{name}");
+                let selector = format!("find-result-{name}");
                 let relative = paths::relative(side.pane.path.as_deref().unwrap_or(""), &path);
                 let label = match line {
                     Some(line) => format!("{relative}:{line}"),
                     None => relative.to_owned(),
                 };
-                let label_selector = format!("find-label-{i}-{label}");
+                let label_selector = format!("find-label-{label}");
                 list = list.child(
                     kit::button(
                         &t,
-                        gpui::SharedString::from(format!("find-{i}-{path}-{}", line.unwrap_or(0))),
+                        gpui::SharedString::from(format!("find-{path}-{}", line.unwrap_or(0))),
                         label,
                         Kind::Quiet,
                     )
+                    .w_full()
+                    .justify_start()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
                     .debug_selector(move || selector.clone())
                     .child(div().debug_selector(move || label_selector.clone()))
                     .on_mouse_down(MouseButton::Right, {
                         let path = path.clone();
                         cx.listener(move |p, e: &gpui::MouseDownEvent, window, cx| {
                             window.focus(&p.focus, cx);
-                            p.find_context_menu(i, path.clone(), e.position, cx);
+                            p.find_context_menu(path.clone(), e.position, cx);
                             cx.stop_propagation();
                         })
                     })
-                    .on_click(
-                        cx.listener(move |p, _, w, cx| p.open_at(i, path.clone(), line, w, cx)),
-                    ),
+                    .on_click(cx.listener(move |p, _, w, cx| p.open_at(path.clone(), line, w, cx))),
                 );
             }
         } else if let Some(find) = &side.pane.find {
@@ -211,7 +228,7 @@ impl FilesPage {
                 let selected = side.pane.selected.as_deref() == Some(name.as_str());
                 list = list.child(
                     div()
-                        .id(gpui::SharedString::from(format!("file-{i}-{full}")))
+                        .id(gpui::SharedString::from(format!("file-{full}")))
                         .flex()
                         .items_center()
                         .w_full()
@@ -221,7 +238,7 @@ impl FilesPage {
                         .text_color(t.text2)
                         .cursor_pointer()
                         .child({
-                            let selector = format!("file-name-{i}-{label}");
+                            let selector = format!("file-name-{label}");
                             div()
                                 .flex_1()
                                 .min_w_0()
@@ -238,7 +255,7 @@ impl FilesPage {
                             } else {
                                 crate::store::format::size(entry.size)
                             };
-                            let selector = format!("file-size-{i}-{name}-{value}");
+                            let selector = format!("file-size-{name}-{value}");
                             div()
                                 .w(px(SIZE_COLUMN))
                                 .flex_none()
@@ -249,7 +266,7 @@ impl FilesPage {
                         })
                         .child({
                             let value = crate::store::format::modified(entry.modified);
-                            let selector = format!("file-modified-{i}-{name}-{value}");
+                            let selector = format!("file-modified-{name}-{value}");
                             div()
                                 .w(px(MODIFIED_COLUMN))
                                 .flex_none()
@@ -259,22 +276,19 @@ impl FilesPage {
                                 .child(value)
                         })
                         .when(selected, |row| {
-                            let id = format!("selected-{i}-{name}");
-                            row.bg(t.raised).child(
-                                div()
-                                    .id(("selection", i))
-                                    .debug_selector(move || id.clone()),
-                            )
+                            let id = format!("selected-{name}");
+                            row.bg(t.raised)
+                                .child(div().id("selection").debug_selector(move || id.clone()))
                         })
                         .debug_selector({
-                            let id = format!("file-row-{i}-{name}");
+                            let id = format!("file-row-{name}");
                             move || id.clone()
                         })
                         .when(folder, |row| {
                             let destination = full.clone();
                             row.on_drop(cx.listener(
                                 move |p, paths: &gpui::ExternalPaths, _, cx| {
-                                    p.upload_paths(i, destination.clone(), paths.paths(), cx);
+                                    p.upload_paths(destination.clone(), paths.paths(), cx);
                                     cx.stop_propagation();
                                 },
                             ))
@@ -283,23 +297,23 @@ impl FilesPage {
                             let name = name.clone();
                             cx.listener(move |p, e: &gpui::MouseDownEvent, window, cx| {
                                 window.focus(&p.focus, cx);
-                                p.context_menu(i, name.clone(), e.position, cx);
+                                p.context_menu(name.clone(), e.position, cx);
                                 cx.stop_propagation();
                             })
                         })
                         .on_click(cx.listener(move |p, _, w, cx| {
-                            p.active = i;
-                            p.sides[i].pane.select(&name);
+                            p.side.pane.select(&name);
                             if folder {
-                                p.list(i, full.clone(), None, cx)
+                                p.list(full.clone(), None, cx)
                             } else {
-                                p.open(i, full.clone(), w, cx)
+                                p.open(full.clone(), w, cx)
                             }
                         })),
                 );
             }
         }
         let parent = side.pane.up();
+        let finding = side.pane.find.is_some();
         let kept: crate::store::Kept = self.host.setting(cx).unwrap_or_default();
         let pins = kept
             .pins
@@ -307,19 +321,23 @@ impl FilesPage {
             .enumerate()
             .map(|(n, pin)| {
                 let label = pin.path.clone();
-                kit::button(&t, ("pin", i * 1000 + n), label, Kind::Quiet)
+                kit::button(&t, ("pin", n), label, Kind::Quiet)
+                    .w_full()
+                    .justify_start()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
                     .debug_selector({
-                        let id = format!("files-pin-{i}-{n}");
+                        let id = format!("files-pin-{n}");
                         move || id.clone()
                     })
-                    .on_click(cx.listener(move |p, _, w, cx| p.open_pin(i, pin.clone(), w, cx)))
+                    .on_click(cx.listener(move |p, _, w, cx| p.open_pin(pin.clone(), w, cx)))
             })
             .collect::<Vec<_>>();
+        let action = |id: &'static str, label: &'static str| {
+            kit::button(&t, id, label, Kind::Quiet).debug_selector(move || id.into())
+        };
         div()
-            .debug_selector({
-                let id = format!("files-pane-{i}");
-                move || id.clone()
-            })
+            .debug_selector(|| "files-pane".into())
             .flex_1()
             .min_w_0()
             .min_h_0()
@@ -331,7 +349,7 @@ impl FilesPage {
                 let destination = side.pane.path.clone();
                 cx.listener(move |p, paths: &gpui::ExternalPaths, _, cx| {
                     if let Some(folder) = destination.clone() {
-                        p.upload_paths(i, folder, paths.paths(), cx);
+                        p.upload_paths(folder, paths.paths(), cx);
                         cx.stop_propagation();
                     }
                 })
@@ -339,19 +357,19 @@ impl FilesPage {
             .child(
                 div()
                     .h(px(size::TAB_BAR))
-                    .px(px(GAP))
+                    .flex_none()
+                    .px(px(ROW_INSET))
                     .flex()
                     .items_center()
-                    .gap(px(GAP))
+                    .gap(px(ROW_INSET))
+                    .border_b_1()
+                    .border_color(t.divider)
                     .child(
-                        kit::button(&t, ("files-up", i), "Up", Kind::Quiet)
-                            .debug_selector({
-                                let id = format!("files-up-{i}");
-                                move || id.clone()
-                            })
+                        kit::button(&t, "files-up", "Up", Kind::Quiet)
+                            .debug_selector(|| "files-up".into())
                             .on_click(cx.listener(move |p, _, _, cx| {
                                 if let Some(path) = parent.clone() {
-                                    p.list(i, path, None, cx)
+                                    p.list(path, None, cx)
                                 }
                             })),
                     )
@@ -361,6 +379,7 @@ impl FilesPage {
                             .min_w_0()
                             .flex()
                             .overflow_hidden()
+                            .text_color(t.text2)
                             .child(
                                 div()
                                     .min_w_0()
@@ -386,8 +405,9 @@ impl FilesPage {
                                     .overflow_hidden()
                                     .whitespace_nowrap()
                                     .text_ellipsis()
+                                    .text_color(t.text)
                                     .debug_selector({
-                                        let id = format!("files-path-end-{i}-{path_end}");
+                                        let id = format!("files-path-end-{path_end}");
                                         move || id.clone()
                                     })
                                     .child(path_end),
@@ -395,199 +415,237 @@ impl FilesPage {
                     ),
             )
             .child(
-                kit::button(&t, ("upload", i), "Upload…", Kind::Plain)
-                    .debug_selector({
-                        let id = format!("files-upload-{i}");
-                        move || id.clone()
-                    })
-                    .on_click(cx.listener(move |p, _, window, cx| {
-                        if let Some(folder) = p.sides[i].pane.path.clone() {
-                            p.pick_uploads(i, folder, window, cx);
-                        }
-                    })),
-            )
-            .children(pins)
-            .child(
                 div()
-                    .id(("files-search", i))
-                    .debug_selector({
-                        let id = format!("files-search-{i}");
-                        move || id.clone()
-                    })
-                    .px(px(GAP))
-                    .on_key_down(cx.listener(move |page, e: &gpui::KeyDownEvent, w, cx| {
-                        page.search_key(i, e, w, cx)
-                    }))
-                    .child(side.search.clone()),
-            )
-            .child(
-                kit::button(
-                    &t,
-                    ("search-mode", i),
-                    if side.search_content {
-                        "Search contents"
-                    } else {
-                        "Find names"
-                    },
-                    Kind::Plain,
-                )
-                .debug_selector({
-                    let id = format!("search-mode-{i}");
-                    move || id.clone()
-                })
-                .on_click(cx.listener(move |p, _, _, cx| p.toggle_search_content(i, cx))),
-            )
-            .child(
-                div()
+                    .flex_none()
                     .flex()
+                    .items_center()
+                    .gap(px(ROW_INSET))
                     .px(px(ROW_INSET))
+                    .pt(px(ROW_INSET))
                     .child(
-                        kit::button(&t, ("sort-name", i), "Name", Kind::Quiet)
+                        div()
+                            .id("files-search")
+                            .debug_selector(|| "files-search".into())
                             .flex_1()
                             .min_w_0()
-                            .justify_start()
-                            .px_0()
-                            .on_click(cx.listener(move |p, _, _, cx| {
-                                p.sort(i, crate::store::listing::Column::Name, cx)
-                            })),
-                    )
-                    .child(
-                        kit::button(&t, ("sort-size", i), "Size", Kind::Quiet)
-                            .w(px(SIZE_COLUMN))
-                            .justify_start()
-                            .px_0()
-                            .on_click(cx.listener(move |p, _, _, cx| {
-                                p.sort(i, crate::store::listing::Column::Size, cx)
-                            })),
-                    )
-                    .child(
-                        kit::button(&t, ("sort-modified", i), "Modified", Kind::Quiet)
-                            .w(px(MODIFIED_COLUMN))
-                            .justify_start()
-                            .px_0()
-                            .on_click(cx.listener(move |p, _, _, cx| {
-                                p.sort(i, crate::store::listing::Column::Modified, cx)
-                            })),
-                    ),
-            )
-            .child(list)
-            .children(side.pane.error.as_ref().map(|error| {
-                div()
-                    .id(("pane-away", i))
-                    .debug_selector({
-                        let id = format!("pane-away-{i}");
-                        move || id.clone()
-                    })
-                    .child(kit::note(&t, error.clone(), Some(t.error)))
-            }))
-            .child(
-                kit::button(&t, ("copy", i), "Copy to other pane", Kind::Plain)
-                    .debug_selector({
-                        let id = format!("copy-{i}");
-                        move || id.clone()
-                    })
-                    .on_click(cx.listener(move |p, _, _, cx| p.copy_to_other(i, cx))),
-            )
-            .child(
-                div()
-                    .px(px(GAP))
-                    .debug_selector({
-                        let id = format!("files-name-{i}");
-                        move || id.clone()
-                    })
-                    .child(side.name.clone()),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap(px(ROW_INSET))
-                    .child(
-                        kit::button(&t, ("create-file", i), "New file", Kind::Quiet)
-                            .debug_selector({
-                                let id = format!("files-create-file-{i}");
-                                move || id.clone()
-                            })
-                            .on_click(cx.listener(move |p, _, _, cx| p.mutate(i, "file", cx))),
-                    )
-                    .child(
-                        kit::button(&t, ("create-folder", i), "New folder", Kind::Quiet)
-                            .debug_selector({
-                                let id = format!("files-create-folder-{i}");
-                                move || id.clone()
-                            })
-                            .on_click(cx.listener(move |p, _, _, cx| p.mutate(i, "folder", cx))),
-                    )
-                    .child(
-                        kit::button(&t, ("rename", i), "Rename", Kind::Quiet)
-                            .debug_selector({
-                                let id = format!("files-rename-{i}");
-                                move || id.clone()
-                            })
-                            .on_click(cx.listener(move |p, _, _, cx| p.mutate(i, "rename", cx))),
+                            .on_key_down(cx.listener(move |page, e: &gpui::KeyDownEvent, w, cx| {
+                                page.search_key(e, w, cx)
+                            }))
+                            .child(side.search.clone()),
                     )
                     .child(
                         kit::button(
                             &t,
-                            ("delete", i),
-                            if side.pane.armed {
-                                "Confirm delete"
+                            "search-mode",
+                            if side.search_content {
+                                "In text"
                             } else {
-                                "Delete"
+                                "In names"
                             },
                             Kind::Quiet,
                         )
-                        .debug_selector({
-                            let id = format!("files-delete-{i}");
-                            move || id.clone()
-                        })
-                        .on_click(cx.listener(move |p, _, _, cx| p.mutate(i, "delete", cx))),
+                        .debug_selector(|| "search-mode".into())
+                        .on_click(cx.listener(move |p, _, _, cx| p.toggle_search_content(cx))),
                     ),
             )
+            .children(pins)
+            .when(!finding, |pane| {
+                pane.child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .px(px(ROW_INSET))
+                        .pt(px(ROW_INSET))
+                        .text_size(px(size::SMALL))
+                        .child(
+                            kit::button(&t, "sort-name", "Name", Kind::Quiet)
+                                .flex_1()
+                                .min_w_0()
+                                .justify_start()
+                                .px_0()
+                                .text_size(px(size::SMALL))
+                                .text_color(t.dim)
+                                .on_click(cx.listener(move |p, _, _, cx| {
+                                    p.sort(crate::store::listing::Column::Name, cx)
+                                })),
+                        )
+                        .child(
+                            kit::button(&t, "sort-size", "Size", Kind::Quiet)
+                                .w(px(SIZE_COLUMN))
+                                .justify_start()
+                                .px_0()
+                                .text_size(px(size::SMALL))
+                                .text_color(t.dim)
+                                .on_click(cx.listener(move |p, _, _, cx| {
+                                    p.sort(crate::store::listing::Column::Size, cx)
+                                })),
+                        )
+                        .child(
+                            kit::button(&t, "sort-modified", "Modified", Kind::Quiet)
+                                .w(px(MODIFIED_COLUMN))
+                                .justify_start()
+                                .px_0()
+                                .text_size(px(size::SMALL))
+                                .text_color(t.dim)
+                                .on_click(cx.listener(move |p, _, _, cx| {
+                                    p.sort(crate::store::listing::Column::Modified, cx)
+                                })),
+                        ),
+                )
+            })
+            .child(list)
+            .children(side.pane.error.as_ref().map(|error| {
+                div()
+                    .id("pane-away")
+                    .debug_selector(|| "pane-away".into())
+                    .px(px(ROW_INSET))
+                    .child(kit::note(&t, error.clone(), Some(t.error)))
+            }))
+            .children(self.naming.map(|naming| {
+                div()
+                    .id("files-name")
+                    .debug_selector(|| "files-name".into())
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(ROW_INSET))
+                    .px(px(ROW_INSET))
+                    .pt(px(ROW_INSET))
+                    .on_key_down(cx.listener(|page, e: &gpui::KeyDownEvent, w, cx| {
+                        if e.keystroke.key == "escape" {
+                            page.stop_naming(w, cx);
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .child(div().flex_1().min_w_0().child(side.name.clone()))
+                    .child(
+                        kit::button(&t, "files-name-apply", naming.verb(), Kind::Plain)
+                            .debug_selector(|| "files-name-apply".into())
+                            .on_click(cx.listener(|p, _, w, cx| p.apply_naming(w, cx))),
+                    )
+            }))
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .px(px(ROW_INSET))
+                    .py(px(ROW_INSET))
+                    .border_t_1()
+                    .border_color(t.divider)
+                    .child(action("files-create-file", "New file").on_click(
+                        cx.listener(|p, _, w, cx| p.start_naming(crate::page::Naming::File, w, cx)),
+                    ))
+                    .child(
+                        action("files-create-folder", "New folder").on_click(cx.listener(
+                            |p, _, w, cx| p.start_naming(crate::page::Naming::Folder, w, cx),
+                        )),
+                    )
+                    .child(action("files-upload", "Upload…").on_click(cx.listener(
+                        move |p, _, window, cx| {
+                            if let Some(folder) = p.side.pane.path.clone() {
+                                p.pick_uploads(folder, window, cx);
+                            }
+                        },
+                    ))),
+            )
     }
-    fn viewer(&self, i: usize, cx: &mut Context<Self>) -> Div {
+    fn viewer(&self, cx: &mut Context<Self>) -> Div {
         let t = theme(cx).clone();
-        let side = &self.sides[i];
+        let side = &self.side;
         let Some(o) = &side.opened else {
             return div()
                 .flex_1()
-                .child(kit::note(&t, "Choose a file to open", None));
+                .min_w_0()
+                .border_1()
+                .border_color(t.divider)
+                .p(px(GAP))
+                .child(kit::note(
+                    &t,
+                    "Open a file from the list, or find one by name or by text.",
+                    None,
+                ));
         };
+        let folder = paths::parent(&o.path);
+        let shown_folder = paths::shown(&side.pane.roots, &folder);
         let mut bar = div()
             .flex()
+            .flex_none()
             .items_center()
-            .gap(px(GAP))
+            .gap(px(ROW_INSET))
             .h(px(size::TAB_BAR))
-            .child(
-                kit::button(&t, "files-send", "Send", Kind::Quiet)
-                    .debug_selector(|| "files-send".into())
-                    .on_click(cx.listener(move |p, _, _, cx| p.send(i, cx))),
-            )
+            .px(px(GAP))
+            .border_b_1()
+            .border_color(t.divider)
+            .when(self.dock, |bar| {
+                bar.child(
+                    kit::button(&t, "files-back", "Back", Kind::Quiet)
+                        .debug_selector(|| "files-back".into())
+                        .on_click(cx.listener(|p, _, _, cx| {
+                            p.side.opened = None;
+                            p.keep(cx);
+                            cx.notify()
+                        })),
+                )
+            })
             .child(
                 div()
-                    .id(("opened-name", i))
+                    .id("opened-name")
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
                     .debug_selector({
                         let id = format!("file-view-{}", o.name);
                         move || id.clone()
                     })
-                    .child(o.name.clone()),
+                    .when(!shown_folder.is_empty(), |name| {
+                        name.child(
+                            div()
+                                .min_w_0()
+                                .flex_shrink_1()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .text_color(t.dim)
+                                .child(format!("{shown_folder}/")),
+                        )
+                    })
+                    .child(div().flex_none().child(o.name.clone())),
             );
         if o.editing {
+            let dirty = self.drafts.contains_key(&o.key());
             bar = bar
+                .when(dirty || o.saving, |bar| {
+                    bar.child(
+                        div()
+                            .flex_none()
+                            .text_size(px(size::SMALL))
+                            .text_color(t.dim)
+                            .debug_selector(|| "files-unsaved".into())
+                            .child(if o.saving { "Saving…" } else { "Unsaved" }),
+                    )
+                })
                 .child(
                     kit::button(&t, "files-save", "Save", Kind::Primary)
                         .debug_selector(|| "files-save".into())
-                        .on_click(cx.listener(move |p, _, _, cx| p.save(i, cx))),
+                        .on_click(cx.listener(move |p, _, _, cx| p.save(cx))),
                 )
                 .child(
-                    kit::button(&t, "files-discard", "Discard", Kind::Quiet)
-                        .on_click(cx.listener(move |p, _, w, cx| p.discard(i, w, cx))),
+                    kit::button(
+                        &t,
+                        "files-discard",
+                        if dirty { "Discard" } else { "Done" },
+                        Kind::Quiet,
+                    )
+                    .on_click(cx.listener(move |p, _, w, cx| p.discard(w, cx))),
                 );
         } else if matches!(o.show, Show::Text { .. }) {
             bar = bar.child(
                 kit::button(&t, "files-edit", "Edit", Kind::Quiet)
                     .debug_selector(|| "files-edit".into())
-                    .on_click(cx.listener(move |p, _, w, cx| p.edit(i, w, cx))),
+                    .on_click(cx.listener(move |p, _, w, cx| p.edit(w, cx))),
             );
         }
         if matches!(o.show, Show::Text { .. }) && !o.editing {
@@ -599,7 +657,7 @@ impl FilesPage {
                     Kind::Quiet,
                 )
                 .debug_selector(|| "files-diff".into())
-                .on_click(cx.listener(move |p, _, _, cx| p.toggle_diff(i, cx))),
+                .on_click(cx.listener(move |p, _, _, cx| p.toggle_diff(cx))),
             );
         }
         if o.pretty.is_some() && !o.editing {
@@ -612,7 +670,7 @@ impl FilesPage {
                 )
                 .debug_selector(|| "files-json-format".into())
                 .on_click(cx.listener(move |p, _, _, cx| {
-                    if let Some(opened) = p.sides[i].opened.as_mut() {
+                    if let Some(opened) = p.side.opened.as_mut() {
                         opened.source = !opened.source;
                         cx.notify();
                     }
@@ -629,16 +687,21 @@ impl FilesPage {
                 )
                 .debug_selector(|| "files-source".into())
                 .on_click(cx.listener(move |p, _, _, cx| {
-                    if let Some(opened) = p.sides[i].opened.as_mut() {
+                    if let Some(opened) = p.side.opened.as_mut() {
                         opened.source = !opened.source;
                         cx.notify();
                     }
                 })),
             );
         }
-        if let Some(zoom) = self.zoom_bar(i, &t, cx) {
+        if let Some(zoom) = self.zoom_bar(&t, cx) {
             bar = bar.child(zoom);
         }
+        bar = bar.child(
+            kit::button(&t, "files-send", "Send", Kind::Plain)
+                .debug_selector(|| "files-send".into())
+                .on_click(cx.listener(move |p, _, _, cx| p.send(cx))),
+        );
         if self.beside {
             bar = bar.child(
                 kit::button(&t, "files-close-beside", "Close", Kind::Quiet)
@@ -651,7 +714,7 @@ impl FilesPage {
                 Some(Err(error)) => kit::note(&t, error.clone(), Some(t.error)).into_any_element(),
                 Some(Ok(diff)) => {
                     let mut view = div()
-                        .id(("file-diff", i))
+                        .id("file-diff")
                         .size_full()
                         .overflow_y_scroll()
                         .flex()
@@ -710,18 +773,18 @@ impl FilesPage {
                         )
                         .into_any_element()
                 }
-                Show::Picture { image, natural } => self.picture(i, image, *natural, cx),
+                Show::Picture { image, natural } => self.picture(image, *natural, cx),
                 Show::Model(m) => div()
-                    .id(("model-stage", i))
+                    .id("model-stage")
                     .size_full()
                     .flex()
                     .flex_col()
                     .items_center()
                     .child(
-                        kit::button(&t, ("model-reset", i), "Reset view", Kind::Quiet).on_click(
+                        kit::button(&t, "model-reset", "Reset view", Kind::Quiet).on_click(
                             cx.listener(move |p, _, _, cx| {
                                 if let Some(Show::Model(model)) =
-                                    p.sides[i].opened.as_mut().map(|o| &mut o.show)
+                                    p.side.opened.as_mut().map(|o| &mut o.show)
                                 {
                                     model.reset();
                                     cx.notify()
@@ -733,7 +796,7 @@ impl FilesPage {
                         MouseButton::Left,
                         cx.listener(move |p, e: &gpui::MouseDownEvent, _, _| {
                             if let Some(Show::Model(model)) =
-                                p.sides[i].opened.as_mut().map(|o| &mut o.show)
+                                p.side.opened.as_mut().map(|o| &mut o.show)
                             {
                                 model.last =
                                     Some((f32::from(e.position.x), f32::from(e.position.y)));
@@ -742,7 +805,7 @@ impl FilesPage {
                     )
                     .on_mouse_move(cx.listener(move |p, e: &MouseMoveEvent, _, cx| {
                         if let Some(Show::Model(model)) =
-                            p.sides[i].opened.as_mut().map(|o| &mut o.show)
+                            p.side.opened.as_mut().map(|o| &mut o.show)
                         {
                             if e.dragging() {
                                 let now = (f32::from(e.position.x), f32::from(e.position.y));
@@ -761,7 +824,7 @@ impl FilesPage {
                     }))
                     .on_scroll(cx.listener(move |p, e: &gpui::ScrollEvent, _, cx| {
                         if let Some(Show::Model(model)) =
-                            p.sides[i].opened.as_mut().map(|o| &mut o.show)
+                            p.side.opened.as_mut().map(|o| &mut o.show)
                         {
                             let y = match e.delta {
                                 ScrollDelta::Lines(v) => v.y,
@@ -777,7 +840,7 @@ impl FilesPage {
                     .into_any_element(),
                 Show::Media(_) => kit::button(&t, "files-play", "Open", Kind::Primary)
                     .debug_selector(|| "files-play".into())
-                    .on_click(cx.listener(move |p, _, _, cx| p.play(i, cx)))
+                    .on_click(cx.listener(move |p, _, _, cx| p.play(cx)))
                     .into_any_element(),
                 Show::Text {
                     markdown: Some(blocks),
@@ -788,7 +851,7 @@ impl FilesPage {
                     let on_link = std::rc::Rc::new(
                         move |link: &str, window: &mut Window, cx: &mut gpui::App| {
                             let _ = me.update(cx, |page, cx| {
-                                page.follow_link(i, &node, &folder, link, window, cx)
+                                page.follow_link(&node, &folder, link, window, cx)
                             });
                         },
                     );
@@ -799,12 +862,14 @@ impl FilesPage {
                         select: None,
                     };
                     div()
-                        .id(("files-markdown-scroll", i))
+                        .id("files-markdown-scroll")
                         .size_full()
                         .overflow_y_scroll()
                         .debug_selector(|| "files-markdown-rendered".into())
                         .child(
                             div()
+                                .p(px(GAP))
+                                .max_w(px(READER_MAX))
                                 .debug_selector(|| "files-markdown-content".into())
                                 .child(parvi_app_kit::widgets::markdown::render(
                                     &look,
@@ -827,8 +892,7 @@ impl FilesPage {
                         .into_any_element()
                 }
                 Show::Text { .. } => {
-                    let selector =
-                        format!("files-code-top-{i}-{}", side.code.read(cx).top_line() + 1);
+                    let selector = format!("files-code-top-{}", side.code.read(cx).top_line() + 1);
                     div()
                         .size_full()
                         .debug_selector(move || selector.clone())
@@ -838,10 +902,7 @@ impl FilesPage {
             }
         };
         div()
-            .debug_selector({
-                let id = format!("files-viewer-bounds-{i}");
-                move || id.clone()
-            })
+            .debug_selector(|| "files-viewer-bounds".into())
             .flex_1()
             .min_w_0()
             .min_h_0()
@@ -910,8 +971,8 @@ impl Render for FilesPage {
                     .child(kit::note(&t, notice.clone(), None)),
             );
         }
-        if let Some((i, at)) = self.menu {
-            let pane = &self.sides[i].pane;
+        if let Some(at) = self.menu {
+            let pane = &self.side.pane;
             let selected = pane.selected_path();
             let is_file = pane.selection().is_some_and(|e| !e.folder);
             let kept: crate::store::Kept = self.host.setting(cx).unwrap_or_default();
@@ -922,16 +983,13 @@ impl Render for FilesPage {
             });
             let open = cx.listener(move |p, _, w, cx| {
                 p.menu = None;
-                let item = p.sides[i]
-                    .pane
-                    .selection()
-                    .map(|e| (e.name.clone(), e.folder));
-                if let (Some((name, folder)), Some(dir)) = (item, p.sides[i].pane.path.clone()) {
+                let item = p.side.pane.selection().map(|e| (e.name.clone(), e.folder));
+                if let (Some((name, folder)), Some(dir)) = (item, p.side.pane.path.clone()) {
                     let path = paths::join(&dir, &name);
                     if folder {
-                        p.list(i, path, None, cx)
+                        p.list(path, None, cx)
                     } else {
-                        p.open(i, path, w, cx)
+                        p.open(path, w, cx)
                     }
                 }
             });
@@ -952,14 +1010,14 @@ impl Render for FilesPage {
                         .debug_selector(|| "file-menu-upload".into())
                         .on_click(cx.listener(move |p, _, window, cx| {
                             p.menu = None;
-                            let pane = &p.sides[i].pane;
+                            let pane = &p.side.pane;
                             let folder = pane
                                 .selection()
                                 .filter(|entry| entry.folder)
                                 .and_then(|_| pane.selected_path())
                                 .or_else(|| pane.path.clone());
                             if let Some(folder) = folder {
-                                p.pick_uploads(i, folder, window, cx);
+                                p.pick_uploads(folder, window, cx);
                             }
                             cx.notify();
                         })),
@@ -969,7 +1027,7 @@ impl Render for FilesPage {
                         .debug_selector(|| "file-menu-copy-path".into())
                         .on_click(cx.listener(move |p, _, _, cx| {
                             p.menu = None;
-                            if let Some(path) = p.sides[i].pane.selected_path() {
+                            if let Some(path) = p.side.pane.selected_path() {
                                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(path))
                             }
                             cx.notify();
@@ -985,7 +1043,7 @@ impl Render for FilesPage {
                     .debug_selector(|| "file-menu-copy-relative".into())
                     .on_click(cx.listener(move |p, _, _, cx| {
                         p.menu = None;
-                        let pane = &p.sides[i].pane;
+                        let pane = &p.side.pane;
                         if let Some(path) = pane.selected_path() {
                             let relative = paths::root_of(&pane.roots, &path)
                                 .map(|root| paths::relative(&root.path, &path))
@@ -1002,7 +1060,7 @@ impl Render for FilesPage {
                         .debug_selector(|| "file-menu-copy-folder".into())
                         .on_click(cx.listener(move |p, _, _, cx| {
                             p.menu = None;
-                            if let Some(path) = p.sides[i].pane.selected_path() {
+                            if let Some(path) = p.side.pane.selected_path() {
                                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(
                                     paths::parent(&path),
                                 ));
@@ -1015,9 +1073,8 @@ impl Render for FilesPage {
                         .debug_selector(|| "file-menu-parent".into())
                         .on_click(cx.listener(move |p, _, _, cx| {
                             p.menu = None;
-                            if let Some(path) = p.sides[i].pane.selected_path() {
+                            if let Some(path) = p.side.pane.selected_path() {
                                 p.list(
-                                    i,
                                     paths::parent(&path),
                                     Some(paths::base_name(&path).to_owned()),
                                     cx,
@@ -1031,8 +1088,8 @@ impl Render for FilesPage {
                         .debug_selector(|| "file-menu-refresh".into())
                         .on_click(cx.listener(move |p, _, _, cx| {
                             p.menu = None;
-                            if let Some(path) = p.sides[i].pane.path.clone() {
-                                p.list(i, path, None, cx);
+                            if let Some(path) = p.side.pane.path.clone() {
+                                p.list(path, None, cx);
                             }
                             cx.notify();
                         })),
@@ -1047,7 +1104,7 @@ impl Render for FilesPage {
                     .debug_selector(|| "file-menu-pin".into())
                     .on_click(cx.listener(move |p, _, _, cx| {
                         p.menu = None;
-                        p.toggle_pin(i, cx);
+                        p.toggle_pin(cx);
                     })),
                 )
                 .when(is_file, |menu| {
@@ -1056,7 +1113,7 @@ impl Render for FilesPage {
                             .debug_selector(|| "file-menu-download".into())
                             .on_click(cx.listener(move |p, _, _, cx| {
                                 p.menu = None;
-                                p.download(i, cx);
+                                p.download(cx);
                             })),
                     )
                 })
@@ -1064,7 +1121,7 @@ impl Render for FilesPage {
                     kit::button(&t, "file-menu-send", "Send to Session", Kind::Quiet).on_click(
                         cx.listener(move |p, _, _, cx| {
                             p.menu = None;
-                            p.send_selected(i, cx)
+                            p.send_selected(cx)
                         }),
                     ),
                 )
@@ -1073,31 +1130,24 @@ impl Render for FilesPage {
                         .debug_selector(|| "file-menu-rename".into())
                         .on_click(cx.listener(move |p, _, w, cx| {
                             p.menu = None;
-                            if let Some(name) =
-                                p.sides[i].pane.selection().map(|entry| entry.name.clone())
-                            {
-                                p.sides[i]
-                                    .name
-                                    .update(cx, |field, cx| field.set(&name, true, cx));
-                            }
-                            parvi_app_kit::widgets::field::focus(&p.sides[i].name, w, cx);
-                            cx.notify()
+                            p.start_naming(crate::page::Naming::Rename, w, cx);
                         })),
                 )
                 .child(
                     kit::button(
                         &t,
                         "file-menu-delete",
-                        if self.sides[i].pane.armed {
+                        if self.side.pane.armed {
                             "Confirm delete"
                         } else {
                             "Delete"
                         },
                         Kind::Quiet,
                     )
+                    .debug_selector(|| "file-menu-delete".into())
                     .on_click(cx.listener(move |p, _, _, cx| {
-                        let confirmed = p.sides[i].pane.armed;
-                        p.mutate(i, "delete", cx);
+                        let confirmed = p.side.pane.armed;
+                        p.mutate("delete", cx);
                         if confirmed {
                             p.menu = None;
                         }
@@ -1135,7 +1185,7 @@ impl Render for FilesPage {
                 .with_priority(20),
             );
         }
-        if let Some(i) = self.conflict {
+        if self.conflict {
             page = page.child(
                 div()
                     .flex()
@@ -1150,13 +1200,13 @@ impl Render for FilesPage {
                         kit::button(&t, "conflict-copy", "Save a copy", Kind::Primary)
                             .debug_selector(|| "conflict-copy".into())
                             .on_click(cx.listener(move |p, _, _, cx| {
-                                p.write(i, crate::open::Write::Copy, cx)
+                                p.write(crate::open::Write::Copy, cx)
                             })),
                     )
                     .child(
                         kit::button(&t, "conflict-overwrite", "Overwrite", Kind::Quiet).on_click(
                             cx.listener(move |p, _, _, cx| {
-                                p.write(i, crate::open::Write::Overwrite, cx)
+                                p.write(crate::open::Write::Overwrite, cx)
                             }),
                         ),
                     )
@@ -1192,7 +1242,7 @@ impl Render for FilesPage {
                     ),
             );
         }
-        if let Some(i) = self.confirm_discard {
+        if self.confirm_discard {
             page = page.child(
                 div()
                     .flex()
@@ -1202,7 +1252,7 @@ impl Render for FilesPage {
                     .child(
                         kit::button(&t, "files-confirm-discard", "Discard", Kind::Primary)
                             .debug_selector(|| "files-confirm-discard".into())
-                            .on_click(cx.listener(move |p, _, w, cx| p.discard(i, w, cx))),
+                            .on_click(cx.listener(move |p, _, w, cx| p.discard(w, cx))),
                     )
                     .child(
                         kit::button(&t, "files-keep-editing", "Keep editing", Kind::Quiet)
@@ -1211,54 +1261,30 @@ impl Render for FilesPage {
                     ),
             );
         }
-        for (i, transfer) in self.transfers.iter().enumerate() {
-            if transfer.kept.state == crate::store::transfers::State::Done
-                && transfer
-                    .kept
-                    .finished
-                    .is_none_or(|at| parvi_app_kit::hub::now_ms().saturating_sub(at) >= 5000)
-            {
-                continue;
-            }
-            let text = format!(
-                "{}: {:?} · {} / {}",
-                transfer.kept.name,
-                transfer.kept.state,
-                crate::store::format::size(transfer.kept.bytes),
-                crate::store::format::size(transfer.kept.total)
-            );
-            let mut row = div().flex().gap(px(GAP)).child(kit::note(&t, text, None));
-            if let Some(error) = &transfer.kept.error {
-                row = row.child(kit::note(&t, error.clone(), Some(t.error)));
-            }
-            if matches!(
-                transfer.kept.state,
-                crate::store::transfers::State::Failed | crate::store::transfers::State::Waiting
-            ) {
-                row = row.child(
-                    kit::button(&t, ("retry-copy", i), "Retry", Kind::Quiet)
-                        .on_click(cx.listener(move |p, _, _, cx| p.retry_copy(i, cx))),
-                );
-            }
-            page = page.child(row);
-        }
         if self.beside {
-            return page.child(self.viewer(0, cx));
+            return page.child(self.viewer(cx));
         }
         if self.dock {
-            return page
-                .w(px(size::MENU * 2.0))
-                .flex_none()
-                .child("Files")
-                .child(self.pane(0, cx))
-                .child(self.viewer(0, cx));
+            page = page.w(px(LIST_W)).flex_none();
+            return if self.side.opened.is_some() {
+                page.child(self.viewer(cx))
+            } else {
+                page.child(self.pane(cx))
+            };
         }
         page = page.child(
-            div().flex().gap(px(GAP)).child("FILES").child(
-                kit::button(&t, "files-projects", "Projects", Kind::Quiet)
-                    .debug_selector(|| "files-projects".into())
-                    .on_click(cx.listener(|p, _, _, cx| p.show_projects(cx))),
-            ),
+            div()
+                .flex()
+                .items_center()
+                .gap(px(GAP))
+                .child(div().text_size(px(HEADING)).child("Files"))
+                .when(!self.landing, |head| {
+                    head.child(
+                        kit::button(&t, "files-projects", "Projects", Kind::Quiet)
+                            .debug_selector(|| "files-projects".into())
+                            .on_click(cx.listener(|p, _, _, cx| p.show_projects(cx))),
+                    )
+                }),
         );
         if self.landing {
             return page.child(self.projects_landing(cx));
@@ -1269,15 +1295,8 @@ impl Render for FilesPage {
                 .min_h_0()
                 .flex()
                 .gap(px(GAP))
-                .child(self.pane(0, cx))
-                .child(self.pane(1, cx))
-                .child(
-                    self.viewer(self.active, cx)
-                        .debug_selector(|| "files-viewer".into())
-                        .when(self.sides[self.active].opened.is_some(), |v| {
-                            v.flex_grow(2.5)
-                        }),
-                ),
+                .child(div().w(px(LIST_W)).flex_none().flex().child(self.pane(cx)))
+                .child(self.viewer(cx).debug_selector(|| "files-viewer".into())),
         )
     }
 }

@@ -6,7 +6,6 @@ pub mod kinds;
 pub mod listing;
 pub mod pane;
 pub mod paths;
-pub mod transfers;
 pub mod zoom;
 
 use serde::{Deserialize, Serialize};
@@ -22,8 +21,7 @@ pub struct Pin {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Kept {
-    pub panes: [pane::Kept; 2],
-    pub transfers: Vec<transfers::Kept>,
+    pub pane: pane::Kept,
     pub sidecar_open: bool,
     pub sidecar: pane::Kept,
     pub dock: pane::Kept,

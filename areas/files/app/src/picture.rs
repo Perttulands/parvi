@@ -36,27 +36,27 @@ impl FilesPage {
     }
 
     /// − and +: the next stop from what side `i`'s picture shows now.
-    pub fn step_zoom(&mut self, i: usize, up: bool, cx: &mut Context<Self>) {
-        let Some(Show::Picture { natural, .. }) = self.sides[i].opened.as_ref().map(|o| &o.show)
-        else {
+    pub fn step_zoom(&mut self, up: bool, cx: &mut Context<Self>) {
+        let Some(Show::Picture { natural, .. }) = self.side.opened.as_ref().map(|o| &o.show) else {
             return;
         };
-        let Some(room) = self.sides[i].room.get() else {
+        let Some(room) = self.side.room.get() else {
             return;
         };
         let next = zoom::step(self.zoom(cx), *natural, room, up);
         self.set_zoom(next, cx);
     }
 
-    /// Frees the pictures no side shows any more; the window keeps a
+    /// Frees the pictures the page no longer shows; the window keeps a
     /// decoded picture until told.
     pub fn release_pictures(&mut self, window: &mut Window) {
         let shown: Vec<Arc<RenderImage>> = self
-            .sides
+            .side
+            .opened
             .iter()
-            .filter_map(|s| match s.opened.as_ref().map(|o| &o.show) {
-                Some(Show::Picture { image, .. }) => Some(image.clone()),
-                Some(Show::Model(model)) => Some(model.image.clone()),
+            .filter_map(|o| match &o.show {
+                Show::Picture { image, .. } => Some(image.clone()),
+                Show::Model(model) => Some(model.image.clone()),
                 _ => None,
             })
             .collect();
@@ -70,24 +70,19 @@ impl FilesPage {
 
     /// The picture's words in the file's header: its pixels, Fit, 1:1,
     /// −, the percent it is drawn at, +.
-    pub(super) fn zoom_bar(&self, i: usize, t: &Theme, cx: &mut Context<Self>) -> Option<Div> {
-        let Some(Show::Picture { natural, .. }) = self.sides[i].opened.as_ref().map(|o| &o.show)
-        else {
+    pub(super) fn zoom_bar(&self, t: &Theme, cx: &mut Context<Self>) -> Option<Div> {
+        let Some(Show::Picture { natural, .. }) = self.side.opened.as_ref().map(|o| &o.show) else {
             return None;
         };
         let level = self.zoom(cx);
-        let percent = self.sides[i]
+        let percent = self
+            .side
             .room
             .get()
             .map(|room| format!("{}%", zoom::drawn_percent(*natural, room, level)));
         let word = |id: &'static str, label: &'static str, on: bool| {
-            kit::button(
-                t,
-                (id, i),
-                label,
-                if on { Kind::Plain } else { Kind::Quiet },
-            )
-            .debug_selector(move || format!("{id}-{i}"))
+            kit::button(t, id, label, if on { Kind::Plain } else { Kind::Quiet })
+                .debug_selector(move || id.into())
         };
         Some(
             div()
@@ -112,7 +107,7 @@ impl FilesPage {
                 )
                 .child(
                     word("zoom-out", "−", false)
-                        .on_click(cx.listener(move |f, _, _, cx| f.step_zoom(i, false, cx))),
+                        .on_click(cx.listener(move |f, _, _, cx| f.step_zoom(false, cx))),
                 )
                 .child(
                     div()
@@ -125,21 +120,15 @@ impl FilesPage {
                 )
                 .child(
                     word("zoom-in", "+", false)
-                        .on_click(cx.listener(move |f, _, _, cx| f.step_zoom(i, true, cx))),
+                        .on_click(cx.listener(move |f, _, _, cx| f.step_zoom(true, cx))),
                 ),
         )
     }
 
     /// The picture at the level: centred while it fits, scrolling inside
     /// the room when a percentage makes it bigger.
-    pub(super) fn picture(
-        &self,
-        i: usize,
-        image: &Arc<RenderImage>,
-        natural: Px,
-        cx: &App,
-    ) -> AnyElement {
-        let room = self.sides[i].room.clone();
+    pub(super) fn picture(&self, image: &Arc<RenderImage>, natural: Px, cx: &App) -> AnyElement {
+        let room = self.side.room.clone();
         let mut picture = img(image.clone()).flex_none();
         // The stage is the room, or the picture where it is bigger, so a
         // small picture is centred and a big one scrolls from its top left.
@@ -157,7 +146,7 @@ impl FilesPage {
             .child(measure(room))
             .child(
                 div()
-                    .id(("picture", i))
+                    .id("picture")
                     .absolute()
                     .inset_0()
                     .overflow_scroll()

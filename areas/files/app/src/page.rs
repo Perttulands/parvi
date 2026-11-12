@@ -23,12 +23,41 @@ struct Upload {
     source: PathBuf,
     node: NodeId,
     folder: String,
-    side: usize,
 }
 struct UploadConflict {
     upload: Upload,
     name: String,
     bytes: Vec<u8>,
+}
+
+/// What the name field is open for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Naming {
+    File,
+    Folder,
+    Rename,
+}
+impl Naming {
+    fn action(self) -> &'static str {
+        match self {
+            Naming::File => "file",
+            Naming::Folder => "folder",
+            Naming::Rename => "rename",
+        }
+    }
+    pub fn verb(self) -> &'static str {
+        match self {
+            Naming::File | Naming::Folder => "Create",
+            Naming::Rename => "Rename",
+        }
+    }
+    fn placeholder(self) -> &'static str {
+        match self {
+            Naming::File => "Name of the new file",
+            Naming::Folder => "Name of the new folder",
+            Naming::Rename => "New name",
+        }
+    }
 }
 
 pub struct Side {
@@ -45,19 +74,18 @@ pub struct Side {
 pub struct FilesPage {
     pub host: Host,
     pub focus: FocusHandle,
-    pub sides: [Side; 2],
-    pub active: usize,
+    pub side: Side,
     pub shown: bool,
     pub drafts: HashMap<(String, String), Draft>,
-    pub transfers: Vec<store::transfers::Transfer>,
     pub error: Option<String>,
     pub notice: Option<String>,
     pub beside: bool,
-    pub confirm_discard: Option<usize>,
-    pub conflict: Option<usize>,
+    pub naming: Option<Naming>,
+    pub confirm_discard: bool,
+    pub conflict: bool,
     copy_ordinal: usize,
     pub confirm_close_beside: bool,
-    pub menu: Option<(usize, gpui::Point<gpui::Pixels>)>,
+    pub menu: Option<gpui::Point<gpui::Pixels>>,
     pub drawn: Vec<std::sync::Arc<gpui::RenderImage>>,
     beside_view: Option<Entity<FilesPage>>,
     restored: bool,
@@ -133,11 +161,9 @@ impl Page for FilesPage {
     ) {
         if state != Some(LinkState::Open) {
             self.projects.remove(node.as_str());
-            for side in &mut self.sides {
-                if side.pane.node == node.as_str() {
-                    side.pane.away = true;
-                    side.pane.error = Some("Waiting for this node to reconnect.".into());
-                }
+            if self.side.pane.node == node.as_str() {
+                self.side.pane.away = true;
+                self.side.pane.error = Some("Waiting for this node to reconnect.".into());
             }
             cx.notify();
         }
@@ -145,13 +171,14 @@ impl Page for FilesPage {
             if let Some(view) = &self.dock_view {
                 view.update(cx, |page, cx| {
                     page.start(cx);
-                    if let Some(path) = page.sides[0]
+                    if let Some(path) = page
+                        .side
                         .opened
                         .as_ref()
                         .filter(|o| o.node == node.as_str() && matches!(o.show, Show::Failed(_)))
                         .map(|o| o.path.clone())
                     {
-                        page.open(0, path, window, cx);
+                        page.open(path, window, cx);
                     }
                 });
             }
@@ -188,28 +215,25 @@ impl Page for FilesPage {
                     self.open_beside(from, node, path, window, cx);
                 } else {
                     self.landing = false;
-                    let i = self.active;
-                    self.sides[i].pane.node = node.to_string();
+                    self.side.pane.node = node.to_string();
                     self.list(
-                        i,
                         paths::parent(&path),
                         Some(paths::base_name(&path).to_string()),
                         cx,
                     );
-                    self.open(i, path, window, cx)
+                    self.open(path, window, cx)
                 }
             }
             Ask::Reveal { what, id, node, .. } if what == "path" => {
                 self.landing = false;
-                let i = self.active;
                 if let Some(n) = node {
-                    let changed = self.sides[i].pane.node != n.as_str();
-                    self.sides[i].pane.choose_node(n.as_str());
+                    let changed = self.side.pane.node != n.as_str();
+                    self.side.pane.choose_node(n.as_str());
                     if changed {
-                        self.roots(i, cx);
+                        self.roots(cx);
                     }
                 }
-                self.reveal(i, id, window, cx);
+                self.reveal(id, window, cx);
             }
             _ => {}
         }
@@ -225,7 +249,7 @@ impl FilesPage {
         if let Some(sessions) = &sessions {
             cx.observe(sessions, |_, _, cx| cx.notify()).detach();
         }
-        let sides = std::array::from_fn(|i| {
+        let side = {
             let code = cx.new(Code::new);
             let pretty_code = cx.new(Code::new);
             let search = cx.new(|cx| TextField::new(cx, "Find files"));
@@ -234,9 +258,9 @@ impl FilesPage {
                 &code,
                 window,
                 move |page, _, event, window, cx| match event {
-                    CodeEvent::Save => page.save(i, cx),
-                    CodeEvent::Changed => page.changed(i, cx),
-                    CodeEvent::Escape => page.finish_edit(i, window, cx),
+                    CodeEvent::Save => page.save(cx),
+                    CodeEvent::Changed => page.changed(cx),
+                    CodeEvent::Escape => page.finish_edit(window, cx),
                 },
             )
             .detach();
@@ -246,23 +270,21 @@ impl FilesPage {
                 move |page, field, event, window, cx| match event {
                     FieldEvent::Changed => {
                         let query = field.read(cx).text.clone();
-                        page.sides[i].pane.filter = query.clone();
-                        let revision = page.sides[i]
-                            .pane
-                            .set_find(&query, page.sides[i].search_content);
-                        let node = page.sides[i].pane.node.clone();
-                        let folder = page.sides[i].pane.path.clone();
+                        page.side.pane.filter = query.clone();
+                        let revision = page.side.pane.set_find(&query, page.side.search_content);
+                        let node = page.side.pane.node.clone();
+                        let folder = page.side.pane.path.clone();
                         if !query.trim().is_empty() {
                             cx.spawn(async move |this, cx| {
                                 cx.background_executor()
                                     .timer(std::time::Duration::from_millis(250))
                                     .await;
                                 let _ = this.update(cx, |page, cx| {
-                                    if page.sides[i].pane.find_revision == revision
-                                        && page.sides[i].pane.node == node
-                                        && page.sides[i].pane.path == folder
+                                    if page.side.pane.find_revision == revision
+                                        && page.side.pane.node == node
+                                        && page.side.pane.path == folder
                                     {
-                                        page.find(i, query, cx);
+                                        page.find(query, cx);
                                     }
                                 });
                             })
@@ -272,10 +294,10 @@ impl FilesPage {
                     }
                     FieldEvent::Submit => {
                         let q = field.read(cx).text.clone();
-                        page.find(i, q, cx)
+                        page.find(q, cx)
                     }
                     FieldEvent::Down => {
-                        page.sides[i].pane.step(1);
+                        page.side.pane.step(1);
                         window.focus(&page.focus, cx);
                         cx.notify();
                     }
@@ -283,14 +305,14 @@ impl FilesPage {
                 },
             )
             .detach();
-            cx.subscribe_in(&name, window, move |page, _, event, _, cx| {
+            cx.subscribe_in(&name, window, move |page, _, event, window, cx| {
                 if matches!(event, FieldEvent::Submit) {
-                    page.mutate(i, "rename", cx);
+                    page.apply_naming(window, cx);
                 }
             })
             .detach();
             Side {
-                pane: Pane::from_kept(&kept.panes[i]),
+                pane: Pane::from_kept(&kept.pane),
                 code,
                 pretty_code,
                 search,
@@ -300,7 +322,7 @@ impl FilesPage {
                 room: Default::default(),
                 opened: None,
             }
-        });
+        };
         if guard {
             host.guard_close(
                 &cx.entity(),
@@ -325,27 +347,15 @@ impl FilesPage {
         Self {
             focus: cx.focus_handle().tab_stop(true),
             host,
-            sides,
-            active: 0,
+            side,
             shown: false,
             drafts: HashMap::new(),
-            transfers: kept
-                .transfers
-                .into_iter()
-                .filter(|item| item.request.node == item.request.target_node)
-                .map(|item| {
-                    let mut transfer = store::transfers::Transfer::new(item);
-                    if transfer.kept.state == store::transfers::State::Running {
-                        transfer.wait("The copy was interrupted; retry it.");
-                    }
-                    transfer
-                })
-                .collect(),
             error: None,
             notice: None,
             beside: false,
-            confirm_discard: None,
-            conflict: None,
+            naming: None,
+            confirm_discard: false,
+            conflict: false,
             copy_ordinal: 1,
             confirm_close_beside: false,
             menu: None,
@@ -357,7 +367,7 @@ impl FilesPage {
             dock_view: None,
             dock: false,
             dock_previous_focus: None,
-            landing: kept.panes[0].path.is_none(),
+            landing: kept.pane.path.is_none(),
             projects: BTreeMap::new(),
             sessions,
             uploads: VecDeque::new(),
@@ -387,10 +397,10 @@ impl FilesPage {
                 view.update(cx, |page, cx| {
                     page.dock = true;
                     page.landing = false;
-                    page.sides[0].pane = Pane::from_kept(&kept.dock);
+                    page.side.pane = Pane::from_kept(&kept.dock);
                     page.start(cx);
                     if let Some(path) = kept.dock_file {
-                        page.open(0, path, window, cx);
+                        page.open(path, window, cx);
                     }
                 });
                 self.dock_view = Some(view.clone());
@@ -427,8 +437,8 @@ impl FilesPage {
         view.update(cx, |p, cx| {
             p.beside = true;
             p.beside_from = from;
-            p.sides[0].pane.node = node.to_string();
-            p.open(0, path, window, cx)
+            p.side.pane.node = node.to_string();
+            p.open(path, window, cx)
         });
         host.show_beside(from, view.into(), cx);
     }
@@ -490,12 +500,10 @@ impl FilesPage {
         let Some(node) = self.host.nodes(cx).first().map(|n| n.id.to_string()) else {
             return;
         };
-        for i in 0..2 {
-            if self.sides[i].pane.node.is_empty() {
-                self.sides[i].pane.node = node.clone();
-            }
-            self.roots(i, cx);
+        if self.side.pane.node.is_empty() {
+            self.side.pane.node = node;
         }
+        self.roots(cx);
         if self.landing && !self.beside && !self.dock {
             self.refresh_projects(cx);
         }
@@ -536,57 +544,53 @@ impl FilesPage {
         cx: &mut Context<Self>,
     ) {
         self.landing = false;
-        self.active = 0;
-        self.sides[0]
+        self.side
             .search
             .update(cx, |field, cx| field.set("", false, cx));
-        let changed = self.sides[0].pane.node != node;
-        self.sides[0].pane.choose_node(&node);
-        if self.sides[0].pane.path.as_deref() != Some(folder.as_str()) {
-            self.sides[0].pane.entries.clear();
-            self.sides[0].pane.find = None;
-            self.sides[0].pane.filter.clear();
+        let changed = self.side.pane.node != node;
+        self.side.pane.choose_node(&node);
+        if self.side.pane.path.as_deref() != Some(folder.as_str()) {
+            self.side.pane.entries.clear();
+            self.side.pane.find = None;
+            self.side.pane.filter.clear();
         }
-        self.sides[0].pane.path = Some(folder.clone());
-        self.sides[0].pane.selected = document.clone();
-        self.sides[0].opened = None;
+        self.side.pane.path = Some(folder.clone());
+        self.side.pane.selected = document.clone();
+        self.side.opened = None;
         if changed {
-            self.roots(0, cx);
+            self.roots(cx);
         } else {
-            self.list(0, folder.clone(), document.clone(), cx);
-        }
-        if self.sides[1].pane.path.is_none() {
-            self.roots(1, cx);
+            self.list(folder.clone(), document.clone(), cx);
         }
         if let Some(name) = document {
-            self.open(0, paths::join(&folder, &name), window, cx);
+            self.open(paths::join(&folder, &name), window, cx);
         }
         cx.notify();
     }
-    fn roots(&mut self, i: usize, cx: &mut Context<Self>) {
-        let node = self.sides[i].pane.node.clone();
-        let asked = self.sides[i].pane.asked;
+    fn roots(&mut self, cx: &mut Context<Self>) {
+        let node = self.side.pane.node.clone();
+        let asked = self.side.pane.asked;
         self.request(
             Request::get(NodeId(node.clone()), "/api/files/roots"),
             move |p, s, b, cx| {
-                if p.sides[i].pane.node != node {
+                if p.side.pane.node != node {
                     return;
                 }
                 if s != 200 {
                     p.fail(s, &b);
-                    p.sides[i].pane.away = true;
-                    p.sides[i].pane.error = p.error.clone();
+                    p.side.pane.away = true;
+                    p.side.pane.error = p.error.clone();
                     cx.notify();
                     return;
                 }
                 match serde_json::from_slice::<NodeRoots>(&b) {
                     Ok(r) => {
-                        p.sides[i].pane.roots = r.roots;
-                        if p.sides[i].pane.asked == asked
+                        p.side.pane.roots = r.roots;
+                        if p.side.pane.asked == asked
                             && (!p.landing || p.beside || p.dock)
-                            && let Some(path) = p.sides[i].pane.start_path(i)
+                            && let Some(path) = p.side.pane.start_path()
                         {
-                            p.list(i, path, None, cx)
+                            p.list(path, None, cx)
                         }
                     }
                     Err(e) => p.error = Some(e.to_string()),
@@ -596,10 +600,10 @@ impl FilesPage {
             cx,
         )
     }
-    fn reveal(&mut self, i: usize, path: String, window: &mut Window, cx: &mut Context<Self>) {
-        let node = self.sides[i].pane.node.clone();
-        self.sides[i].pane.asked += 1;
-        let asked = self.sides[i].pane.asked;
+    fn reveal(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        let node = self.side.pane.node.clone();
+        self.side.pane.asked += 1;
+        let asked = self.side.pane.asked;
         let task = self.host.request(
             Request::get(NodeId(node.clone()), route("folder", &path)),
             cx,
@@ -607,11 +611,11 @@ impl FilesPage {
         cx.spawn_in(window, async move |this, cx| {
             let answer = task.await;
             let _ = this.update_in(cx, |page, window, cx| {
-                if page.sides[i].pane.node != node || page.sides[i].pane.asked != asked {
+                if page.side.pane.node != node || page.side.pane.asked != asked {
                     return;
                 }
                 match answer {
-                    Ok(answer) if answer.status == 200 => page.list(i, path, None, cx),
+                    Ok(answer) if answer.status == 200 => page.list(path, None, cx),
                     Ok(answer)
                         if serde_json::from_slice::<serde_json::Value>(&answer.body)
                             .ok()
@@ -620,12 +624,11 @@ impl FilesPage {
                             }) =>
                     {
                         page.list(
-                            i,
                             paths::parent(&path),
                             Some(paths::base_name(&path).to_string()),
                             cx,
                         );
-                        page.open(i, path, window, cx);
+                        page.open(path, window, cx);
                     }
                     Ok(answer) => page.fail(answer.status, &answer.body),
                     Err(error) => page.error = Some(error.message),
@@ -640,68 +643,60 @@ impl FilesPage {
         &mut self,
         node: &str,
         folder: &str,
-        select: Option<(usize, String)>,
+        select: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        for i in 0..self.sides.len() {
-            if self.sides[i].pane.node == node && self.sides[i].pane.path.as_deref() == Some(folder)
-            {
-                let selected = select
-                    .as_ref()
-                    .filter(|(side, _)| *side == i)
-                    .map(|(_, name)| name.clone());
-                self.list(i, folder.to_owned(), selected, cx);
-            }
+        if self.side.pane.node == node && self.side.pane.path.as_deref() == Some(folder) {
+            self.list(folder.to_owned(), select, cx);
         }
     }
 
-    pub fn list(&mut self, i: usize, path: String, select: Option<String>, cx: &mut Context<Self>) {
-        self.list_with_menu(i, path, select, None, cx);
+    pub fn list(&mut self, path: String, select: Option<String>, cx: &mut Context<Self>) {
+        self.list_with_menu(path, select, None, cx);
     }
 
     fn list_with_menu(
         &mut self,
-        i: usize,
         path: String,
         select: Option<String>,
         menu: Option<gpui::Point<gpui::Pixels>>,
         cx: &mut Context<Self>,
     ) {
-        let node = self.sides[i].pane.node.clone();
-        self.sides[i].pane.asked += 1;
-        let id = self.sides[i].pane.asked;
+        let node = self.side.pane.node.clone();
+        self.side.pane.asked += 1;
+        let id = self.side.pane.asked;
         self.request(
             Request::get(NodeId(node.clone()), route("folder", &path)),
             move |p, s, b, cx| {
-                if p.sides[i].pane.node != node || p.sides[i].pane.asked != id {
+                if p.side.pane.node != node || p.side.pane.asked != id {
                     return;
                 }
                 if s != 200 {
                     p.fail(s, &b);
                     if s == 0 || s == 421 || s == 502 || s == 503 {
-                        p.sides[i].pane.away = true;
-                        p.sides[i].pane.error = p.error.clone();
+                        p.side.pane.away = true;
+                        p.side.pane.error = p.error.clone();
                     }
                 } else {
                     match serde_json::from_slice::<Listing>(&b) {
                         Ok(l) => {
-                            let moved = p.sides[i].pane.path.as_deref() != Some(l.path.as_str());
-                            let opening_selected = p.sides[i].opened.as_ref().is_some_and(|o| {
+                            let moved = p.side.pane.path.as_deref() != Some(l.path.as_str());
+                            let opening_selected = p.side.opened.as_ref().is_some_and(|o| {
                                 paths::parent(&o.path) == l.path
                                     && select.as_deref() == Some(paths::base_name(&o.path))
                             });
-                            p.sides[i].pane.listed(l.path, l.entries, select);
+                            p.side.pane.listed(l.path, l.entries, select);
                             if moved && !opening_selected && menu.is_none() {
-                                p.sides[i].opened = None;
+                                p.side.opened = None;
                             }
                             if let Some(at) = menu {
-                                p.sides[i].pane.find = None;
-                                p.sides[i]
+                                p.side.pane.find = None;
+                                p.side
                                     .search
                                     .update(cx, |field, cx| field.set("", false, cx));
-                                if p.sides[i].pane.selection().is_some() {
-                                    p.sides[i].pane.armed = false;
-                                    p.menu = Some((i, at));
+                                if p.side.pane.selection().is_some() {
+                                    p.side.pane.armed = false;
+                                    p.menu = Some(at);
                                 }
                             }
                             p.keep(cx)
@@ -714,17 +709,17 @@ impl FilesPage {
             cx,
         )
     }
-    pub fn find(&mut self, i: usize, q: String, cx: &mut Context<Self>) {
-        let Some(path) = self.sides[i].pane.path.clone() else {
+    pub fn find(&mut self, q: String, cx: &mut Context<Self>) {
+        let Some(path) = self.side.pane.path.clone() else {
             return;
         };
-        let content = self.sides[i].search_content;
-        let revision = self.sides[i].pane.set_find(&q, content);
+        let content = self.side.search_content;
+        let revision = self.side.pane.set_find(&q, content);
         if q.trim().is_empty() {
             cx.notify();
             return;
         }
-        let node = self.sides[i].pane.node.clone();
+        let node = self.side.pane.node.clone();
         let uri = format!(
             "{}&q={}",
             route(if content { "search" } else { "find" }, &path),
@@ -738,44 +733,40 @@ impl FilesPage {
                 } else {
                     Err(String::from_utf8_lossy(&b).into_owned())
                 };
-                if p.sides[i].pane.node == node
-                    && p.sides[i].pane.path.as_deref() == Some(path.as_str())
-                {
-                    p.sides[i].pane.found(revision, found);
+                if p.side.pane.node == node && p.side.pane.path.as_deref() == Some(path.as_str()) {
+                    p.side.pane.found(revision, found);
                 }
                 cx.notify()
             },
             cx,
         )
     }
-    pub fn toggle_search_content(&mut self, i: usize, cx: &mut Context<Self>) {
-        self.sides[i].search_content = !self.sides[i].search_content;
-        let query = self.sides[i].search.read(cx).text.clone();
-        self.find(i, query, cx);
+    pub fn toggle_search_content(&mut self, cx: &mut Context<Self>) {
+        self.side.search_content = !self.side.search_content;
+        let query = self.side.search.read(cx).text.clone();
+        self.find(query, cx);
     }
     pub fn open_at(
         &mut self,
-        i: usize,
         path: String,
         line: Option<usize>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open(i, path, window, cx);
-        self.sides[i].pending_line = line;
+        self.open(path, window, cx);
+        self.side.pending_line = line;
     }
-    pub fn open(&mut self, i: usize, path: String, window: &mut Window, cx: &mut Context<Self>) {
-        self.sides[i].pending_line = None;
-        self.sides[i]
+    pub fn open(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.side.pending_line = None;
+        self.side
             .code
             .update(cx, |code, cx| code.edit(false, window, cx));
         if !self.beside && !self.dock {
-            Code::focus(&self.sides[i].code, window, cx);
+            Code::focus(&self.side.code, window, cx);
         }
-        self.active = i;
-        let node = self.sides[i].pane.node.clone();
+        let node = self.side.pane.node.clone();
         let name = paths::base_name(&path).to_string();
-        self.sides[i].opened = Some(Opened {
+        self.side.opened = Some(Opened {
             node: node.clone(),
             path: path.clone(),
             name: name.clone(),
@@ -802,15 +793,15 @@ impl FilesPage {
                 | crate::store::kinds::Kind::Video
                 | crate::store::kinds::Kind::Pdf
         ) {
-            self.sides[i].opened.as_mut().unwrap().show =
-                Show::Media(crate::store::kinds::kind(&name));
+            self.side.opened.as_mut().unwrap().show = Show::Media(crate::store::kinds::kind(&name));
             cx.notify();
             return;
         }
         self.request(
             Request::get(NodeId(node.clone()), route("file", &path)),
             move |p, s, b, cx| {
-                if !p.sides[i]
+                if !p
+                    .side
                     .opened
                     .as_ref()
                     .is_some_and(|o| o.node == node && o.path == path)
@@ -822,11 +813,11 @@ impl FilesPage {
                         .ok()
                         .is_some_and(|v| v["error"]["code"] == "not_file")
                     {
-                        p.list(i, path, None, cx);
+                        p.list(path, None, cx);
                         return;
                     }
                     p.fail(s, &b);
-                    if let Some(o) = p.sides[i].opened.as_mut() {
+                    if let Some(o) = p.side.opened.as_mut() {
                         o.show = Show::Failed(p.error.clone().unwrap_or_default());
                     }
                     cx.notify();
@@ -839,7 +830,8 @@ impl FilesPage {
                     cx.spawn(async move |this, cx| {
                         let result = task.await;
                         let _ = this.update(cx, |p, cx| {
-                            if let Some(o) = p.sides[i]
+                            if let Some(o) = p
+                                .side
                                 .opened
                                 .as_mut()
                                 .filter(|o| o.node == node && o.path == path)
@@ -863,7 +855,8 @@ impl FilesPage {
                     cx.spawn(async move |this, cx| {
                         let result = task.await;
                         let _ = this.update(cx, |p, cx| {
-                            if let Some(o) = p.sides[i]
+                            if let Some(o) = p
+                                .side
                                 .opened
                                 .as_mut()
                                 .filter(|o| o.node == node && o.path == path)
@@ -891,12 +884,12 @@ impl FilesPage {
                 let (show, text, pretty) = open::show(&name, &b);
                 let base = open::version(&b);
                 let draft = p.drafts.get(&(node, path)).cloned();
-                let code = p.sides[i].code.clone();
-                p.sides[i].pretty_code.update(cx, |code, cx| {
+                let code = p.side.code.clone();
+                p.side.pretty_code.update(cx, |code, cx| {
                     code.set_lang(syntax::lang(&name), cx);
                     code.set(pretty.as_deref().unwrap_or(&text), cx);
                 });
-                let line = p.sides[i].pending_line.take();
+                let line = p.side.pending_line.take();
                 code.update(cx, |code, cx| {
                     code.set_lang(syntax::lang(&name), cx);
                     code.set(draft.as_ref().map_or(&text, |d| &d.text), cx);
@@ -904,7 +897,7 @@ impl FilesPage {
                         code.show_line(line.saturating_sub(1), cx);
                     }
                 });
-                let o = p.sides[i].opened.as_mut().unwrap();
+                let o = p.side.opened.as_mut().unwrap();
                 if line.is_some() {
                     o.source = true;
                 }
@@ -918,11 +911,11 @@ impl FilesPage {
             cx,
         )
     }
-    fn changed(&mut self, i: usize, cx: &mut Context<Self>) {
-        let Some(o) = self.sides[i].opened.as_ref() else {
+    fn changed(&mut self, cx: &mut Context<Self>) {
+        let Some(o) = self.side.opened.as_ref() else {
             return;
         };
-        let text = self.sides[i].code.read(cx).text().to_owned();
+        let text = self.side.code.read(cx).text().to_owned();
         if text != o.saved {
             self.drafts.insert(
                 o.key(),
@@ -936,8 +929,8 @@ impl FilesPage {
         }
         cx.notify()
     }
-    pub fn toggle_diff(&mut self, i: usize, cx: &mut Context<Self>) {
-        let Some(opened) = self.sides[i].opened.as_mut() else {
+    pub fn toggle_diff(&mut self, cx: &mut Context<Self>) {
+        let Some(opened) = self.side.opened.as_mut() else {
             return;
         };
         opened.diff_open = !opened.diff_open;
@@ -957,7 +950,8 @@ impl FilesPage {
                 } else {
                     Err(String::from_utf8_lossy(&body).into_owned())
                 };
-                if let Some(opened) = page.sides[i]
+                if let Some(opened) = page
+                    .side
                     .opened
                     .as_mut()
                     .filter(|o| o.node == node && o.path == path)
@@ -970,50 +964,51 @@ impl FilesPage {
         );
         cx.notify();
     }
-    pub fn edit(&mut self, i: usize, w: &mut Window, cx: &mut Context<Self>) {
-        if let Some(o) = self.sides[i].opened.as_mut() {
+    pub fn edit(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        if let Some(o) = self.side.opened.as_mut() {
             o.editing = true;
-            self.sides[i].code.update(cx, |c, cx| c.edit(true, w, cx));
+            self.side.code.update(cx, |c, cx| c.edit(true, w, cx));
         }
         cx.notify()
     }
-    fn finish_edit(&mut self, i: usize, w: &mut Window, cx: &mut Context<Self>) {
-        if self.sides[i].opened.as_ref().is_some_and(|o| !o.editing) {
-            self.sides[i].opened = None;
+    fn finish_edit(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        if self.side.opened.as_ref().is_some_and(|o| !o.editing) {
+            self.side.opened = None;
             w.focus(&self.focus, cx);
             cx.notify();
             return;
         }
-        let dirty = self.sides[i]
+        let dirty = self
+            .side
             .opened
             .as_ref()
             .is_some_and(|o| self.drafts.contains_key(&o.key()));
         if dirty {
-            self.confirm_discard = Some(i);
-        } else if let Some(o) = self.sides[i].opened.as_mut() {
+            self.confirm_discard = true;
+        } else if let Some(o) = self.side.opened.as_mut() {
             o.editing = false;
-            self.sides[i].code.update(cx, |c, cx| c.edit(false, w, cx));
+            self.side.code.update(cx, |c, cx| c.edit(false, w, cx));
         }
         cx.notify()
     }
     pub fn keep_editing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(i) = self.confirm_discard.take() {
-            Code::focus(&self.sides[i].code, window, cx);
+        if std::mem::take(&mut self.confirm_discard) {
+            Code::focus(&self.side.code, window, cx);
         }
         cx.notify();
     }
 
-    pub fn save(&mut self, i: usize, cx: &mut Context<Self>) {
-        self.write(i, open::Write::Save, cx);
+    pub fn save(&mut self, cx: &mut Context<Self>) {
+        self.write(open::Write::Save, cx);
     }
     pub fn cancel_conflict(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(i) = self.conflict.take() {
-            Code::focus(&self.sides[i].code, window, cx)
+        if std::mem::take(&mut self.conflict) {
+            Code::focus(&self.side.code, window, cx)
         }
         cx.notify();
     }
-    pub fn write(&mut self, i: usize, mode: open::Write, cx: &mut Context<Self>) {
-        let Some(opened) = self.sides[i].opened.as_mut() else {
+    pub fn write(&mut self, mode: open::Write, cx: &mut Context<Self>) {
+        let Some(opened) = self.side.opened.as_mut() else {
             return;
         };
         if opened.saving {
@@ -1025,10 +1020,11 @@ impl FilesPage {
         let base = opened.base.clone();
         let name = opened.name.clone();
         let folder = paths::parent(&path);
-        let sent = self.sides[i].code.read(cx).text().to_owned();
+        let sent = self.side.code.read(cx).text().to_owned();
         let (target, ordinal) = if mode == open::Write::Copy {
             let mut n = self.copy_ordinal;
-            while self.sides[i]
+            while self
+                .side
                 .pane
                 .entries
                 .iter()
@@ -1054,7 +1050,8 @@ impl FilesPage {
         self.request(
             request,
             move |p, status, body, cx| {
-                if !p.sides[i]
+                if !p
+                    .side
                     .opened
                     .as_ref()
                     .is_some_and(|o| o.node == node && o.path == path)
@@ -1062,20 +1059,22 @@ impl FilesPage {
                     return;
                 }
                 if status != success {
-                    p.sides[i].opened.as_mut().unwrap().saving = false;
+                    p.side.opened.as_mut().unwrap().saving = false;
                     if status == 412 {
-                        p.conflict = Some(i);
+                        p.conflict = true;
                         p.copy_ordinal = 1;
                     } else if status == 409 && mode == open::Write::Copy {
                         p.copy_ordinal = ordinal + 1;
-                        p.write(i, mode, cx);
+                        p.write(mode, cx);
                     } else {
                         p.fail(status, &body)
                     }
                 } else {
-                    p.conflict = None;
-                    let now = p.sides[i].code.read(cx).text().to_owned();
-                    let o = p.sides[i].opened.as_mut().unwrap();
+                    p.conflict = false;
+                    p.host
+                        .toast(&format!("Saved {}", paths::base_name(&target)), cx);
+                    let now = p.side.code.read(cx).text().to_owned();
+                    let o = p.side.opened.as_mut().unwrap();
                     let old_key = o.key();
                     o.saving = false;
                     if mode == open::Write::Copy {
@@ -1092,15 +1091,15 @@ impl FilesPage {
                     o.base = open::version(sent.as_bytes());
                     let new_key = o.key();
                     let pretty = o.pretty.clone();
-                    p.sides[i].pretty_code.update(cx, |code, cx| {
+                    p.side.pretty_code.update(cx, |code, cx| {
                         code.set(pretty.as_deref().unwrap_or(&sent), cx)
                     });
                     p.drafts.remove(&old_key);
                     if let Some(d) = open::acknowledged(&now, &sent) {
                         p.drafts.insert(new_key, d);
                     }
-                    let selection = (mode == open::Write::Copy)
-                        .then(|| (i, paths::base_name(&target).to_owned()));
+                    let selection =
+                        (mode == open::Write::Copy).then(|| paths::base_name(&target).to_owned());
                     p.refresh_folder(&node, &folder, selection, cx);
                 }
                 cx.notify();
@@ -1108,19 +1107,13 @@ impl FilesPage {
             cx,
         )
     }
-    pub fn search_key(
-        &mut self,
-        i: usize,
-        e: &KeyDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if e.keystroke.key == "escape" && self.sides[i].search.read(cx).is_focused(window) {
-            self.sides[i]
+    pub fn search_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if e.keystroke.key == "escape" && self.side.search.read(cx).is_focused(window) {
+            self.side
                 .search
                 .update(cx, |field, cx| field.set("", false, cx));
-            self.sides[i].pane.filter.clear();
-            self.sides[i].pane.find = None;
+            self.side.pane.filter.clear();
+            self.side.pane.find = None;
             window.focus(&self.focus, cx);
             cx.stop_propagation();
             cx.notify();
@@ -1133,7 +1126,6 @@ impl FilesPage {
         }
         let key = &e.keystroke;
         let m = key.modifiers;
-        let i = self.active;
         if m.alt || m.platform || (m.control && key.key != "c") {
             return;
         }
@@ -1147,72 +1139,57 @@ impl FilesPage {
         }
         match key.key.as_str() {
             "up" | "k" => {
-                self.sides[i].pane.step(-1);
+                self.side.pane.step(-1);
             }
             "down" | "j" => {
-                self.sides[i].pane.step(1);
+                self.side.pane.step(1);
             }
             "home" => {
-                self.sides[i].pane.step(isize::MIN);
+                self.side.pane.step(isize::MIN);
             }
             "end" => {
-                self.sides[i].pane.step(isize::MAX);
+                self.side.pane.step(isize::MAX);
             }
-            "tab" => self.active = 1 - i,
             "enter" => {
-                let selected = self.sides[i]
+                let selected = self
+                    .side
                     .pane
                     .selection()
                     .map(|e| (e.name.clone(), e.folder));
-                if let (Some((name, folder)), Some(dir)) =
-                    (selected, self.sides[i].pane.path.clone())
-                {
+                if let (Some((name, folder)), Some(dir)) = (selected, self.side.pane.path.clone()) {
                     let path = paths::join(&dir, &name);
                     if folder {
-                        self.list(i, path, None, cx)
+                        self.list(path, None, cx)
                     } else {
-                        self.open(i, path, window, cx)
+                        self.open(path, window, cx)
                     }
                 }
             }
             "backspace" => {
-                if let Some(up) = self.sides[i].pane.up() {
-                    let select = self.sides[i].pane.came_from();
-                    self.list(i, up, select, cx)
+                if let Some(up) = self.side.pane.up() {
+                    let select = self.side.pane.came_from();
+                    self.list(up, select, cx)
                 }
             }
             "f5" => {
-                if let Some(path) = self.sides[i].pane.path.clone() {
-                    self.list(i, path, None, cx)
+                if let Some(path) = self.side.pane.path.clone() {
+                    self.list(path, None, cx)
                 }
             }
-            "delete" => self.mutate(i, "delete", cx),
-            "/" => parvi_app_kit::widgets::field::focus(&self.sides[i].search, window, cx),
-            "f2" => {
-                if let Some(name) = self.sides[i]
-                    .pane
-                    .selection()
-                    .map(|entry| entry.name.clone())
-                {
-                    self.sides[i]
-                        .name
-                        .update(cx, |field, cx| field.set(&name, true, cx));
-                    parvi_app_kit::widgets::field::focus(&self.sides[i].name, window, cx);
-                }
-            }
+            "delete" => self.mutate("delete", cx),
+            "/" => parvi_app_kit::widgets::field::focus(&self.side.search, window, cx),
+            "f2" => self.start_naming(Naming::Rename, window, cx),
             "escape" => {
-                if self.sides[i].opened.is_some() {
-                    self.sides[i].opened = None
+                if self.side.opened.is_some() {
+                    self.side.opened = None
                 } else {
-                    self.sides[i].pane.find = None;
-                    self.sides[i].pane.filter.clear();
-                    self.sides[i]
-                        .search
-                        .update(cx, |f, cx| f.set("", false, cx));
+                    self.side.pane.find = None;
+                    self.side.pane.filter.clear();
+                    self.side.search.update(cx, |f, cx| f.set("", false, cx));
                 }
             }
             "c" if m.control && m.shift => {
-                if let Some(path) = self.sides[i].pane.selected_path() {
+                if let Some(path) = self.side.pane.selected_path() {
                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(path))
                 }
             }
@@ -1221,26 +1198,61 @@ impl FilesPage {
         cx.stop_propagation();
         cx.notify();
     }
-    pub fn sort(&mut self, i: usize, column: store::listing::Column, cx: &mut Context<Self>) {
-        self.sides[i].pane.sort = self.sides[i].pane.sort.toggled(column);
+    pub fn sort(&mut self, column: store::listing::Column, cx: &mut Context<Self>) {
+        self.side.pane.sort = self.side.pane.sort.toggled(column);
         self.keep(cx);
         cx.notify();
     }
-    pub fn discard(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
-        self.confirm_discard = None;
-        if let Some(opened) = self.sides[i].opened.as_mut() {
+    pub fn discard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.confirm_discard = false;
+        if let Some(opened) = self.side.opened.as_mut() {
             self.drafts.remove(&opened.key());
             let saved = opened.saved.clone();
             opened.editing = false;
-            self.sides[i].code.update(cx, |code, cx| {
+            self.side.code.update(cx, |code, cx| {
                 code.set(&saved, cx);
                 code.edit(false, window, cx)
             });
         }
         cx.notify();
     }
-    pub fn mutate(&mut self, i: usize, action: &'static str, cx: &mut Context<Self>) {
-        let pane = &mut self.sides[i].pane;
+    /// Opens the name field to create a file or folder here, or to rename
+    /// the selected entry.
+    pub fn start_naming(&mut self, naming: Naming, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.side.pane.writable() {
+            return;
+        }
+        let text = match naming {
+            Naming::Rename => match self.side.pane.selection() {
+                Some(entry) => entry.name.clone(),
+                None => return,
+            },
+            _ => String::new(),
+        };
+        self.naming = Some(naming);
+        self.side.name.update(cx, |field, cx| {
+            field.set_placeholder(naming.placeholder());
+            field.set(&text, true, cx)
+        });
+        parvi_app_kit::widgets::field::focus(&self.side.name, window, cx);
+        cx.notify();
+    }
+    pub fn stop_naming(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.naming = None;
+        self.side
+            .name
+            .update(cx, |field, cx| field.set("", false, cx));
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+    pub fn apply_naming(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(naming) = self.naming {
+            self.mutate(naming.action(), cx);
+            window.focus(&self.focus, cx);
+        }
+    }
+    pub fn mutate(&mut self, action: &'static str, cx: &mut Context<Self>) {
+        let pane = &mut self.side.pane;
         let Some(folder) = pane.path.clone() else {
             return;
         };
@@ -1248,8 +1260,8 @@ impl FilesPage {
             return;
         }
         let node = pane.node.clone();
-        let name = self.sides[i].name.read(cx).text.trim().to_owned();
-        let selected = self.sides[i].pane.selected_path();
+        let name = self.side.name.read(cx).text.trim().to_owned();
+        let selected = self.side.pane.selected_path();
         if matches!(action, "file" | "folder" | "rename")
             && let Some(reason) = paths::bad_name(&name)
         {
@@ -1277,7 +1289,7 @@ impl FilesPage {
                 ),
             ),
             "delete" => {
-                let Some(path) = self.sides[i].pane.press_delete() else {
+                let Some(path) = self.side.pane.press_delete() else {
                     cx.notify();
                     return;
                 };
@@ -1293,28 +1305,23 @@ impl FilesPage {
                 } else {
                     if action == "delete"
                         && let Some(deleted) = &selected
+                        && p.side
+                            .opened
+                            .as_ref()
+                            .is_some_and(|o| o.node == node && paths::inside(deleted, &o.path))
                     {
-                        for side in &mut p.sides {
-                            if side
-                                .opened
-                                .as_ref()
-                                .is_some_and(|o| o.node == node && paths::inside(deleted, &o.path))
-                            {
-                                side.opened = None;
-                            }
-                        }
+                        p.side.opened = None;
                     }
                     let select = if let Some((from, to)) = moved {
                         store::drafts::move_drafts(&mut p.drafts, &node, &from, &to);
-                        for side in &mut p.sides {
-                            if let Some(opened) = side
-                                .opened
-                                .as_mut()
-                                .filter(|o| o.node == node && paths::inside(&from, &o.path))
-                            {
-                                opened.path = format!("{to}{}", &opened.path[from.len()..]);
-                                opened.name = paths::base_name(&opened.path).to_owned();
-                            }
+                        if let Some(opened) = p
+                            .side
+                            .opened
+                            .as_mut()
+                            .filter(|o| o.node == node && paths::inside(&from, &o.path))
+                        {
+                            opened.path = format!("{to}{}", &opened.path[from.len()..]);
+                            opened.name = paths::base_name(&opened.path).to_owned();
                         }
                         Some(paths::base_name(&to).to_owned())
                     } else if action == "file" || action == "folder" {
@@ -1322,7 +1329,11 @@ impl FilesPage {
                     } else {
                         None
                     };
-                    p.refresh_folder(&node, &folder, select.map(|name| (i, name)), cx)
+                    if action != "delete" {
+                        p.naming = None;
+                        p.side.name.update(cx, |field, cx| field.set("", false, cx));
+                    }
+                    p.refresh_folder(&node, &folder, select, cx)
                 }
                 cx.notify()
             },
@@ -1331,33 +1342,30 @@ impl FilesPage {
     }
     pub(crate) fn pick_uploads(
         &mut self,
-        i: usize,
         folder: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let node = NodeId(self.sides[i].pane.node.clone());
+        let node = NodeId(self.side.pane.node.clone());
         parvi_app_kit::widgets::path_picker::pick(
             self.host.clone(),
             "Upload files",
             window,
             cx,
-            move |page, paths, cx| page.queue_uploads(i, node, folder, &paths, cx),
+            move |page, paths, cx| page.queue_uploads(node, folder, &paths, cx),
         );
     }
     pub(crate) fn upload_paths(
         &mut self,
-        i: usize,
         folder: String,
         paths: &[PathBuf],
         cx: &mut Context<Self>,
     ) {
-        let node = NodeId(self.sides[i].pane.node.clone());
-        self.queue_uploads(i, node, folder, paths, cx);
+        let node = NodeId(self.side.pane.node.clone());
+        self.queue_uploads(node, folder, paths, cx);
     }
     fn queue_uploads(
         &mut self,
-        i: usize,
         node: NodeId,
         folder: String,
         paths: &[PathBuf],
@@ -1371,7 +1379,6 @@ impl FilesPage {
                 source,
                 node: node.clone(),
                 folder: folder.clone(),
-                side: i,
             }));
         self.next_upload(cx);
     }
@@ -1444,7 +1451,7 @@ impl FilesPage {
                     page.refresh_folder(
                         upload.node.as_str(),
                         &upload.folder,
-                        Some((upload.side, target_name)),
+                        Some(target_name),
                         cx,
                     );
                     page.uploading = false;
@@ -1498,25 +1505,22 @@ impl FilesPage {
     }
     pub fn context_menu(
         &mut self,
-        i: usize,
         name: String,
         at: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
-        self.sides[i].pane.select(&name);
-        self.sides[i].pane.armed = false;
-        self.menu = Some((i, at));
+        self.side.pane.select(&name);
+        self.side.pane.armed = false;
+        self.menu = Some(at);
         cx.notify();
     }
     pub fn find_context_menu(
         &mut self,
-        i: usize,
         path: String,
         at: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
         self.list_with_menu(
-            i,
             paths::parent(&path),
             Some(paths::base_name(&path).to_owned()),
             Some(at),
@@ -1524,8 +1528,8 @@ impl FilesPage {
         );
     }
 
-    pub fn toggle_pin(&mut self, i: usize, cx: &mut Context<Self>) {
-        let pane = &self.sides[i].pane;
+    pub fn toggle_pin(&mut self, cx: &mut Context<Self>) {
+        let pane = &self.side.pane;
         let Some(path) = pane.selected_path() else {
             return;
         };
@@ -1552,15 +1556,9 @@ impl FilesPage {
         }
         cx.notify();
     }
-    pub fn open_pin(
-        &mut self,
-        i: usize,
-        pin: store::Pin,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let changed_node = self.sides[i].pane.node != pin.node;
-        self.sides[i].pane.choose_node(&pin.node);
+    pub fn open_pin(&mut self, pin: store::Pin, window: &mut Window, cx: &mut Context<Self>) {
+        let changed_node = self.side.pane.node != pin.node;
+        self.side.pane.choose_node(&pin.node);
         let folder = if pin.folder {
             pin.path.clone()
         } else {
@@ -1568,14 +1566,14 @@ impl FilesPage {
         };
         let selected = (!pin.folder).then(|| paths::base_name(&pin.path).to_owned());
         if changed_node {
-            self.sides[i].pane.path = Some(folder);
-            self.sides[i].pane.selected = selected;
-            self.roots(i, cx);
+            self.side.pane.path = Some(folder);
+            self.side.pane.selected = selected;
+            self.roots(cx);
         } else {
-            self.list(i, folder, selected, cx);
+            self.list(folder, selected, cx);
         }
         if !pin.folder {
-            self.open(i, pin.path, window, cx);
+            self.open(pin.path, window, cx);
         }
     }
     fn show_notice(&mut self, message: String, cx: &mut Context<Self>) {
@@ -1594,8 +1592,8 @@ impl FilesPage {
         .detach();
     }
 
-    pub fn download(&mut self, i: usize, cx: &mut Context<Self>) {
-        let pane = &self.sides[i].pane;
+    pub fn download(&mut self, cx: &mut Context<Self>) {
+        let pane = &self.side.pane;
         let Some(path) = pane.selected_path() else {
             return;
         };
@@ -1664,148 +1662,8 @@ impl FilesPage {
             cx,
         );
     }
-    pub fn copy_to_other(&mut self, i: usize, cx: &mut Context<Self>) {
-        let other = 1 - i;
-        let Some(source) = self.sides[i].pane.selected_path() else {
-            return;
-        };
-        let Some(folder) = self.sides[other].pane.path.clone() else {
-            return;
-        };
-        let node = self.sides[i].pane.node.clone();
-        if !self.sides[i].pane.writable()
-            || !self.sides[other].pane.writable()
-            || node != self.sides[other].pane.node
-        {
-            self.error = Some("Copy is available only within one reachable node.".into());
-            cx.notify();
-            return;
-        }
-        let request = parvi_files_contract::TransferRequest {
-            node: node.clone(),
-            path: source.clone(),
-            target_node: node,
-            folder: folder.clone(),
-            id: store::transfers::new_id(),
-        };
-        self.transfers
-            .push(store::transfers::Transfer::new(store::transfers::Kept {
-                name: paths::base_name(&source).to_owned(),
-                from: store::transfers::End {
-                    shown: source,
-                    ..Default::default()
-                },
-                to: store::transfers::End {
-                    shown: folder,
-                    ..Default::default()
-                },
-                request,
-                state: store::transfers::State::Running,
-                bytes: 0,
-                total: 0,
-                error: None,
-                finished: None,
-            }));
-        self.keep(cx);
-        self.run_copy(self.transfers.len() - 1, cx);
-    }
-    pub fn retry_copy(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(transfer) = self.transfers.get_mut(index) {
-            transfer.restart();
-            self.keep(cx);
-            self.run_copy(index, cx)
-        }
-    }
-    fn run_copy(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(transfer) = self.transfers.get(index) else {
-            return;
-        };
-        let job = transfer.kept.request.clone();
-        let id = job.id.clone();
-        let request = Request::new("POST", NodeId(job.node.clone()), "/api/files/bridge/start")
-            .json(&serde_json::to_value(&job).expect("copy request is JSON"));
-        self.request(
-            request,
-            move |page, status, body, cx| {
-                if status != 202 {
-                    page.fail(status, &body);
-                    let message = page.error.clone().unwrap_or_default();
-                    if let Some(transfer) = page.transfers.get_mut(index).filter(|t| t.id() == id) {
-                        transfer.wait(&message);
-                    }
-                    page.keep(cx);
-                    cx.notify();
-                    return;
-                }
-                let uri = format!("/api/files/bridge/events?id={}", enc(&id));
-                let request = Request::get(NodeId(job.node.clone()), uri)
-                    .within(std::time::Duration::from_secs(120));
-                page.request(
-                    request,
-                    move |page, status, body, cx| {
-                        if status != 200 {
-                            page.fail(status, &body);
-                            let message = page.error.clone().unwrap_or_default();
-                            if let Some(transfer) =
-                                page.transfers.get_mut(index).filter(|t| t.id() == id)
-                            {
-                                transfer.wait(&message);
-                            }
-                        } else {
-                            let result = String::from_utf8_lossy(&body);
-                            let progress = result
-                                .lines()
-                                .filter_map(|l| l.strip_prefix("data: "))
-                                .filter_map(|l| {
-                                    serde_json::from_str::<parvi_files_contract::Progress>(l).ok()
-                                })
-                                .next_back();
-                            if let Some(transfer) =
-                                page.transfers.get_mut(index).filter(|t| t.id() == id)
-                            {
-                                if let Some(progress) = progress {
-                                    transfer.progress(&progress, parvi_app_kit::hub::now_ms());
-                                    if progress.state == "running" {
-                                        transfer.wait("The copy did not finish; retry it.");
-                                    }
-                                    if progress.state == "done" {
-                                        cx.spawn(async move |this, cx| {
-                                            cx.background_executor()
-                                                .timer(std::time::Duration::from_secs(5))
-                                                .await;
-                                            let _ = this.update(cx, |_, cx| cx.notify());
-                                        })
-                                        .detach();
-                                        for side in 0..2 {
-                                            if page.sides[side].pane.node == job.target_node
-                                                && page.sides[side].pane.path.as_deref()
-                                                    == Some(&job.folder)
-                                            {
-                                                page.list(
-                                                    side,
-                                                    job.folder.clone(),
-                                                    Some(paths::base_name(&job.path).to_owned()),
-                                                    cx,
-                                                );
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    transfer.wait("The copy did not report progress; retry it.");
-                                }
-                            }
-                        }
-                        page.keep(cx);
-                        cx.notify();
-                    },
-                    cx,
-                );
-            },
-            cx,
-        );
-    }
-    pub fn play(&mut self, i: usize, cx: &mut Context<Self>) {
-        let Some(opened) = self.sides[i].opened.as_ref() else {
+    pub fn play(&mut self, cx: &mut Context<Self>) {
+        let Some(opened) = self.side.opened.as_ref() else {
             return;
         };
         let node = opened.node.clone();
@@ -1832,7 +1690,6 @@ impl FilesPage {
     }
     pub fn follow_link(
         &mut self,
-        i: usize,
         node: &str,
         folder: &str,
         link: &str,
@@ -1847,7 +1704,7 @@ impl FilesPage {
             return;
         }
         let link = link.split('#').next().unwrap_or_default();
-        if link.is_empty() || self.sides[i].pane.node != node {
+        if link.is_empty() || self.side.pane.node != node {
             return;
         }
         let mut at = folder.to_owned();
@@ -1858,23 +1715,21 @@ impl FilesPage {
                 p => at = paths::join(&at, p),
             }
         }
-        if !self.sides[i].pane.roots.is_empty()
-            && paths::root_of(&self.sides[i].pane.roots, &at).is_none()
+        if !self.side.pane.roots.is_empty() && paths::root_of(&self.side.pane.roots, &at).is_none()
         {
             self.error = Some("That link is outside the roots.".into());
             cx.notify();
             return;
         }
         self.list(
-            i,
             paths::parent(&at),
             Some(paths::base_name(&at).to_owned()),
             cx,
         );
-        self.open(i, at, window, cx);
+        self.open(at, window, cx);
     }
-    pub fn send_selected(&self, i: usize, cx: &mut Context<Self>) {
-        if let Some(path) = self.sides[i].pane.selected_path() {
+    pub fn send_selected(&self, cx: &mut Context<Self>) {
+        if let Some(path) = self.side.pane.selected_path() {
             let _ = self.host.ask(
                 Ask::Send {
                     reference: paths::reference(&path),
@@ -1885,12 +1740,13 @@ impl FilesPage {
         }
     }
 
-    pub fn send(&self, i: usize, cx: &mut Context<Self>) {
-        let path = self.sides[i]
+    pub fn send(&self, cx: &mut Context<Self>) {
+        let path = self
+            .side
             .opened
             .as_ref()
             .map(|o| o.path.clone())
-            .or_else(|| self.sides[i].pane.selected_path());
+            .or_else(|| self.side.pane.selected_path());
         if let Some(path) = path {
             let _ = self.host.ask(
                 Ask::Send {
@@ -1901,14 +1757,13 @@ impl FilesPage {
             );
         }
     }
-    fn keep(&self, cx: &mut Context<Self>) {
+    pub(crate) fn keep(&self, cx: &mut Context<Self>) {
         let mut k: store::Kept = self.host.setting(cx).unwrap_or_default();
         if self.dock {
-            k.dock = self.sides[0].pane.kept();
-            k.dock_file = self.sides[0].opened.as_ref().map(|o| o.path.clone());
+            k.dock = self.side.pane.kept();
+            k.dock_file = self.side.opened.as_ref().map(|o| o.path.clone());
         } else {
-            k.panes = std::array::from_fn(|i| self.sides[i].pane.kept());
-            k.transfers = self.transfers.iter().map(|t| t.kept.clone()).collect();
+            k.pane = self.side.pane.kept();
         }
         let _ = self.host.set_setting(&k, cx);
     }
