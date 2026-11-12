@@ -126,6 +126,10 @@ impl Bd {
 /// (`.beads/dolt/<db>`). Any other layout, such as a store served from
 /// elsewhere, has no marker Parvi can read cheaply: the error says why, and
 /// the store is then read only when watching starts or on request.
+///
+/// The marker is the manifests' bytes, about 150 each, not their file
+/// times: `bd list` rewrites a manifest with the same bytes on every read,
+/// so a time or inode would move with Parvi's own reads.
 pub fn marker(folder: &str) -> Result<Vec<u8>, String> {
     let beads = Path::new(folder).join(".beads");
     let mut manifests = Vec::new();

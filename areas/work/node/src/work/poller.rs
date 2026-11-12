@@ -8,7 +8,10 @@
 //! is read when watching starts (unless it was read less than [`EVERY`]
 //! ago, across watches) and again only when a watcher asks for it with
 //! [`Work::refresh`]: nothing rereads a remote store on a timer
-//! (`/srv/AGENTS.md`, Background work).
+//! (`/srv/AGENTS.md`, Background work). A refresh, as a Refresh press or
+//! `parvi work list` asks, reads a Beads store only if its marker moved or
+//! it has none. Each read is kept beside the node's configuration with its
+//! marker, so a node that starts again shows the stores at once.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -48,6 +51,9 @@ pub(super) struct Inner {
     poll: Mutex<Poll>,
     /// Each store's Beads as last read, with the manifest they were read at.
     stores: Mutex<HashMap<String, Read>>,
+    /// Where each store's last read is kept across restarts, with its
+    /// marker, so a node that starts again reads only what changed.
+    kept: Option<std::path::PathBuf>,
     /// Each store's id prefix, once asked: it does not change.
     pub(super) prefixes: Mutex<HashMap<String, String>>,
     /// A watcher asked to read everything again now.
@@ -81,6 +87,17 @@ impl Default for Work {
 
 impl Work {
     pub fn new(config: Config, node: impl Into<String>, gh: Gh, bd: Bd) -> Work {
+        Work::keeping(config, node, gh, bd, None)
+    }
+
+    /// As [`Work::new`], keeping each store's last read in `kept`.
+    pub fn keeping(
+        config: Config,
+        node: impl Into<String>,
+        gh: Gh,
+        bd: Bd,
+        kept: Option<std::path::PathBuf>,
+    ) -> Work {
         let snapshot = Snapshot {
             projects: config
                 .projects
@@ -106,6 +123,7 @@ impl Work {
             snapshot: watch::Sender::new(Arc::new(snapshot)),
             poll: Mutex::default(),
             stores: Mutex::default(),
+            kept,
             prefixes: Mutex::default(),
             refresh: tokio::sync::Notify::new(),
             refreshed: watch::Sender::new(0),
@@ -202,19 +220,23 @@ impl Inner {
     /// since, else read now, as always when it has no manifest. Also says
     /// whether this read them.
     pub(super) async fn store(&self, folder: &str) -> Result<(Arc<Vec<Item>>, bool)> {
-        self.store_now(folder, false).await
-    }
-
-    async fn store_now(&self, folder: &str, force: bool) -> Result<(Arc<Vec<Item>>, bool)> {
         let marker = beads::marker(folder).ok();
-        if !force
-            && let Some(read) = self.stores.lock().unwrap().get(folder)
+        if let Some(read) = self.stores.lock().unwrap().get(folder)
             && marker.is_some()
             && read.marker == marker
         {
             return Ok((read.items.clone(), false));
         }
-        let json = self.bd.list(folder).await?;
+        let json = match marker.as_deref().and_then(|m| self.kept_read(folder, m)) {
+            Some(json) => json,
+            None => {
+                let json = self.bd.list(folder).await?;
+                if let Some(marker) = &marker {
+                    self.keep_read(folder, marker, &json)?;
+                }
+                json
+            }
+        };
         let items = Arc::new(super::beads_parse::parse(&json, &self.node, folder)?);
         self.stores.lock().unwrap().insert(
             folder.to_owned(),
@@ -225,6 +247,38 @@ impl Inner {
         );
         Ok((items, true))
     }
+
+    /// The file a store's last read is kept in.
+    fn kept_file(&self, folder: &str) -> Option<std::path::PathBuf> {
+        let name: String = folder
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        Some(self.kept.as_ref()?.join(format!("{name}.json")))
+    }
+
+    /// The kept read of a store, if it was kept at this marker.
+    fn kept_read(&self, folder: &str, marker: &[u8]) -> Option<String> {
+        let text = std::fs::read_to_string(self.kept_file(folder)?).ok()?;
+        let (kept_marker, json) = text.split_once('\n')?;
+        (kept_marker == hex(marker)).then(|| json.to_owned())
+    }
+
+    fn keep_read(&self, folder: &str, marker: &[u8], json: &str) -> Result<()> {
+        let Some(file) = self.kept_file(folder) else {
+            return Ok(());
+        };
+        let dir = file.parent().expect("kept reads have a folder");
+        std::fs::create_dir_all(dir)?;
+        let partial = file.with_extension("partial");
+        std::fs::write(&partial, format!("{}\n{json}", hex(marker)))?;
+        std::fs::rename(&partial, &file)?;
+        Ok(())
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// One watcher. Dropping it stops the poller if it was the last.
@@ -269,7 +323,8 @@ async fn rounds(work: Arc<Inner>) {
         let refreshing = requested > *work.refreshed.borrow();
         if refreshing {
             github = true;
-            // Every store is read again, one without a manifest too.
+            // Every store is looked at again: one whose marker moved, or
+            // that has none, is read.
             attempted.clear();
         }
         let mut jobs = Vec::new();
@@ -323,7 +378,7 @@ async fn rounds(work: Arc<Inner>) {
                             });
                         }
                         Project::Beads(store) => {
-                            let read = work.store_now(&store.folder, refreshing).await;
+                            let read = work.store(&store.folder).await;
                             work.snapshot.send_if_modified(|snapshot| {
                                 let ProjectView::Beads(view) =
                                     &mut Arc::make_mut(snapshot).projects[index]
@@ -616,6 +671,48 @@ pub(super) mod tests {
             "changed: read again"
         );
         assert_eq!(fake.runs("bd").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_refresh_or_a_restart_reads_only_the_stores_that_changed() {
+        let fake = Fake::new("kept", "exit 1", &fixture("beads.json"));
+        let projects = vec![Project::Beads(Store {
+            folder: fake.store(),
+        })];
+        let start = || {
+            Work::keeping(
+                Config {
+                    projects: projects.clone(),
+                },
+                "n1",
+                Gh::new(fake.dir.join("gh").display().to_string()),
+                Bd::new(fake.dir.join("bd").display().to_string()),
+                Some(fake.dir.join("kept")),
+            )
+        };
+        let read = |work: &Work| {
+            let work = work.clone();
+            async move {
+                let _watching = work.subscribe();
+                let requested = work.refresh();
+                let snapshot = work.refreshed(requested).await;
+                store(&snapshot, 0).items.as_ref().map(Vec::len)
+            }
+        };
+        let work = start();
+        assert_eq!(read(&work).await, Some(4));
+        assert_eq!(read(&work).await, Some(4));
+        assert_eq!(fake.runs("bd").len(), 1, "an unchanged store is not read");
+        fake.touch("two");
+        assert_eq!(read(&work).await, Some(4));
+        assert_eq!(fake.runs("bd").len(), 2, "a changed store is read");
+        drop(work);
+        // A node that starts again takes the kept read while it holds.
+        assert_eq!(read(&start()).await, Some(4));
+        assert_eq!(fake.runs("bd").len(), 2, "a restart reads nothing new");
+        fake.touch("three");
+        assert_eq!(read(&start()).await, Some(4));
+        assert_eq!(fake.runs("bd").len(), 3, "nor misses a change");
     }
 
     #[tokio::test]

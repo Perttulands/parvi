@@ -39,7 +39,13 @@ pub fn build(setup: &Setup) -> Result<Built> {
 pub fn build_with(setup: &Setup, bd: Bd, gh: Gh) -> Result<Built> {
     let section: Section = setup.config.section("work")?;
     let config = Config::parse(&section.projects.join("\n"))?;
-    let work = Work::new(config, setup.node.id.as_str(), gh, bd);
+    let work = Work::keeping(
+        config,
+        setup.node.id.as_str(),
+        gh,
+        bd,
+        Some(setup.dir.join("work-reads")),
+    );
     setup
         .provided
         .provide::<dyn Resolver>(Arc::new(Provided(work.clone())))?;

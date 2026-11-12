@@ -1,4 +1,5 @@
-//! A refresh must answer from the current store, even after an earlier read.
+//! A refresh must answer from the current store, even after an earlier read:
+//! a write moves the store's marker, and the next refresh reads it.
 #![cfg(unix)]
 
 use futures_util::{SinkExt, StreamExt};
@@ -52,11 +53,8 @@ async fn next_status(
 async fn cli_list_and_page_refresh_read_the_changed_store() {
     let dir = parvi_testkit::fresh_dir("parvi-work-refresh");
     std::fs::create_dir_all(dir.join(".beads/embeddeddolt/fixture/.dolt/noms")).unwrap();
-    std::fs::write(
-        dir.join(".beads/embeddeddolt/fixture/.dolt/noms/manifest"),
-        "unchanged",
-    )
-    .unwrap();
+    let manifest = dir.join(".beads/embeddeddolt/fixture/.dolt/noms/manifest");
+    std::fs::write(&manifest, "first").unwrap();
     let items = dir.join("items.json");
     status_file(&items, "open");
     let script = dir.join("fake-bd");
@@ -79,14 +77,16 @@ async fn cli_list_and_page_refresh_read_the_changed_store() {
         "open"
     );
 
-    // The marker deliberately stays unchanged: explicit refresh must force a read.
+    // A write through bd moves the store's marker; the next list reads it.
     status_file(&items, "closed");
+    std::fs::write(&manifest, "after closing").unwrap();
     assert_eq!(
         status(&node.call("work_list", json!({"all":true})).await.unwrap()),
         "closed"
     );
     next_status(&mut ws, "closed").await;
     status_file(&items, "in_progress");
+    std::fs::write(&manifest, "after starting").unwrap();
     ws.send(Message::Binary(vec![parvi_work_contract::WATCH, 2].into()))
         .await
         .unwrap();
