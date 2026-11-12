@@ -78,12 +78,7 @@ impl AgentsPage {
                     .items_center()
                     .border_b_1()
                     .border_color(t.divider)
-                    .child(
-                        div()
-                            .text_size(px(board::HEADING))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Agents"),
-                    )
+                    .child(kit::page_title(&t, "Agents"))
                     .child(div().flex_1())
                     .child(kit::note(&t, format!("{harnesses} harnesses"), Some(t.dim))),
             )
@@ -161,27 +156,34 @@ impl AgentsPage {
             rail = rail.child(group_label(&t, "Skills from"));
             for c in list {
                 let mut count = 0;
+                // Commits behind upstream, as the drift list words it, and
+                // each skill not linked or broken once, wherever it is.
                 let mut behind = 0;
-                let mut unlinked = 0;
-                let mut broken = 0;
+                let mut unlinked = std::collections::BTreeSet::new();
+                let mut broken = std::collections::BTreeSet::new();
                 for (_, r) in &reports {
                     if let Some(mine) = r.checkouts.iter().find(|x| x.name == c.name) {
                         count = count.max(agents::checkout_skills(r, mine).len());
+                        behind = behind.max(mine.behind);
                         for drift in agents::checkout_drift(r, mine) {
                             match drift.tone {
-                                Tone::Behind => behind += 1,
-                                Tone::Unlinked => unlinked += 1,
-                                Tone::Error => broken += 1,
+                                Tone::Unlinked => {
+                                    unlinked.insert(drift.path);
+                                }
+                                Tone::Error => {
+                                    broken.insert(drift.path);
+                                }
                                 _ => {}
                             }
                         }
                     }
                 }
+                let (unlinked, broken) = (unlinked.len(), broken.len());
                 let chosen = self.state.chosen == Chosen::Checkout(c.name.clone());
                 let sub = div()
                     .flex()
                     .gap(px(tokens::P4))
-                    .child(format!("{count} skills"))
+                    .child(agents::skills(count))
                     .when(behind > 0, |d| {
                         d.child("·").child(
                             div()
@@ -519,7 +521,10 @@ impl AgentsPage {
                                 .child(agents::upstream_words(c)),
                         )
                         .when(c.dirty, |d| d.child(" · local changes"))
-                        .child(format!(" · {} skills", agents::checkout_skills(r, c).len()))
+                        .child(format!(
+                            " · {}",
+                            agents::skills(agents::checkout_skills(r, c).len())
+                        ))
                         .when_some(c.setup.clone(), |d, s| d.child(format!(" · setup ./{s}"))),
                 );
             d = d.child(
@@ -545,7 +550,7 @@ impl AgentsPage {
         checkouts: &[&Checkout],
         cx: &mut Context<Self>,
     ) -> Div {
-        let mut buttons = div().flex().gap(px(tokens::P8)).items_center();
+        let mut buttons = div().flex().flex_wrap().gap(px(tokens::P8)).items_center();
         for (i, c) in checkouts.iter().enumerate() {
             let label = if checkouts.len() == 1 {
                 if c.setup.is_some() {
@@ -698,6 +703,7 @@ fn text(t: &Theme, s: &str, colour: Option<Hsla>) -> AnyElement {
         .text_color(colour.unwrap_or(t.text))
         .overflow_hidden()
         .whitespace_nowrap()
+        .text_ellipsis()
         .child(s.to_string())
         .into_any_element()
 }

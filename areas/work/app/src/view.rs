@@ -244,12 +244,7 @@ impl Work {
             .gap(px(SPACE_2XL))
             .border_b_1()
             .border_color(t.divider)
-            .child(
-                div()
-                    .text_size(px(BAR_TITLE_SIZE))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("Work"),
-            )
+            .child(kit::page_title(&t, "Work"))
             .child(kit::note(
                 &t,
                 if shown == all {
@@ -719,7 +714,7 @@ impl Work {
     }
 
     /// Beside the table while a row is selected, or beneath it in a narrow
-    /// pane: its family as a graph, and its card under it.
+    /// pane: its family as a graph when it has one, and its card under it.
     fn side(&self, side: Side, cx: &mut Context<Self>) -> Option<Div> {
         let selected = self.selected_row().filter(|_| self.card)?;
         let t = theme(cx).clone();
@@ -732,10 +727,9 @@ impl Work {
             Side::Beside(w) => pane.w(px(w)).flex_none().border_l_1(),
             Side::Beneath => pane.flex_1().min_h_0().border_t_1(),
         };
-        Some(
-            pane.child(self.graph(selected, wide - GRAPH_EDGE_INSET, cx))
-                .children(self.card(cx)),
-        )
+        let graph = crate::store::work::graph::related(&self.board, selected)
+            .then(|| self.graph(selected, wide - GRAPH_EDGE_INSET, cx));
+        Some(pane.children(graph).children(self.card(cx)))
     }
 
     /// What was read, what failed and why, a store the node cannot watch,
@@ -786,12 +780,19 @@ impl Work {
                 .items_center()
                 .gap(px(SPACE_MD))
                 .child(div().text_color(t.text2).child(summary))
-                .child(
+                .child(if self.refreshing.is_empty() {
                     kit::button(&t, "w-refresh", "Refresh", Kind::Quiet)
                         .text_size(px(FOOTER_TEXT_SIZE))
                         .tooltip(kit::tip("Read GitHub and the Beads stores again now"))
-                        .on_click(cx.listener(|w, _, _, cx| w.refresh(cx))),
-                ),
+                        .on_click(cx.listener(|w, _, _, cx| w.refresh(cx)))
+                        .into_any_element()
+                } else {
+                    div()
+                        .debug_selector(|| "w-refreshing".into())
+                        .text_color(t.accent)
+                        .child("Reading every project again…")
+                        .into_any_element()
+                }),
         );
         for p in &self.board.projects {
             if let Some(e) = &p.error {

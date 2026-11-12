@@ -4,8 +4,8 @@
 
 use crate::shell::Shell;
 use gpui::{
-    AnyElement, Context, FontWeight, MouseButton, MouseDownEvent, Window, anchored, deferred, div,
-    point, prelude::*, px,
+    AnyElement, Context, MouseButton, MouseDownEvent, Window, anchored, deferred, div, point,
+    prelude::*, px,
 };
 use parvi_app_kit::clock;
 use parvi_app_kit::host::{Cover, Status};
@@ -16,10 +16,49 @@ use parvi_app_kit::theme::{self, Theme, alpha, motion, size, theme};
 use parvi_app_kit::widgets::{boundary, kit};
 use std::time::Duration;
 
+/// The keys toggle's padding, and its widest words ("Keys off").
+const KEYS_PAD: f32 = 12.;
+const KEYS_CHARS: usize = 8;
+/// Room kept on the bar for a page's own tabs past their first, in
+/// characters: the terminals' `+`.
+const EXTRA_TAB_CHARS: usize = 1;
+/// How long words that are not a failure stay in the status line.
+const STATUS_SHOWN_S: u64 = 30;
+/// What the leader says with keys off.
+pub(crate) const KEYS_OFF_HINT: &str = "Keys are off: the tab bar's Keys button turns them on.";
+
 impl Shell {
+    /// Whether the tabs must sit close together: the window is narrower
+    /// than every page's tab spaced out, the keys toggle, and one terminal
+    /// tab's room for the tabs a page keeps of its own.
+    fn tabs_compact(&self, off: &[&str], window: &mut Window) -> bool {
+        let text = window.text_system();
+        let font = text.resolve_font(&gpui::font(theme::FAMILY));
+        let cell = text
+            .advance(font, px(size::TEXT), 'M')
+            .map_or(px(size::TEXT * 0.6), |s| s.width);
+        let titles: Vec<&str> = self
+            .pages
+            .iter()
+            .filter(|p| !p.meta.area.is_some_and(|a| off.contains(&a)))
+            .map(|p| p.meta.title)
+            .collect();
+        let spaced: usize = titles.iter().map(|t| kit::tab_text(t, false).len()).sum();
+        let tabs = titles.len() + 1;
+        let need = cell * (spaced + KEYS_CHARS + EXTRA_TAB_CHARS) as f32
+            + px(kit::TAB_PAD * 2. * tabs as f32 + KEYS_PAD * 2.);
+        need > window.viewport_size().width
+    }
+
     fn render_tab_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
         let off = self.hub.read(cx).areas_off();
+        let style = kit::TabStyle {
+            compact: self.tabs_compact(&off.iter().map(|s| s.as_ref()).collect::<Vec<_>>(), window),
+        };
+        if cx.try_global::<kit::TabStyle>() != Some(&style) {
+            cx.set_global(style);
+        }
         let mut bar = div()
             .flex_none()
             .h(px(size::TAB_BAR))
@@ -38,23 +77,9 @@ impl Shell {
                 continue;
             }
             bar = bar.child(
-                div()
-                    .id(("tab", i))
+                kit::tab(&t, ("tab", i), active, cx)
                     .debug_selector(|| format!("tab-{}", page.meta.id))
-                    .px(px(20.))
-                    .flex()
-                    .items_center()
-                    .cursor_pointer()
-                    .text_size(px(size::TEXT))
-                    .font_weight(if active {
-                        FontWeight::SEMIBOLD
-                    } else {
-                        FontWeight::NORMAL
-                    })
-                    .text_color(if active { t.text } else { t.text2 })
-                    .when(active, |d| d.border_b_2().border_color(t.accent))
-                    .hover(|d| d.text_color(t.text))
-                    .child(kit::tab_label(page.meta.title))
+                    .child(kit::tab_label(page.meta.title, cx))
                     .on_click(cx.listener(move |s, _, window, cx| s.show(i, window, cx))),
             );
         }
@@ -62,8 +87,9 @@ impl Shell {
         bar.child(
             div()
                 .id("keys-toggle")
+                .flex_none()
                 .ml_auto()
-                .px(px(12.))
+                .px(px(KEYS_PAD))
                 .flex()
                 .items_center()
                 .cursor_pointer()
@@ -98,6 +124,9 @@ impl Shell {
         self.hub.update(cx, |h, cx| {
             let on = on.unwrap_or(!h.settings.keys);
             h.settings.keys = on;
+            if on && h.status.as_ref().is_some_and(|s| s.text == KEYS_OFF_HINT) {
+                h.status = None;
+            }
             h.save(cx);
             h.toast(if on { "Keys on" } else { "Keys off" }, cx);
         });
@@ -118,12 +147,33 @@ impl Shell {
             .border_color(t.divider)
             .text_size(px(12.))
             .text_color(t.text2);
+        // What the line says goes stale: words that are not a failure go
+        // after a while, failures stay until something replaces them.
+        let status = hub.status.clone().filter(|s| {
+            s.failure
+                || s.at
+                    .elapsed()
+                    .is_ok_and(|age| age < Duration::from_secs(STATUS_SHOWN_S))
+        });
+        if let Some(s) = &status
+            && !s.failure
+            && self.status_expiry.as_ref().map(|(at, _)| *at) != Some(s.at)
+        {
+            let left = Duration::from_secs(STATUS_SHOWN_S)
+                .saturating_sub(s.at.elapsed().unwrap_or_default());
+            let task = cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(left).await;
+                let _ = this.update(cx, |_, cx| cx.notify());
+            });
+            self.status_expiry = Some((s.at, task));
+        }
+        let hub = self.hub.read(cx);
         if let Some(Status {
             at,
             text,
             failure,
             action,
-        }) = hub.status.clone()
+        }) = status
         {
             line = line
                 .child(div().flex_none().text_color(t.dim).child(clock::at(at)))

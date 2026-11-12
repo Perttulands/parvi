@@ -46,6 +46,7 @@ impl ReadingsPage {
 impl Page for ReadingsPage {
     const ID: &'static str = "host";
     const TITLE: &'static str = "Host";
+    const KEY: Option<char> = Some('H');
     const AREA: Option<&'static str> = Some("host");
     const KINDS: parvi_core::frame::Kinds = &[HOST_STATE..=HOST_EVENT];
     const CHANNELS: &'static [u8] = &[HOST];
@@ -127,18 +128,15 @@ impl Render for ReadingsPage {
             .bg(t.bg)
             .text_color(t.text)
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(tokens::GAP))
-                    .p(px(tokens::PAD))
-                    .child(div().text_size(px(tokens::HEADER)).child("Host"))
+                kit::page_bar(&t)
+                    .child(kit::page_title(&t, "Host"))
+                    .child(div().flex_1())
                     .child(
                         kit::button(
                             &t,
                             "host-pause",
                             if self.paused { "Resume" } else { "Pause" },
-                            kit::Kind::Plain,
+                            kit::Kind::Quiet,
                         )
                         .on_click(cx.listener(|s, _, _, cx| {
                             s.paused = !s.paused;

@@ -30,7 +30,6 @@ use serde_json::json;
 
 const PAD: f32 = 12.;
 const START_FORM_MAX: f32 = 680.;
-const TAB_PAD: f32 = 20.;
 const TAB_GAP: f32 = 6.;
 const EDGE: f32 = 2.;
 const EDITOR_W: f32 = 360.;
@@ -1279,6 +1278,7 @@ fn mission_path(slug: &str) -> String {
 impl Page for MissionsPage {
     const ID: &'static str = "missions";
     const TITLE: &'static str = "Missions";
+    const KEY: Option<char> = Some('M');
     const AREA: Option<&'static str> = Some("missions");
     const KINDS: parvi_core::frame::Kinds = parvi_missions_contract::KINDS;
     const CHANNELS: &'static [u8] = &[WATCH];
@@ -1330,24 +1330,9 @@ impl Page for MissionsPage {
             .flat_map(|feed| feed.runs.values())
             .filter(|run| crate::store::words::needs_you(run))
             .count();
-        let mut tab = div()
-            .id("missions-tab")
+        let mut tab = kit::tab(&t, "missions-tab", shown, cx)
             .debug_selector(|| "tab-missions".into())
-            .px(px(TAB_PAD))
-            .flex()
-            .items_center()
-            .gap(px(TAB_GAP))
-            .cursor_pointer()
-            .text_size(px(size::TEXT))
-            .font_weight(if shown {
-                FontWeight::SEMIBOLD
-            } else {
-                FontWeight::NORMAL
-            })
-            .text_color(if shown { t.text } else { t.text2 })
-            .when(shown, |d| d.border_b_2().border_color(t.accent))
-            .hover(|d| d.text_color(t.text))
-            .child(kit::tab_label(Self::TITLE));
+            .child(kit::tab_label(Self::TITLE, cx));
         if count > 0 {
             tab = tab.child(
                 div()

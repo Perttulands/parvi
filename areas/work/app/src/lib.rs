@@ -42,6 +42,9 @@ pub struct Work {
     rail_search: Entity<TextField>,
     report: Option<Entity<report::Report>>,
     snapshots: BTreeMap<String, Snapshot>,
+    /// Nodes still reading for a Refresh press, with the count of
+    /// refreshes they had finished when it was pressed.
+    refreshing: BTreeMap<String, u64>,
     board: Board,
     slice: Slice,
     sliced: Sliced,
@@ -63,12 +66,20 @@ pub struct Work {
 impl Page for Work {
     const ID: &'static str = NAME;
     const TITLE: &'static str = "Work";
+    const KEY: Option<char> = Some('O');
     const AREA: Option<&'static str> = Some(NAME);
     const KINDS: parvi_core::frame::Kinds = &[SNAPSHOT..=SNAPSHOT];
     const CHANNELS: &'static [u8] = &[WATCH];
     const ANSWERS: &'static [Answers] = &[Answers::Reveal("item")];
     fn frame(&mut self, node: &NodeId, _: u8, body: &[u8], _: &mut Window, cx: &mut Context<Self>) {
         if let Ok(s) = serde_json::from_slice::<Snapshot>(body) {
+            if self
+                .refreshing
+                .get(node.as_str())
+                .is_some_and(|&at| s.refreshed > at)
+            {
+                self.refreshing.remove(node.as_str());
+            }
             self.snapshots.insert(node.as_str().into(), s);
             self.rebuild(cx);
         }
@@ -82,6 +93,7 @@ impl Page for Work {
     ) {
         if state.is_none() {
             self.snapshots.remove(node.as_str());
+            self.refreshing.remove(node.as_str());
             self.rebuild(cx);
         }
     }
@@ -164,6 +176,7 @@ impl Work {
             rail_search,
             report: None,
             snapshots: BTreeMap::new(),
+            refreshing: BTreeMap::new(),
             board: Board::default(),
             slice: Slice::unfinished(),
             sliced: Sliced::default(),
@@ -184,6 +197,7 @@ impl Work {
     }
     fn rebuild(&mut self, cx: &mut Context<Self>) {
         let snapshot = Snapshot {
+            refreshed: 0,
             projects: self
                 .snapshots
                 .values()
@@ -249,8 +263,14 @@ impl Work {
     }
     fn refresh(&mut self, cx: &mut Context<Self>) {
         for node in self.host.nodes(cx) {
+            let done = self
+                .snapshots
+                .get(node.id.as_str())
+                .map_or(0, |s| s.refreshed);
+            self.refreshing.insert(node.id.as_str().into(), done);
             self.host.send(&node.id, vec![WATCH, 2], cx);
         }
+        cx.notify();
     }
     pub fn reslice(&mut self) {
         self.sliced = self.slice.apply(&self.board);

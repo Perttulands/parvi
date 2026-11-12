@@ -14,6 +14,10 @@ use parvi_app_kit::widgets::kit;
 
 /// The panel's layer on the stack.
 pub const LAYER: &str = "keys";
+/// The panel, and its columns: the keys, the arrow, then the label.
+const PANEL_W: f32 = 540.;
+const CAPS_W: f32 = 170.;
+const ARROW_W: f32 = 30.;
 
 pub struct KeysPanel {
     host: Host,
@@ -106,7 +110,8 @@ impl KeysPanel {
             .hover(|d| d.bg(t.raised))
             .child(
                 div()
-                    .w(px(170.))
+                    .w(px(CAPS_W))
+                    .flex_none()
                     .text_color(if selected {
                         t.accent
                     } else if r.caps.is_empty() {
@@ -116,10 +121,20 @@ impl KeysPanel {
                     })
                     .child(shown),
             )
-            .child(div().w(px(30.)).text_color(t.dim).child("→"))
+            .child(
+                div()
+                    .w(px(ARROW_W))
+                    .flex_none()
+                    .text_color(t.dim)
+                    .child("→"),
+            )
             .child(
                 div()
                     .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
                     .text_color(if selected { t.accent } else { t.text })
                     .child(r.label.clone()),
             )
@@ -165,7 +180,7 @@ impl Render for KeysPanel {
             })
             .child(
                 kit::panel(&t)
-                    .w(px(470.))
+                    .w(px(PANEL_W))
                     .flex()
                     .flex_col()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())

@@ -166,6 +166,7 @@ impl Work {
                         w.snapshots.insert(
                             node.to_string(),
                             Snapshot {
+                                refreshed: 0,
                                 projects: vec![
                                     ProjectView::Beads(StoreView::default());
                                     w.board.projects.len()

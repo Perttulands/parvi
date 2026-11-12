@@ -6,7 +6,7 @@ use gpui::{
     prelude::*, px,
 };
 use parvi_app_kit::theme::{
-    board::{GAP, HEADING, LIST_W, PAD, READER_MAX},
+    board::{GAP, LIST_W, PAD, READER_MAX},
     size, theme,
 };
 use parvi_app_kit::widgets::kit::{self, Kind};
@@ -15,6 +15,8 @@ const ROW_INSET: f32 = 6.;
 const SIZE_COLUMN: f32 = 70.;
 const MODIFIED_COLUMN: f32 = 100.;
 const CARD_W: f32 = 336.;
+/// A project card's sessions line and documents line.
+const CARD_LINE: f32 = 22.;
 
 impl FilesPage {
     fn projects_landing(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -62,32 +64,31 @@ impl FilesPage {
                     let node_id = node.clone();
                     let folder = project.path.clone();
                     let selector = format!("files-project-{}", project.name);
-                    let mut card = div()
-                        .w(px(CARD_W))
+                    let name = kit::button(
+                        &t,
+                        gpui::SharedString::from(format!("project-{node}-{folder}")),
+                        project.name.clone(),
+                        Kind::Quiet,
+                    )
+                    .w_full()
+                    .justify_start()
+                    .text_color(t.text)
+                    .debug_selector(move || selector.clone())
+                    .on_click(cx.listener(move |p, _, w, cx| {
+                        p.browse_project(node_id.clone(), folder.clone(), None, w, cx)
+                    }));
+                    // Every card has the same three lines: the project, the
+                    // sessions working in it, and its documents.
+                    let mut working = div()
+                        .h(px(CARD_LINE))
+                        .px(px(ROW_INSET))
                         .flex()
-                        .flex_wrap()
                         .items_center()
-                        .border_1()
-                        .border_color(t.divider)
-                        .rounded(px(size::RADIUS))
-                        .p(px(ROW_INSET / 2.))
-                        .child(
-                            kit::button(
-                                &t,
-                                gpui::SharedString::from(format!("project-{node}-{folder}")),
-                                project.name.clone(),
-                                Kind::Quiet,
-                            )
-                            .w_full()
-                            .justify_start()
-                            .text_color(t.text)
-                            .debug_selector(move || selector.clone())
-                            .on_click(cx.listener(
-                                move |p, _, w, cx| {
-                                    p.browse_project(node_id.clone(), folder.clone(), None, w, cx)
-                                },
-                            )),
-                        );
+                        .gap(px(ROW_INSET))
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_size(px(size::SMALL))
+                        .text_color(t.text2);
                     if let Some(sessions) = &self.sessions {
                         for session in &sessions.read(cx).sessions {
                             if session.node == *node
@@ -96,31 +97,37 @@ impl FilesPage {
                                     .as_deref()
                                     .is_some_and(|cwd| paths::inside(&project.path, cwd))
                             {
-                                let label = format!("Session: {}", session.name);
                                 let selector = format!(
                                     "files-project-session-{}-{}",
                                     project.name, session.name
                                 );
-                                card = card.child(
+                                working = working.child(
                                     div()
+                                        .flex_none()
                                         .debug_selector(move || selector.clone())
-                                        .child(kit::note(&t, label, None)),
+                                        .child(format!("● {}", session.name)),
                                 );
                             }
                         }
                     }
+                    let mut documents = div()
+                        .h(px(CARD_LINE))
+                        .flex()
+                        .items_center()
+                        .overflow_hidden();
                     for doc in &project.documents {
                         let node_id = node.clone();
                         let folder = project.path.clone();
                         let name = doc.clone();
                         let selector = format!("files-project-doc-{}-{doc}", project.name);
-                        card = card.child(
+                        documents = documents.child(
                             kit::button(
                                 &t,
                                 gpui::SharedString::from(format!("document-{node}-{folder}-{doc}")),
                                 doc.clone(),
                                 Kind::Quiet,
                             )
+                            .flex_none()
                             .text_size(px(size::SMALL))
                             .debug_selector(move || selector.clone())
                             .on_click(cx.listener(
@@ -136,6 +143,17 @@ impl FilesPage {
                             )),
                         );
                     }
+                    let card = div()
+                        .w(px(CARD_W))
+                        .flex()
+                        .flex_col()
+                        .border_1()
+                        .border_color(t.divider)
+                        .rounded(px(size::RADIUS))
+                        .p(px(ROW_INSET / 2.))
+                        .child(name)
+                        .child(working)
+                        .child(documents);
                     grid = grid.child(card);
                 }
                 body = body.child(grid);
@@ -1289,31 +1307,35 @@ impl Render for FilesPage {
                 page.child(self.pane(cx))
             };
         }
-        page = page.child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(GAP))
-                .child(div().text_size(px(HEADING)).child("Files"))
+        let head =
+            kit::page_bar(&t)
+                .child(kit::page_title(&t, "Files"))
                 .when(!self.landing, |head| {
                     head.child(
                         kit::button(&t, "files-projects", "Projects", Kind::Quiet)
                             .debug_selector(|| "files-projects".into())
                             .on_click(cx.listener(|p, _, _, cx| p.show_projects(cx))),
                     )
-                }),
-        );
-        if self.landing {
-            return page.child(self.projects_landing(cx));
-        }
-        page.child(
-            div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .gap(px(GAP))
-                .child(div().w(px(LIST_W)).flex_none().flex().child(self.pane(cx)))
-                .child(self.viewer(cx).debug_selector(|| "files-viewer".into())),
-        )
+                });
+        let page = if self.landing {
+            page.child(self.projects_landing(cx))
+        } else {
+            page.child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .gap(px(GAP))
+                    .child(div().w(px(LIST_W)).flex_none().flex().child(self.pane(cx)))
+                    .child(self.viewer(cx).debug_selector(|| "files-viewer".into())),
+            )
+        };
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(t.bg)
+            .child(head)
+            .child(page.flex_1().min_h_0())
     }
 }

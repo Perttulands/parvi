@@ -70,6 +70,7 @@ pub struct ScheduledPage {
 impl Page for ScheduledPage {
     const ID: &'static str = crate::NAME;
     const TITLE: &'static str = "Scheduled";
+    const KEY: Option<char> = Some('S');
     const AREA: Option<&'static str> = Some(crate::NAME);
     const KINDS: parvi_core::frame::Kinds = &[CHANGED..=CHANGED];
     const CHANNELS: &'static [u8] = &[WATCH];

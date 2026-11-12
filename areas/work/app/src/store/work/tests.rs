@@ -28,6 +28,7 @@ fn board() -> Board {
     let mut done_blocker = bead("x-4", "open", "2026-11-04T00:00:00Z");
     done_blocker.family.blockers = vec!["x-2".into()];
     let s = Snapshot {
+        refreshed: 0,
         projects: vec![
             Project::Beads(Store {
                 folder: "/srv/x".into(),
@@ -201,7 +202,14 @@ pub fn store(folder: &str, mut items: Vec<Item>) -> Project {
 }
 
 fn board_of(projects: Vec<Project>) -> Board {
-    Board::from_snapshot(&Snapshot { projects }, NOW, &|_| 0)
+    Board::from_snapshot(
+        &Snapshot {
+            refreshed: 0,
+            projects,
+        },
+        NOW,
+        &|_| 0,
+    )
 }
 
 #[test]

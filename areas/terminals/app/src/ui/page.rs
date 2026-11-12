@@ -267,6 +267,9 @@ pub struct Terminals {
     /// Number of overview cards fitting in the last painted row.
     pub overview_columns: Rc<Cell<usize>>,
     pub overview_scroll: ScrollHandle,
+    /// The terminal tabs' strip, and the tab it last brought into view.
+    pub tab_scroll: ScrollHandle,
+    pub tab_scrolled: Option<usize>,
     pub hover_row: Option<String>,
     /// Launches asked of a node, by node and request: the recipe, the window
     /// it goes to and that window's tab.
@@ -389,6 +392,8 @@ impl Terminals {
             overview_cursor: 0,
             overview_columns: Rc::new(Cell::new(1)),
             overview_scroll: ScrollHandle::new(),
+            tab_scroll: ScrollHandle::new(),
+            tab_scrolled: None,
             hover_row: None,
             launches: HashMap::new(),
             status_revision: 0,
@@ -1566,6 +1571,7 @@ impl Terminals {
 impl Page for Terminals {
     const ID: &'static str = crate::NAME;
     const TITLE: &'static str = "Terminals";
+    const KEY: Option<char> = Some('T');
     const AREA: Option<&'static str> = Some(crate::NAME);
     const KINDS: Kinds = parvi_terminals_contract::KINDS;
     const ANSWERS: &'static [Answers] =

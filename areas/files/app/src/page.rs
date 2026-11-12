@@ -126,6 +126,7 @@ fn upload_copy_name(name: &str, ordinal: usize) -> String {
 impl Page for FilesPage {
     const ID: &'static str = "files";
     const TITLE: &'static str = "Files";
+    const KEY: Option<char> = Some('F');
     const AREA: Option<&'static str> = Some("files");
     const ANSWERS: &'static [Answers] = &[Answers::OpenPath, Answers::Reveal("path")];
     const SETTINGS: &'static [parvi_app_kit::Setting] =
@@ -710,6 +711,12 @@ impl FilesPage {
                                     && select.as_deref() == Some(paths::base_name(&o.path))
                             });
                             p.side.pane.listed(l.path, l.entries, select);
+                            if moved {
+                                // A new folder starts with an empty search.
+                                p.side
+                                    .search
+                                    .update(cx, |field, cx| field.set("", false, cx));
+                            }
                             if moved && !opening_selected && menu.is_none() {
                                 p.side.opened = None;
                             }
@@ -918,7 +925,7 @@ impl FilesPage {
                     code.set_lang(syntax::lang(&name), cx);
                     code.set(draft.as_ref().map_or(&text, |d| &d.text), cx);
                     if let Some(line) = line {
-                        code.show_line(line.saturating_sub(1), cx);
+                        code.go_to_line(line.saturating_sub(1), cx);
                     }
                 });
                 let o = p.side.opened.as_mut().unwrap();

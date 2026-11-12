@@ -11,6 +11,10 @@ use super::item::Item;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Snapshot {
     pub projects: Vec<ProjectView>,
+    /// Refreshes the node has finished reading since it started: a Refresh
+    /// press is done once this passes the count it was pressed at.
+    #[serde(default)]
+    pub refreshed: u64,
 }
 
 /// One project as last read, tagged by its tracker.
@@ -160,6 +164,7 @@ mod wire_tests {
     fn snapshot_round_trips_before_and_after_a_read() {
         for work in [None, Some(Work::default())] {
             let snapshot = Snapshot {
+                refreshed: 0,
                 projects: vec![ProjectView::Github(RepoView {
                     name: "example/project".into(),
                     work,

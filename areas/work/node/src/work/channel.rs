@@ -81,7 +81,10 @@ mod tests {
     async fn sends_the_snapshot_while_watching() {
         let mut channel = Channel::new(Work::default());
         channel.receive(&[WATCH, 1]).unwrap();
-        assert_eq!(channel.next().await, b"\x90{\"projects\":[]}");
+        assert_eq!(
+            channel.next().await,
+            b"\x90{\"projects\":[],\"refreshed\":0}"
+        );
         channel.receive(&[WATCH, 0]).unwrap();
         let quiet = tokio::time::timeout(std::time::Duration::from_millis(50), channel.next());
         assert!(quiet.await.is_err());
@@ -92,6 +95,7 @@ mod tests {
         let work = crate::work::parse::parse(include_str!("../../tests/fixtures/work/parvi.json"))
             .unwrap();
         let frame = snapshot(&Snapshot {
+            refreshed: 0,
             projects: vec![ProjectView::Github(RepoView {
                 name: "example-owner/parvi".into(),
                 checkout: None,

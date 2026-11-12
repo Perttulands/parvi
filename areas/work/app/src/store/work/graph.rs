@@ -78,6 +78,16 @@ pub fn family_head(board: &Board, selected: usize) -> usize {
     board.links.parent[selected].unwrap_or(selected)
 }
 
+/// Whether a row has any relation a graph would draw: a parent, children,
+/// blockers or dependents. A row alone gets no graph.
+pub fn related(board: &Board, row: usize) -> bool {
+    let links = &board.links;
+    links.parent[row].is_some()
+        || !links.children[row].is_empty()
+        || !links.blockers[row].is_empty()
+        || !links.dependents[row].is_empty()
+}
+
 /// How large a drawing can be shown whole in the pane.
 pub fn fit_scale(pane: (f32, f32), width: f32, height: f32) -> f32 {
     1f32.min(pane.0 / width.max(1.))

@@ -23,6 +23,11 @@ fn commits(n: u32) -> String {
     format!("{n} commit{}", if n == 1 { "" } else { "s" })
 }
 
+/// How many skills, in words.
+pub fn skills(n: usize) -> String {
+    format!("{n} skill{}", if n == 1 { "" } else { "s" })
+}
+
 fn link<'a>(s: &'a Skill, folder: &str) -> Option<&'a str> {
     s.links.get(folder).map(String::as_str)
 }

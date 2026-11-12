@@ -16,6 +16,7 @@ use parvi_work_contract::{ProjectView as Project, RepoView as Repo, Snapshot, St
 /// BeadsView.test.tsx's stores, a repository, and one that failed.
 fn snapshot() -> Snapshot {
     Snapshot {
+        refreshed: 0,
         projects: vec![
             store(
                 "/srv/data/context",
@@ -122,6 +123,7 @@ fn a_wide_graph_can_be_panned_with_its_buttons(cx: &mut TestAppContext) {
             w.snapshots.insert(
                 "node".into(),
                 Snapshot {
+                    refreshed: 0,
                     projects: vec![store("/chain", items)],
                 },
             );
@@ -175,6 +177,7 @@ fn says_it_is_still_reading_while_no_project_has_answered(cx: &mut TestAppContex
     cx.update(|_, cx| {
         work.update(cx, |w, cx| {
             let reading = Snapshot {
+                refreshed: 0,
                 projects: vec![
                     Project::Beads(Store {
                         folder: "/srv".into(),
@@ -210,6 +213,7 @@ fn says_it_is_still_reading_while_no_project_has_answered(cx: &mut TestAppContex
             w.snapshots.insert(
                 "node".into(),
                 Snapshot {
+                    refreshed: 0,
                     projects: vec![
                         store("/one", vec![b("one-1")]),
                         Project::Beads(Store {
@@ -232,6 +236,7 @@ fn says_it_is_still_reading_while_no_project_has_answered(cx: &mut TestAppContex
             w.snapshots.insert(
                 "node".into(),
                 Snapshot {
+                    refreshed: 0,
                     projects: vec![
                         store("/one", vec![b("one-1")]),
                         store("/two", vec![b("two-1")]),
@@ -347,6 +352,12 @@ fn the_graph_follows_the_selected_row_and_names_it_to_an_agent(cx: &mut TestAppC
         assert_eq!(drawn, ["#10", "#11"]);
     });
     cx.run_until_parked();
+    assert!(cx.debug_bounds("work-graph-drawing").is_some());
+    // An item with no relation gets its card alone, no graph.
+    select(&work, cx, "ctx-old");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("work-card").is_some());
+    assert!(cx.debug_bounds("work-graph-drawing").is_none());
 }
 
 #[gpui::test]

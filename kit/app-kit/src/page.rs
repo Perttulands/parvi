@@ -18,6 +18,10 @@ pub trait Page: Render + Sized + 'static {
     const ID: &'static str;
     /// Its tab.
     const TITLE: &'static str;
+    /// The key that shows it from anywhere: a letter is Alt+Shift and the
+    /// letter, or the leader then the capital; any other key is Alt and
+    /// the key, or the leader then the key.
+    const KEY: Option<char> = None;
     /// The node area it needs: the tab is hidden while every node reached
     /// has that area off.
     const AREA: Option<&'static str> = None;
@@ -104,6 +108,7 @@ pub type Build = fn(Host, &mut Window, &mut App) -> Mounted;
 pub struct Meta {
     pub id: &'static str,
     pub title: &'static str,
+    pub key: Option<char>,
     pub area: Option<&'static str>,
     pub kinds: Kinds,
     pub channels: &'static [u8],
@@ -138,6 +143,7 @@ pub fn mount<P: Page>(
         meta: Meta {
             id: P::ID,
             title: P::TITLE,
+            key: P::KEY,
             area: P::AREA,
             kinds: P::KINDS,
             channels: P::CHANNELS,

@@ -151,7 +151,7 @@ impl Render for BrainPage {
                     .px(px(PAD))
                     .flex()
                     .items_center()
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Brain"))
+                    .child(kit::page_title(&t, "Brain"))
                     .child(div().flex_1())
                     .child(kit::note(&t, count, Some(t.dim))),
             )

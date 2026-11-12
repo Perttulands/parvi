@@ -12,6 +12,33 @@ pub fn label(t: &Theme, text: impl Into<SharedString>) -> Div {
         .child(text.into().to_uppercase())
 }
 
+/// A page's name at the head of the page: every page draws it the same.
+pub fn page_title(t: &Theme, text: impl Into<SharedString>) -> Div {
+    let text = text.into();
+    let selector = format!("page-title-{text}");
+    div()
+        .debug_selector(move || selector)
+        .flex_none()
+        .text_size(px(crate::theme::board::HEADING))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(t.text)
+        .child(text)
+}
+
+/// The bar at a page's head, as high as the tab bar: its title, a note,
+/// and its actions to the right.
+pub fn page_bar(t: &Theme) -> Div {
+    div()
+        .flex_none()
+        .h(px(size::TAB_BAR))
+        .px(px(crate::theme::board::PAD))
+        .flex()
+        .items_center()
+        .gap(px(12.))
+        .border_b_1()
+        .border_color(t.divider)
+}
+
 /// A small switch, reachable with Tab and flipped with Space or Enter.
 pub fn toggle(t: &Theme, id: impl Into<ElementId>, on: bool) -> Stateful<Div> {
     let accent = t.accent;
@@ -48,16 +75,68 @@ pub enum Kind {
     Quiet,
 }
 
-/// The label shared by the shell's page tabs and workspace tabs.
-pub fn tab_label(title: &str) -> Div {
-    let text = title
-        .to_uppercase()
+/// How the tab bar draws its tabs: letters spaced out where the window has
+/// room for every page's tab, close together where it has not. The shell
+/// sets it as it draws the bar; every tab on the bar reads it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TabStyle {
+    pub compact: bool,
+}
+
+impl gpui::Global for TabStyle {}
+
+/// A tab's padding either side, spaced out and compact.
+pub const TAB_PAD: f32 = 20.;
+pub const TAB_PAD_COMPACT: f32 = 10.;
+
+fn compact(cx: &App) -> bool {
+    cx.try_global::<TabStyle>().is_some_and(|s| s.compact)
+}
+
+/// A tab's words as the bar shows them: upper case, letters spaced out
+/// unless compact.
+pub fn tab_text(title: &str, compact: bool) -> String {
+    let upper = title.to_uppercase();
+    if compact {
+        return upper;
+    }
+    upper
         .chars()
         .map(|c| c.to_string())
         .collect::<Vec<_>>()
-        .join(" ");
-    let selector = format!("tab-label-{text}");
+        .join(" ")
+}
+
+/// A tab's label, as the bar's style says.
+pub fn tab_label(title: &str, cx: &App) -> Div {
+    let text = tab_text(title, compact(cx));
+    let selector = format!("tab-label-{}", tab_text(title, false));
     div().debug_selector(move || selector).child(text)
+}
+
+/// One tab on the tab bar; `active` underlines it. It never shrinks.
+pub fn tab(t: &Theme, id: impl Into<ElementId>, active: bool, cx: &App) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .px(px(if compact(cx) {
+            TAB_PAD_COMPACT
+        } else {
+            TAB_PAD
+        }))
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .cursor_pointer()
+        .text_size(px(size::TEXT))
+        .font_weight(if active {
+            FontWeight::SEMIBOLD
+        } else {
+            FontWeight::NORMAL
+        })
+        .text_color(if active { t.text } else { t.text2 })
+        .when(active, |d| d.border_b_2().border_color(t.accent))
+        .hover(|d| d.text_color(t.text))
 }
 
 pub fn button(

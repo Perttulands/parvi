@@ -49,7 +49,7 @@ async fn work_is_pushed_only_while_watched() {
         .unwrap()
         .unwrap()
         .into_data();
-    assert_eq!(&frame[..], b"\x90{\"projects\":[]}");
+    assert_eq!(&frame[..], b"\x90{\"projects\":[],\"refreshed\":0}");
     ws.send(Message::Binary(vec![0x98, 0].into()))
         .await
         .unwrap();

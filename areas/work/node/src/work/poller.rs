@@ -99,6 +99,7 @@ impl Work {
         kept: Option<std::path::PathBuf>,
     ) -> Work {
         let snapshot = Snapshot {
+            refreshed: 0,
             projects: config
                 .projects
                 .iter()
@@ -415,6 +416,9 @@ async fn rounds(work: Arc<Inner>) {
             work.poll.lock().unwrap().last_github = Some(Instant::now());
         }
         if refreshing {
+            // Published even when nothing changed: the press is answered.
+            work.snapshot
+                .send_modify(|snapshot| Arc::make_mut(snapshot).refreshed = requested);
             work.refreshed.send_replace(requested);
         }
         // A refresh is only ever asked for; GitHub is not read on a timer.
@@ -631,7 +635,8 @@ pub(super) mod tests {
         assert_eq!(repo(&first, 0).checkout.as_deref(), Some("~/parvi"));
         assert_eq!(store(&first, 1).items, None);
         let mut read = watching.next().await;
-        while store(&read, 1).items.is_none() {
+        // The two reads run at once and either may land first.
+        while store(&read, 1).items.is_none() || repo(&read, 0).synced.is_none() {
             read = watching.next().await;
         }
         assert_eq!(fake.runs("gh"), vec!["owner=example-owner name=parvi"]);
@@ -696,6 +701,7 @@ pub(super) mod tests {
                 let _watching = work.subscribe();
                 let requested = work.refresh();
                 let snapshot = work.refreshed(requested).await;
+                assert_eq!(snapshot.refreshed, requested, "the press is answered");
                 store(&snapshot, 0).items.as_ref().map(Vec::len)
             }
         };

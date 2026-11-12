@@ -40,6 +40,11 @@ pub struct Shell {
     channels_on: HashSet<&'static str>,
     /// The operator chose to close the window over unsaved work.
     leaving: bool,
+    /// Each page's own chord, made once from its key: the page, the
+    /// leader's key, the Alt key and whether Shift goes with Alt.
+    page_keys: Vec<(usize, &'static str, &'static str, bool)>,
+    /// The status line's next redraw, when its words go stale.
+    pub(crate) status_expiry: Option<(std::time::SystemTime, Task<()>)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -94,6 +99,12 @@ pub fn check(pages: &[Meta]) -> Result<(), Error> {
                     format!("two pages are both {}", a.id),
                 ));
             }
+            if a.key.is_some() && a.key == b.key {
+                return Err(Error::new(
+                    "key_twice",
+                    format!("{} and {} take the same key", a.id, b.id),
+                ));
+            }
             if overlap(a.kinds, b.kinds) {
                 return Err(Error::new(
                     "kinds_overlap",
@@ -126,6 +137,23 @@ pub fn check_chords(pages: &[(&'static str, Vec<Chord>)]) -> Result<(), Error> {
     Ok(())
 }
 
+/// A page's key as its chord takes it: the leader's key, the Alt key, and
+/// whether Shift goes with Alt. A letter is Alt+Shift and the letter, or
+/// the leader then the capital; any other key is Alt and the key.
+fn page_key(key: char) -> (&'static str, &'static str, bool) {
+    let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
+    if key.is_ascii_alphabetic() {
+        (
+            leak(key.to_ascii_uppercase().to_string()),
+            leak(key.to_ascii_lowercase().to_string()),
+            true,
+        )
+    } else {
+        let key = leak(key.to_string());
+        (key, key, false)
+    }
+}
+
 impl Shell {
     pub fn new(
         hub: Entity<Hub>,
@@ -143,6 +171,12 @@ impl Shell {
         let answers = pages.iter().map(|p| (p.meta.id, p.meta.answers)).collect();
         hub.update(cx, |h, _| h.set_answers(answers));
         let keys = cx.new(|cx| KeysPanel::new(host.clone(), window, cx));
+        let page_keys = pages
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| Some((i, page_key(p.meta.key?))))
+            .map(|(i, (leader, alt, shift))| (i, leader, alt, shift))
+            .collect();
         if !pages.is_empty() {
             cx.defer_in(window, |s, window, cx| s.show(0, window, cx));
         }
@@ -161,6 +195,8 @@ impl Shell {
             view: ViewControl::default(),
             channels_on: HashSet::new(),
             leaving: false,
+            page_keys,
+            status_expiry: None,
             _subscriptions: subscriptions,
         }
     }
@@ -355,6 +391,19 @@ impl Shell {
                 });
             }),
         ];
+        for &(i, leader, alt, shift) in &self.page_keys {
+            let shell = cx.entity().downgrade();
+            all.push(
+                Chord::new(
+                    leader,
+                    format!("Show {}", self.pages[i].meta.title),
+                    move |window, cx| {
+                        let _ = shell.update(cx, |s, cx| s.show(i, window, cx));
+                    },
+                )
+                .alt(alt, Some(shift)),
+            );
+        }
         for (i, page) in self.pages.iter().enumerate() {
             if self.shown != Some(i) {
                 all.extend(page.chords(cx).into_iter().filter(|c| c.everywhere));
@@ -423,9 +472,7 @@ impl Shell {
                 // The leader still answers with keys off, to say how to turn
                 // them back on, and nothing else.
                 self.host.report(
-                    parvi_app_kit::host::Status::new(
-                        "Keys are off: the tab bar's Keys button turns them on.",
-                    ),
+                    parvi_app_kit::host::Status::new(crate::chrome::KEYS_OFF_HINT),
                     cx,
                 );
             }
@@ -526,6 +573,7 @@ mod tests {
         Meta {
             id,
             title: id,
+            key: None,
             area: None,
             kinds,
             channels: &[],
@@ -558,6 +606,19 @@ mod tests {
         };
         let e = check(&[twice]).unwrap_err();
         assert_eq!(e.message, "a declares its setting loud twice");
+        let keyed = |id, key| Meta {
+            key: Some(key),
+            ..meta(id, &[])
+        };
+        assert!(check(&[keyed("a", 'A'), keyed("b", 'B')]).is_ok());
+        let e = check(&[keyed("a", 'A'), keyed("b", 'A')]).unwrap_err();
+        assert_eq!(e.message, "a and b take the same key");
+    }
+
+    #[test]
+    fn a_page_key_is_alt_shift_and_its_letter_or_alt_and_its_key() {
+        assert_eq!(page_key('A'), ("A", "a", true));
+        assert_eq!(page_key(','), (",", ",", false));
     }
 
     #[test]

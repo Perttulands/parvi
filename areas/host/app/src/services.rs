@@ -188,6 +188,7 @@ impl ServicesPage {
 impl Page for ServicesPage {
     const ID: &'static str = "services";
     const TITLE: &'static str = "Services";
+    const KEY: Option<char> = Some('E');
     const AREA: Option<&'static str> = Some("host");
     fn focus(&self, _: &App) -> Option<FocusHandle> {
         Some(self.focus.clone())
@@ -232,7 +233,12 @@ impl Render for ServicesPage {
                     &node.environment,
                 )));
             if let Some(error) = state.and_then(|s| s.error.as_ref()) {
-                room = room.child(kit::note(&t, error.clone(), Some(t.error)));
+                room = room.child(
+                    div()
+                        .px(px(tokens::PAD))
+                        .pb(px(tokens::PAD))
+                        .child(kit::note(&t, error.clone(), Some(t.error))),
+                );
             }
             if let Some(n) = state {
                 if let Some(list) = &n.list {
@@ -242,11 +248,10 @@ impl Render for ServicesPage {
                     failed += list.iter().filter(|s| s.state == "failed").count();
                     refreshed = refreshed.max(n.read_at);
                     if list.is_empty() {
-                        room = room.child(kit::note(
-                            &t,
-                            "The catalog lists no services.",
-                            Some(t.dim),
-                        ));
+                        room =
+                            room.child(div().px(px(tokens::PAD)).pb(px(tokens::PAD)).child(
+                                kit::note(&t, "The catalog lists no services.", Some(t.dim)),
+                            ));
                     }
                     for service in list {
                         let (node_id, service_id) = (id.to_owned(), service.id.clone());
@@ -438,13 +443,11 @@ impl Render for ServicesPage {
             .bg(t.bg)
             .text_color(t.text)
             .child(
-                div()
-                    .flex()
-                    .gap(px(tokens::GAP))
-                    .p(px(tokens::PAD))
-                    .child(div().text_size(px(tokens::HEADER)).child("Services"))
+                kit::page_bar(&t)
+                    .child(kit::page_title(&t, "Services"))
+                    .child(div().flex_1())
                     .child(
-                        kit::button(&t, "services-refresh", "Refresh", kit::Kind::Plain)
+                        kit::button(&t, "services-refresh", "Refresh", kit::Kind::Quiet)
                             .debug_selector(|| "services-refresh".into())
                             .on_click(cx.listener(|s, _, _, cx| s.read_all(cx))),
                     ),

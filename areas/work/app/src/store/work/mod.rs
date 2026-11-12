@@ -417,6 +417,7 @@ impl Board {
             .map(|(f, _)| f.to_owned())
             .unwrap_or_default();
         let snapshot = Snapshot {
+            refreshed: 0,
             projects: vec![Project::Beads(parvi_work_contract::StoreView {
                 folder,
                 items: Some(vec![item]),
@@ -441,6 +442,7 @@ impl Board {
         }
         let listed = Board::from_snapshot(
             &Snapshot {
+                refreshed: 0,
                 projects: projects.to_vec(),
             },
             now,

@@ -66,6 +66,7 @@ pub struct SettingsPage {
 impl Page for SettingsPage {
     const ID: &'static str = ID;
     const TITLE: &'static str = "Settings";
+    const KEY: Option<char> = Some(',');
 
     /// The fields show what is kept now, and the node's config is read.
     fn shown(&mut self, shown: bool, _: &mut Window, cx: &mut Context<Self>) {
@@ -371,6 +372,12 @@ impl Render for SettingsPage {
         for meta in self.pages.clone() {
             all = all.child(self.rows(Owner::Page(meta.id), meta.title, meta.settings, &t, cx));
         }
-        all.child(self.node_rows(&t))
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(t.bg)
+            .child(kit::page_bar(&t).child(kit::page_title(&t, "Settings")))
+            .child(all.child(self.node_rows(&t)).flex_1().min_h_0())
     }
 }

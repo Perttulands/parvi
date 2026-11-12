@@ -288,7 +288,7 @@ fn terminal_dock_search_and_printed_path_open_beside(cx: &mut TestAppContext) {
     click(cx, "find-result-note.txt");
     until(cx, "dock file", |cx| {
         cx.debug_bounds("file-view-note.txt").is_some()
-            && cx.debug_bounds("files-code-top-12").is_some()
+            && cx.debug_bounds("files-code-top-9").is_some()
     });
     cx.simulate_keystrokes("alt-o");
     until(cx, "dock closed", |cx| {
@@ -1338,14 +1338,33 @@ fn find_updates_as_typed_shows_paths_lines_and_truncation(cx: &mut TestAppContex
         cx.debug_bounds("find-label-sub/a.rs:12").is_some()
     });
     click(cx, "find-result-a.rs");
-    until(cx, "line 12 in view", |cx| {
-        page.read_with(cx, |p, cx| p.side.code.read(cx).top_line() == 11)
+    until(cx, "line 12 selected, lines above it in view", |cx| {
+        page.read_with(cx, |p, cx| {
+            let code = p.side.code.read(cx);
+            code.selected_lines() == Some((12, 12)) && code.top_line() == 8
+        })
     });
     cx.simulate_keystrokes("escape / ctrl-a");
     cx.simulate_input("capword");
     click(cx, "search-mode");
     until(cx, "truncation note", |cx| {
         cx.debug_bounds("files-find-truncated").is_some()
+    });
+    click(cx, "files-search");
+    cx.simulate_keystrokes("ctrl-a backspace");
+    until(cx, "the folder again", |cx| {
+        cx.debug_bounds("file-row-sub").is_some()
+    });
+    click(cx, "file-row-sub");
+    until(cx, "into sub", |cx| {
+        cx.debug_bounds("file-row-a.rs").is_some()
+    });
+    click(cx, "files-search");
+    cx.simulate_input("rea");
+    click(cx, "files-up");
+    until(cx, "a new folder starts with an empty search", |cx| {
+        page.read_with(cx, |p, cx| p.side.search.read(cx).text.is_empty())
+            && cx.debug_bounds("file-row-sub").is_some()
     });
     drop(running);
     std::fs::remove_dir_all(root).unwrap();

@@ -24,6 +24,8 @@ const INDENT: &str = "  ";
 /// Typing within this long of the last edit undoes together.
 const UNDO_GROUP: Duration = Duration::from_millis(700);
 const UNDO_DEPTH: usize = 200;
+/// Lines kept in view above a line gone to.
+const GO_TO_CONTEXT: usize = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CodeEvent {
@@ -204,6 +206,15 @@ impl Code {
     pub fn show_line(&mut self, n: usize, cx: &mut Context<Self>) {
         self.top = n.min(self.starts.len().saturating_sub(1)) as f32;
         cx.notify();
+    }
+
+    /// Goes to line `n` (0-based): it is selected, with a few lines above
+    /// it in view.
+    pub fn go_to_line(&mut self, n: usize, cx: &mut Context<Self>) {
+        let n = n.min(self.starts.len().saturating_sub(1));
+        self.selected = self.line_range(n);
+        self.reversed = false;
+        self.show_line(n.saturating_sub(GO_TO_CONTEXT), cx);
     }
 
     /// The first and last line (1-based) the selection covers, or none
@@ -1053,6 +1064,22 @@ mod tests {
         assert_eq!(from_shown(line, 10), 4);
         assert_eq!(from_shown(line, 99), line.len());
         assert_eq!(starts_of("a\nbc\n"), vec![0, 2, 5]);
+    }
+
+    #[gpui::test]
+    fn going_to_a_line_selects_it_with_lines_above_in_view(cx: &mut gpui::TestAppContext) {
+        let code = cx.new(Code::new);
+        code.update(cx, |c, cx| {
+            c.set(
+                &(1..=20).map(|n| format!("line {n}\n")).collect::<String>(),
+                cx,
+            );
+            c.go_to_line(9, cx);
+            assert_eq!(c.selected_lines(), Some((10, 10)));
+            assert_eq!(c.top_line(), 9 - GO_TO_CONTEXT);
+            c.go_to_line(1, cx);
+            assert_eq!((c.selected_lines(), c.top_line()), (Some((2, 2)), 0));
+        });
     }
 
     #[gpui::test]

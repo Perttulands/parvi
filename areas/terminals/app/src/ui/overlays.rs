@@ -25,7 +25,22 @@ impl Terminals {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = theme(cx).clone();
-        let mut bar = div().flex().items_stretch();
+        // The tabs shrink and scroll when the bar is short of room, so the
+        // other pages' tabs always show; `+` stays in reach beside them.
+        let mut bar = div()
+            .id("terminal-tabs")
+            .flex()
+            .items_stretch()
+            .min_w_0()
+            .overflow_x_scroll()
+            .track_scroll(&self.tab_scroll);
+        // A newly active tab is brought into view; the strip otherwise
+        // stays where the operator scrolled it.
+        let active = self.settings.workspace.active;
+        if self.tab_scrolled != Some(active) {
+            self.tab_scroll.scroll_to_item(active);
+            self.tab_scrolled = Some(active);
+        }
         let ws = &self.settings.workspace;
         let renaming = match self.surfaces.last() {
             Some(Surface::RenameTab(i)) => Some(*i),
@@ -46,24 +61,9 @@ impl Terminals {
             let active = shown && ws.active == i;
             let marked = self.tab_marked(i);
             bar = bar.child(
-                div()
-                    .id(("terminal-tab", i))
+                kit::tab(&t, ("terminal-tab", i), active, cx)
                     .debug_selector(|| format!("tab-terminals-{i}"))
-                    .px(px(20.))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .cursor_pointer()
-                    .text_size(px(size::TEXT))
-                    .font_weight(if active {
-                        FontWeight::SEMIBOLD
-                    } else {
-                        FontWeight::NORMAL
-                    })
-                    .text_color(if active { t.text } else { t.text2 })
-                    .when(active, |d| d.border_b_2().border_color(t.accent))
-                    .hover(|d| d.text_color(t.text))
-                    .child(kit::tab_label(&tab_label(tb, i)))
+                    .child(kit::tab_label(&tab_label(tb, i), cx))
                     .when(marked, |d| d.child(kit::waiting_dot(&t)))
                     .on_click(
                         cx.listener(move |s, _, window, cx| s.run(Action::Tab(i), window, cx)),
@@ -77,10 +77,17 @@ impl Terminals {
                     ),
             );
         }
+        let mut bar = div()
+            .flex()
+            .items_stretch()
+            .flex_shrink_1()
+            .min_w_0()
+            .child(bar);
         if ws.shown_tabs().len() < crate::store::workspace::MAX_TABS {
             bar = bar.child(
                 div()
                     .id("tab-add")
+                    .flex_none()
                     .debug_selector(|| "tab-add".into())
                     .px(px(12.))
                     .flex()

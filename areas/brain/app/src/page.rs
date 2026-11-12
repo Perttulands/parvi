@@ -41,6 +41,7 @@ pub struct BrainPage {
 impl Page for BrainPage {
     const ID: &'static str = "brain";
     const TITLE: &'static str = "Brain";
+    const KEY: Option<char> = Some('B');
     const AREA: Option<&'static str> = Some("brain");
     const ANSWERS: &'static [Answers] = &[Answers::Reveal("brain")];
 

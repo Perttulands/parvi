@@ -36,16 +36,8 @@ impl Render for SessionPreview {
 impl Render for ScheduledPage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
-        let toolbar = div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap(px(12.))
-            .h(px(size::TAB_BAR))
-            .px(px(GAP))
-            .border_b_1()
-            .border_color(t.divider)
-            .child(div().font_weight(FontWeight::BOLD).child("SCHEDULED TASKS"))
+        let toolbar = kit::page_bar(&t)
+            .child(kit::page_title(&t, "Scheduled"))
             .child(kit::note(
                 &t,
                 "Prompts Parvi sends into your sessions on a timer",

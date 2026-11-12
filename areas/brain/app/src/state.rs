@@ -411,7 +411,8 @@ pub fn marks(snippet: &str) -> Vec<(String, bool)> {
     out
 }
 
-/// Display a snippet without heading or wiki-link syntax, retaining match marks.
+/// Display a snippet without Markdown syntax (headings, wiki and Markdown
+/// links, emphasis, code marks), retaining match marks.
 pub fn snippet_parts(snippet: &str) -> Vec<(String, bool)> {
     let chars: Vec<(char, bool)> = marks(snippet)
         .into_iter()
@@ -447,6 +448,35 @@ pub fn snippet_parts(snippet: &str) -> Vec<(String, bool)> {
             visible.extend_from_slice(&chars[start..end]);
             i = end + 2;
             line_start = false;
+            continue;
+        }
+        // A link the snippet cut through shows its words: `[[` without its
+        // end, an end without its start.
+        if matches!(
+            (chars[i].0, chars.get(i + 1).map(|c| c.0)),
+            ('[', Some('[')) | (']', Some(']'))
+        ) {
+            i += 2;
+            continue;
+        }
+        // A Markdown link shows its text, its target left out.
+        if chars[i].0 == '['
+            && let Some(close) = (i + 1..chars.len())
+                .take_while(|&j| chars[j].0 != '\n' && chars[j].0 != '[')
+                .find(|&j| chars[j].0 == ']')
+            && chars.get(close + 1).is_some_and(|c| c.0 == '(')
+        {
+            visible.extend_from_slice(&chars[i + 1..close]);
+            i = (close + 2..chars.len())
+                .find(|&j| chars[j].0 == ')' || chars[j].0 == '\n')
+                .map_or(chars.len(), |j| j + usize::from(chars[j].0 == ')'));
+            line_start = false;
+            continue;
+        }
+        // Emphasis and code marks.
+        if chars[i].0 == '`' || (chars[i].0 == '*' && chars.get(i + 1).is_some_and(|c| c.0 == '*'))
+        {
+            i += if chars[i].0 == '`' { 1 } else { 2 };
             continue;
         }
         visible.push(chars[i]);
@@ -817,6 +847,18 @@ mod tests {
         assert_eq!(
             snippet_parts("»[[Page|label]]«"),
             vec![("label".into(), true)]
+        );
+        let plain = |s: &str| -> String { snippet_parts(s).into_iter().map(|(t, _)| t).collect() };
+        assert_eq!(plain("and [[resource …"), "and resource …");
+        assert_eq!(plain("page]] and more"), "page and more");
+        assert_eq!(
+            plain("its [installer](/srv/tools/heavy/install.sh) for"),
+            "its installer for"
+        );
+        assert_eq!(plain("see [the doc](/srv/cut…"), "see the doc");
+        assert_eq!(
+            plain("**bold** and `code` [x] stays"),
+            "bold and code [x] stays"
         );
     }
     #[test]

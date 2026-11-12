@@ -15,7 +15,6 @@ pub const CHECK_RADIUS: f32 = 2.;
 pub const STATUS_GLYPH_W: f32 = 14.;
 pub const RAIL_W: f32 = 240.;
 pub const BAR_H: f32 = 52.;
-pub const BAR_TITLE_SIZE: f32 = 15.;
 pub const SEARCH_W: f32 = 320.;
 pub const HEADER_H: f32 = 30.;
 pub const ROW_EXTRA_H: f32 = 4.;

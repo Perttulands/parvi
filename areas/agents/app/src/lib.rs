@@ -100,6 +100,7 @@ impl AgentsPage {
 impl Page for AgentsPage {
     const ID: &'static str = "agents";
     const TITLE: &'static str = "Agents";
+    const KEY: Option<char> = Some('A');
     const AREA: Option<&'static str> = Some("agents");
     const KINDS: parvi_core::frame::Kinds = &[0x80..=0x8f];
     const CHANNELS: &'static [u8] = &[WATCH];
