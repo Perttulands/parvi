@@ -836,6 +836,9 @@ impl Shared {
 async fn supervise(shared: Arc<Shared>, mut stopped: oneshot::Receiver<()>) {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let mut tasks: HashMap<String, JoinHandle<()>> = HashMap::new();
+    // A node killed while it held a seat left the operator's clients set
+    // aside; they size their windows again from now.
+    restore_set_aside(shared.backend.as_ref(), None).await;
     loop {
         match list_sessions(shared.backend.as_ref()).await {
             Ok(found) => {
@@ -1359,6 +1362,9 @@ async fn follow_inner(
     {
         entry.activity.last_output = Some(SystemTime::UNIX_EPOCH + Duration::from_secs(seconds));
     }
+    // A follower of this session that ended without giving the seat back
+    // (its task panicked) left clients set aside.
+    restore_set_aside(shared.backend.as_ref(), Some(session)).await;
     let mut client = shared.backend.attach(session).await?;
     // Kept across loop turns: `read_until` keeps a partly read line here when
     // another branch of the select wins.
@@ -1427,7 +1433,7 @@ async fn follow_inner(
         Pending::Activity,
     );
 
-    loop {
+    let ended: Result<()> = async { loop {
         if !out.is_empty() {
             client.writer.write_all(out.as_bytes()).await?;
             client.writer.flush().await?;
@@ -1468,7 +1474,7 @@ async fn follow_inner(
                                 // listed would otherwise go unseen.
                                 let _ = supervisor.send(SupervisorMsg::Rediscover);
                             }
-                            Pending::Clients => seat.listed(ok, &lines, &mut out, &mut pending),
+                            Pending::Clients => seat.listed(session, ok, &lines, &mut out, &mut pending),
                             Pending::Delivery(step) => {
                                 deliveries.replied(session, step, ok, &lines, &mut out, &mut pending);
                                 if let Some(due) = deliveries.due() {
@@ -1633,7 +1639,7 @@ async fn follow_inner(
                 Some(Request::Claim { cols, rows }) => {
                     seat.claim(session, cols, rows, &mut out, &mut pending);
                 }
-                Some(Request::Release) => seat.release(&mut out, &mut pending),
+                Some(Request::Release) => seat.release(session, &mut out, &mut pending),
                 Some(Request::RefreshFacts) => request_facts(session, &mut out, &mut pending),
                 Some(Request::Send(delivery)) => {
                     layout_changed = None;
@@ -1654,16 +1660,93 @@ async fn follow_inner(
                     }
                     // Leaving while holding the seat would leave the clients
                     // we set aside unable to size the window.
-                    seat.release(&mut out, &mut pending);
+                    seat.release(session, &mut out, &mut pending);
                     client.writer.write_all(out.as_bytes()).await?;
                     client.writer.flush().await?;
                     break;
                 }
             },
         }
+    } Ok(()) }.await;
+    // However the follower ended, the clients it set aside size again, if
+    // tmux still hears it; if not, the next follower or node start does it
+    // from `@parvi-aside`.
+    if seat.held {
+        let mut out = String::new();
+        seat.release(session, &mut out, &mut pending);
+        if client.writer.write_all(out.as_bytes()).await.is_ok() {
+            let _ = client.writer.flush().await;
+        }
     }
-
+    ended?;
     client.close().await
+}
+
+/// Gives back the sizing of the clients a follower set aside and never
+/// released, as its session's `@parvi-aside` names them: those still set
+/// to `ignore-size`, unless a follower holds that session's seat now. Only
+/// `only`'s, when given; one read when it has none.
+async fn restore_set_aside(backend: &dyn Backend, only: Option<&str>) {
+    let format = "#{session_id}\t#{@parvi-aside}";
+    let listed = match only {
+        Some(session) => {
+            backend
+                .command(&["display-message", "-p", "-t", session, format])
+                .await
+        }
+        None => backend.command(&["list-sessions", "-F", format]).await,
+    };
+    let Ok(listed) = listed else { return };
+    let aside: Vec<(&str, &str)> = listed
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .filter(|(_, names)| !names.is_empty())
+        .collect();
+    if aside.is_empty() {
+        return;
+    }
+    let Ok(clients) = backend
+        .command(&[
+            "list-clients",
+            "-F",
+            "#{session_id}\t#{client_name}\t#{client_flags}",
+        ])
+        .await
+    else {
+        return;
+    };
+    let clients: Vec<[&str; 3]> = clients
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.splitn(3, '\t');
+            Some([fields.next()?, fields.next()?, fields.next()?])
+        })
+        .collect();
+    let has = |flags: &str, flag: &str| flags.split(',').any(|f| f == flag);
+    for (session, names) in aside {
+        let held = clients.iter().any(|[on, _, flags]| {
+            *on == session
+                && has(flags, "control-mode")
+                && flags.split(',').any(|f| f.starts_with("pause-after"))
+                && !has(flags, "ignore-size")
+        });
+        if held {
+            continue;
+        }
+        for name in names.split(' ') {
+            if clients
+                .iter()
+                .any(|[_, client, flags]| *client == name && has(flags, "ignore-size"))
+            {
+                let _ = backend
+                    .command(&["refresh-client", "-t", name, "-f", "!ignore-size"])
+                    .await;
+            }
+        }
+        let _ = backend
+            .command(&["set-option", "-u", "-t", session, "@parvi-aside"])
+            .await;
+    }
 }
 
 /// One session's sizing seat, as our client sees it.
@@ -1714,6 +1797,7 @@ impl Seat {
     /// it is still wanted.
     fn listed(
         &mut self,
+        session: &str,
         ok: bool,
         lines: &[String],
         out: &mut String,
@@ -1739,6 +1823,19 @@ impl Seat {
             );
             self.set_aside.push(name.to_owned());
         }
+        // Kept in tmux, so they are given back even if this follower or its
+        // node dies holding the seat (`restore_set_aside`).
+        if !self.set_aside.is_empty() {
+            send(
+                out,
+                pending,
+                format!(
+                    "set-option -t '{session}' @parvi-aside '{}'",
+                    self.set_aside.join(" ")
+                ),
+                Pending::Seat,
+            );
+        }
         send(
             out,
             pending,
@@ -1756,7 +1853,7 @@ impl Seat {
 
     /// Stops sizing, and lets the clients we set aside size again. Ours goes
     /// first, so the window takes their size rather than ours.
-    fn release(&mut self, out: &mut String, pending: &mut VecDeque<Pending>) {
+    fn release(&mut self, session: &str, out: &mut String, pending: &mut VecDeque<Pending>) {
         let wanted = self.wanted.take();
         if !self.held {
             return;
@@ -1769,6 +1866,14 @@ impl Seat {
             "refresh-client -f ignore-size".to_owned(),
             Pending::Seat,
         );
+        if !self.set_aside.is_empty() {
+            send(
+                out,
+                pending,
+                format!("set-option -u -t '{session}' @parvi-aside"),
+                Pending::Seat,
+            );
+        }
         for name in self.set_aside.drain(..) {
             send(
                 out,

@@ -24,7 +24,7 @@ pub use area::{Area, BoxFuture, Build, Built, Channel, Client, Command, Finish};
 pub use client::{NodeClient, NodeError};
 pub use config::Config;
 pub use listing::Listing;
-pub use serve::{Failure, Options, Running, start};
+pub use serve::{Failure, Options, Running, set_liveness, start};
 pub use setup::{Provided, Setup};
 
 /// This build: the package version and, built from Git, its commit

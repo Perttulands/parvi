@@ -33,6 +33,7 @@ use tokio::task::JoinHandle;
 
 pub(crate) use addressed::elsewhere;
 pub use hello::hello;
+pub use socket::set_liveness;
 pub use trust::Trust;
 
 use crate::config::Config;

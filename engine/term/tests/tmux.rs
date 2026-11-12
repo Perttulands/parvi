@@ -796,6 +796,74 @@ async fn a_release_with_nobody_else_keeps_the_size_and_stopping_releases() {
     viewer.detach();
 }
 
+fn client_named(server: &Server, sizing: bool) -> String {
+    server
+        .run(&["list-clients", "-F", "#{client_name} #{client_flags}"])
+        .lines()
+        .find(|line| line.contains("pause-after") != sizing)
+        .and_then(|line| line.split(' ').next())
+        .expect("the client is attached")
+        .to_owned()
+}
+
+/// A follower that ends without being stopped (tmux let it go) gives the
+/// seat back: the viewer it set aside sizes the window again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_follower_that_goes_without_stopping_gives_the_seat_back() {
+    let Some(server) = Server::start() else {
+        return;
+    };
+    server.new_session("alpha", 200, 50);
+    let viewer = server.viewer("alpha", 120, 40);
+    window_becomes(&server, "alpha", "120x40").await;
+    let engine = Engine::start(server.socket());
+    let pane = seeded_pane(&engine).await;
+    engine.claim(pane, 1, 90, 30).await.unwrap();
+    window_becomes(&server, "alpha", "90x30").await;
+    assert!(viewer_flags(&server).contains("ignore-size"));
+
+    server.run(&["detach-client", "-t", &client_named(&server, false)]);
+    eventually("the viewer sizing again", || {
+        (!viewer_flags(&server).contains("ignore-size")).then_some(())
+    })
+    .await;
+    window_becomes(&server, "alpha", "120x40").await;
+    engine.stop().await;
+    viewer.detach();
+}
+
+/// A node killed while it held a seat left the viewer set aside, as the
+/// session's `@parvi-aside` records; the next node gives it back without
+/// attaching to the session.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_node_start_gives_back_a_seat_a_killed_node_held() {
+    let Some(server) = Server::start() else {
+        return;
+    };
+    server.new_session("alpha", 200, 50);
+    let viewer = server.viewer("alpha", 120, 40);
+    window_becomes(&server, "alpha", "120x40").await;
+    let name = client_named(&server, true);
+    server.run(&["refresh-client", "-t", &name, "-f", "ignore-size"]);
+    server.run(&["set-option", "-t", "alpha", "@parvi-aside", &name]);
+    assert!(viewer_flags(&server).contains("ignore-size"));
+
+    let engine = Engine::start_lazy(server.socket());
+    eventually("the viewer sizing again", || {
+        (!viewer_flags(&server).contains("ignore-size")).then_some(())
+    })
+    .await;
+    assert_eq!(
+        server
+            .run(&["show-options", "-qv", "-t", "alpha", "@parvi-aside"])
+            .trim(),
+        ""
+    );
+    assert_eq!(server.clients().len(), 1, "the node did not attach");
+    engine.stop().await;
+    viewer.detach();
+}
+
 /// Issue #4, check 4: with a sizing viewer and an `ignore-size` observer, the
 /// window goes through exactly the same sizes whether we follow it or not. So
 /// we never take, hold or block the sizing seat.
