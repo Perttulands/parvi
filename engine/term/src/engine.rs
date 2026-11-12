@@ -23,7 +23,7 @@
 //! Nobody is detached. Releasing undoes exactly that, so the window goes back to
 //! whoever sized it before, or keeps its size if nobody did.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -974,9 +974,10 @@ struct Discovery {
 
 /// Read all unopened sessions with a fixed number of tmux commands.
 async fn discover_all(backend: &dyn Backend) -> Option<Discovery> {
-    let pane_format = "#{session_id}\t#{pane_id} #{pane_width} #{pane_height} #{window_activity}";
+    let pane_format =
+        format!("#{{session_id}}\t#{{pane_id}} #{{pane_width}} #{{pane_height}} {ACTIVITY_FORMAT}");
     let fact_format = format!("#{{session_id}}\t{FACTS_FORMAT}");
-    let pane_args = ["list-panes", "-a", "-F", pane_format];
+    let pane_args = ["list-panes", "-a", "-F", &pane_format];
     let fact_args = ["list-sessions", "-F", &fact_format];
     let client_args = ["list-clients", "-F", "#{session_id}\t#{client_flags}"];
     let (panes, facts, clients) = tokio::join!(
@@ -1011,12 +1012,14 @@ async fn discover_all(backend: &dyn Backend) -> Option<Discovery> {
             continue;
         };
         let mut fields = fields.split_whitespace();
-        let (Some(id), Some(cols), Some(rows), Some(activity)) = (
+        let (Some(id), Some(cols), Some(rows)) = (
             fields.next().and_then(control::parse_pane),
             fields.next().and_then(|v| v.parse().ok()),
             fields.next().and_then(|v| v.parse().ok()),
-            fields.next().and_then(|v| v.parse::<u64>().ok()),
         ) else {
+            continue;
+        };
+        let Some(activity) = starting_output(&fields.collect::<Vec<_>>().join(" ")) else {
             continue;
         };
         found
@@ -1169,6 +1172,51 @@ enum Pending {
     /// The current window's last activity, to start from before any output.
     Activity,
     Facts,
+    /// The session's last output, kept in tmux for the next follower.
+    Kept,
+}
+
+/// What a follower reads when it starts: tmux's last activity in the
+/// window, then the last output and the time a follower kept them when it
+/// left (`leave_output`).
+const ACTIVITY_FORMAT: &str = "#{window_activity} #{@parvi-output} #{@parvi-left}";
+
+/// How long after a follower left its own going still counts as its doing:
+/// letting go of the window resizes it, and the programs redraw.
+const LEFT_REDRAW: u64 = 5;
+
+/// The last output a follower starts from, in Unix seconds. tmux counts a
+/// redraw for a new size as activity, and resizes the window as followers
+/// come and go, so the output the last follower kept stands unless tmux saw
+/// activity after it left and its redraw settled.
+fn starting_output(activity: &str) -> Option<u64> {
+    let mut fields = activity.split(' ').map(|f| f.parse::<u64>().ok());
+    let window = fields.next().flatten();
+    let kept = fields.next().flatten();
+    let left = fields.next().flatten();
+    match (window, kept, left) {
+        (Some(window), Some(kept), Some(left)) if window <= left + LEFT_REDRAW => Some(kept),
+        (window, ..) => window,
+    }
+}
+
+/// The commands that keep the session's last output in tmux as this
+/// follower leaves, for the next one to start from (`starting_output`).
+/// Only a follower that sized the window or saw it redrawn keeps them, so
+/// a session it only watched is left as it was.
+fn leave_output(session: &str, wrote: SystemTime) -> Option<[String; 2]> {
+    let secs = |t: SystemTime| {
+        t.duration_since(SystemTime::UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_secs())
+    };
+    Some([
+        format!("set-option -t '{session}' @parvi-output {}", secs(wrote)?),
+        format!(
+            "set-option -t '{session}' @parvi-left {}",
+            secs(SystemTime::now())?
+        ),
+    ])
 }
 
 const LIST_PANES_FORMAT: &str = "#{pane_id} #{pane_width} #{pane_height}";
@@ -1177,7 +1225,9 @@ const LIST_PANES_FORMAT: &str = "#{pane_id} #{pane_width} #{pane_height}";
 /// shows the same text laid out again: lines wrapped at other places, rules
 /// drawn longer or shorter, rulers moved, text cut with `…`. So each word
 /// of `after`, split at its `…`, is looked for in all of `before` with its
-/// spacing gone and repeated characters counted once.
+/// spacing gone and repeated characters counted once. Widened, a redraw
+/// shows more of a line it cut before, so a line that goes on from where
+/// one of `before` ended or was cut adds nothing.
 fn adds_text<'a>(before: impl IntoIterator<Item = &'a str>, after: &str) -> bool {
     fn squeeze(text: &str) -> String {
         let mut out = String::with_capacity(text.len());
@@ -1188,14 +1238,91 @@ fn adds_text<'a>(before: impl IntoIterator<Item = &'a str>, after: &str) -> bool
         }
         out
     }
-    let had: Vec<String> = before.into_iter().map(squeeze).collect();
+    /// A line's text up to where it was cut.
+    fn head(line: &str) -> String {
+        squeeze(line.split('…').next().unwrap_or_default())
+    }
+    /// Shorter heads are a prompt or a bullet, which real output goes on from.
+    const HEAD_MIN: usize = 6;
+    let before: Vec<&str> = before.into_iter().collect();
+    let had: Vec<String> = before.iter().map(|t| squeeze(t)).collect();
+    let heads: Vec<String> = before
+        .iter()
+        .flat_map(|t| t.lines())
+        .map(head)
+        .filter(|h| h.chars().count() >= HEAD_MIN)
+        .collect();
     after
-        .split_whitespace()
+        .lines()
+        .filter(|line| {
+            let h = head(line);
+            !heads.iter().any(|cut| h.starts_with(cut.as_str()))
+        })
+        .flat_map(str::split_whitespace)
         .flat_map(|word| word.split('…'))
         .any(|part| {
             let part = squeeze(part);
             !part.is_empty() && !had.iter().any(|text| text.contains(&part))
         })
+}
+
+/// Whether output starts painting the screen over from the top: it clears
+/// the screen, or homes the cursor and erases. A program that repaints for
+/// a new size all it has shown, as Claude Code does, brings back text from
+/// above a shorter screen, which no screen held before.
+fn repaints(data: &[u8]) -> bool {
+    const FROM_TOP: [&[u8]; 6] = [
+        b"\x1b[2J",
+        b"\x1b[H\x1b[2K",
+        b"\x1b[H\x1b[J",
+        b"\x1b[H\x1b[0J",
+        b"\x1b[1;1H\x1b[2K",
+        b"\x1b[1;1H\x1b[J",
+    ];
+    FROM_TOP
+        .iter()
+        .any(|seq| data.windows(seq.len()).any(|w| w == *seq))
+}
+
+/// Whether output puts any character on screen, rather than only setting
+/// modes, moving the cursor or ringing the bell. A sequence split across
+/// two outputs may read as text, which errs on the side of news.
+fn writes_text(data: &[u8]) -> bool {
+    let mut i = 0;
+    while i < data.len() {
+        match data[i] {
+            0x1b => {
+                i += 1;
+                match data.get(i) {
+                    // CSI: parameters up to a final byte.
+                    Some(b'[') => {
+                        i += 1;
+                        while data.get(i).is_some_and(|b| !(0x40..=0x7e).contains(b)) {
+                            i += 1;
+                        }
+                    }
+                    // OSC, DCS and the like: a string up to BEL or ST.
+                    Some(b']' | b'P' | b'_' | b'^' | b'X') => {
+                        i += 1;
+                        while i < data.len() && data[i] != 0x07 && !data[i..].starts_with(b"\x1b\\")
+                        {
+                            i += 1;
+                        }
+                        if data[i..].starts_with(b"\x1b\\") {
+                            i += 1;
+                        }
+                    }
+                    // A character set: one more byte names it.
+                    Some(b'(' | b')' | b'*' | b'+') => i += 1,
+                    _ => {}
+                }
+            }
+            b if b < 0x20 || b == 0x7f => {}
+            _ => return true,
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Follows one session until its client exits or the engine stops.
@@ -1221,9 +1348,9 @@ async fn follow_inner(
     // time before it happens rather than seeding from the attach itself.
     if let Ok(before) = shared
         .backend
-        .command(&["display-message", "-p", "-t", session, "#{window_activity}"])
+        .command(&["display-message", "-p", "-t", session, ACTIVITY_FORMAT])
         .await
-        && let Ok(seconds) = before.trim().parse::<u64>()
+        && let Some(seconds) = starting_output(before.trim())
         && let Some(entry) = shared.state.lock().unwrap().sessions.get_mut(session)
         && entry
             .activity
@@ -1261,6 +1388,11 @@ async fn follow_inner(
     // cut its text short for a narrow window shows it whole again when it
     // widens.
     let mut shown_before: HashMap<PaneId, VecDeque<String>> = HashMap::new();
+    // Our panes that began repainting from the top since the layout changed.
+    let mut repainting: HashSet<PaneId> = HashSet::new();
+    // Output tmux counted as activity and we did not: what the next
+    // follower needs told (`leave_output`).
+    let mut tmux_counts_more = false;
     let quiet = tokio::time::sleep(ACTIVE_FOR);
     tokio::pin!(quiet);
     // A look at our panes' screens for a waiting prompt is due.
@@ -1291,7 +1423,7 @@ async fn follow_inner(
     send(
         &mut out,
         &mut pending,
-        "display-message -p '#{window_activity}'".to_owned(),
+        format!("display-message -p '{ACTIVITY_FORMAT}'"),
         Pending::Activity,
     );
 
@@ -1358,10 +1490,19 @@ async fn follow_inner(
                         // changed size is its redraw, not news, unless it
                         // puts text on screen that was not there before.
                         let mut redraw = layout_changed.is_some_and(|at| at.elapsed() < REDRAW_FOR);
+                        // Setting modes, as Claude Code does when a client
+                        // attaches, shows nothing.
+                        let shows = writes_text(&data);
+                        if redraw && repaints(&data) {
+                            repainting.insert(id);
+                        }
                         if pane.synced {
                             let data = pane.utf8.pass(data);
                             pane.screen.process(&data);
-                            if redraw && let Some(before) = shown_before.get(&id) {
+                            if redraw
+                                && !repainting.contains(&id)
+                                && let Some(before) = shown_before.get(&id)
+                            {
                                 let after = pane.screen.screen().contents();
                                 redraw = !adds_text(before.iter().map(String::as_str), &after);
                             }
@@ -1376,7 +1517,8 @@ async fn follow_inner(
                             looking = true;
                             look.as_mut().reset(tokio::time::Instant::now() + LOOK_AFTER);
                         }
-                        if redraw {
+                        if redraw || !shows {
+                            tmux_counts_more = true;
                             continue;
                         }
                         last_output = tokio::time::Instant::now();
@@ -1420,6 +1562,7 @@ async fn follow_inner(
                                     texts.pop_front();
                                 }
                             }
+                            repainting.clear();
                         }
                         layout_changed = Some(tokio::time::Instant::now());
                         send(&mut out, &mut pending, list_panes(session), Pending::ListPanes);
@@ -1497,6 +1640,18 @@ async fn follow_inner(
                     deliveries.push(session, delivery, &mut out, &mut pending);
                 }
                 Some(Request::Stop) | None => {
+                    // Letting go of the seat resizes the window too.
+                    let told = tmux_counts_more || seat.held;
+                    let wrote = if !told {
+                        None
+                    } else if active {
+                        Some(SystemTime::now() - last_output.elapsed())
+                    } else {
+                        shared.state.lock().unwrap().sessions.get(session).and_then(|s| s.activity.last_output)
+                    };
+                    for keep in wrote.and_then(|wrote| leave_output(session, wrote)).into_iter().flatten() {
+                        send(&mut out, &mut pending, keep, Pending::Kept);
+                    }
                     // Leaving while holding the seat would leave the clients
                     // we set aside unable to size the window.
                     seat.release(&mut out, &mut pending);
@@ -1727,7 +1882,7 @@ fn on_reply(
         .get(session)
         .is_some_and(|s| s.replace_invalid_utf8);
     match what {
-        Pending::Input | Pending::Continue | Pending::Seat => {}
+        Pending::Input | Pending::Continue | Pending::Seat | Pending::Kept => {}
         Pending::Facts => {
             let mut facts = lines
                 .first()
@@ -1772,7 +1927,7 @@ fn on_reply(
             }
         }
         Pending::Activity => {
-            let seconds = lines.first().and_then(|line| line.parse::<u64>().ok());
+            let seconds = lines.first().and_then(|line| starting_output(line));
             if let (true, Some(seconds), Some(entry)) =
                 (ok, seconds, state.sessions.get_mut(session))
                 && entry.activity.last_output.is_none()
@@ -1921,6 +2076,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_follower_starts_from_the_output_the_last_one_kept() {
+        assert_eq!(starting_output("100  "), Some(100), "none kept");
+        assert_eq!(starting_output("100"), Some(100));
+        // The redraws as it left, and while it followed, are not output.
+        assert_eq!(starting_output("203 50 200"), Some(50));
+        assert_eq!(starting_output("150 50 200"), Some(50));
+        // Activity well after it left is output nobody followed.
+        assert_eq!(starting_output("300 50 200"), Some(300));
+        assert_eq!(starting_output(""), None);
+    }
+
+    #[test]
+    fn setting_modes_writes_no_text() {
+        // What Claude Code writes when a client attaches.
+        assert!(!writes_text(
+            b"\x1b(B\x0f\x1b[?2004h\x1b[<u\x1b[>5u\x1b[>4;2m"
+        ));
+        assert!(!writes_text(b"\x1b]0;title\x07\x1b]2;t\x1b\\\r\n\x07"));
+        assert!(writes_text(b"\x1b[1mok\x1b[0m"));
+        assert!(writes_text("\x1b[2K⠋".as_bytes()));
+    }
+
+    #[test]
+    fn a_repaint_from_the_top_is_told() {
+        assert!(repaints(
+            b"\x1b[?25l\x1b[2D\x1b[5B\x1b[H\x1b[2K\x1b[1B\x1b[2K"
+        ));
+        assert!(repaints(b"x\x1b[2Jy"));
+        assert!(!repaints(b"\x1b[2Kprogress 40%\r"));
+        assert!(!repaints(b"line 3001: build step ok\r\n"));
+    }
+
+    #[test]
     fn a_redraw_adds_no_text_and_output_does() {
         let before = "$ ls\nnotes.txt\n$ ";
         assert!(!adds_text([before], "$ ls\n  notes.txt  \n\n$"));
@@ -1938,10 +2126,16 @@ mod tests {
         // Text cut short, at the end or in the middle.
         assert!(!adds_text(["saving is off"], "saving is of…"));
         assert!(!adds_text(["/…/own-term/proj/alpha"], "/…/proj/alpha"));
-        // Widened again, it shows what an earlier, wider screen showed.
+        // Widened, it shows the rest of a line it cut or ended early.
         let (wide, narrow) = ("saving is off — inherited", "saving is of…");
-        assert!(adds_text([narrow], wide));
-        assert!(!adds_text([wide, narrow], wide));
+        assert!(!adds_text([narrow], wide));
+        assert!(!adds_text(
+            ["x\nbypass permissions on"],
+            "x\nbypass permissions on (shift+tab to cycle)"
+        ));
+        // Output going on from a short line, or under a cut one, is new.
+        assert!(adds_text(["$ make"], "$ make done"));
+        assert!(adds_text([narrow], "saving is off\nbuild failed"));
     }
 
     #[test]

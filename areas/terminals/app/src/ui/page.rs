@@ -1442,6 +1442,12 @@ impl Terminals {
         };
         let k = Key::of(s);
         self.place(k, window, cx);
+        // A drawer lying over the windows would hide the match; it steps
+        // away, and Alt+H brings it back with the same results.
+        if self.drawer_room(window, cx).is_none() {
+            self.close(surface::FIND, cx);
+            window.focus(&self.term_focus, cx);
+        }
         let w = self.settings.workspace.focus;
         self.settings.workspace.choose_pane(w, m.pane);
         self.histories.remove(&w);

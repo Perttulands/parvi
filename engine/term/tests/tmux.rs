@@ -1234,7 +1234,9 @@ async fn following_idle_sessions_preserves_their_old_activity() {
 /// A program that repaints its whole screen when its window changes size,
 /// as vim does, has not written anything new: the claim that resized it
 /// leaves the session idle and its last output where it was. Writing later
-/// is news again.
+/// is news again. Like Claude Code, it repaints all it has shown from the
+/// top, so the taller window shows a banner that was above the screen. A
+/// follower that starts later starts from the same last output.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_repaint_for_a_new_size_is_not_activity() {
     let Some(server) = Server::start_in("terminal-repaint") else {
@@ -1245,7 +1247,7 @@ async fn a_repaint_for_a_new_size_is_not_activity() {
     write_script(
         &script,
         format!(
-            "#!/bin/sh\npaint() {{ printf '\\033[2J\\033[Hready\\n'; }}\ntrap 'paint; touch {}' WINCH\npaint\nwhile :; do sleep 0.2; done\n",
+            "#!/bin/sh\npaint() {{ printf '\\033[H\\033[2Kbanner\\n'; seq 1 40; printf ready; }}\ntrap 'paint; touch {}' WINCH\npaint\nwhile :; do sleep 0.2; done\n",
             server.dir().join("repainted").display()
         ),
     );
@@ -1276,7 +1278,7 @@ async fn a_repaint_for_a_new_size_is_not_activity() {
     let last = |engine: &Engine| engine.sessions()[0].activity.last_output;
     let idle = eventually("seeded idle", || last(&engine)).await;
 
-    engine.claim(pane, 1, 80, 24).await.unwrap();
+    engine.claim(pane, 1, 100, 50).await.unwrap();
     eventually("the program repainted", || {
         server.dir().join("repainted").exists().then_some(())
     })
@@ -1289,6 +1291,19 @@ async fn a_repaint_for_a_new_size_is_not_activity() {
         Some(idle),
         "a repaint moved its last output"
     );
+
+    // tmux counted the repaint as activity. The next follower, as after a
+    // node restarts, starts from the output this one kept as it left.
+    let idle_secs = idle
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    engine.stop().await;
+    assert!(wrote_at() > idle_secs, "tmux saw the repaint");
+    let engine = Engine::start(server.socket());
+    seeded_pane(&engine).await;
+    let again = eventually("followed again", || last(&engine)).await;
+    assert_eq!(again, idle, "a new follower took the repaint for output");
 
     // The same repaint with no new size is the program writing.
     tokio::time::sleep(Duration::from_secs(2)).await;

@@ -17,10 +17,10 @@ use alacritty_terminal::index::{Column, Line, Point as GridPoint, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::TermMode;
 use gpui::{
-    AnyElement, Bounds, ClipboardItem, ContentMask, Context, DispatchPhase, ElementInputHandler,
-    EntityInputHandler, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    Pixels, ScrollDelta, ScrollEvent, UTF16Selection, Window, canvas, deferred, div, point,
-    prelude::*, px, relative,
+    AnyElement, App, Bounds, ClipboardItem, ContentMask, Context, DispatchPhase,
+    ElementInputHandler, EntityInputHandler, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, ScrollDelta, ScrollEvent, UTF16Selection, Window, canvas,
+    deferred, div, point, prelude::*, px, relative,
 };
 use parvi_app_kit::Ask;
 use parvi_app_kit::host::Request;
@@ -153,9 +153,41 @@ impl Terminals {
     /// What a view beside the windows takes: its full width while every
     /// window keeps a readable width, less down to its least when not.
     fn beside_width(&self, window: &Window) -> f32 {
-        let windows = self.settings.workspace.windows().len().max(1) as f32;
-        (self.workspace_room(window) - windows * size::WINDOW_MIN)
+        (self.workspace_room(window) - self.columns() * size::WINDOW_MIN)
             .clamp(size::BESIDE_MIN, size::BESIDE)
+    }
+
+    /// How many windows stand side by side: one row of up to three, or two
+    /// rows of two (CHROTE's grid-1..4).
+    fn columns(&self) -> f32 {
+        match self.settings.workspace.windows().len() {
+            4 => 2.,
+            n => n.max(1) as f32,
+        }
+    }
+
+    /// The width an open drawer moves the windows aside by, while each keeps
+    /// a readable width. `None` with a drawer open is a drawer lying over
+    /// them: no session is resized for a drawer that is soon closed.
+    pub(super) fn drawer_room(&self, window: &Window, cx: &App) -> Option<f32> {
+        let find = self.is_open(super::surface::FIND);
+        if !find && !self.is_open(super::surface::SEND) {
+            return None;
+        }
+        let mut room = self.workspace_room(window);
+        if self.host.beside(cx).is_some() {
+            room -= self.beside_width(window);
+        }
+        let width = if find {
+            Some(size::FIND_DRAWER)
+        } else {
+            self.settings.send_width
+        };
+        Some(crate::store::send::width(
+            width,
+            window.viewport_size().width / px(1.),
+        ))
+        .filter(|width| room - width >= self.columns() * size::WINDOW_MIN)
     }
 
     fn render_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -227,24 +259,7 @@ impl Terminals {
             self.dragging_over = None;
         }
         let tiles: Vec<AnyElement> = (0..n).map(|i| self.render_tile(i, window, cx)).collect();
-        // A drawer moves the windows aside while each keeps a readable
-        // width; where they would not, it lies over them, and no session is
-        // resized for a drawer that is soon closed.
-        let mut room = self.workspace_room(window);
-        if self.host.beside(cx).is_some() {
-            room -= self.beside_width(window);
-        }
-        let drawer_room = (self.is_open(super::surface::SEND)
-            || self.is_open(super::surface::FIND))
-        .then(|| {
-            let width = if self.is_open(super::surface::FIND) {
-                Some(size::FIND_DRAWER)
-            } else {
-                self.settings.send_width
-            };
-            crate::store::send::width(width, window.viewport_size().width / px(1.))
-        })
-        .filter(|width| room - width >= n as f32 * size::WINDOW_MIN);
+        let drawer_room = self.drawer_room(window, cx);
         let mut grid = div()
             .id("grid")
             .track_focus(&self.term_focus)
@@ -290,8 +305,7 @@ impl Terminals {
             .size_0(),
         );
         let mut tiles = tiles.into_iter();
-        // One row of up to three, or two rows of two (CHROTE's grid-1..4).
-        // Every layout that can still grow is one row, so a seam is always
+        // One row of up to three, or two rows of two (`columns`). Every layout that can still grow is one row, so a seam is always
         // between two windows side by side.
         let rows: Vec<usize> = if n == 4 { vec![2, 2] } else { vec![n] };
         for count in rows {
