@@ -3,10 +3,10 @@
 
 use std::path::PathBuf;
 
+use super::Home;
 use super::checkout::{self, Checkout, Fetch};
 use super::skills::{self, FOLDERS, Skill};
 use super::tools::{self, Found, TOOLS};
-use super::{Home, run};
 use parvi_agents_contract as wire;
 
 pub struct Report {
@@ -44,12 +44,12 @@ pub fn checkout_paths(skills: &[Skill]) -> Vec<PathBuf> {
 }
 
 impl Report {
-    pub fn checkout_paths(&self) -> Vec<PathBuf> {
+    fn checkout_paths(&self) -> Vec<PathBuf> {
         checkout_paths(&self.skills)
     }
 
     /// Reads every checkout and how far behind each skill is, again.
-    pub async fn read_checkouts(&mut self, home: &Home, fetch: impl Fn(&PathBuf) -> Fetch) {
+    async fn read_checkouts(&mut self, home: &Home, fetch: impl Fn(&PathBuf) -> Fetch) {
         let paths = self.checkout_paths();
         self.checkouts = all(paths.iter().map(|path| {
             let (home, path, fetch) = (home.clone(), path.clone(), fetch(path));
@@ -78,24 +78,6 @@ impl Report {
                 skill.behind = checkout::behind_in(home, &checkout.path, relative).await;
             }
         }
-    }
-
-    /// Fetches every checkout, then reads them again.
-    pub async fn fetch(&mut self, home: &Home) {
-        let paths = self.checkout_paths();
-        let results = all(paths.iter().map(|path| {
-            let (home, path) = (home.clone(), path.clone());
-            async move { run::fetch(&home, &path).await }
-        }))
-        .await;
-        self.read_checkouts(home, |path| {
-            let at = paths.iter().position(|p| p == path);
-            match at.map(|i| &results[i]) {
-                Some(Err(why)) => Fetch::Failed(why.clone()),
-                _ => Fetch::Fetched,
-            }
-        })
-        .await;
     }
 
     /// Converts local paths and probe results into the shared wire contract.
@@ -136,6 +118,7 @@ impl Report {
                 .iter()
                 .map(|c| {
                     let (fetch, fetch_error) = match &c.fetch {
+                        Fetch::Local => ("local", None),
                         Fetch::Fetching => ("fetching", None),
                         Fetch::Fetched => ("fetched", None),
                         Fetch::Failed(why) => ("failed", Some(why.clone())),

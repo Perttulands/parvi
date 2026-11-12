@@ -9,16 +9,17 @@ mod sync;
 mod tools;
 
 use anyhow::{Context, Result};
-use parvi_agents_contract::{FAILED, REPORT, SYNC, SYNCED, WATCH};
+use parvi_agents_contract::{FAILED, FETCH_FAILED, REPORT, SYNC, SYNCED, WATCH};
 use parvi_core::Error;
 use parvi_node_kit::args::{object, text};
 use parvi_node_kit::{Area, BoxFuture, Built, Channel, Client, Command, Listing, Setup};
 use parvi_term::Sessions;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio::task::JoinHandle;
 
 pub use checkout::Fetch;
@@ -51,6 +52,60 @@ struct AgentsArea {
     sessions: Arc<dyn Sessions>,
     node: String,
     roles: Arc<roles::Service>,
+    sync_state: Arc<SyncState>,
+}
+
+struct SyncState {
+    results: Mutex<HashMap<PathBuf, Fetch>>,
+    serial: Mutex<()>,
+    changes: broadcast::Sender<()>,
+}
+impl Default for SyncState {
+    fn default() -> Self {
+        Self {
+            results: Mutex::new(HashMap::new()),
+            serial: Mutex::new(()),
+            changes: broadcast::channel(32).0,
+        }
+    }
+}
+impl SyncState {
+    async fn report(&self, home: &Home) -> Report {
+        let mut report = gather(home, Fetch::Local).await;
+        let results = self.results.lock().await.clone();
+        for checkout in &mut report.checkouts {
+            checkout.fetch = results.get(&checkout.path).cloned().unwrap_or(Fetch::Local);
+        }
+        report
+    }
+
+    async fn sync(
+        &self,
+        home: &Home,
+        sessions: &dyn Sessions,
+        shown: &str,
+    ) -> Result<String, Error> {
+        let path = sync::checkout(home, shown).map_err(|e| Error::new(FAILED, format!("{e:#}")))?;
+        let _serial = self.serial.lock().await;
+        self.results
+            .lock()
+            .await
+            .insert(path.clone(), Fetch::Fetching);
+        let _ = self.changes.send(());
+        let result = run::fetch(home, &path).await;
+        self.results.lock().await.insert(
+            path.clone(),
+            match &result {
+                Ok(()) => Fetch::Fetched,
+                Err(error) => Fetch::Failed(error.clone()),
+            },
+        );
+        let _ = self.changes.send(());
+        result.map_err(|error| Error::new(FETCH_FAILED, error))?;
+        sync::sync_fetched(sessions, &path)
+            .await
+            .map_err(|e| Error::new(FAILED, format!("{e:#}")))
+    }
 }
 
 /// Overrides the probed home and executable path for a node environment.
@@ -80,11 +135,13 @@ pub fn build(setup: &Setup) -> Result<Built> {
     let root = parvi_mission_engine::Store::root_in(&setup.dir);
     let roles = Arc::new(roles::Service::new(root, fixture_codex));
     let node = setup.node.id.to_string();
+    let sync_state = Arc::new(SyncState::default());
     Built::then(move |provided| {
         Ok(Arc::new(AgentsArea {
             home,
             node,
             roles,
+            sync_state,
             sessions: provided
                 .get::<dyn Sessions>()
                 .context("agents sync needs sessions")?,
@@ -104,21 +161,25 @@ impl Area for AgentsArea {
             out,
             incoming,
             watch: None,
+            sync_state: self.sync_state.clone(),
         }))
     }
     fn commands(&self) -> Vec<Command> {
-        let (home, node) = (self.home.clone(), self.node.clone());
+        let (home, node, sync_state) = (
+            self.home.clone(),
+            self.node.clone(),
+            self.sync_state.clone(),
+        );
         let show = Command::new(
             "agents_show",
             "Report this node's agent tools, skills and checkouts.",
             || object(json!({}), &[]),
             move |_| {
-                let (home, node) = (home.clone(), node.clone());
+                let (home, node, sync_state) = (home.clone(), node.clone(), sync_state.clone());
                 async move {
                     let home =
                         home.ok_or_else(|| Error::new(FAILED, "this node has no home folder"))?;
-                    let mut report = gather(&home, Fetch::Fetching).await;
-                    report.fetch(&home).await;
+                    let report = sync_state.report(&home).await;
                     let mut value: Value = serde_json::from_str(&report.json(&home))
                         .map_err(|e| Error::new(FAILED, e.to_string()))?;
                     value["node"] = json!(node);
@@ -126,21 +187,36 @@ impl Area for AgentsArea {
                 }
             },
         );
-        let (home, sessions, node) = (self.home.clone(), self.sessions.clone(), self.node.clone());
+        let (home, sessions, node, sync_state) = (
+            self.home.clone(),
+            self.sessions.clone(),
+            self.node.clone(),
+            self.sync_state.clone(),
+        );
         let sync = Command::new(
             "agents_sync",
             "Sync a skills checkout in a terminal session.",
             || object(json!({"checkout":{"type":"string"}}), &["checkout"]),
             move |args| {
-                let (home, sessions, node) = (home.clone(), sessions.clone(), node.clone());
+                let (home, sessions, node, sync_state) = (
+                    home.clone(),
+                    sessions.clone(),
+                    node.clone(),
+                    sync_state.clone(),
+                );
                 async move {
                     let home =
                         home.ok_or_else(|| Error::new(FAILED, "this node has no home folder"))?;
-                    let checkout =
-                        text(&args, "checkout").map_err(|e| Error::new(FAILED, e.to_string()))?;
-                    let session = sync::sync(&home, sessions.as_ref(), checkout)
-                        .await
-                        .map_err(|e| Error::new(FAILED, format!("{e:#}")))?;
+                    let checkout = text(&args, "checkout")
+                        .map_err(|e| Error::new(FAILED, e.to_string()))?
+                        .to_owned();
+                    // A caller can disconnect while git is running. Finish the
+                    // operation so its shared result cannot remain "fetching".
+                    let session = tokio::spawn(async move {
+                        sync_state.sync(&home, sessions.as_ref(), &checkout).await
+                    })
+                    .await
+                    .map_err(|error| Error::new(FAILED, error.to_string()))??;
                     Ok(json!({"node":node,"session":session}))
                 }
             },
@@ -192,6 +268,7 @@ struct Connection {
     out: mpsc::Sender<Vec<u8>>,
     incoming: mpsc::Receiver<Vec<u8>>,
     watch: Option<JoinHandle<()>>,
+    sync_state: Arc<SyncState>,
 }
 impl Drop for Connection {
     fn drop(&mut self) {
@@ -213,24 +290,30 @@ impl Channel for Connection {
                     }
                     if on {
                         let out = self.out.clone();
+                        let sync_state = self.sync_state.clone();
+                        let mut changes = sync_state.changes.subscribe();
                         self.watch = Some(tokio::spawn(async move {
-                            let mut report = gather(&home, Fetch::Fetching).await;
-                            let frame = report_frame(&report.json(&home));
-                            if out.send(frame).await.is_err() || report.checkouts.is_empty() {
-                                return;
+                            loop {
+                                let report = sync_state.report(&home).await;
+                                if out.send(report_frame(&report.json(&home))).await.is_err() {
+                                    return;
+                                }
+                                match changes.recv().await {
+                                    Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => (),
+                                    Err(broadcast::error::RecvError::Closed) => return,
+                                }
                             }
-                            report.fetch(&home).await;
-                            let frame = report_frame(&report.json(&home));
-                            let _ = out.send(frame).await;
                         }));
                     }
                 }
                 Some(Request::Sync { id, checkout }) => {
-                    let (out, sessions) = (self.out.clone(), self.sessions.clone());
+                    let (out, sessions, sync_state) = (
+                        self.out.clone(),
+                        self.sessions.clone(),
+                        self.sync_state.clone(),
+                    );
                     tokio::spawn(async move {
-                        let answer = sync::sync(&home, sessions.as_ref(), &checkout)
-                            .await
-                            .map_err(|e| Error::new(FAILED, format!("{e:#}")));
+                        let answer = sync_state.sync(&home, sessions.as_ref(), &checkout).await;
                         let _ = out.send(synced_frame(id, answer)).await;
                     });
                 }

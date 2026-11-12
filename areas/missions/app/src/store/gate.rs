@@ -63,10 +63,11 @@ pub fn route(targets: &[Target], answer: &str, alone: bool) -> (String, String) 
 
 /// Names the card whose output the gate is considering.
 pub fn source(mission: &parvi_missions_contract::Mission, id: &str) -> String {
-    if id.is_empty() {
+    let title = mission.node_title(id).trim();
+    if title.is_empty() {
         "upstream step".into()
     } else {
-        mission.node_name(id).to_owned()
+        title.into()
     }
 }
 /// Names candidates and the judge's recommendation in a pick request.
@@ -105,7 +106,7 @@ pub fn picking_words(pick: &serde_json::Value, goes: &str) -> Vec<String> {
 mod tests {
     use super::*;
     #[test]
-    fn a_gate_quote_names_the_feeding_card_or_its_id() {
+    fn a_gate_quote_names_the_feeding_card_or_a_plain_fallback() {
         let mission = parvi_missions_contract::Mission {
             formations: vec![
                 parvi_missions_contract::Formation {
@@ -121,8 +122,8 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(source(&mission, "named"), "Plan");
-        assert_eq!(source(&mission, "untitled"), "untitled");
-        assert_eq!(source(&mission, "missing"), "missing");
+        assert_eq!(source(&mission, "untitled"), "upstream step");
+        assert_eq!(source(&mission, "missing"), "upstream step");
         assert_eq!(source(&mission, ""), "upstream step");
     }
     #[test]

@@ -12,6 +12,8 @@ use std::time::Duration;
 
 pub const NAMES: &[&str] = &[
     "mission_list",
+    "mission_archives",
+    "mission_purge_archive",
     "mission_inspect",
     "mission_validate",
     "mission_new",
@@ -94,6 +96,12 @@ pub fn commands(missions: &Missions) -> Vec<Command> {
 fn description(name: &str) -> &'static str {
     match name {
         "mission_list" => "List the missions on this node.",
+        "mission_archives" => {
+            "List archived mission definitions, layouts and notes, including partial archives."
+        }
+        "mission_purge_archive" => {
+            "Permanently remove a listed mission archive's definition, layout and associated notes; unrelated notes and run history remain."
+        }
         "mission_inspect" => "Read a mission and its graph.",
         "mission_validate" => "Report errors and warnings on a mission.",
         "mission_new" => "Create an empty mission.",
@@ -129,7 +137,10 @@ fn schema(name: &str) -> Value {
     let b = json!({"type":"boolean"});
     let obj = json!({"type":"object"});
     match name {
-        "mission_list" => object(json!({}), &[]),
+        "mission_list" | "mission_archives" => object(json!({}), &[]),
+        "mission_purge_archive" => {
+            object(json!({"slug":s,"archive_id":s}), &["slug", "archive_id"])
+        }
         "mission_new" => object(json!({"slug":s,"title":s}), &["slug"]),
         "mission_edit" => object(
             json!({"mission":s,"change":obj,"rev":i}),
@@ -262,6 +273,18 @@ async fn call(m: Missions, name: &str, a: Value) -> Result<Value, Error> {
                 return Err(bad("no arguments expected"));
             }
             Ok(json!({"node":node,"missions":m.store.list_missions()?}))
+        }
+        "mission_archives" => {
+            if a.as_object().is_some_and(|v| !v.is_empty()) {
+                return Err(bad("no arguments expected"));
+            }
+            Ok(json!({"node":node,"archives":m.store.mission_archives()?}))
+        }
+        "mission_purge_archive" => {
+            let removed = m
+                .store
+                .remove_mission_archive(required(&a, "slug")?, required(&a, "archive_id")?)?;
+            Ok(json!({"node":node,"removed":removed}))
         }
         "mission_new" => {
             let slug = required(&a, "slug")?;

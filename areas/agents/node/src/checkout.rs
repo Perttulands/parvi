@@ -1,6 +1,6 @@
 //! A skills repository's checkout, such as agent-kit: where it is, what it
 //! has checked out, how far it is from its upstream, and the setup script
-//! a sync runs after pulling.
+//! a sync runs after fast-forwarding.
 
 use std::path::{Path, PathBuf};
 
@@ -32,6 +32,8 @@ pub struct Checkout {
 /// How current `behind` and `ahead` are.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fetch {
+    /// Local refs as last updated by any external or prior fetch.
+    Local,
     /// As of the checkout's last fetch; a fresh one is under way.
     Fetching,
     Fetched,

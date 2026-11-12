@@ -11,6 +11,8 @@ const LAB: Listing = Listing {
 };
 const EXPECTED: &[&str] = &[
     "mission_list",
+    "mission_archives",
+    "mission_purge_archive",
     "mission_inspect",
     "mission_validate",
     "mission_new",
@@ -101,7 +103,7 @@ async fn command_list_and_coded_failures() {
         .unwrap();
     for &command in EXPECTED {
         let args = match command {
-            "mission_list" => json!({"unexpected":true}),
+            "mission_list" | "mission_archives" => json!({"unexpected":true}),
             "run_list" => json!({"mission":9}),
             _ => json!({}),
         };
@@ -448,6 +450,32 @@ async fn cli_uses_the_same_mission_commands() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn end_create_help_names_the_outcomes_and_default() {
+    let node = Node::start(&[sessions::LISTING, parvi_work::LISTING, LAB], "")
+        .await
+        .unwrap();
+    let args = vec![
+        "create".to_owned(),
+        "--help".to_owned(),
+        "--node".to_owned(),
+        format!("{}/", node.url()),
+    ];
+    let mut output = Vec::new();
+    assert_eq!(
+        parvi_node_kit::cli::run("end", &args, &mut output)
+            .await
+            .unwrap(),
+        0
+    );
+    let help = String::from_utf8(output).unwrap();
+    assert!(
+        help.contains("--outcome is done (the default) or rejected"),
+        "{help}"
+    );
+    node.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn specialized_authoring_commands_build_and_edit_a_graph() {
     let node = Node::start(&[sessions::LISTING, parvi_work::LISTING, LAB], "")
         .await
@@ -702,5 +730,121 @@ async fn specialized_authoring_commands_build_and_edit_a_graph() {
     node.call("mission_delete", json!({"mission":"board"}))
         .await
         .unwrap();
+    node.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cli_lists_and_removes_deleted_mission_archives() {
+    let node = Node::start(&[sessions::LISTING, parvi_work::LISTING, LAB], "")
+        .await
+        .unwrap();
+    node.call("mission_new", json!({"slug":"archived","title":"Archived"}))
+        .await
+        .unwrap();
+    node.call(
+        "mission_edit",
+        json!({"mission":"archived","change":{"createInputCard":{"title":"Start","goal":"Work"}}}),
+    )
+    .await
+    .unwrap();
+    node.call(
+        "mission_note",
+        json!({"mission":"archived","text":"Keep this note"}),
+    )
+    .await
+    .unwrap();
+    async fn cli(node: &Node, args: &[&str]) -> serde_json::Value {
+        let mut args: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();
+        args.extend(["--node".into(), format!("{}/", node.url()), "--json".into()]);
+        let mut output = Vec::new();
+        assert_eq!(
+            parvi_node_kit::cli::run("mission", &args, &mut output)
+                .await
+                .unwrap(),
+            0,
+            "{args:?}"
+        );
+        serde_json::from_slice(&output).unwrap()
+    }
+    let mut help = Vec::new();
+    let args = vec![
+        "delete".into(),
+        "--help".into(),
+        "--node".into(),
+        format!("{}/", node.url()),
+    ];
+    assert_eq!(
+        parvi_node_kit::cli::run("mission", &args, &mut help)
+            .await
+            .unwrap(),
+        0
+    );
+    let help = String::from_utf8(help).unwrap();
+    assert!(
+        help.contains("archive") && help.contains("purge-archive"),
+        "{help}"
+    );
+    let deletion = cli(&node, &["delete", "archived"]).await;
+    let archive = deletion["deletion"]["archiveId"].as_str().unwrap();
+    assert!(
+        cli(&node, &["list"]).await["missions"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let listed = cli(&node, &["archives"]).await;
+    let record = listed["archives"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["archiveId"] == archive)
+        .unwrap();
+    assert_eq!(record["slug"], "archived");
+    assert_eq!(record["mission"], true);
+    assert_eq!(record["layout"], true);
+    assert_eq!(record["notes"], true);
+    // Reusing the slug must not let purging the earlier archive remove the
+    // new definition, its notes, or any run history.
+    node.call(
+        "mission_new",
+        json!({"slug":"archived","title":"Replacement"}),
+    )
+    .await
+    .unwrap();
+    let notes = node.dir().join("missions/notes/archived.notes.toml");
+    assert!(!notes.exists());
+    node.call(
+        "mission_note",
+        json!({"mission":"archived","text":"Replacement note"}),
+    )
+    .await
+    .unwrap();
+    assert!(notes.exists());
+    let run_dir = node.dir().join("missions/runs");
+    std::fs::create_dir_all(&run_dir).unwrap();
+    std::fs::write(run_dir.join("keep-history"), "unrelated run").unwrap();
+    let removed = cli(&node, &["purge-archive", "archived", archive]).await;
+    assert_eq!(removed["removed"]["archiveId"], archive);
+    assert!(
+        cli(&node, &["archives"]).await["archives"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        node.call("mission_inspect", json!({"mission":"archived"}))
+            .await
+            .unwrap()["mission"]["title"],
+        "Replacement"
+    );
+    assert!(
+        std::fs::read_to_string(&notes)
+            .unwrap()
+            .contains("Replacement note")
+    );
+    assert_eq!(
+        std::fs::read_to_string(run_dir.join("keep-history")).unwrap(),
+        "unrelated run"
+    );
     node.stop().await;
 }

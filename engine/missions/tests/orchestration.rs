@@ -420,3 +420,137 @@ async fn controller_output_reaches_gate_and_lost_workers_are_reported() {
     node.stop().await;
     std::fs::remove_dir_all(root).unwrap();
 }
+
+// The same real SeatExecutor is driven through the node's public CLI here.
+static CLI_SEATS: Mutex<Option<Arc<LabSeats>>> = Mutex::new(None);
+struct CliSeatExecutor(tokio::runtime::Handle);
+impl parvi_mission_engine::Executor for CliSeatExecutor {
+    fn execute_formation(
+        &self,
+        execution: parvi_mission_engine::FormationExecution,
+        sink: parvi_mission_engine::ExecutionSink,
+    ) -> Result<parvi_mission_engine::FormationResult, parvi_mission_engine::Error> {
+        let seats = CLI_SEATS.lock().unwrap().as_ref().unwrap().clone();
+        parvi_mission_engine::Executor::execute_formation(
+            &SeatExecutor::new(seats, self.0.clone()),
+            execution,
+            sink,
+        )
+    }
+}
+fn cli_build(setup: &parvi_node_kit::Setup) -> anyhow::Result<parvi_node_kit::Built> {
+    parvi_missions::build_with_executor(
+        setup,
+        Some(Box::new(CliSeatExecutor(tokio::runtime::Handle::current()))),
+    )
+}
+const CLI_MISSIONS: parvi_node_kit::Listing = parvi_node_kit::Listing {
+    build: cli_build,
+    ..parvi_missions::LISTING
+};
+async fn cli(node: &Node, noun: &str, args: &[&str]) -> serde_json::Value {
+    let mut argv: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();
+    argv.extend(["--node".into(), format!("{}/", node.url()), "--json".into()]);
+    let mut output = Vec::new();
+    let exit = parvi_node_kit::cli::run(noun, &argv, &mut output)
+        .await
+        .unwrap();
+    assert_eq!(
+        exit,
+        0,
+        "{noun} {argv:?}: {}",
+        String::from_utf8_lossy(&output)
+    );
+    serde_json::from_slice(&output).unwrap()
+}
+#[tokio::test(flavor = "multi_thread")]
+async fn cli_runs_orchestration_to_end_with_controller_and_worker_seats() {
+    let node = Node::start(&[sessions::LISTING, parvi_work::LISTING, CLI_MISSIONS], "")
+        .await
+        .unwrap();
+    let root = node.dir().join("missions");
+    let seats = Arc::new(LabSeats {
+        sessions: node.sessions(),
+        root: root.clone(),
+        entries: Default::default(),
+    });
+    *CLI_SEATS.lock().unwrap() = Some(seats.clone());
+    let mission = include_str!("parity/runs/missions/solo-lab.mission.toml")
+        .replace("type = \"solo\"", "type = \"orchestrated\"")
+        .replace("id = \"slot_work\"", "id = \"slot_lead\"\ncontroller = true")
+        .replace("[[end]]", "[[formation.slot]]\nid = \"slot_worker\"\nlabel = \"Worker\"\nharness = \"openai-codex\"\neffort = \"medium\"\n\n[[end]]");
+    std::fs::create_dir_all(root.join("missions")).unwrap();
+    std::fs::write(root.join("missions/hello.mission.toml"), mission).unwrap();
+    let started = cli(
+        &node,
+        "mission",
+        &["run", "hello", "--inputs", r#"{"brief":"ship"}"#],
+    )
+    .await;
+    let run = started["runId"].as_str().unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let ready = {
+                let entries = seats.entries.lock().unwrap();
+                entries.len() == 2
+                    && entries
+                        .values()
+                        .any(|e| e.dispatch.slot_id == "slot_lead" && e.staged)
+            };
+            if ready {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("controller and worker prepared");
+    {
+        let mut entries = seats.entries.lock().unwrap();
+        assert!(
+            entries
+                .values()
+                .any(|e| e.dispatch.slot_id == "slot_worker" && !e.staged)
+        );
+        let lead = entries
+            .values_mut()
+            .find(|e| e.dispatch.slot_id == "slot_lead")
+            .unwrap();
+        let brief = std::fs::read_to_string(&lead.path).unwrap();
+        assert!(brief.contains("seat-slot_worker"));
+        lead.result = Some(DispatchResult {
+            status: "ok".into(),
+            text: "```parvi-outputs\n{\"port_out\":{\"text\":\"controller-result\"}}\n```".into(),
+        });
+        let data = json!({"dispatchId":lead.dispatch.id,"sentinel":{"runId":run}});
+        lead.events.push(SeatEvent {
+            key: "result".into(),
+            seq: 3,
+            kind: "slot_result".into(),
+            data: data.as_object().unwrap().clone(),
+        });
+    }
+    let final_run = cli(
+        &node,
+        "run",
+        &["wait", run, "--until", "final", "--timeout", "10"],
+    )
+    .await;
+    assert_eq!(final_run["status"], "succeeded", "{final_run}");
+    let ledger =
+        parvi_mission_engine::Ledger::new(root.join("runs").join(format!("{run}.ndjson")), run)
+            .read()
+            .unwrap();
+    assert!(
+        ledger
+            .iter()
+            .any(|e| e.kind == "orchestration_team" && e.data["controllerSlot"] == "slot_lead")
+    );
+    assert!(
+        ledger
+            .iter()
+            .any(|e| e.kind == "node_output" && e.node_id == "fmn_work")
+    );
+    node.stop().await;
+    *CLI_SEATS.lock().unwrap() = None;
+}

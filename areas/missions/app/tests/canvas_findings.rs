@@ -116,6 +116,24 @@ fn canvas_shows_exact_findings_on_cards_and_edges_and_clears_them(cx: &mut TestA
             && cx.debug_bounds("validation-edge-edge_duplicate").is_some()
             && cx.debug_bounds("validation-edge-edge_dangling").is_some()
     });
+    until(cx, "gate note control", |cx| {
+        cx.debug_bounds("canvas-note-pin-gate_review").is_some()
+    });
+    let gate = cx.debug_bounds("mission-card-gate_review").unwrap();
+    let pin = cx.debug_bounds("canvas-note-pin-gate_review").unwrap();
+    let pass = cx.debug_bounds("canvas-gate-pass-label").unwrap();
+    let fail = cx.debug_bounds("canvas-gate-fail-label").unwrap();
+    assert!(pin.origin.x >= gate.origin.x && pin.origin.y >= gate.origin.y);
+    assert!(pin.origin.x + pin.size.width <= gate.origin.x + gate.size.width);
+    assert!(pin.origin.y + pin.size.height <= gate.origin.y + gate.size.height);
+    for label in [pass, fail] {
+        assert!(
+            pin.origin.x + pin.size.width <= label.origin.x
+                || label.origin.x + label.size.width <= pin.origin.x
+                || pin.origin.y + pin.size.height <= label.origin.y
+                || label.origin.y + label.size.height <= pin.origin.y
+        );
+    }
     let rt = tokio::runtime::Runtime::new().unwrap();
     let client = NodeClient::new(Some(&format!("{}/", running.url))).unwrap();
     let (report, _) = rt
@@ -126,6 +144,26 @@ fn canvas_shows_exact_findings_on_cards_and_edges_and_clears_them(cx: &mut TestA
             None,
         ))
         .unwrap();
+    let mission = parvi_missions_contract::Mission::parse(include_str!(
+        "fixtures/validation-clean.mission.toml"
+    ))
+    .unwrap();
+    let finding = report["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|finding| {
+            finding["nodeId"] == "step_work"
+                && finding["message"].as_str().unwrap().contains("step_work")
+        })
+        .unwrap();
+    let text = parvi_missions_app::store::validation::readable_message(
+        &mission,
+        finding["message"].as_str().unwrap(),
+    );
+    assert!(!text.contains("step_work"));
+    let selector = Box::leak(format!("validation-display-Work: {text}").into_boxed_str());
+    assert!(cx.debug_bounds(selector).is_some());
     for id in [
         "step_work",
         "gate_review",

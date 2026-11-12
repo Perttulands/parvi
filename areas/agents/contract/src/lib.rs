@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub const FAILED: &str = "agents_failed";
+pub const FETCH_FAILED: &str = "agents_fetch_failed";
 
 pub const WATCH: u8 = 0x80;
 pub const SYNC: u8 = 0x81;

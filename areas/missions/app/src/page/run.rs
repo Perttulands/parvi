@@ -1010,7 +1010,12 @@ impl MissionsPage {
         };
         div().child(button)
     }
-    pub(super) fn run_start_form(&self, t: &Theme, cx: &mut Context<Self>) -> Option<Div> {
+    pub(super) fn run_start_form(
+        &self,
+        t: &Theme,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Div> {
         if self.run.starting {
             let mut form = div()
                 .p(px(PAD))
@@ -1063,8 +1068,63 @@ impl MissionsPage {
                     form = form.child(div().text_color(t.dim).child(description.to_owned()));
                 }
             }
-            if !self.run.busy && self.run.uncertain.is_none() {
+            form = form
+                .child("Working directory")
+                .child(div().child(self.run.cwd.clone()))
+                .child("Repository")
+                .child(div().child(self.run.repository.clone()))
+                .child("Base")
+                .child(div().child(self.run.base.clone()))
+                .child("Work reference")
+                .child(div().child(self.run.work.clone()))
+                .child("Context paths")
+                .child(
+                    div()
+                        .debug_selector(|| "run-context-paths".into())
+                        .child(self.run.paths.clone()),
+                );
+            if self.run.uncertain.is_some() && !self.run.busy {
+                form = form.child("Retry sends the same start request and its original values.");
+            }
+            form = form.when_some(self.run.error.clone(), |d, e| {
+                let message = self
+                    .run
+                    .start_definition
+                    .as_ref()
+                    .map(|(mission, _)| crate::store::validation::readable_message(mission, &e))
+                    .unwrap_or(e);
+                d.child(div().text_color(t.error).child(message))
+            });
+            for (i, finding) in self.run.findings.iter().enumerate() {
+                let selector = if finding.ends_with(" is required.") {
+                    format!("run-required-{}", finding.trim_end_matches(" is required."))
+                } else {
+                    format!("run-finding-{i}-{finding}")
+                };
+                let display = self
+                    .run
+                    .start_definition
+                    .as_ref()
+                    .map(|(mission, _)| {
+                        crate::store::validation::readable_message(mission, finding)
+                    })
+                    .unwrap_or_else(|| finding.clone());
                 form = form.child(
+                    div()
+                        .debug_selector(move || selector.clone())
+                        .text_color(t.error)
+                        .child(display),
+                );
+            }
+            let mut actions = div()
+                .p(px(PAD))
+                .flex_none()
+                .flex()
+                .justify_end()
+                .gap(px(PAD))
+                .debug_selector(|| "run-start-actions".into());
+            if !self.run.busy && self.run.uncertain.is_none() {
+                actions = actions.child(
                     kit::button(t, "run-cancel", "Cancel", Kind::Quiet)
                         .debug_selector(|| "run-cancel".into())
                         .on_click(cx.listener(|page, _, _, cx| {
@@ -1076,41 +1136,16 @@ impl MissionsPage {
                         })),
                 );
             }
-            form = form.child(
+            actions = actions.child(
                 kit::button(t, "run-start", "Start run", Kind::Primary)
                     .debug_selector(|| "run-start".into())
                     .on_click(cx.listener(|p, _, _, cx| p.start_run(cx))),
             );
-            form = form
-                .child("Working directory")
-                .child(div().child(self.run.cwd.clone()))
-                .child("Repository")
-                .child(div().child(self.run.repository.clone()))
-                .child("Base")
-                .child(div().child(self.run.base.clone()))
-                .child("Work reference")
-                .child(div().child(self.run.work.clone()))
-                .child("Context paths")
-                .child(div().child(self.run.paths.clone()));
-            if self.run.uncertain.is_some() && !self.run.busy {
-                form = form.child("Retry sends the same start request and its original values.");
-            }
-            form = form.when_some(self.run.error.clone(), |d, e| {
-                d.child(div().text_color(t.error).child(e))
-            });
-            for (i, finding) in self.run.findings.iter().enumerate() {
-                let selector = if finding.ends_with(" is required.") {
-                    format!("run-required-{}", finding.trim_end_matches(" is required."))
-                } else {
-                    format!("run-finding-{i}-{finding}")
-                };
-                form = form.child(
-                    div()
-                        .debug_selector(move || selector.clone())
-                        .text_color(t.error)
-                        .child(finding.clone()),
-                );
-            }
+            let available = (f32::from(window.viewport_size().height)
+                - size::TAB_BAR * 2.
+                - size::STATUS
+                - PAD)
+                .clamp(size::CONTROL * 3., START_FORM_MAX);
             return Some(
                 div()
                     .absolute()
@@ -1126,9 +1161,11 @@ impl MissionsPage {
                             .id("start-dialog")
                             .debug_selector(|| "start-dialog".into())
                             .w(px(size::NOTICE))
-                            .max_h(px(560.))
-                            .overflow_y_scroll()
-                            .child(form),
+                            .max_h(px(available))
+                            .flex()
+                            .flex_col()
+                            .child(form.id("start-fields").min_h_0().overflow_y_scroll())
+                            .child(actions),
                     ),
             );
         }
@@ -1152,7 +1189,13 @@ impl MissionsPage {
             .flex_col()
             .gap(px(PAD))
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(format!("Stop run {}?", run.run_id));
+            .child(format!(
+                "Stop {}?",
+                mission
+                    .map(|m| m.title.as_str())
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or(&run.mission_slug)
+            ));
         for point in run_state::points(run) {
             if point.kind == run_state::PointKind::Running && !point.node.is_empty() {
                 let title = mission
@@ -1512,16 +1555,24 @@ impl MissionsPage {
         if self.run.starting {
             return None;
         }
-        let id = self.run.selected.as_ref()?;
-        let mut view = div()
-            .p(px(PAD))
-            .flex()
-            .flex_col()
-            .gap(px(PAD))
-            .child(format!("Run {id}"));
+        self.run.selected.as_ref()?;
+        let mut view = div().p(px(PAD)).flex().flex_col().gap(px(PAD));
         let Some(run) = self.selected_run().cloned() else {
             return Some(view.child("Waiting for run state…"));
         };
+        let mission = self.run.frozen.as_ref().or(self.state.mission.as_ref());
+        let title = mission
+            .map(|m| m.title.trim())
+            .filter(|title| !title.is_empty())
+            .unwrap_or(&run.mission_slug);
+        view = view.child(
+            div()
+                .debug_selector({
+                    let title = title.to_owned();
+                    move || format!("run-mission-{title}")
+                })
+                .child(format!("Run · {title}")),
+        );
         if self.run.frozen.is_none() && self.run.error.is_some() {
             view = view.child(
                 kit::button(t, "retry-run-definition", "Try again", Kind::Plain)
@@ -1554,7 +1605,10 @@ impl MissionsPage {
         view = view.child(
             div()
                 .debug_selector(move || status_selector.clone())
-                .child(format!("Status: {}", run.status)),
+                .child(format!(
+                    "Status: {}",
+                    crate::store::words::state_word(&run.status)
+                )),
         );
         let now = time::OffsetDateTime::now_utc();
         let when = crate::store::words::short_time(&run.started_at, now);
@@ -1604,10 +1658,13 @@ impl MissionsPage {
                     .cloned()
                     .collect::<Vec<_>>()
                     .join(" · ");
-                events = events.child(format!(
-                    "{} · {} · {} {}",
-                    event.seq, event.kind, id, detail
-                ));
+                let node = mission
+                    .map(|m| m.node_title(id))
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(id);
+                let text = format!("{} · {} · {} {}", event.seq, event.kind, node, detail);
+                let selector = format!("run-event-{}-{}", event.kind, event.detail);
+                events = events.child(div().debug_selector(move || selector.clone()).child(text));
             }
             view = view.child(events);
         }
@@ -1630,12 +1687,26 @@ impl MissionsPage {
         for gate in &run.waiting_gates {
             let gate_id = gate.gate_id.clone();
             let seq = gate.requested_seq;
+            let gate_title = mission
+                .map(|m| m.node_title(&gate_id))
+                .filter(|title| !title.trim().is_empty())
+                .unwrap_or("Review");
             let mut row = div()
                 .debug_selector(|| "run-gate".into())
                 .p(px(PAD))
+                .flex()
+                .flex_col()
+                .gap(px(PAD))
                 .border_1()
                 .border_color(t.accent)
-                .child(format!("Waiting for you: {gate_id}"));
+                .child(
+                    div()
+                        .debug_selector({
+                            let title = gate_title.to_owned();
+                            move || format!("gate-title-{title}")
+                        })
+                        .child(format!("Waiting for your answer · {gate_title}")),
+                );
             if let Some((_, Ok(Some(request)))) = self.run.gates.get(&gate_id) {
                 let source = self
                     .run
@@ -1643,19 +1714,32 @@ impl MissionsPage {
                     .as_ref()
                     .or(self.state.mission.as_ref())
                     .map(|mission| crate::store::gate::source(mission, &request.input.from_node_id))
-                    .unwrap_or_else(|| request.input.from_node_id.clone());
+                    .unwrap_or_else(|| "upstream step".into());
                 let quote = if request.input.text.trim().is_empty() {
                     "The upstream step sent no text.".to_owned()
                 } else {
                     request.input.text.clone()
                 };
+                let question = if request.criterion.trim().is_empty() {
+                    "Review the result and decide whether to approve it.".to_owned()
+                } else {
+                    request.criterion.clone()
+                };
                 row = row
                     .child(
-                        div()
-                            .debug_selector(|| "gate-request-loaded".into())
-                            .child(request.criterion.clone()),
+                        div().debug_selector(|| "gate-request-loaded".into()).child(
+                            div()
+                                .debug_selector({
+                                    let question = question.clone();
+                                    move || format!("gate-question-{question}")
+                                })
+                                .child(question),
+                        ),
                     )
-                    .child(kit::label(t, format!("From {source}")))
+                    .child(
+                        kit::label(t, format!("From {source}"))
+                            .debug_selector(move || format!("gate-source-{source}")),
+                    )
                     .child(
                         div()
                             .id(SharedString::from(format!("gate-input-{seq}")))
@@ -1685,7 +1769,7 @@ impl MissionsPage {
                         kit::button(
                             t,
                             SharedString::from(format!("gate-retry-{gate_id}")),
-                            "Try again",
+                            "Retry loading gate",
                             Kind::Plain,
                         )
                         .debug_selector(|| "gate-retry".into())
@@ -1706,7 +1790,7 @@ impl MissionsPage {
                 kit::button(
                     t,
                     SharedString::from(format!("gate-send-{gate_id}")),
-                    "Send",
+                    "Send gate to session",
                     Kind::Quiet,
                 )
                 .on_click(cx.listener(move |p, _, _, cx| {
@@ -1809,14 +1893,18 @@ impl MissionsPage {
                     }
                 }
             } else {
-                for (word, verdict) in [(approve_label, "pass"), (reject_label, "fail")] {
+                let mut actions = div().flex().gap(px(PAD));
+                for (word, verdict, kind) in [
+                    (approve_label, "pass", Kind::Primary),
+                    (reject_label, "fail", Kind::Plain),
+                ] {
                     let gate = gate_id.clone();
-                    row = row.child(
+                    actions = actions.child(
                         kit::button(
                             t,
                             SharedString::from(format!("gate-{}-{verdict}", gate_id)),
                             word,
-                            Kind::Primary,
+                            kind,
                         )
                         .debug_selector(move || format!("gate-{verdict}"))
                         .on_click(
@@ -1824,6 +1912,7 @@ impl MissionsPage {
                         ),
                     );
                 }
+                row = row.child(actions);
             }
             view = view.child(row);
         }
@@ -1928,23 +2017,25 @@ impl MissionsPage {
                     .child(format!("Could not load evidence: {error}")),
             );
         }
-        let reference = crate::store::words::run_reference(&run, &place);
-        view = view.child(
-            kit::button(t, "run-send", "Send", Kind::Quiet).on_click(cx.listener(
-                move |p, _, _, cx| {
-                    if let Err(e) = p.host.ask(
-                        Ask::Send {
-                            reference: reference.clone(),
-                            target: None,
-                        },
-                        cx,
-                    ) {
-                        p.run.error = Some(e.message);
-                        cx.notify();
-                    }
-                },
-            )),
-        );
+        if !run.r#final {
+            let reference = crate::store::words::run_reference(&run, &place);
+            view = view.child(
+                kit::button(t, "run-send", "Send run to session", Kind::Quiet)
+                    .debug_selector(|| "run-send".into())
+                    .on_click(cx.listener(move |p, _, _, cx| {
+                        if let Err(e) = p.host.ask(
+                            Ask::Send {
+                                reference: reference.clone(),
+                                target: None,
+                            },
+                            cx,
+                        ) {
+                            p.run.error = Some(e.message);
+                            cx.notify();
+                        }
+                    })),
+            );
+        }
         if !run.r#final {
             view = view.child(
                 kit::button(t, "run-abort", "Stop run", Kind::Quiet)
@@ -1958,10 +2049,14 @@ impl MissionsPage {
                         cx.notify();
                     })),
             );
-        } else if run.status == "succeeded" {
-            view = view.child(kit::button(t, "run-land", "Land", Kind::Quiet).on_click(
-                cx.listener(|p, _, _, cx| p.run_post("/land".into(), json!({"force":false}), cx)),
-            ));
+        } else if !run.repository.is_empty() {
+            view = view.child(
+                kit::button(t, "run-land", "Land repository run", Kind::Quiet)
+                    .debug_selector(|| "run-land".into())
+                    .on_click(cx.listener(|p, _, _, cx| {
+                        p.run_post("/land".into(), json!({"force":false}), cx)
+                    })),
+            );
         }
         if run.resume_allowed {
             view = view.child(
@@ -2030,7 +2125,9 @@ impl MissionsPage {
                 .as_ref()
                 .map(|m| m.node_name(&point.node))
                 .unwrap_or(point.node.as_str());
-            view = view.child(run_state::phrase(&point, title));
+            let phrase = run_state::phrase(&point, title);
+            let selector = format!("run-sentence-{phrase}");
+            view = view.child(div().debug_selector(move || selector.clone()).child(phrase));
         }
         let mission = self
             .run
@@ -2316,20 +2413,24 @@ impl MissionsPage {
             );
             let send_id = format!("send-output-{}", output.name);
             view = view.child(text).child(
-                kit::button(t, SharedString::from(send_id), "Send", Kind::Quiet).on_click(
-                    cx.listener(move |p, _, _, cx| {
-                        if let Err(e) = p.host.ask(
-                            Ask::Send {
-                                reference: reference.clone(),
-                                target: None,
-                            },
-                            cx,
-                        ) {
-                            p.run.error = Some(e.message);
-                            cx.notify();
-                        }
-                    }),
-                ),
+                kit::button(
+                    t,
+                    SharedString::from(send_id),
+                    "Send output to session",
+                    Kind::Quiet,
+                )
+                .on_click(cx.listener(move |p, _, _, cx| {
+                    if let Err(e) = p.host.ask(
+                        Ask::Send {
+                            reference: reference.clone(),
+                            target: None,
+                        },
+                        cx,
+                    ) {
+                        p.run.error = Some(e.message);
+                        cx.notify();
+                    }
+                })),
             );
             if matches!(output.kind.as_str(), "file" | "folder") {
                 let path = output.value.clone();

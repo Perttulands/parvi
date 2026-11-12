@@ -217,4 +217,28 @@ fn comparing_and_picking_attempt_records_the_reason(cx: &mut TestAppContext) {
         assert!(Instant::now() < deadline, "pick was not recorded");
         std::thread::sleep(Duration::from_millis(20));
     }
+    loop {
+        let run = rt.block_on(async {
+            client
+                .request(
+                    http::Method::GET,
+                    &format!("/api/runs/{run_id}"),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+                .0
+        });
+        if run["final"] == true {
+            assert_eq!(run["status"], "picked", "{run}");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "picked run did not reach End: {run}"
+        );
+        cx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }

@@ -198,7 +198,7 @@ fn create_nodes_with_default_shapes() {
 }
 
 #[test]
-fn delete_archives_mission_and_layout_without_touching_notes() {
+fn delete_archives_mission_layout_and_its_own_notes() {
     let dir = Scratch::new();
     let store = Store::new(&dir.0);
     let edit = store.create_mission("work", "Work", "human:ui").unwrap();
@@ -215,8 +215,17 @@ fn delete_archives_mission_and_layout_without_touching_notes() {
             "human:ui",
         )
         .unwrap();
-    std::fs::create_dir_all(dir.0.join("notes")).unwrap();
-    std::fs::write(dir.0.join("notes/work.notes.toml"), "preserved").unwrap();
+    let saved_notes = store
+        .patch_notes(
+            "work",
+            "*",
+            parvi_mission_model::NotePatch::Append {
+                target: "mission".into(),
+                author: "human:ui".into(),
+                text: "preserved".into(),
+            },
+        )
+        .unwrap();
     let removed = store.delete_mission("work", pre(&edit)).unwrap();
     assert!(store.list_missions().unwrap().is_empty());
     assert!(
@@ -235,10 +244,14 @@ fn delete_archives_mission_and_layout_without_touching_notes() {
             ))
             .exists()
     );
-    assert_eq!(
-        std::fs::read_to_string(dir.0.join("notes/work.notes.toml")).unwrap(),
-        "preserved"
-    );
+    assert!(!dir.0.join("notes/work.notes.toml").exists());
+    let archived_notes = std::fs::read_to_string(dir.0.join(format!(
+        "notes/work.notes.toml.deleted-{}",
+        removed.archive_id
+    )))
+    .unwrap();
+    let archived_notes = parvi_mission_model::Notes::parse(&archived_notes).unwrap();
+    assert_eq!(archived_notes, saved_notes.notes);
 }
 
 #[test]
@@ -1813,4 +1826,396 @@ fn swapping_staffing_is_one_revision_and_reversible_across_formations() {
         store.read_mission("work").unwrap().formations[0].slots[0].agent_id,
         "builder"
     );
+}
+
+#[test]
+fn deleted_mission_archives_can_be_listed_and_removed_without_touching_reused_slug() {
+    let dir = Scratch::new();
+    let store = Store::new(&dir.0);
+    let original = store
+        .create_mission("work", "Original", "human:ui")
+        .unwrap();
+    let original = store
+        .patch(
+            "work",
+            pre(&original),
+            Patch::CreateEnd {
+                title: "Done".into(),
+                outcome: "done".into(),
+                x: 10,
+                y: 20,
+            },
+            "human:ui",
+        )
+        .unwrap();
+    store
+        .patch_notes(
+            "work",
+            "*",
+            parvi_mission_model::NotePatch::Append {
+                target: "mission".into(),
+                author: "human:ui".into(),
+                text: "original notes".into(),
+            },
+        )
+        .unwrap();
+    std::fs::create_dir_all(dir.0.join("runs")).unwrap();
+    std::fs::write(dir.0.join("runs/run_1.ndjson"), "retained history").unwrap();
+    let deleted = store.delete_mission("work", pre(&original)).unwrap();
+    let current = store
+        .create_mission("work", "Replacement", "human:ui")
+        .unwrap();
+    store
+        .patch_notes(
+            "work",
+            "*",
+            parvi_mission_model::NotePatch::Append {
+                target: "mission".into(),
+                author: "human:ui".into(),
+                text: "replacement notes".into(),
+            },
+        )
+        .unwrap();
+    let archives = store.mission_archives().unwrap();
+    assert_eq!(archives.len(), 1);
+    assert_eq!(
+        (&archives[0].slug, &archives[0].archive_id),
+        (&deleted.slug, &deleted.archive_id)
+    );
+    assert!(
+        archives[0].mission
+            && archives[0].layout
+            && archives[0].notes
+            && !archives[0].retained_notes
+    );
+    assert_eq!(
+        store
+            .remove_mission_archive("work", &deleted.archive_id)
+            .unwrap(),
+        archives[0]
+    );
+    assert!(store.mission_archives().unwrap().is_empty());
+    assert_eq!(
+        store.mission_edit("work").unwrap().mission.id,
+        current.mission.id
+    );
+    assert_eq!(
+        store.notes_edit("work").unwrap().notes.entries[0].text,
+        "replacement notes"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.0.join("runs/run_1.ndjson")).unwrap(),
+        "retained history"
+    );
+    assert_eq!(
+        store
+            .remove_mission_archive("work", &deleted.archive_id)
+            .unwrap_err()
+            .code,
+        "not_found"
+    );
+}
+
+#[test]
+fn orphan_and_partial_archives_remain_listable_and_removable() {
+    let dir = Scratch::new();
+    let store = Store::new(&dir.0);
+    std::fs::create_dir_all(dir.0.join("missions")).unwrap();
+    std::fs::create_dir_all(dir.0.join("layout")).unwrap();
+    let mission = dir
+        .0
+        .join("missions/old.mission.toml.deleted-archive_legacy");
+    let layout = dir.0.join("layout/old.layout.toml.deleted-archive_legacy");
+    std::fs::write(&mission, "an unreadable archived definition").unwrap();
+    std::fs::create_dir(&layout).unwrap(); // Removal must not recursively delete this directory.
+    assert!(
+        store
+            .remove_mission_archive("old", "archive_legacy")
+            .is_err()
+    );
+    let list = store.mission_archives().unwrap();
+    assert_eq!(list.len(), 1);
+    assert!(list[0].mission && list[0].layout);
+    std::fs::remove_dir(&layout).unwrap();
+    let removed = store
+        .remove_mission_archive("old", "archive_legacy")
+        .unwrap();
+    assert!(removed.mission && !removed.layout);
+    std::fs::write(&layout, "orphan layout").unwrap();
+    let orphan = store.mission_archives().unwrap();
+    assert_eq!(orphan.len(), 1);
+    assert!(!orphan[0].mission && orphan[0].layout);
+    assert_eq!(
+        store
+            .remove_mission_archive("old", "archive_legacy")
+            .unwrap(),
+        orphan[0]
+    );
+    assert!(store.mission_archives().unwrap().is_empty());
+
+    // A failure after the layout was removed leaves the remaining component
+    // discoverable and removable on a later retry.
+    std::fs::create_dir(&mission).unwrap();
+    std::fs::write(&layout, "layout").unwrap();
+    assert!(
+        store
+            .remove_mission_archive("old", "archive_legacy")
+            .is_err()
+    );
+    let partial = store.mission_archives().unwrap();
+    assert_eq!(partial.len(), 1);
+    assert!(partial[0].mission && !partial[0].layout);
+    std::fs::remove_dir(&mission).unwrap();
+    std::fs::write(&mission, "archive").unwrap();
+    assert_eq!(
+        store
+            .remove_mission_archive("old", "archive_legacy")
+            .unwrap(),
+        partial[0]
+    );
+    assert!(store.mission_archives().unwrap().is_empty());
+}
+
+#[test]
+fn archive_removal_rejects_traversal_and_malformed_ids() {
+    let dir = Scratch::new();
+    let store = Store::new(&dir.0);
+    for (slug, id) in [
+        ("../outside", "archive_a"),
+        ("work", "../../outside"),
+        ("work", "archive_"),
+        ("work/else", "archive_a"),
+        ("work", "archive_a/b"),
+    ] {
+        assert!(
+            store.remove_mission_archive(slug, id).is_err(),
+            "{slug:?} {id:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn removing_an_archived_symlink_does_not_touch_its_target() {
+    use std::os::unix::fs::symlink;
+    let dir = Scratch::new();
+    let store = Store::new(&dir.0);
+    std::fs::create_dir_all(dir.0.join("missions")).unwrap();
+    let target = dir.0.join("outside.toml");
+    std::fs::write(&target, "precious").unwrap();
+    let archived = dir
+        .0
+        .join("missions/link.mission.toml.deleted-archive_link");
+    symlink(&target, &archived).unwrap();
+    assert_eq!(store.mission_archives().unwrap().len(), 1);
+    assert!(
+        store
+            .remove_mission_archive("link", "archive_link")
+            .unwrap()
+            .mission
+    );
+    assert!(!archived.exists());
+    assert_eq!(std::fs::read_to_string(target).unwrap(), "precious");
+}
+
+#[test]
+fn legacy_retained_notes_are_listed_only_for_the_matching_archived_mission() {
+    let dir = Scratch::new();
+    let store = Store::new(&dir.0);
+    let original = store
+        .create_mission("work", "Original", "human:ui")
+        .unwrap();
+    store
+        .patch_notes(
+            "work",
+            "*",
+            parvi_mission_model::NotePatch::Append {
+                target: "mission".into(),
+                author: "human:ui".into(),
+                text: "legacy note".into(),
+            },
+        )
+        .unwrap();
+    let removed = store.delete_mission("work", pre(&original)).unwrap();
+    let live_notes = dir.0.join("notes/work.notes.toml");
+    std::fs::rename(
+        dir.0.join(format!(
+            "notes/work.notes.toml.deleted-{}",
+            removed.archive_id
+        )),
+        &live_notes,
+    )
+    .unwrap();
+    let archived = store.mission_archives().unwrap();
+    assert_eq!(archived.len(), 1);
+    assert!(archived[0].mission && archived[0].retained_notes && !archived[0].notes);
+    // A replacement with a different mission ID does not own the old notes.
+    let replacement = store
+        .create_mission("work", "Replacement", "human:ui")
+        .unwrap();
+    assert!(store.mission_archives().unwrap()[0].retained_notes);
+    let purged = store
+        .remove_mission_archive("work", &removed.archive_id)
+        .unwrap();
+    assert!(purged.retained_notes);
+    assert!(!live_notes.exists());
+    assert_eq!(
+        store.mission_edit("work").unwrap().mission.id,
+        replacement.mission.id
+    );
+}
+
+#[test]
+fn legacy_notes_are_not_claimed_when_ownership_is_ambiguous_or_live() {
+    let dir = Scratch::new();
+    let store = Store::new(&dir.0);
+    let original = store
+        .create_mission("work", "Original", "human:ui")
+        .unwrap();
+    store
+        .patch_notes(
+            "work",
+            "*",
+            parvi_mission_model::NotePatch::Append {
+                target: "mission".into(),
+                author: "human:ui".into(),
+                text: "notes".into(),
+            },
+        )
+        .unwrap();
+    let removed = store.delete_mission("work", pre(&original)).unwrap();
+    let live_notes = dir.0.join("notes/work.notes.toml");
+    std::fs::rename(
+        dir.0.join(format!(
+            "notes/work.notes.toml.deleted-{}",
+            removed.archive_id
+        )),
+        &live_notes,
+    )
+    .unwrap();
+    let archived = dir.0.join(format!(
+        "missions/work.mission.toml.deleted-{}",
+        removed.archive_id
+    ));
+    let second = dir
+        .0
+        .join("missions/work.mission.toml.deleted-archive_second");
+    std::fs::copy(&archived, &second).unwrap();
+    assert!(
+        store
+            .mission_archives()
+            .unwrap()
+            .iter()
+            .all(|archive| !archive.retained_notes)
+    );
+    // A live definition with the same identity also prevents the archive from
+    // claiming notes, even when it is the sole archive.
+    std::fs::remove_file(second).unwrap();
+    std::fs::copy(&archived, dir.0.join("missions/work.mission.toml")).unwrap();
+    assert!(!store.mission_archives().unwrap()[0].retained_notes);
+    store
+        .remove_mission_archive("work", &removed.archive_id)
+        .unwrap();
+    assert!(live_notes.exists());
+    assert_eq!(
+        store.notes_edit("work").unwrap().notes.entries[0].text,
+        "notes"
+    );
+}
+
+#[test]
+fn orphaned_note_archives_are_listed_and_removed() {
+    let dir = Scratch::new();
+    let store = Store::new(&dir.0);
+    std::fs::create_dir_all(dir.0.join("notes")).unwrap();
+    let notes = dir.0.join("notes/work.notes.toml.deleted-archive_note");
+    std::fs::write(&notes, "old note archive").unwrap();
+    let archives = store.mission_archives().unwrap();
+    assert_eq!(archives.len(), 1);
+    assert!(archives[0].notes && !archives[0].mission && !archives[0].layout);
+    assert_eq!(
+        store
+            .remove_mission_archive("work", "archive_note")
+            .unwrap(),
+        archives[0]
+    );
+    assert!(!notes.exists());
+}
+
+#[test]
+fn deleting_refuses_unreadable_notes_without_archiving_the_mission() {
+    let dir = Scratch::new();
+    let store = Store::new(&dir.0);
+    let original = store
+        .create_mission("work", "Original", "human:ui")
+        .unwrap();
+    std::fs::create_dir_all(dir.0.join("notes")).unwrap();
+    let path = dir.0.join("notes/work.notes.toml");
+    std::fs::write(&path, "not a valid note file").unwrap();
+    let error = store.delete_mission("work", pre(&original)).unwrap_err();
+    assert_eq!(error.code, "invalid_definition_source");
+    assert_eq!(
+        store.mission_edit("work").unwrap().mission.id,
+        original.mission.id
+    );
+    assert_eq!(
+        std::fs::read_to_string(path).unwrap(),
+        "not a valid note file"
+    );
+    assert!(store.mission_archives().unwrap().is_empty());
+}
+
+#[test]
+fn deleting_a_replacement_does_not_archive_or_remove_older_unrelated_notes() {
+    let dir = Scratch::new();
+    let store = Store::new(&dir.0);
+    let old = store.create_mission("work", "Old", "human:ui").unwrap();
+    store
+        .patch_notes(
+            "work",
+            "*",
+            parvi_mission_model::NotePatch::Append {
+                target: "mission".into(),
+                author: "human:ui".into(),
+                text: "older notes".into(),
+            },
+        )
+        .unwrap();
+    let old_archive = store.delete_mission("work", pre(&old)).unwrap();
+    let live_notes = dir.0.join("notes/work.notes.toml");
+    std::fs::rename(
+        dir.0.join(format!(
+            "notes/work.notes.toml.deleted-{}",
+            old_archive.archive_id
+        )),
+        &live_notes,
+    )
+    .unwrap();
+    let replacement = store
+        .create_mission("work", "Replacement", "human:ui")
+        .unwrap();
+    let replacement_archive = store.delete_mission("work", pre(&replacement)).unwrap();
+    assert!(live_notes.exists());
+    let archives = store.mission_archives().unwrap();
+    let original = archives
+        .iter()
+        .find(|item| item.archive_id == old_archive.archive_id)
+        .unwrap();
+    let newer = archives
+        .iter()
+        .find(|item| item.archive_id == replacement_archive.archive_id)
+        .unwrap();
+    assert!(original.retained_notes);
+    assert!(!newer.notes && !newer.retained_notes);
+    store
+        .remove_mission_archive("work", &replacement_archive.archive_id)
+        .unwrap();
+    assert!(live_notes.exists());
+    assert!(
+        store
+            .remove_mission_archive("work", &old_archive.archive_id)
+            .unwrap()
+            .retained_notes
+    );
+    assert!(!live_notes.exists());
 }

@@ -37,6 +37,7 @@ pub struct AgentsPage {
     state: Agents,
     filter: Option<Entity<TextField>>,
     places: BTreeMap<String, String>,
+    show_sync_failures: bool,
 }
 impl AgentsPage {
     fn new(host: Host, _: &mut Window, _: &mut Context<Self>) -> Self {
@@ -46,6 +47,7 @@ impl AgentsPage {
             state: Agents::default(),
             filter: None,
             places: BTreeMap::new(),
+            show_sync_failures: false,
         }
     }
     fn agents_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<TextField> {
@@ -79,7 +81,9 @@ impl AgentsPage {
             .collect()
     }
     fn agents_refresh(&mut self, cx: &mut Context<Self>) {
-        self.host.channel(WATCH, true, cx);
+        for node in self.host.nodes(cx) {
+            self.host.send(&node.id, vec![WATCH, 1], cx);
+        }
     }
     fn agents_sync(&mut self, node: &str, checkout: &str, cx: &mut Context<Self>) {
         let frame = self.state.sync(node, checkout);
@@ -112,7 +116,9 @@ impl Page for AgentsPage {
                 &format!("Syncing {checkout} in {session}; refresh when done"),
                 cx,
             ),
-            Some(Some(Synced::Refused { checkout, why })) => self.host.report(
+            Some(Some(Synced::Refused { code, .. }))
+                if code == parvi_agents_contract::FETCH_FAILED => {}
+            Some(Some(Synced::Refused { checkout, why, .. })) => self.host.report(
                 Status::failure(format!("Sync of {checkout} did not start: {why}")),
                 cx,
             ),

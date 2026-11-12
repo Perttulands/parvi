@@ -181,3 +181,106 @@ fn opens_a_fixture_mission_on_the_canvas(cx: &mut TestAppContext) {
     });
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }
+
+// The node is authored exclusively through the public CLI, then opened by the app.
+#[gpui::test]
+fn cli_authored_graph_and_layout_open_on_the_canvas(cx: &mut TestAppContext) {
+    let running = start();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    async fn cli(url: &str, noun: &str, args: &[&str]) -> serde_json::Value {
+        let mut argv: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();
+        argv.extend(["--node".into(), format!("{url}/"), "--json".into()]);
+        let mut output = Vec::new();
+        let exit = parvi_node_kit::cli::run(noun, &argv, &mut output)
+            .await
+            .unwrap();
+        assert_eq!(
+            exit,
+            0,
+            "{noun} {argv:?}: {}",
+            String::from_utf8_lossy(&output)
+        );
+        serde_json::from_slice(&output).unwrap()
+    }
+    let (input, steps, judge, human, end) = rt.block_on(async {
+        let u = &running.url;
+        cli(u, "mission", &["new", "cli-board", "--title", "CLI Board"]).await;
+        let input = cli(u, "mission", &["create", "cli-board", "--title", "Start"]).await["inputCard"]["id"].as_str().unwrap().to_owned();
+        let mut steps = Vec::new();
+        for title in ["Draft", "Polish", "Judge"] {
+            let step = cli(u, "formation", &["create", "cli-board", "--type", "solo", "--title", title]).await["formation"].clone();
+            let id = step["id"].as_str().unwrap().to_owned();
+            let input = format!("{id}:{}", step["inputs"][0]["id"].as_str().unwrap());
+            let output = format!("{id}:{}", step["outputs"][0]["id"].as_str().unwrap());
+            steps.push((id, input, output));
+        }
+        let judge = cli(u, "gate", &["create", "cli-board", "--title", "Judge gate", "--kinds", "formation"]).await["gate"]["id"].as_str().unwrap().to_owned();
+        cli(u, "gate", &["judge", "cli-board", &judge, "--chain", &steps[2].0]).await;
+        let human = cli(u, "gate", &["create", "cli-board", "--title", "Human gate"]).await["gate"]["id"].as_str().unwrap().to_owned();
+        let end = cli(u, "end", &["create", "cli-board", "--outcome", "done"]).await["end"]["id"].as_str().unwrap().to_owned();
+        cli(u, "mission", &["wire", "cli-board", &steps[0].1, "--input", &input]).await;
+        for (from, to) in [
+            (steps[0].2.clone(), format!("{judge}:in")),
+            (format!("{judge}:pass"), steps[1].1.clone()),
+            (steps[1].2.clone(), format!("{human}:in")),
+            (format!("{human}:pass"), format!("{end}:in")),
+        ] {
+            cli(u, "formation", &["wire", "cli-board", &from, &to]).await;
+        }
+        cli(u, "mission", &["move", "cli-board", &steps[0].0, "--x", "123", "--y", "456"]).await;
+        (input, steps, judge, human, end)
+    });
+    let settings = std::env::temp_dir()
+        .join(format!("parvi-cli-canvas-{}", std::process::id()))
+        .join("app.json");
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let url = running.url.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        parvi_app_shell::start(
+            &[parvi_missions_app::build],
+            Some(url),
+            Some(settings),
+            window,
+            cx,
+        )
+    });
+    let selector = Box::leak(format!("mission-{}-cli-board", running.id).into_boxed_str());
+    until(cx, "CLI mission listing", |cx| {
+        cx.debug_bounds(selector).is_some()
+    });
+    let at = cx.debug_bounds(selector).unwrap().center();
+    cx.simulate_click(at, Modifiers::none());
+    until(cx, "canvas control", |cx| {
+        cx.debug_bounds("mission-mode-canvas").is_some()
+    });
+    let at = cx.debug_bounds("mission-mode-canvas").unwrap().center();
+    cx.simulate_click(at, Modifiers::none());
+    for id in std::iter::once(&input)
+        .chain(steps.iter().map(|s| &s.0))
+        .chain([&judge, &human, &end])
+    {
+        let selector = Box::leak(format!("mission-card-{id}").into_boxed_str());
+        until(cx, "CLI-authored canvas card", |cx| {
+            cx.debug_bounds(selector).is_some()
+        });
+    }
+    let client = NodeClient::new(Some(&format!("{}/", running.url))).unwrap();
+    let layout = rt
+        .block_on(client.request(
+            http::Method::GET,
+            "/api/missions/cli-board/layout",
+            None,
+            None,
+        ))
+        .unwrap()
+        .0;
+    assert!(
+        layout["layout"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| node["id"] == steps[0].0 && node["x"] == 123 && node["y"] == 456)
+    );
+}

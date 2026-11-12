@@ -196,3 +196,105 @@ fn creates_and_renames_a_mission_with_cancel_and_conflict_guard(cx: &mut TestApp
         );
     });
 }
+
+#[gpui::test]
+fn designs_a_multi_gate_mission_and_shows_findings_on_the_canvas(cx: &mut TestAppContext) {
+    let running = start();
+    let settings = std::env::temp_dir()
+        .join(format!("parvi-design-{}", std::process::id()))
+        .join("app.json");
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let url = running.url.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        parvi_app_shell::start(
+            &[parvi_missions_app::build],
+            Some(url),
+            Some(settings),
+            window,
+            cx,
+        )
+    });
+    cx.simulate_resize(gpui::size(gpui::px(1600.), gpui::px(1000.)));
+    until(cx, "new mission", |cx| has(cx, "new-mission"));
+    click(cx, "new-mission");
+    until(cx, "new mission form", |cx| has(cx, "mission-form-name"));
+    cx.simulate_input("Design journey");
+    click(cx, "mission-form-submit");
+    let mission = format!("mission-{}-design-journey", running.node);
+    until(cx, "mission listing", |cx| has(cx, &mission));
+    click(cx, &mission);
+    until(cx, "canvas control", |cx| has(cx, "mission-mode-canvas"));
+    click(cx, "mission-mode-canvas");
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let client = NodeClient::new(Some(&format!("{}/", running.url))).unwrap();
+    let read = || {
+        rt.block_on(client.request(
+            http::Method::GET,
+            "/api/missions/design-journey",
+            None,
+            None,
+        ))
+        .unwrap()
+        .0["mission"]
+            .clone()
+    };
+    for (button, field, count) in [
+        ("new-input", "inputCards", 1),
+        ("new-step", "formations", 1),
+        ("new-step", "formations", 2),
+        ("new-gate", "gates", 1),
+    ] {
+        until(cx, "board ready for edit", |cx| has(cx, "undo"));
+        click(cx, button);
+        until(cx, "card saved", |_| {
+            read()[field].as_array().unwrap().len() == count
+        });
+    }
+    let gate_id = read()["gates"][0]["id"].as_str().unwrap().to_owned();
+    until(cx, "board ready to arrange", |cx| has(cx, "undo"));
+    click(cx, "arrange");
+    until(cx, "arranged layout saved", |_| {
+        let layout = rt
+            .block_on(client.request(
+                http::Method::GET,
+                "/api/missions/design-journey/layout",
+                None,
+                None,
+            ))
+            .unwrap()
+            .0;
+        layout["layout"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| node["id"] == gate_id && (node["x"] != 200 || node["y"] != 200))
+    });
+    until(cx, "arranged canvas", |cx| has(cx, "canvas-fit"));
+    click(cx, "canvas-fit");
+    let gate = format!("mission-card-{gate_id}");
+    until(cx, "judge gate card", |cx| has(cx, &gate));
+    click(cx, &gate);
+    until(cx, "gate editor", |cx| has(cx, "step-extra"));
+    click(cx, "step-extra");
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("formation");
+    click(cx, "step-save");
+    until(cx, "judge gate saved", |cx| !has(cx, "step-extra"));
+    assert_eq!(read()["gates"][0]["kinds"][0], "formation");
+    for (button, field, count) in [("new-gate", "gates", 2), ("new-end", "ends", 1)] {
+        until(cx, "board ready for edit", |cx| has(cx, "undo"));
+        click(cx, button);
+        until(cx, "card saved", |_| {
+            read()[field].as_array().unwrap().len() == count
+        });
+    }
+    let doc = read();
+    assert_eq!(doc["gates"][1]["kinds"][0], "human");
+    let selector = format!(
+        "validation-card-{}",
+        doc["formations"][0]["id"].as_str().unwrap()
+    );
+    until(cx, "finding on a step card", |cx| has(cx, &selector));
+}

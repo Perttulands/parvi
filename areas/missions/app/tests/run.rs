@@ -346,6 +346,20 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
     until(cx, "brief reopened", |cx| {
         cx.debug_bounds("run-input-brief").is_some()
     });
+    cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
+    cx.run_until_parked();
+    let footer = cx.debug_bounds("run-start-actions").unwrap();
+    let start = cx.debug_bounds("run-start").unwrap();
+    let cancel = cx.debug_bounds("run-cancel").unwrap();
+    assert!(start.center().y >= footer.origin.y && cancel.center().y >= footer.origin.y);
+    let paths = cx.debug_bounds("run-context-paths").unwrap();
+    assert!(paths.origin.y + paths.size.height <= footer.origin.y);
+    cx.simulate_resize(gpui::size(px(800.), px(600.)));
+    cx.run_until_parked();
+    let footer = cx.debug_bounds("run-start-actions").unwrap();
+    assert!(footer.origin.y + footer.size.height <= px(600.));
+    cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
+    cx.run_until_parked();
     click(cx, "run-input-brief");
     cx.simulate_input("hello");
     cx.run_until_parked();
@@ -357,6 +371,7 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
     click(cx, "run-start");
     until(cx, "active step", |cx| {
         cx.debug_bounds("run-step-fmn_work-running").is_some()
+            && cx.debug_bounds("run-sentence-running Work").is_some()
     });
     for _ in 0..8 {
         let y = f32::from(cx.debug_bounds("run-abort").unwrap().center().y);
@@ -467,6 +482,7 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
     until(cx, "hidden missions count", |cx| {
         cx.debug_bounds("missions-count-1").is_some()
     });
+    assert!(cx.debug_bounds("tab-label-M I S S I O N S").is_some());
     until(cx, "desktop notification", |cx| {
         !cx.shown_system_notifications().is_empty()
     });
@@ -487,6 +503,12 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
     let mission = cx.debug_bounds(mission_selector).unwrap();
     assert!(row.origin.y < mission.origin.y);
     until(cx, "human gate", |cx| cx.debug_bounds("run-gate").is_some());
+    assert!(cx.debug_bounds("run-mission-Gated").is_some());
+    assert!(cx.debug_bounds("gate-title-Review").is_some());
+    until(cx, "waiting sentence", |cx| {
+        cx.debug_bounds("run-sentence-waiting for you at Review")
+            .is_some()
+    });
     until(cx, "gate read failure", |cx| {
         cx.debug_bounds("gate-retry").is_some()
     });
@@ -497,6 +519,11 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
     until(cx, "gate request", |cx| {
         cx.debug_bounds("gate-request-loaded").is_some()
     });
+    assert!(cx.debug_bounds("gate-source-Work").is_some());
+    assert!(
+        cx.debug_bounds("gate-question-Review the result and decide whether to approve it.")
+            .is_some()
+    );
     assert!(cx.debug_bounds("gate-input-quote").is_some());
     cx.run_until_parked();
     assert!(
@@ -512,6 +539,13 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
     until(cx, "run finished", |cx| {
         cx.debug_bounds("run-step-end_done-done").is_some()
             || cx.debug_bounds("run-finished-succeeded").is_some()
+    });
+    assert!(cx.debug_bounds("run-land").is_none());
+    assert!(cx.debug_bounds("run-send").is_none());
+    click(cx, "run-events");
+    until(cx, "gate response in run history", |cx| {
+        cx.debug_bounds("run-event-human_verdict_recorded-Approved after review")
+            .is_some()
     });
     until(cx, "gate response saved", |cx| {
         shell

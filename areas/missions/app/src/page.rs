@@ -29,6 +29,7 @@ use parvi_missions_contract::{
 use serde_json::json;
 
 const PAD: f32 = 12.;
+const START_FORM_MAX: f32 = 680.;
 const TAB_PAD: f32 = 20.;
 const TAB_GAP: f32 = 6.;
 const EDGE: f32 = 2.;
@@ -455,7 +456,9 @@ impl MissionsPage {
             return;
         }
         self.run = run::RunUi::new(cx);
-        self.canvas = canvas::View::default();
+        if self.state.selected.as_ref() != Some(&(node.clone(), slug.clone())) {
+            self.canvas = canvas::View::default();
+        }
         self.reveal_card = None;
         self.generation += 1;
         let generation = self.generation;
@@ -508,7 +511,6 @@ impl MissionsPage {
                                     Ok(v) => {
                                         page.state.layout_etag = Some(v.layout.etag);
                                         page.state.layout = Some(v.layout.layout);
-                                        page.canvas.invalidate_fit();
                                     }
                                     Err(e) => page.state.error = Some(e.to_string()),
                                 }
@@ -531,6 +533,24 @@ impl MissionsPage {
             .detach();
         }
         cx.notify();
+    }
+    fn refresh_selected_if_newer(&mut self, cx: &mut Context<Self>) {
+        if self.editor.is_none()
+            && !self.writing
+            && !self.is_showing_run()
+            && let Some((node, slug)) = self.state.selected.clone()
+            && let Some(mission) = &self.state.mission
+            && let Some(listing) = self
+                .state
+                .nodes
+                .get(&node)
+                .and_then(|feed| feed.missions.as_ref())
+                .and_then(|list| list.iter().find(|item| item.slug == slug))
+            && ((!listing.id.is_empty() && listing.id != mission.id)
+                || listing.rev.is_some_and(|rev| rev > mission.rev))
+        {
+            self.open(node, slug, cx);
+        }
     }
     fn edit_step(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.writing || self.editor.as_ref().is_some_and(|e| e.busy) {
@@ -860,6 +880,7 @@ impl MissionsPage {
                     }
                     Err(e) => page.state.error = Some(format!("{}: {}", e.code, e.message)),
                 }
+                page.refresh_selected_if_newer(cx);
                 cx.notify();
             });
         })
@@ -1193,7 +1214,6 @@ impl MissionsPage {
                         Ok(v) => {
                             page.state.layout_etag = Some(v.layout.etag);
                             page.state.layout = Some(v.layout.layout);
-                            page.canvas.invalidate_fit();
                         }
                         Err(e) => page.state.error = Some(e.to_string()),
                     },
@@ -1321,7 +1341,7 @@ impl Page for MissionsPage {
             .text_color(if shown { t.text } else { t.text2 })
             .when(shown, |d| d.border_b_2().border_color(t.accent))
             .hover(|d| d.text_color(t.text))
-            .child("Missions");
+            .child(kit::tab_label(Self::TITLE));
         if count > 0 {
             tab = tab.child(
                 div()
@@ -1374,21 +1394,14 @@ impl Page for MissionsPage {
         if kind == parvi_missions_contract::RUNS_SNAPSHOT {
             self.sync_gate(cx);
         }
-        if self.editor.is_none()
-            && !self.is_showing_run()
-            && kind == parvi_missions_contract::SNAPSHOT
-            && let Some((selected_node, slug)) = self.state.selected.clone()
-            && selected_node == node.as_str()
-            && let Some(mission) = &self.state.mission
-            && let Some(listing) = self
+        if kind == parvi_missions_contract::SNAPSHOT
+            && self
                 .state
-                .nodes
-                .get(&selected_node)
-                .and_then(|n| n.missions.as_ref())
-                .and_then(|list| list.iter().find(|m| m.slug == slug))
-            && listing.rev.is_some_and(|rev| rev != mission.rev)
+                .selected
+                .as_ref()
+                .is_some_and(|(selected, _)| selected == node.as_str())
         {
-            self.open(selected_node, slug, cx);
+            self.refresh_selected_if_newer(cx);
         }
         cx.notify();
     }
@@ -1496,7 +1509,7 @@ impl Render for MissionsPage {
             empty
         };
         let form = self.mission_form(&t, cx);
-        let start_form = self.run_start_form(&t, cx);
+        let start_form = self.run_start_form(&t, window, cx);
         let attempts_form = self.attempts_form(&t, cx);
         let stop_form = self.stop_form(&t, cx);
         div()
@@ -1549,11 +1562,11 @@ impl Render for MissionsPage {
                         .child(kit::button(&t, "mission-mode-canvas", "Canvas", if self.mission_canvas_mode { Kind::Plain } else { Kind::Quiet }).debug_selector(|| "mission-mode-canvas".into()).on_click(cx.listener(|p, _, _, cx| { p.mission_canvas_mode = true; cx.notify(); })))
                         .child(div().debug_selector({ let complete = self.validation_complete(); move || if complete { "mission-validation-complete".into() } else { "mission-validation-pending".into() } }).child(div().debug_selector({ let ready = self.mission_run_ready(); move || if ready { "mission-run-ready".into() } else { "mission-run-quiet".into() } }).child(kit::button(&t, "prepare-run", "Run", if self.mission_run_ready() { Kind::Primary } else { Kind::Quiet }).debug_selector(|| "prepare-run".into()).on_click(cx.listener(|p, _, _, cx| p.prepare_run(cx))))))
                         .when(self.validation_failed(), |d| d.child(kit::button(&t, "retry-validation", "Retry validation", Kind::Quiet).debug_selector(|| "retry-validation".into()).on_click(cx.listener(|p, _, _, cx| { p.validation.clear(); p.sync_validation(cx); cx.notify(); }))))
-                        .child(kit::button(&t, "new-input", "+ Input", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createInputCard":{"title":"Input","goal":"","x":200,"y":200}}), WriteMode::Edit, cx))))
-                        .child(kit::button(&t, "new-step", "+ Step", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createFormation":{"type":"solo","title":"New step","x":200,"y":200}}), WriteMode::Edit, cx))))
-                        .child(kit::button(&t, "new-gate", "+ Gate", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createGate":{"title":"New gate","kinds":["human"],"x":200,"y":200}}), WriteMode::Edit, cx))))
-                        .child(kit::button(&t, "new-end", "+ End", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createEnd":{"title":"End","outcome":"done","x":200,"y":200}}), WriteMode::Edit, cx))))
-                        .child(kit::button(&t, "arrange", "Arrange", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.arrange(cx))))
+                        .child(kit::button(&t, "new-input", "+ Input", Kind::Quiet).debug_selector(|| "new-input".into()).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createInputCard":{"title":"Input","goal":"","x":200,"y":200}}), WriteMode::Edit, cx))))
+                        .child(kit::button(&t, "new-step", "+ Step", Kind::Quiet).debug_selector(|| "new-step".into()).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createFormation":{"type":"solo","title":"New step","x":200,"y":200}}), WriteMode::Edit, cx))))
+                        .child(kit::button(&t, "new-gate", "+ Gate", Kind::Quiet).debug_selector(|| "new-gate".into()).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createGate":{"title":"New gate","kinds":["human"],"x":200,"y":200}}), WriteMode::Edit, cx))))
+                        .child(kit::button(&t, "new-end", "+ End", Kind::Quiet).debug_selector(|| "new-end".into()).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createEnd":{"title":"End","outcome":"done","x":200,"y":200}}), WriteMode::Edit, cx))))
+                        .child(kit::button(&t, "arrange", "Arrange", Kind::Quiet).debug_selector(|| "arrange".into()).on_click(cx.listener(|p, _, _, cx| p.arrange(cx))))
                         .child(kit::button(&t, "undo", "Undo", Kind::Quiet).debug_selector({ let busy = self.writing; move || if busy { "undo-busy".into() } else { "undo".into() } }).on_click(cx.listener(|p, _, _, cx| p.undo(false, cx))))
                         .child(kit::button(&t, "redo", "Redo", Kind::Quiet).debug_selector({ let busy = self.writing; move || if busy { "redo-busy".into() } else { "redo".into() } }).on_click(cx.listener(|p, _, _, cx| p.undo(true, cx)))))
                     .when_some(self.state.error.clone(), |d, e| d.child(div().text_color(t.error).child(e)))
@@ -1626,14 +1639,14 @@ impl Render for MissionsPage {
                                 EditKind::End => "Outcome",
                                 _ => "",
                             })
-                            .child(div().child(self.extra.clone()))
+                            .child(div().debug_selector(|| "step-extra".into()).child(self.extra.clone()))
                         })
                         .when(matches!(ed.kind, EditKind::Step), |mut d| {
                             if let Some(f) = self.state.mission.as_ref().and_then(|m| m.formations.iter().find(|f| f.id == ed.id)) {
                                 d = d.child("Ports");
                                 for port in f.inputs.iter().chain(&f.outputs) {
                                     let id = port.id.clone(); let selected = id.clone(); let label = port.label.clone(); let kind = port.kind.clone(); let selector = format!("port-{id}");
-                                    d = d.child(kit::button(&t, gpui::SharedString::from(format!("port-{id}")), format!("{} ({})", port.label, id), Kind::Quiet).debug_selector(move || selector.clone()).on_click(cx.listener(move |p, _, _, cx| { p.select_port(&selected, &label, &kind, cx); })));
+                                    d = d.child(kit::button(&t, gpui::SharedString::from(format!("port-{id}")), if port.label.trim().is_empty() { id.clone() } else { port.label.clone() }, Kind::Quiet).debug_selector(move || selector.clone()).on_click(cx.listener(move |p, _, _, cx| { p.select_port(&selected, &label, &kind, cx); })));
                                 }
                                 d = d.child(div().child(self.port_label.clone())).child(div().child(self.port_kind.clone()))
                                     .child(kit::button(&t, "port-add-in", "+ Input port", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.port_edit("input", cx))))
