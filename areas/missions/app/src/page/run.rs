@@ -2273,6 +2273,11 @@ impl MissionsPage {
                     {
                         card = card.child(div().text_color(t.error).child(point.reason.clone()));
                     }
+                    if status == Some(run_state::NodeState::Running)
+                        && let Some(note) = run_state::seat_note(&run.events, &step.id)
+                    {
+                        card = card.child(div().text_color(rgb(t.ansi[3])).child(sentence(&note)));
+                    }
                     if run.waiting_gates.iter().any(|gate| gate.gate_id == step.id) {
                         card = card.child(
                             div()

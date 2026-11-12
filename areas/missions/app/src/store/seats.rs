@@ -59,6 +59,9 @@ pub fn seats(run: &RunProjection) -> Vec<Seat> {
                 }) {
                     seat.state = match event.outcome.as_str() {
                         "ended" | "gone" => State::Ended,
+                        // A stopping coordinator leaves the seat running for
+                        // the run to reattach, as the engine counts it.
+                        "left_shutdown" => State::Live,
                         _ => State::Unavailable,
                     };
                 }
@@ -94,5 +97,10 @@ mod tests {
             (&seats[1].node, &seats[1].session),
             (&"n2".into(), &"$2".into())
         );
+    }
+    #[test]
+    fn a_seat_left_running_by_a_coordinator_shutdown_can_still_be_opened() {
+        let run: RunProjection = serde_json::from_value(json!({"runId":"run_1","status":"blocked","final":false,"resumeAllowed":true,"epoch":1,"missionSlug":"m","missionId":"m","missionRev":1,"inputCardId":"i","work":"","cwd":"","repository":"","base":"","contextPaths":[],"inputs":[],"outputs":[],"eventCount":2,"startedBy":"","startedAt":"","updatedAt":"","waitingGates":[],"events":[{"seq":1,"type":"seat_created","nodeId":"work","slotId":"a","seatNode":"n1","sessionId":"$1","sessionName":"seat"},{"seq":2,"type":"seat_cleanup","nodeId":"work","slotId":"a","sessionName":"seat","outcome":"left_shutdown"}]})).unwrap();
+        assert_eq!(seats(&run)[0].state, State::Live);
     }
 }

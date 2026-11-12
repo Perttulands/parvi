@@ -38,6 +38,23 @@ fn sorted(events: &[RunEvent]) -> Vec<&RunEvent> {
     v
 }
 
+/// What a running step's seat last reported about itself when that is not
+/// plain work: an agent that ended its turn without finishing, or the one
+/// nudge the coordinator sent it. Blank once the seat works or finishes.
+pub fn seat_note(events: &[RunEvent], node: &str) -> Option<String> {
+    let last = sorted(events)
+        .into_iter()
+        .rev()
+        .find(|e| e.node_id == node)?;
+    match last.kind.as_str() {
+        "seat_state" if last.state != "working" && !last.detail.is_empty() => {
+            Some(last.detail.clone())
+        }
+        "seat_idle_recovery" if !last.detail.is_empty() => Some(last.detail.clone()),
+        _ => None,
+    }
+}
+
 /// Honest per-node state from the ledger, in the engine's vocabulary.
 pub fn project(events: &[RunEvent]) -> Projection {
     let mut p = Projection::default();
@@ -466,5 +483,24 @@ mod tests {
         ];
         assert_eq!(points(&run)[0].node, "g");
         assert_eq!(project(&run.events).states["a"], NodeState::Canceled);
+    }
+
+    #[test]
+    fn a_seat_that_stopped_short_says_so_until_it_works_again() {
+        let stopped = RunEvent {
+            state: "turn_ended_without_sentinel".into(),
+            detail: "the agent ended a turn without the completion sentinel".into(),
+            ..ev(2, "seat_state", "work")
+        };
+        let mut events = vec![ev(1, "adapter_send", "work"), stopped];
+        assert_eq!(
+            seat_note(&events, "work").as_deref(),
+            Some("the agent ended a turn without the completion sentinel")
+        );
+        events.push(RunEvent {
+            state: "working".into(),
+            ..ev(3, "seat_state", "work")
+        });
+        assert_eq!(seat_note(&events, "work"), None);
     }
 }
