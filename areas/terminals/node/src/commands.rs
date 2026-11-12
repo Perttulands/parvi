@@ -343,7 +343,7 @@ fn session(session: &SessionInfo) -> Value {
 }
 
 async fn read_screen(ctx: &Ctx, args: &Value) -> Result<Value> {
-    let (session, pane) = target(ctx, args)?;
+    let (session, pane) = target(ctx, args).await?;
     let mut changed = ctx.hub.watch();
     let text = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
@@ -364,7 +364,7 @@ async fn read_screen(ctx: &Ctx, args: &Value) -> Result<Value> {
 }
 
 async fn send_text(ctx: &Ctx, args: &Value) -> Result<Value> {
-    let (session, pane) = target(ctx, args)?;
+    let (session, pane) = target(ctx, args).await?;
     let text = text(args, "text")?;
     if text.len() > MAX_SEND {
         bail!("text is longer than {MAX_SEND} bytes");
@@ -419,7 +419,7 @@ async fn launch_agent(ctx: &Ctx, args: &Value) -> Result<Value> {
 }
 
 async fn history(ctx: &Ctx, args: &Value) -> Result<Value> {
-    let (session, pane) = target(ctx, args)?;
+    let (session, pane) = target(ctx, args).await?;
     let (server, own) = ctx.hub.pane(pane).context("the pane went")?;
     let capture = search::capture(server.backend(), own).await?;
     let plain = strip_escapes(&capture);
@@ -487,7 +487,7 @@ async fn search(ctx: &Ctx, args: &Value) -> Result<Value> {
 }
 
 async fn keys(ctx: &Ctx, args: &Value) -> Result<Value> {
-    let (session, pane) = target(ctx, args)?;
+    let (session, pane) = target(ctx, args).await?;
     let keys = args
         .get("keys")
         .and_then(Value::as_array)
@@ -597,13 +597,13 @@ fn strip_escapes(text: &str) -> String {
 }
 
 /// The session `session` names, by id or else by name, and its pane
-/// `pane`, or its first.
-fn target(ctx: &Ctx, args: &Value) -> Result<(SessionInfo, PaneId)> {
+/// `pane`, or else its active one ([`Hub::active_pane`]).
+async fn target(ctx: &Ctx, args: &Value) -> Result<(SessionInfo, PaneId)> {
     let wanted = text(args, "session")?;
     let session = find(ctx, wanted)?;
     let session = &session;
     let pane = match args.get("pane") {
-        None | Some(Value::Null) => session.panes.first().map(|&(id, _, _)| id),
+        None | Some(Value::Null) => Some(ctx.hub.active_pane(&session.id).await?),
         Some(pane) => {
             let pane = pane
                 .as_u64()

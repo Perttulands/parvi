@@ -283,6 +283,53 @@ async fn sends_text_into_a_session() {
     node.stop().await;
 }
 
+/// Without a pane, a send and a read go to the pane the operator is on,
+/// not to the first window's shell, where the text would run.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_send_without_a_pane_goes_to_the_active_one() {
+    let Some(node) = Node::start("send-active").await else {
+        return;
+    };
+    let first = node.tmux.display("alpha:0", "#{pane_id}");
+    node.tmux.run(&["new-window", "-t", "alpha"]);
+    let active = node.tmux.display("alpha:1", "#{pane_id}");
+    let active: u64 = active.trim_start_matches('%').parse().unwrap();
+    for tries in 0.. {
+        let listed = node.call("session_list", json!({})).await.unwrap();
+        if session_named(&listed, "alpha")["panes"]
+            .as_array()
+            .unwrap()
+            .len()
+            == 2
+        {
+            break;
+        }
+        assert!(tries < 100, "the new window was never listed: {listed}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let read = node
+        .call("session_read", json!({ "session": "alpha" }))
+        .await
+        .unwrap();
+    assert_eq!(read["pane"], active);
+    node.call(
+        "session_send",
+        json!({ "session": "alpha", "text": "echo went-$((6*7))" }),
+    )
+    .await
+    .unwrap();
+    eventually("the echo ran in the active window", || {
+        let text = node.tmux.run(&["capture-pane", "-p", "-t", "alpha:1"]);
+        text.lines()
+            .any(|line| line.trim() == "went-42")
+            .then_some(())
+    })
+    .await;
+    let text = node.tmux.run(&["capture-pane", "-p", "-t", &first]);
+    assert!(!text.contains("went"), "the first window got it: {text}");
+    node.stop().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn presses_keys_reads_history_searches_and_kills() {
     let Some(node) = Node::start("keys").await else {
