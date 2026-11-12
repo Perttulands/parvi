@@ -2455,10 +2455,15 @@ impl MissionsPage {
         let Some(evidence) = &self.run.evidence.evidence else {
             return Vec::new();
         };
+        let events = self
+            .selected_run()
+            .map(|run| run.events.as_slice())
+            .unwrap_or_default();
         evidence
             .problems
             .iter()
             .map(|problem| {
+                let reason = run_state::problem_now(events, problem.seq, &problem.reason.text);
                 let selector = format!("run-problem-{}-{}", problem.seq, problem.reason.text);
                 let row = div()
                     .debug_selector(move || selector.clone())
@@ -2467,11 +2472,7 @@ impl MissionsPage {
                 // A problem of the whole run reads as a sentence of its own;
                 // one of a step is led by the step's name.
                 if problem.node_id.is_empty() {
-                    row.child(
-                        div()
-                            .text_color(colour)
-                            .child(sentence(&problem.reason.text)),
-                    )
+                    row.child(div().text_color(colour).child(sentence(&reason)))
                 } else {
                     row.child(
                         div()
@@ -2479,7 +2480,7 @@ impl MissionsPage {
                             .text_color(t.text2)
                             .child(name_of(&problem.node_id)),
                     )
-                    .child(div().text_color(colour).child(problem.reason.text.clone()))
+                    .child(div().text_color(colour).child(reason))
                 }
             })
             .collect()

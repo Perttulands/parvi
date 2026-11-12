@@ -55,6 +55,18 @@ pub fn seat_note(events: &[RunEvent], node: &str) -> Option<String> {
     }
 }
 
+/// A recorded problem as it reads now: a block the run has since resumed
+/// from no longer tells the operator to resume it.
+pub fn problem_now(events: &[RunEvent], seq: u64, reason: &str) -> String {
+    let resumed = events
+        .iter()
+        .any(|e| e.kind == "run_resumed" && e.seq > seq);
+    match reason.split_once("; resume") {
+        Some((what, _)) if resumed => format!("{what}; resumed"),
+        _ => reason.to_owned(),
+    }
+}
+
 /// Honest per-node state from the ledger, in the engine's vocabulary.
 pub fn project(events: &[RunEvent]) -> Projection {
     let mut p = Projection::default();
@@ -446,6 +458,18 @@ mod tests {
         assert_eq!(
             phrase(&pts[0], "Operator verdict"),
             "waiting for you at Operator verdict"
+        );
+    }
+
+    #[test]
+    fn a_resumed_block_no_longer_asks_for_a_resume() {
+        let reason = "coordinator shut down; resume to continue";
+        let blocked = vec![ev(1, "run_started", ""), ev(4, "run_blocked", "")];
+        assert_eq!(problem_now(&blocked, 4, reason), reason);
+        let resumed = [blocked, vec![ev(5, "run_resumed", "")]].concat();
+        assert_eq!(
+            problem_now(&resumed, 4, reason),
+            "coordinator shut down; resumed"
         );
     }
 

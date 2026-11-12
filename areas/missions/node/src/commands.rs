@@ -151,7 +151,14 @@ fn schema(name: &str) -> Value {
             &["mission"],
         ),
         "mission_run" | "formation_run" => {
-            let properties = json!({"mission":s,"formation":s,"input":s,"inputs":obj,"cwd":s,"work":s,"repository":s,"base":s,"context_paths":{"type":"array","items":s},"actor":s,"request_id":s});
+            let properties = json!({"mission":s,"formation":s,
+                "input":{"type":"string","description":"Which Input card (id or title), when the mission has several; not an input value."},
+                "inputs":{"type":"object","description":"The input values as a JSON object, e.g. '{\"topic\":\"fog\"}'."},
+                "cwd":{"type":"string","description":"The folder the steps work in; a new one per run when left out."},
+                "work":s,
+                "repository":{"type":"string","description":"A repository named under [missions] repositories in the node's config; the run works on its own branch and worktree."},
+                "base":{"type":"string","description":"The branch the run's branch starts from."},
+                "context_paths":{"type":"array","items":s},"actor":s,"request_id":s});
             if name == "formation_run" {
                 object(properties, &["mission", "formation"])
             } else {
@@ -167,7 +174,13 @@ fn schema(name: &str) -> Value {
         }
         "run_list" => object(json!({"mission":s}), &[]),
         "run_evidence" | "run_attempts" => object(json!({"run":s,"step":s}), &["run"]),
-        "run_wait" => object(json!({"run":s,"until":s,"since":i,"timeout":i}), &["run"]),
+        "run_wait" => object(
+            json!({"run":s,
+                "until":{"type":"string","description":"needs-you (the default: a gate waits or the run ends), final, or any-change."},
+                "since":{"type":"integer","description":"Count only what happened after this cursor, as an earlier answer gave it."},
+                "timeout":{"type":"integer","description":"Seconds to wait at most (default 3600)."}}),
+            &["run"],
+        ),
         "run_abort" => object(json!({"run":s,"reason":s,"actor":s}), &["run"]),
         "run_resume" => object(
             json!({"run":s,"mode":s,"take_fail":b,"grant":b,"pick_best":b,"reason":s,"actor":s}),
