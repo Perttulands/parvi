@@ -36,7 +36,6 @@ pub fn build(host: Host, window: &mut Window, cx: &mut App) -> Mounted {
 pub struct Work {
     host: Host,
     me: WeakEntity<Work>,
-    sessions: Option<Entity<parvi_terminals_contract::SessionList>>,
     focus: FocusHandle,
     search: Entity<TextField>,
     rail_search: Entity<TextField>,
@@ -166,11 +165,9 @@ impl Work {
             },
         )
         .detach();
-        let sessions = host.model::<parvi_terminals_contract::SessionList>(cx);
         Self {
             host,
             me: cx.weak_entity(),
-            sessions,
             focus: cx.focus_handle(),
             search,
             rail_search,
@@ -525,30 +522,13 @@ impl Work {
                 .filter(|(reference, _)| reference == &item.reference)
                 .map(|(_, line)| line.clone())
                 .unwrap_or_else(|| item.line(&self.board));
-            let node = self.node_for_project(item.project);
-            let folder = self.board.projects[item.project].checkout.as_deref();
-            let target = self.sessions.as_ref().and_then(|list| {
-                list.read(cx)
-                    .sessions
-                    .iter()
-                    .find(|session| {
-                        Some(session.node.as_str()) == node.as_deref()
-                            && session
-                                .cwd
-                                .as_deref()
-                                .zip(folder)
-                                .is_some_and(|(a, b)| same_folder(a, b))
-                    })
-                    .map(|session| parvi_app_kit::ask::SessionTarget {
-                        node: NodeId(session.node.clone()),
-                        user: session.user.clone().unwrap_or_default(),
-                        name: session.name.clone(),
-                    })
-            });
             let _ = self.host.ask(
+                // The terminals choose the target by their own rule (the
+                // terminal this card sits beside, else the last one sent
+                // to), never by guessing from the item's folder.
                 Ask::Send {
                     reference: line,
-                    target,
+                    target: None,
                 },
                 cx,
             );
@@ -649,15 +629,6 @@ impl Work {
             self.follow_row(row, cx);
         }
     }
-}
-
-/// Two spellings of the same checkout, including a home-relative path.
-fn same_folder(a: &str, b: &str) -> bool {
-    let a = a.trim_end_matches(['/', '\\']);
-    let b = b.trim_end_matches(['/', '\\']);
-    a == b
-        || (b.starts_with("~/") && a.ends_with(&b[1..]))
-        || (a.starts_with("~/") && b.ends_with(&a[1..]))
 }
 
 /// Suggest a tmux-safe name; the answering page resolves collisions.

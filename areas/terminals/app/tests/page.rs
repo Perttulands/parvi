@@ -317,8 +317,9 @@ fn a_page_hands_a_reference_into_a_session_through_send(cx: &mut TestAppContext)
         shell.read_with(cx, |s, _| s.shown_page()) == Some("toy")
     });
     click(cx, "toy-send".into());
-    // The ask brings the Terminals page forward with Send aimed at the
-    // focused window's session; Send pastes the reference and submits it.
+    // The ask brings the Terminals page forward. Nothing was sent to before
+    // and the toy is beside no terminal, so Send aims nowhere and refuses
+    // until the operator picks; then it pastes the reference and submits.
     until(cx, "the Send drawer", |cx| {
         cx.debug_bounds("send-go").is_some()
     });
@@ -326,6 +327,15 @@ fn a_page_hands_a_reference_into_a_session_through_send(cx: &mut TestAppContext)
         shell.read_with(cx, |s, _| s.shown_page()),
         Some("terminals")
     );
+    let page = PAGE.with(|p| p.borrow().clone()).expect("the page");
+    assert_eq!(page.read_with(cx, |p, _| p.send_target.clone()), None);
+    click(cx, "send-go".into());
+    cx.run_until_parked();
+    assert!(
+        page.read_with(cx, |p, _| p.send.sending.is_none()),
+        "no target, no send"
+    );
+    click(cx, format!("send-target-{}::alpha", running.node));
     click(cx, "send-go".into());
     until(cx, "the reference's output in the session", |cx| {
         shown(cx).contains("sent-42")
@@ -1706,6 +1716,7 @@ fn pasted_attachment_reaches_the_node_and_session(cx: &mut TestAppContext) {
     until(cx, "clipboard attachment", |cx| {
         page.read_with(cx, |p, _| !p.send.files.is_empty())
     });
+    click(cx, format!("send-target-{}::alpha", running.node));
     click(cx, "send-go".into());
     let mut path = std::path::PathBuf::new();
     until(cx, "reference and drop path delivered", |_| {
@@ -2095,7 +2106,7 @@ fn arrange_tabs_preset_drag_and_claim_on_a_live_node(cx: &mut TestAppContext) {
         })
     });
     cx.simulate_keystrokes("alt-c");
-    until(cx, "Claim all reaches tmux", |cx| {
+    until(cx, "Fit every window reaches tmux", |cx| {
         page.read_with(cx, |p, _| {
             p.fleet
                 .all

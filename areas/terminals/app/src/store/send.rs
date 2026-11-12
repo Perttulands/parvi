@@ -97,6 +97,30 @@ pub fn launch_paste(all: &[Session], node: &str, sid: &str) -> Option<(Key, bool
         .map(|s| (Key::of(s), false))
 }
 
+/// The session Send opens aimed at, by one rule the operator can predict:
+/// the terminal a view `beside` it sits by, when Send came from that view;
+/// else the session the asking page names (a run's own seat); else the
+/// last session the operator sent to from this app (`last`, a
+/// [`Key::text`]). Only a session still listed in `all`, and never one
+/// picked by the list's order.
+pub fn first_target(
+    all: &[Session],
+    beside: Option<&Key>,
+    named: Option<&Key>,
+    last: Option<&str>,
+) -> Option<Key> {
+    let live = |k: &Key| crate::store::sessions::find(all, k).is_some();
+    beside
+        .filter(|k| live(k))
+        .or(named.filter(|k| live(k)))
+        .cloned()
+        .or_else(|| {
+            all.iter()
+                .map(Key::of)
+                .find(|k| Some(k.text().as_str()) == last)
+        })
+}
+
 /// The drawer's width: the one remembered on this device, else the
 /// default; never under the least, and never so wide that the workspace
 /// beside it keeps less than its share of `room`.
@@ -132,6 +156,37 @@ pub fn bytes(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn send_aims_at_the_terminal_beside_else_the_named_else_the_last_sent() {
+        let session = |name: &str| Session {
+            node: "n".into(),
+            name: name.into(),
+            ..Default::default()
+        };
+        let all = [session("codex-srv"), session("mine"), session("seat")];
+        let key = |name: &str| Key::of(&session(name));
+        let last = key("mine").text();
+        assert_eq!(
+            first_target(&all, Some(&key("seat")), None, Some(&last)),
+            Some(key("seat"))
+        );
+        assert_eq!(
+            first_target(&all, None, Some(&key("seat")), Some(&last)),
+            Some(key("seat"))
+        );
+        assert_eq!(
+            first_target(&all, None, None, Some(&last)),
+            Some(key("mine"))
+        );
+        // Nothing sent to yet, or the last one gone: no target, not the
+        // first in the list.
+        assert_eq!(first_target(&all, None, None, None), None);
+        assert_eq!(
+            first_target(&all[..1], Some(&key("seat")), None, Some(&last)),
+            None
+        );
+    }
 
     #[test]
     fn sizes_read_in_1024s() {

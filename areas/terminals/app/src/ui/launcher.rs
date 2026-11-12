@@ -450,6 +450,9 @@ fn where_rows(shell: &Terminals) -> Vec<devices::DeviceRows> {
 }
 
 /// The node hooks a harness it knows, on its own tmux server only.
+/// The height of the notify line: its toggle and top margin.
+const NOTIFY_ROW: f32 = 26.;
+
 pub(super) fn notify_offered(command: &str, user: &str) -> bool {
     user.is_empty() && launch::notify_label(command).is_some()
 }
@@ -796,31 +799,40 @@ impl Render for Launcher {
                     .items_center()
                     .justify_between()
                     .child(kit::label(&t, "Flags"))
+                    // Reset comes and goes left of Browse, which stays put.
                     .child(
-                        kit::button(
-                            &t,
-                            ("flags-browse", i),
-                            if self.panel_open { "Close" } else { "Browse" },
-                            Kind::Quiet,
-                        )
-                        .debug_selector(move || format!("flags-browse-{i}"))
-                        .on_click(cx.listener({
-                            let node = target.clone().unwrap_or_default();
-                            let harness = harness.clone();
-                            move |l, _, window, cx| {
-                                l.panel_open = !l.panel_open;
-                                if l.panel_open {
-                                    if matches!(l.catalogue, Some(Err(_))) {
-                                        l.catalogue_key = None;
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.))
+                            .children(reset)
+                            .child(
+                                kit::button(
+                                    &t,
+                                    ("flags-browse", i),
+                                    if self.panel_open { "Close" } else { "Browse" },
+                                    Kind::Quiet,
+                                )
+                                .debug_selector(move || format!("flags-browse-{i}"))
+                                .on_click(cx.listener({
+                                    let node = target.clone().unwrap_or_default();
+                                    let harness = harness.clone();
+                                    move |l, _, window, cx| {
+                                        l.panel_open = !l.panel_open;
+                                        if l.panel_open {
+                                            if matches!(l.catalogue, Some(Err(_))) {
+                                                l.catalogue_key = None;
+                                            }
+                                            l.fetch_flags(node.clone(), harness.clone(), cx);
+                                            parvi_app_kit::widgets::field::focus(
+                                                &l.search, window, cx,
+                                            );
+                                        }
+                                        cx.notify();
                                     }
-                                    l.fetch_flags(node.clone(), harness.clone(), cx);
-                                    parvi_app_kit::widgets::field::focus(&l.search, window, cx);
-                                }
-                                cx.notify();
-                            }
-                        })),
-                    )
-                    .children(reset),
+                                })),
+                            ),
+                    ),
             )
             .child(self.flags.clone())
             .children(panel)
@@ -843,7 +855,9 @@ impl Render for Launcher {
             )
             .child(div().mt(px(6.)).child(kit::label(&t, "Name")))
             .child(self.name.clone())
-            .children(notify)
+            // The notify line keeps its room when a shell has none, so the
+            // launch button stays where it was across harnesses.
+            .child(div().min_h(px(NOTIFY_ROW)).children(notify))
             .children(
                 self.problem
                     .clone()

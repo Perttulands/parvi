@@ -201,22 +201,21 @@ pub(super) fn tab_menu(ws: &Workspace, i: usize, live: bool) -> Vec<MenuItem> {
         items.push(MenuItem::sub("Delete preset", None, delete));
     }
     let bound = tab.shown().iter().any(|w| !w.is_empty());
-    let claim = MenuItem::new("Claim all", Act::ClaimAll).chord("Alt+C");
+    let claim = MenuItem::new("Fit every window to this screen", Act::ClaimAll).chord("Alt+C");
     let claim = if ws.active != i {
-        claim.refused("Open this tab to claim its visible frames.")
+        claim.refused("Open this tab first.")
     } else if !live {
         claim.refused("No window here shows a live session.")
     } else {
         claim.hint(CLAIM_EXPLANATION)
     };
-    let reconnect = MenuItem::new("Reconnect frames", Act::Reconnect);
+    let clear = MenuItem::new("Clear tab assignments", Act::ClearTab(i)).danger();
     items.extend([
         MenuItem::rule(),
-        MenuItem::new("Clear tab assignments", Act::ClearTab(i)).danger(),
         if bound {
-            reconnect
+            clear
         } else {
-            reconnect.refused("No window here holds a session.")
+            clear.refused("No window here holds a session.")
         },
         claim,
     ]);
@@ -495,6 +494,7 @@ impl Terminals {
         let t = theme(cx).clone();
         let mut results = div()
             .id("find-results")
+            .track_scroll(&self.find_scroll)
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -506,13 +506,28 @@ impl Terminals {
             Some((matches, done)) => match *done {
                 None => format!("Searching… {} found", matches.len()),
                 Some((m, p, trunc)) => format!(
-                    "{m} {} in {p} {}{}",
+                    "{m} {}, {p} {} searched{}",
                     if m == 1 { "match" } else { "matches" },
                     if p == 1 { "pane" } else { "panes" },
                     if trunc { ", stopped early" } else { "" }
                 ),
             },
         };
+        let summary = match &found {
+            Some((matches, _)) if !matches.is_empty() => {
+                format!("{summary} · Enter opens the next, Shift+Enter the one before")
+            }
+            _ => summary,
+        };
+        // Where the drawer would lie over the window showing a hit, it
+        // keeps only its query and that hit.
+        let compact = self.find_shown.is_some() && self.drawer_room(window, cx).is_none();
+        let shown_hit = self.find_shown.and_then(|i| {
+            let (matches, _) = found.as_ref()?;
+            let m = matches.get(i)?;
+            let name = self.fleet.session_of_pane(&m.node, m.pane)?.name.clone();
+            Some((i, matches.len(), name, m.line, m.context[1].clone()))
+        });
         let query = self.find_query.read(cx).text.clone();
         if let Some((matches, _)) = &found {
             let cursor = self.find_cursor.min(matches.len().saturating_sub(1));
@@ -579,8 +594,17 @@ impl Terminals {
             .debug_selector(|| "find-drawer".into())
             .absolute()
             .top_0()
-            .bottom_0()
+            .when(!compact, |d| d.bottom_0())
             .right_0()
+            // Shift+Enter in the query steps back; the field would take it
+            // for Enter.
+            // Shift+Enter steps back; the field would take it as Enter.
+            .capture_action(cx.listener(
+                |s, _: &parvi_app_kit::widgets::field::ShiftEnter, window, cx| {
+                    s.step_match(false, window, cx);
+                    cx.stop_propagation();
+                },
+            ))
             .w(px(crate::store::send::width(
                 Some(size::FIND_DRAWER),
                 window.viewport_size().width / px(1.),
@@ -622,11 +646,29 @@ impl Terminals {
                     .child(kit::note(&t, summary, Some(t.dim))),
             )
             .child(kit::rule(&t))
-            .child(results);
+            .map(|d| match (compact, shown_hit) {
+                (true, Some((i, n, name, line, text))) => d.child(
+                    div()
+                        .debug_selector(|| "find-shown".into())
+                        .px(px(12.))
+                        .py(px(8.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .child(div().text_size(px(11.)).text_color(t.dim).child(format!(
+                            "{} of {n} · {name}, line {}",
+                            i + 1,
+                            line + 1
+                        )))
+                        .child(hit_line(&t, &text, &query)),
+                ),
+                _ => d.child(results),
+            });
         div()
             .absolute()
             .inset_0()
-            .child(self.scrim(surface::FIND, cx))
+            // Compact, it leaves the windows to be read and clicked.
+            .when(!compact, |d| d.child(self.scrim(surface::FIND, cx)))
             .child(drawer)
             .into_any_element()
     }
@@ -708,13 +750,13 @@ mod tests {
     }
 
     #[test]
-    fn reconnect_and_claim_all_say_why_they_are_refused() {
+    fn clear_and_fit_say_why_they_are_refused() {
         let mut ws = Workspace::default();
         ws.add_tab();
         ws.show_tab(0);
         let menu = tab_menu(&ws, 0, false);
-        assert!(row(&menu, "Reconnect frames").refused);
-        let claim = row(&menu, "Claim all");
+        assert!(row(&menu, "Clear tab assignments").refused);
+        let claim = row(&menu, "Fit every window to this screen");
         assert!(claim.refused);
         assert_eq!(
             claim.hint.as_deref(),
@@ -722,19 +764,16 @@ mod tests {
         );
         ws.bind(0, key("a"), None);
         let menu = tab_menu(&ws, 0, true);
-        assert!(!row(&menu, "Reconnect frames").refused);
-        let claim = row(&menu, "Claim all");
+        assert!(!row(&menu, "Clear tab assignments").refused);
+        let claim = row(&menu, "Fit every window to this screen");
         assert!(!claim.refused);
         assert_eq!(claim.hint.as_deref(), Some(CLAIM_EXPLANATION));
         assert_eq!(claim.chord.as_deref(), Some("Alt+C"));
         // An inactive tab's menu acts on nothing on screen.
         let other = tab_menu(&ws, 1, true);
-        let claim = row(&other, "Claim all");
+        let claim = row(&other, "Fit every window to this screen");
         assert!(claim.refused);
-        assert_eq!(
-            claim.hint.as_deref(),
-            Some("Open this tab to claim its visible frames.")
-        );
+        assert_eq!(claim.hint.as_deref(), Some("Open this tab first."));
         assert_eq!(row(&other, "Rename tab").act, Some(Act::RenameTab(1)));
     }
 

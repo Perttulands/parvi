@@ -48,7 +48,7 @@ fn chords(page: &WeakEntity<Terminals>, tabs: usize) -> Vec<Chord> {
         })
         .collect();
     all.extend([
-        chord("c", "Claim all sessions", Action::ClaimAll).alt("c", Some(false)),
+        chord("c", "Fit every window to this screen", Action::ClaimAll).alt("c", Some(false)),
         chord("w", "Next window", Action::NextWindow).alt("w", Some(false)),
         chord("W", "Previous window", Action::PreviousWindow).alt("w", Some(true)),
         chord("=", "Add a window", Action::AddWindow)
@@ -257,7 +257,7 @@ mod tests {
         let direct_map = [
             ("i", false, None),
             ("enter", false, None),
-            ("c", false, Some("Claim all sessions")),
+            ("c", false, Some("Fit every window to this screen")),
             ("r", false, None),
             ("w", false, Some("Next window")),
             ("w", true, Some("Previous window")),
@@ -284,7 +284,7 @@ mod tests {
             assert_eq!(got.as_deref(), want, "Alt+{key} shift={shift}");
         }
         let leader_map = [
-            ("c", Some("Claim all sessions")),
+            ("c", Some("Fit every window to this screen")),
             ("w", Some("Next window")),
             ("W", Some("Previous window")),
             ("=", Some("Add a window")),

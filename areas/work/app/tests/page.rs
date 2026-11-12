@@ -342,6 +342,9 @@ fn work_column_and_terminal_links_open_cards_and_hand_off(cx: &mut TestAppContex
     });
     click(cx, "work-send");
     until(cx, "send drawer", |cx| cx.debug_bounds("send-go").is_some());
+    // The card is on the Work page, beside no terminal, and nothing was
+    // sent to before: the operator picks the target.
+    click(cx, &format!("send-target-{}::alpha", running.node));
     click(cx, "send-go");
     until(cx, "reference in session", |cx| {
         shown(cx).contains("bead fixture-1: Read the fixture")

@@ -288,16 +288,23 @@ pub fn asks(s: &Session) -> bool {
     waiting(s).is_some() || news(s).is_some_and(|e| e.kind == EventKind::NeedsInput)
 }
 
-/// Where Alt+J goes: a session that asks, the latest to ask first, then the
-/// one whose agent reported last and has not been looked at. Never the
-/// session the operator is on, `here`.
+/// Where Alt+J goes: a session with a question on its screen, then one
+/// whose agent reported it needs input, the latest first, then the one
+/// whose agent reported last and has not been looked at. Never the session
+/// the operator is on, `here`.
 pub fn next_news<'a>(all: &'a [Session], here: Option<&Key>) -> Option<&'a Session> {
     let elsewhere = |s: &&Session| here.is_none_or(|k| *k != Key::of(s));
     let latest = |s: &&Session| news(s).map_or(0, |e| e.at);
     all.iter()
         .filter(elsewhere)
-        .filter(|s| asks(s))
+        .filter(|s| waiting(s).is_some())
         .max_by_key(latest)
+        .or_else(|| {
+            all.iter()
+                .filter(elsewhere)
+                .filter(|s| asks(s))
+                .max_by_key(latest)
+        })
         .or_else(|| {
             all.iter()
                 .filter(elsewhere)
@@ -644,6 +651,15 @@ mod tests {
             summary: String::new(),
         });
         assert_eq!(next_news(&asking, None).unwrap().name, "a", "it asked");
+
+        // A question on screen beats a newer needs-input report.
+        asking[0].event.as_mut().unwrap().at = 99;
+        asking[2].panes[0].waiting = Some("Tea or coffee?".into());
+        assert_eq!(
+            next_news(&asking, None).unwrap().name,
+            "c",
+            "questions first"
+        );
     }
 
     #[test]

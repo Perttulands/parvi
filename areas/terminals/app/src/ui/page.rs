@@ -45,7 +45,6 @@ pub enum Act {
     SavePreset,
     RestorePreset(usize),
     DeletePreset(usize),
-    Reconnect,
     ClaimAll,
     Peek(Key),
     Send(Key),
@@ -262,11 +261,14 @@ pub struct Terminals {
     pub send: super::send::Draft,
     pub find_query: Entity<TextField>,
     pub find_cursor: usize,
+    /// The hit last opened, which Enter steps on from.
+    pub find_shown: Option<usize>,
     pub rename_field: Entity<TextField>,
     pub overview_cursor: usize,
     /// Number of overview cards fitting in the last painted row.
     pub overview_columns: Rc<Cell<usize>>,
     pub overview_scroll: ScrollHandle,
+    pub find_scroll: ScrollHandle,
     /// The terminal tabs' strip, and the active tab, tab count and window
     /// width it last brought the active tab into view at.
     pub tab_scroll: ScrollHandle,
@@ -303,6 +305,8 @@ pub struct Terminals {
     pub peek_rows: usize,
     /// The agent event each session was last told seen for, by key text.
     pub seen_sent: HashMap<String, u64>,
+    /// The session whose report the status line says, and when it said it.
+    pub told: Option<(Key, std::time::SystemTime)>,
     /// The operator pressed a key or a button on this page, or showed a
     /// session, since it last drew: he is looking at it.
     pub acted: bool,
@@ -389,10 +393,12 @@ impl Terminals {
             send: Default::default(),
             find_query,
             find_cursor: 0,
+            find_shown: None,
             rename_field,
             overview_cursor: 0,
             overview_columns: Rc::new(Cell::new(1)),
             overview_scroll: ScrollHandle::new(),
+            find_scroll: ScrollHandle::new(),
             tab_scroll: ScrollHandle::new(),
             tab_scrolled: None,
             hover_row: None,
@@ -410,6 +416,7 @@ impl Terminals {
             restarting: HashSet::new(),
             peek_rows: 0,
             seen_sent: HashMap::new(),
+            told: None,
             acted: false,
             _woken: woken,
         };
@@ -470,7 +477,13 @@ impl Terminals {
                 FieldEvent::Up => s.send_cursor = s.send_cursor.saturating_sub(1),
                 FieldEvent::Down => s.send_cursor = (s.send_cursor + 1).min(n.saturating_sub(1)),
                 FieldEvent::Submit | FieldEvent::Tab => {
-                    let t = s.send_targets(&q);
+                    // Only a row the operator typed toward and sees lit is
+                    // taken; with nothing typed, Enter picks nothing.
+                    let t = if q.trim().is_empty() {
+                        vec![]
+                    } else {
+                        s.send_targets(&q)
+                    };
                     if let Some(x) = t.get(s.send_cursor) {
                         let target = Key::of(x);
                         if s.send_target.as_ref() != Some(&target) {
@@ -493,11 +506,12 @@ impl Terminals {
                 FieldEvent::Changed => {
                     let q = s.find_query.read(cx).text.clone();
                     s.find_cursor = 0;
+                    s.find_shown = None;
                     s.fleet.search(&q);
                 }
                 FieldEvent::Up => s.find_cursor = s.find_cursor.saturating_sub(1),
                 FieldEvent::Down => s.find_cursor = (s.find_cursor + 1).min(n.saturating_sub(1)),
-                FieldEvent::Submit => s.open_match(s.find_cursor, window, cx),
+                FieldEvent::Submit => s.step_match(true, window, cx),
                 _ => {}
             }
             cx.notify();
@@ -864,6 +878,16 @@ impl Terminals {
     /// Says something on the app's status line, with a button that does
     /// `action` on this page.
     pub fn report(&mut self, text: &str, failure: bool, action: Option<(String, Act)>) {
+        self.say(text, failure, action);
+    }
+
+    /// Says `text` on the status line; returns when, to take it back by.
+    pub fn say(
+        &mut self,
+        text: &str,
+        failure: bool,
+        action: Option<(String, Act)>,
+    ) -> std::time::SystemTime {
         self.status_revision = self.status_revision.wrapping_add(1);
         let mut status = if failure {
             Status::failure(text)
@@ -876,7 +900,9 @@ impl Terminals {
                 let _ = page.update(cx, |p, cx| p.act(act.clone(), window, cx));
             });
         }
+        let at = status.at;
         self.said.push(status);
+        at
     }
 
     pub(super) fn track_launch(
@@ -941,6 +967,7 @@ impl Terminals {
             }
             Surface::Find => {
                 self.find_cursor = 0;
+                self.find_shown = None;
                 self.find_query
                     .update(cx, |f, cx| f.set(&f.text.clone(), true, cx));
                 self.find_query.focus_handle(cx)
@@ -1062,10 +1089,6 @@ impl Terminals {
                     self.report(&format!("Preset '{name}' deleted"), false, None);
                 }
             }
-            Act::Reconnect => {
-                self.host.redial(cx);
-                self.report("Reconnecting…", false, None);
-            }
             Act::ClaimAll => {
                 let panes = self.window_panes();
                 let n = panes.iter().flatten().count();
@@ -1076,8 +1099,8 @@ impl Terminals {
                 }
                 self.report(
                     &format!(
-                        "Claimed {n} {}",
-                        if n == 1 { "session" } else { "sessions" }
+                        "Fitted {n} {} to this screen",
+                        if n == 1 { "window" } else { "windows" }
                     ),
                     false,
                     None,
@@ -1453,12 +1476,13 @@ impl Terminals {
         };
         let k = Key::of(s);
         self.place(k, window, cx);
-        // A drawer lying over the windows would hide the match; it steps
-        // away, and Alt+H brings it back with the same results.
-        if self.drawer_room(window, cx).is_none() {
-            self.close(surface::FIND, cx);
-            window.focus(&self.term_focus, cx);
-        }
+        // The hits stay open, the query keeps the keys: Enter goes on to
+        // the next, Shift+Enter back. Where the drawer would lie over the
+        // windows it shrinks to its query and this hit.
+        self.find_cursor = i;
+        self.find_shown = Some(i);
+        self.find_scroll.scroll_to_item(i);
+        field::focus(&self.find_query, window, cx);
         let w = self.settings.workspace.focus;
         self.settings.workspace.choose_pane(w, m.pane);
         self.histories.remove(&w);
@@ -1473,6 +1497,30 @@ impl Terminals {
         }
         self.sync(cx);
         cx.notify();
+    }
+
+    /// Opens the scrollback search for `words`, from the session search.
+    pub fn search_inside(&mut self, words: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let words = words.trim().to_string();
+        self.find_query.update(cx, |f, cx| f.set(&words, false, cx));
+        if self.is_open(surface::FIND) {
+            self.find_cursor = 0;
+            self.find_shown = None;
+            field::focus(&self.find_query, window, cx);
+        } else {
+            self.open(Surface::Find, window, cx);
+        }
+        self.fleet.search(&words);
+        cx.notify();
+    }
+
+    /// Enter (`forward`) or Shift+Enter in the scrollback search: the
+    /// lit hit first, then the next or the one before, round the ends.
+    pub fn step_match(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let n = self.fleet.found().map_or(0, |(m, _)| m.len());
+        if let Some(i) = crate::store::find::step(n, self.find_cursor, self.find_shown, forward) {
+            self.open_match(i, window, cx);
+        }
     }
 
     // ---- history ----
@@ -1634,14 +1682,22 @@ impl Page for Terminals {
     fn answer(&mut self, ask: Ask, _: &'static str, window: &mut Window, cx: &mut Context<Self>) {
         match ask {
             Ask::Send { reference, target } => {
-                let target = match target {
-                    Some(t) => Some(Key {
-                        node: t.node.to_string(),
-                        user: t.user,
-                        name: t.name,
-                    }),
-                    None => self.focused_key(),
-                };
+                let named = target.map(|t| Key {
+                    node: t.node.to_string(),
+                    user: t.user,
+                    name: t.name,
+                });
+                // Asked while this page shows a view beside its windows: the
+                // terminal that view sits by is the focused window's.
+                let beside = (self.shown && self.host.beside(cx).is_some())
+                    .then(|| self.focused_key())
+                    .flatten();
+                let target = crate::store::send::first_target(
+                    &self.fleet.all,
+                    beside.as_ref(),
+                    named.as_ref(),
+                    self.settings.recent_targets.first().map(String::as_str),
+                );
                 self.handoff(Some(reference), target, window, cx);
             }
             Ask::Reveal {

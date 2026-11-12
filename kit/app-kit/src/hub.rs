@@ -420,6 +420,14 @@ impl Hub {
         cx.notify();
     }
 
+    /// Takes back the status said `at`, if nothing has replaced it.
+    pub fn withdraw(&mut self, at: SystemTime, cx: &mut Context<Self>) {
+        if self.status.as_ref().is_some_and(|s| s.at == at) {
+            self.status = None;
+            cx.notify();
+        }
+    }
+
     pub fn toast(&mut self, text: &str, cx: &mut Context<Self>) {
         let at = Instant::now();
         self.toast = Some(Toast {

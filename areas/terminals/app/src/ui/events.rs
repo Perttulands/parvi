@@ -18,7 +18,8 @@ impl Terminals {
         for s in &list {
             let Some(e) = &s.event else { continue };
             let title = sessions::report_title(s, e);
-            self.report(&title, false, None);
+            let at = self.say(&title, false, None);
+            self.told = Some((Key::of(s), at));
             if self.settings.event_toast {
                 self.toast(&title, cx);
             }
@@ -85,6 +86,16 @@ impl Terminals {
         if told != Some(at) {
             let s = s.clone();
             self.fleet.seen(&s, at);
+        }
+    }
+
+    /// The operator answered `k`: what the status line says it reported is
+    /// over, so it goes at once rather than after a while.
+    pub fn answered(&mut self, k: &Key, cx: &mut Context<Self>) {
+        if self.told.as_ref().is_some_and(|(told, _)| told == k)
+            && let Some((_, at)) = self.told.take()
+        {
+            self.host.withdraw(at, cx);
         }
     }
 

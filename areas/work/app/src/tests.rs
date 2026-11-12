@@ -587,13 +587,6 @@ fn session_names() {
     );
 }
 
-#[test]
-fn folders_written_two_ways_match() {
-    assert!(super::same_folder("/home/example/project/", "~/project"));
-    assert!(super::same_folder("/srv/x", "/srv/x/"));
-    assert!(!super::same_folder("/srv/x", "/srv/y"));
-}
-
 #[gpui::test]
 fn a_search_that_only_finished_work_answers_says_so_and_shows_it(cx: &mut TestAppContext) {
     let (work, cx) = page(cx);

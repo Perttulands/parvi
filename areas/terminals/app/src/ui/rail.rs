@@ -53,13 +53,32 @@ impl Terminals {
                     },
                 )),
             );
+        let query = self.rail_search.read(cx).text.clone();
+        // It matches names; what sessions printed is searched elsewhere,
+        // and one click carries the words there.
+        let inside = (!query.trim().is_empty()).then(|| {
+            let words = query.clone();
+            div()
+                .id("rail-search-inside")
+                .debug_selector(|| "rail-search-inside".into())
+                .pt(px(6.))
+                .text_size(px(11.))
+                .text_color(t.dim)
+                .cursor_pointer()
+                .hover(|d| d.text_color(t.accent))
+                .child(format!(
+                    "Names only. Search inside sessions (Alt+H) for “{}”",
+                    query.trim()
+                ))
+                .on_click(cx.listener(move |s, _, window, cx| s.search_inside(&words, window, cx)))
+        });
         let search = div()
             .flex_none()
             .p(px(8.))
             .border_b_1()
             .border_color(t.divider)
-            .child(self.rail_search.clone());
-        let query = self.rail_search.read(cx).text.clone();
+            .child(self.rail_search.clone())
+            .children(inside);
         let fleet = &self.fleet;
         let devices =
             devices::devices(

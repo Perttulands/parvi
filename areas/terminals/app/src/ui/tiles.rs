@@ -968,10 +968,10 @@ impl Terminals {
         if self.fleet.holds(&key.node, pane) {
             items.push(MenuItem::new("Give the size back", Act::Release(i)));
         } else if let Some(why) = session.and_then(|s| pinned(s, pane)) {
-            items.push(MenuItem::new("Claim the size", Act::Claim(i)).refused(why));
+            items.push(MenuItem::new("Fit to this screen", Act::Claim(i)).refused(why));
         } else {
             items.push(
-                MenuItem::new("Claim the size", Act::Claim(i))
+                MenuItem::new("Fit to this screen", Act::Claim(i))
                     .chord("Alt+C")
                     .hint(CLAIM_EXPLANATION),
             );
@@ -1288,7 +1288,7 @@ impl Terminals {
                     .text_color(t.text2)
                     .child("Too large to read here, so it is cut off.")
                     .child(
-                        kit::button(t, ("clipped-claim", i), "Claim the size", Kind::Primary)
+                        kit::button(t, ("clipped-claim", i), "Fit to this screen", Kind::Primary)
                             .tooltip(kit::tip(CLAIM_EXPLANATION))
                             .on_click(cx.listener(move |s, _, window, cx| {
                                 s.act(Act::Claim(i), window, cx)
@@ -1337,6 +1337,9 @@ impl Terminals {
             }
         }
         self.fleet.input(&pane.node, pane.pane, bytes);
+        if let Some(k) = self.focused_key() {
+            self.answered(&k, cx);
+        }
     }
 
     fn paste_clipboard(&mut self, cx: &mut Context<Self>) {

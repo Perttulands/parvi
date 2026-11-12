@@ -256,7 +256,10 @@ impl Terminals {
         // A launched agent may still be starting: the node waits until it
         // is ready for the paste (#242).
         match self.fleet.paste_to(&k.node, pane, &text, enter, launched) {
-            Ok(id) => self.send.sending = Some((id, k, launched, enter)),
+            Ok(id) => {
+                self.answered(&k, cx);
+                self.send.sending = Some((id, k, launched, enter));
+            }
             Err(e) => self.send.said = Some(e),
         }
         cx.notify();
@@ -502,13 +505,20 @@ impl Terminals {
         if let Some(why) = &self.send.said {
             body = body.child(kit::note(&t, why.clone(), Some(t.error)));
         }
-        let blocked = busy || self.send.stuck || self.send.new_agent;
+        // Nothing goes until a target is chosen, and the button says which.
+        let aimed = (!self.send.new_agent)
+            .then(|| self.send_target.clone())
+            .flatten();
+        let blocked = busy || self.send.stuck || aimed.is_none();
         let go = if self.send.uploading {
-            "Attaching…"
+            "Attaching…".to_string()
         } else if busy {
-            "Sending…"
+            "Sending…".to_string()
         } else {
-            "Send"
+            match &aimed {
+                Some(k) => format!("Send to {}", k.name),
+                None => "Pick a target".to_string(),
+            }
         };
         body = body.child(
             div()

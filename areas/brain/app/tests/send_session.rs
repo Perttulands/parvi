@@ -145,6 +145,9 @@ fn brain_send_reaches_a_real_session(cx: &mut TestAppContext) {
     });
     click(cx, "brain-send");
     until(cx, "send drawer", |cx| cx.debug_bounds("send-go").is_some());
+    // The reader is a page of its own, beside no terminal, and nothing was
+    // sent to before: the operator picks the target.
+    click(cx, &format!("send-target-{}::alpha", running.node));
     click(cx, "send-go");
     until(cx, "reference in session", |cx| {
         let text = shown(cx);

@@ -313,6 +313,12 @@ impl Host {
         self.update(cx, |h, cx| h.report(status, cx));
     }
 
+    /// Takes back what was said on the status line `at` (its `Status::at`),
+    /// once it is no longer true; anything said since stays.
+    pub fn withdraw(&self, at: SystemTime, cx: &mut App) {
+        self.update(cx, |h, cx| h.withdraw(at, cx));
+    }
+
     /// A moment's word in the status line.
     pub fn toast(&self, text: &str, cx: &mut App) {
         self.update(cx, |h, cx| h.toast(text, cx));
@@ -462,11 +468,6 @@ impl Host {
             }
         });
         Ok(())
-    }
-
-    /// Dials every link again now, instead of waiting out its backoff.
-    pub fn redial(&self, cx: &mut App) {
-        self.update(cx, |h, cx| h.redial(cx));
     }
 
     /// Posts a desktop notification; a click on it runs `click` in the

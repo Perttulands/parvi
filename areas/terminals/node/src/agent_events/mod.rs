@@ -168,6 +168,22 @@ fn names_the_thread(payload: &[u8]) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether a needs-input payload is only Claude Code's reminder that it
+/// has sat idle at its prompt (`idle_prompt`, "Claude is waiting for your
+/// input"): no question, and its finished report already said so. Told as
+/// a question it would outrank real ones.
+fn only_idle(payload: &[u8]) -> bool {
+    serde_json::from_slice::<Value>(payload)
+        .ok()
+        .is_some_and(|doc| {
+            doc.get("notification_type").and_then(Value::as_str) == Some("idle_prompt")
+                || doc
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .is_some_and(|m| m.trim() == "Claude is waiting for your input")
+        })
+}
+
 #[derive(Deserialize)]
 struct Report {
     session: String,
@@ -192,7 +208,7 @@ async fn report(
         ));
     };
     let body = &body[..body.len().min(MAX_PAYLOAD)];
-    if names_the_thread(body) {
+    if names_the_thread(body) || (kind == Kind::NeedsInput && only_idle(body)) {
         return Ok(StatusCode::NO_CONTENT);
     }
     match hub.record_event(&report.session, kind, summary(body)) {
@@ -207,6 +223,19 @@ async fn report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_idle_reminder_is_no_question() {
+        assert!(only_idle(
+            br#"{"message":"Claude is waiting for your input","notification_type":"idle_prompt"}"#
+        ));
+        assert!(only_idle(
+            br#"{"message":"Claude is waiting for your input"}"#
+        ));
+        assert!(!only_idle(
+            br#"{"message":"Claude needs your permission to use Bash","notification_type":"permission_prompt"}"#
+        ));
+    }
 
     #[test]
     fn codexs_thread_title_is_no_report() {
