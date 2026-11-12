@@ -716,6 +716,19 @@ pub fn call(m: &Missions, name: &str, input: &Value) -> std::result::Result<Valu
         fields["x"] = json!(position.x);
         fields["y"] = json!(position.y);
     }
+    // A mission still laid out as Arrange lays it out stays that way as an
+    // agent adds to it; one a person has placed by hand keeps their places.
+    let arranged = {
+        let layout = m.store.layout_edit(selector)?.layout;
+        let place = |nodes: &[wire::LayoutNode]| {
+            let mut v: Vec<_> = nodes.iter().map(|n| (n.id.clone(), n.x, n.y)).collect();
+            v.sort();
+            v
+        };
+        layout.nodes.is_empty()
+            || place(&parvi_mission_engine::arrange(&current.mission, &layout).nodes)
+                == place(&layout.nodes)
+    };
     let change = json!({operation:fields});
     let patch = wire::patch::decode(&change).map_err(bad)?;
     let result = m.store.patch(
@@ -727,6 +740,12 @@ pub fn call(m: &Missions, name: &str, input: &Value) -> std::result::Result<Valu
         patch,
         args.flag("updated-by").unwrap_or("agent:parvi"),
     )?;
+    if arranged {
+        let layout = m.store.layout_edit(selector)?;
+        let nodes = parvi_mission_engine::arrange(&result.mission, &layout.layout).nodes;
+        m.store
+            .patch_layout(selector, &layout.etag, LayoutPatch::Nodes(nodes))?;
+    }
     m.changed();
     let after = super::commands::document(result.mission, result.etag)?;
     let mut answer = json!({"node":m.node,"mission":after});

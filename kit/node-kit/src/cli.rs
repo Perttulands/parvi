@@ -102,17 +102,30 @@ pub async fn run(noun: &str, args: &[String], out: &mut impl Write) -> Result<i3
 
 /// The commands, one line each, for `parvi help`.
 pub async fn overview(node: Option<&str>) -> Result<String> {
-    let tools = list(&NodeClient::new(node)?).await?;
-    let mut lines = Vec::new();
-    for t in &tools {
+    Ok(listing(&list(&NodeClient::new(node)?).await?))
+}
+
+/// One line per command, each noun's commands together, nouns in the order
+/// the node first names them.
+fn listing(tools: &[Value]) -> String {
+    let mut nouns: Vec<(&str, Vec<String>)> = Vec::new();
+    for t in tools {
         let (noun, verb) = name(t).split_once('_').unwrap_or((name(t), ""));
-        lines.push(format!(
+        let line = format!(
             "  parvi {noun} {}  {}",
             verb.replace('_', "-"),
             first_line(t)
-        ));
+        );
+        match nouns.iter_mut().find(|(n, _)| *n == noun) {
+            Some((_, lines)) => lines.push(line),
+            None => nouns.push((noun, vec![line])),
+        }
     }
-    Ok(lines.join("\n"))
+    nouns
+        .into_iter()
+        .flat_map(|(_, lines)| lines)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn take_node(args: &[String]) -> Result<(Option<String>, Vec<String>)> {
@@ -494,6 +507,27 @@ fn render_text(text: &str, indent: usize, out: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn help_lists_each_nouns_commands_together() {
+        let tools: Vec<Value> = ["mission_list", "run_list", "mission_create", "run_wait"]
+            .iter()
+            .map(|n| json!({"name": n, "description": "Does it."}))
+            .collect();
+        let verbs: Vec<String> = listing(&tools)
+            .lines()
+            .map(|l| l.split("  ").nth(1).unwrap_or("").to_owned())
+            .collect();
+        assert_eq!(
+            verbs,
+            [
+                "parvi mission list",
+                "parvi mission create",
+                "parvi run list",
+                "parvi run wait"
+            ]
+        );
+    }
 
     fn schema() -> Value {
         json!({

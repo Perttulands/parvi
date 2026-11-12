@@ -11,7 +11,7 @@ use parvi_missions_contract::{
 const STICKY_W: f32 = 240.;
 const OPEN_W: f32 = 320.;
 const GAP: f32 = 6.;
-const STICKY_ROOM: f32 = 130.;
+pub(super) const STICKY_ROOM: f32 = 130.;
 const PIN: f32 = 22.;
 const PIN_IN: f32 = 9.;
 const PIN_MIN: f32 = 16.;
@@ -316,7 +316,7 @@ impl MissionsPage {
             } else {
                 "Add a note"
             }))
-            .child(if has { "▰" } else { "+" })
+            .when(has, |d| d.child("▰"))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |page, _, window, cx| {
                 page.open_canvas_note(target.clone(), window, cx)

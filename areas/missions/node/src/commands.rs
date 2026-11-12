@@ -35,6 +35,7 @@ pub const NAMES: &[&str] = &[
     "run_abort",
     "run_resume",
     "run_land",
+    "run_delete",
     "gate_request",
     "gate_approve",
     "gate_reject",
@@ -124,6 +125,9 @@ fn description(name: &str) -> &'static str {
         "run_abort" => "Abort a run.",
         "run_resume" => "Resume a blocked run.",
         "run_land" => "Land a finished repository run.",
+        "run_delete" => {
+            "Delete a finished run, its kept outputs and the folder Parvi made for it; land a repository run first."
+        }
         "gate_approve" => "Approve a pending human gate.",
         "gate_reject" => "Reject a pending human gate.",
         "gate_pick" => "Pick an attempt at a pending human gate.",
@@ -507,6 +511,14 @@ async fn call(m: Missions, name: &str, a: Value) -> Result<Value, Error> {
             let coordinator = m.coordinator.clone();
             let run = blocking(move || coordinator.resume(&id, request)).await?;
             Ok(json!({"node":node,"run":run}))
+        }
+        "run_delete" => {
+            let id = required(&a, "run")?.to_owned();
+            let coordinator = m.coordinator.clone();
+            let gone = id.clone();
+            blocking(move || coordinator.delete_run(&id)).await?;
+            m.changed();
+            Ok(json!({"node":node,"deleted":gone}))
         }
         "run_land" => {
             let id = required(&a, "run")?.to_owned();

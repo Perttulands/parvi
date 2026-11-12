@@ -84,6 +84,9 @@ pub struct MissionsPage {
     /// A run output on its way into the start form of the mission opening.
     carry: Option<String>,
     reveal_card: Option<String>,
+    /// A step being added: once it exists, wire it from this port (if any)
+    /// and open it in the editor.
+    new_step: Option<Option<String>>,
     seen_run_snapshots: std::collections::BTreeSet<String>,
 }
 #[derive(Clone, Copy)]
@@ -184,6 +187,7 @@ impl MissionsPage {
             wanted: None,
             carry: None,
             reveal_card: None,
+            new_step: None,
             seen_run_snapshots: Default::default(),
         };
         for field in [
@@ -558,6 +562,8 @@ impl MissionsPage {
         }
     }
     fn edit_step(&mut self, id: &str, cx: &mut Context<Self>) {
+        // The card being edited stays in view beside the editor.
+        self.canvas.follow(Some(id.to_owned()));
         if self.writing || self.editor.as_ref().is_some_and(|e| e.busy) {
             return;
         }
@@ -872,6 +878,7 @@ impl MissionsPage {
                                 page.state.layout_etag = Some(v.layout.etag);
                                 page.state.layout = Some(v.layout.layout);
                                 page.state.error = None;
+                                page.created_step(&mission, cx);
                             }
                             Err(e) => page.state.error = Some(e.to_string()),
                         }
@@ -1561,10 +1568,10 @@ impl Render for MissionsPage {
                         .child(kit::button(&t, "mission-mode-canvas", "Canvas", if self.mission_canvas_mode { Kind::Plain } else { Kind::Quiet }).debug_selector(|| "mission-mode-canvas".into()).on_click(cx.listener(|p, _, _, cx| { p.mission_canvas_mode = true; cx.notify(); })))
                         .child(div().debug_selector({ let complete = self.validation_complete(); move || if complete { "mission-validation-complete".into() } else { "mission-validation-pending".into() } }).child(div().debug_selector({ let ready = self.mission_run_ready(); move || if ready { "mission-run-ready".into() } else { "mission-run-quiet".into() } }).child(kit::button(&t, "prepare-run", "Run", if self.mission_run_ready() { Kind::Primary } else { Kind::Quiet }).debug_selector(|| "prepare-run".into()).on_click(cx.listener(|p, _, _, cx| p.prepare_run(cx))))))
                         .when(self.validation_failed(), |d| d.child(kit::button(&t, "retry-validation", "Retry validation", Kind::Quiet).debug_selector(|| "retry-validation".into()).on_click(cx.listener(|p, _, _, cx| { p.validation.clear(); p.sync_validation(cx); cx.notify(); }))))
-                        .child(kit::button(&t, "new-input", "+ Input", Kind::Quiet).debug_selector(|| "new-input".into()).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createInputCard":{"title":"Input","goal":"","x":200,"y":200}}), WriteMode::Edit, cx))))
-                        .child(kit::button(&t, "new-step", "+ Step", Kind::Quiet).debug_selector(|| "new-step".into()).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createFormation":{"type":"solo","title":"New step","x":200,"y":200}}), WriteMode::Edit, cx))))
-                        .child(kit::button(&t, "new-gate", "+ Gate", Kind::Quiet).debug_selector(|| "new-gate".into()).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createGate":{"title":"New gate","kinds":["human"],"x":200,"y":200}}), WriteMode::Edit, cx))))
-                        .child(kit::button(&t, "new-end", "+ End", Kind::Quiet).debug_selector(|| "new-end".into()).on_click(cx.listener(|p, _, _, cx| p.write_board(json!({"createEnd":{"title":"End","outcome":"done","x":200,"y":200}}), WriteMode::Edit, cx))))
+                        .child(kit::button(&t, "new-input", "+ Input", Kind::Quiet).debug_selector(|| "new-input".into()).on_click(cx.listener(|p, _, _, cx| p.add_card(board::Kind::Input, cx))))
+                        .child(kit::button(&t, "new-step", "+ Step", Kind::Quiet).debug_selector(|| "new-step".into()).on_click(cx.listener(|p, _, _, cx| p.add_card(board::Kind::Formation, cx))))
+                        .child(kit::button(&t, "new-gate", "+ Gate", Kind::Quiet).debug_selector(|| "new-gate".into()).on_click(cx.listener(|p, _, _, cx| p.add_card(board::Kind::Gate, cx))))
+                        .child(kit::button(&t, "new-end", "+ End", Kind::Quiet).debug_selector(|| "new-end".into()).on_click(cx.listener(|p, _, _, cx| p.add_card(board::Kind::End, cx))))
                         .child(kit::button(&t, "undo", "Undo", Kind::Quiet).debug_selector({ let busy = self.writing; move || if busy { "undo-busy".into() } else { "undo".into() } }).on_click(cx.listener(|p, _, _, cx| p.undo(false, cx))))
                         .child(kit::button(&t, "redo", "Redo", Kind::Quiet).debug_selector({ let busy = self.writing; move || if busy { "redo-busy".into() } else { "redo".into() } }).on_click(cx.listener(|p, _, _, cx| p.undo(true, cx))))))
                     .when_some(self.state.error.clone(), |d, e| d.child(div().text_color(t.error).child(e)))

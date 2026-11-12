@@ -349,6 +349,54 @@ pub fn board(m: &Mission, flow: &Flow, layout: &[LayoutNode], running: bool) -> 
     Board { cards, wires }
 }
 
+/// How big a card of this kind is when it is new: one port each way, one
+/// slot, no brief.
+pub fn new_size(kind: Kind) -> (f32, f32) {
+    match kind {
+        Kind::Input => (INPUT_W, INPUT_HEAD + INPUT_GOAL + INPUT_LINE + INPUT_FOOT),
+        Kind::Formation => (STEP_W, 2. * IO_ROW + STEP_HEAD_EMPTY + body_h("solo", 1)),
+        Kind::Gate => (GATE_W, GATE_H),
+        Kind::End => (END_W, END_H),
+    }
+}
+
+/// Where a new card of `size` goes: the first place inside `view` (x, y,
+/// width, height on the board) that keeps clear of every card and of the
+/// room `below` each Input card keeps for the mission's notes. It is tried
+/// first to the right of the rightmost cards, so a mission grows in reading
+/// order; None when the view has no such place.
+pub fn free_spot(
+    b: &Board,
+    view: (f32, f32, f32, f32),
+    size: (f32, f32),
+    below: f32,
+) -> Option<(f32, f32)> {
+    let (vx, vy, vw, vh) = view;
+    let taken = |x: f32, y: f32| {
+        b.cards.iter().any(|c| {
+            let h = c.h + if c.kind == Kind::Input { below } else { 0. };
+            x < c.x + c.w + GAP_Y
+                && c.x < x + size.0 + GAP_Y
+                && y < c.y + h + GAP_Y
+                && c.y < y + size.1 + GAP_Y
+        })
+    };
+    let inside =
+        |x: f32, y: f32| x >= vx && y >= vy && x + size.0 <= vx + vw && y + size.1 <= vy + vh;
+    let mut beside: Vec<&Card> = b.cards.iter().collect();
+    beside.sort_by(|a, b| (b.x + b.w).total_cmp(&(a.x + a.w)));
+    let first = beside.iter().map(|c| (c.x + c.w + GAP_X, c.y));
+    let step = PORT;
+    let rows = ((vh - size.1) / step).max(0.) as usize;
+    let cols = ((vw - size.0) / step).max(0.) as usize;
+    let grid = (0..=rows)
+        .flat_map(|r| (0..=cols).map(move |c| (vx + c as f32 * step, vy + r as f32 * step)));
+    first
+        .chain(grid)
+        .find(|&(x, y)| inside(x, y) && !taken(x, y))
+        .map(|(x, y)| (x.round(), y.round()))
+}
+
 /// The smallest rectangle holding every card: x, y, width, height.
 pub fn extent(b: &Board) -> (f32, f32, f32, f32) {
     if b.cards.is_empty() {
@@ -422,6 +470,33 @@ mod tests {
             assert_eq!(wire.from, source.at, "source {}", connection.id);
             assert_eq!(wire.to, target.at, "target {}", connection.id);
         }
+    }
+
+    #[test]
+    fn a_new_card_lands_in_free_space_in_view() {
+        let m = delivery();
+        let b = board(&m, &build(&m), &[], false);
+        let (x0, y0, w, h) = extent(&b);
+        let size = new_size(Kind::Formation);
+        let clear = |(x, y): (f32, f32)| {
+            b.cards
+                .iter()
+                .all(|c| x + size.0 <= c.x || c.x + c.w <= x || y + size.1 <= c.y || c.y + c.h <= y)
+        };
+        // A view over the whole board and room beside it: the card goes to
+        // the right of the rightmost card, in view, touching nothing.
+        let view = (x0, y0, w + size.0 * 2., h);
+        let at = free_spot(&b, view, size, 0.).unwrap();
+        assert!(clear(at));
+        assert!(at.0 >= x0 + w);
+        assert!(at.0 + size.0 <= view.0 + view.2 && at.1 + size.1 <= view.1 + view.3);
+        // A view the cards fill leaves no place; one beside them has one.
+        assert_eq!(free_spot(&b, (x0, y0, w, h), (w, h), 0.), None);
+        let empty = Board::default();
+        assert_eq!(
+            free_spot(&empty, (500., 300., 800., 600.), size, 0.),
+            Some((500., 300.))
+        );
     }
 
     #[test]

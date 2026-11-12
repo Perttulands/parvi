@@ -1,8 +1,8 @@
 //! Mission canvas interaction, adapted from the original Missions page.
 use super::*;
 use gpui::{
-    Bounds, Hsla, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels,
-    Point, ScrollEvent, SharedString, Stateful, canvas, point,
+    AnyElement, Bounds, Hsla, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    PathBuilder, Pixels, Point, ScrollEvent, SharedString, Stateful, canvas, point,
 };
 use parvi_app_kit::widgets::boundary;
 use parvi_missions_contract::{LayoutNode, Mission};
@@ -12,6 +12,8 @@ const ZOOM_MIN: f32 = 0.3;
 const ZOOM_MAX: f32 = 1.6;
 const ZOOM_STEP: f32 = 1.2;
 const FIT_MARGIN: f32 = 80.;
+/// The strip on the right the zoom controls stand in; new cards keep out.
+const CONTROLS_W: f32 = 112.;
 const DRAG_SLOP: f32 = 3.;
 const CURVE_REACH: f32 = 40.;
 const CURVE_DOWN: f32 = 60.;
@@ -51,6 +53,8 @@ pub(super) struct View {
     menu: Option<(f32, f32)>,
     bounds: Rc<Cell<(f32, f32, f32, f32)>>,
     fitted: bool,
+    /// The card being edited, kept in view until the view is moved by hand.
+    follow: Option<String>,
 }
 impl Default for View {
     fn default() -> Self {
@@ -61,6 +65,7 @@ impl Default for View {
             menu: None,
             bounds: Rc::new(Cell::new((0., 0., 0., 0.))),
             fitted: false,
+            follow: None,
         }
     }
 }
@@ -71,6 +76,9 @@ impl View {
     pub(super) fn zoom(&self) -> f32 {
         self.zoom
     }
+    pub(super) fn follow(&mut self, id: Option<String>) {
+        self.follow = id;
+    }
     pub(super) fn invalidate_fit(&mut self) {
         self.fitted = false;
     }
@@ -78,6 +86,7 @@ impl View {
         self.menu.take().is_some()
     }
     fn zoom_at(&mut self, factor: f32, at: (f32, f32)) {
+        self.follow = None;
         let z = (self.zoom * factor).clamp(ZOOM_MIN, ZOOM_MAX);
         let k = z / self.zoom;
         self.pan = (
@@ -93,6 +102,36 @@ impl View {
             (f32::from(p.x) - x - self.pan.0) / self.zoom,
             (f32::from(p.y) - y - self.pan.1) / self.zoom,
         )
+    }
+    /// The part of the board in view, left of the zoom controls, as x, y,
+    /// width, height on the board; None before the canvas is first laid out.
+    pub(super) fn visible(&self) -> Option<(f32, f32, f32, f32)> {
+        let (_, _, w, h) = self.bounds.get();
+        let w = w - CONTROLS_W;
+        (w > 0. && h > 0.).then(|| {
+            (
+                -self.pan.0 / self.zoom,
+                -self.pan.1 / self.zoom,
+                w / self.zoom,
+                h / self.zoom,
+            )
+        })
+    }
+    /// Bring a place on the board (x, y, width, height) into the middle of
+    /// the view when any of it is out of view.
+    pub(super) fn show(&mut self, (x, y, w, h): (f32, f32, f32, f32)) {
+        let Some((vx, vy, vw, vh)) = self.visible() else {
+            return;
+        };
+        if x >= vx && y >= vy && x + w <= vx + vw && y + h <= vy + vh {
+            return;
+        }
+        let (_, _, bw, bh) = self.bounds.get();
+        self.pan = (
+            (bw - CONTROLS_W) / 2. - (x + w / 2.) * self.zoom,
+            bh / 2. - (y + h / 2.) * self.zoom,
+        );
+        self.fitted = true;
     }
     fn center(&self) -> (f32, f32) {
         let (_, _, w, h) = self.bounds.get();
@@ -136,6 +175,14 @@ impl MissionsPage {
             });
         }
         let board = board::board(mission, &flow::build(mission), &layout, running);
+        if let Some(id) = self.canvas.follow.clone() {
+            match board.cards.iter().find(|c| c.id == id) {
+                Some(c) if self.editor.as_ref().is_some_and(|e| e.id == id) => {
+                    self.canvas.show((c.x, c.y, c.w, c.h))
+                }
+                _ => self.canvas.follow = None,
+            }
+        }
         let states = self
             .selected_run()
             .map(|run| crate::store::run_state::project(&run.events));
@@ -160,6 +207,7 @@ impl MissionsPage {
                 cx.listener(|p, e: &MouseDownEvent, _, cx| {
                     p.canvas.menu = None;
                     p.canvas.drag = Some(Drag::Pan(e.position, p.canvas.pan));
+                    p.canvas.follow = None;
                     cx.notify();
                 }),
             )
@@ -241,6 +289,7 @@ impl MissionsPage {
                     let center = p.canvas.center();
                     p.canvas.zoom_at(factor, center);
                 } else {
+                    p.canvas.follow = None;
                     p.canvas.pan.0 += f32::from(delta.x);
                     p.canvas.pan.1 += f32::from(delta.y);
                     p.canvas.fitted = true;
@@ -269,6 +318,11 @@ impl MissionsPage {
             layer = layer.child(self.canvas_card(
                 t, mission, card, &view, running, state, attempts, &findings, cx,
             ));
+        }
+        if !running {
+            for card in board.cards.iter().filter(|c| c.kind != board::Kind::End) {
+                layer = layer.child(self.canvas_next(t, card, &view, cx));
+            }
         }
         for note in self.canvas_notes(t, mission, &board, &view, cx) {
             layer = layer.child(note);
@@ -896,12 +950,21 @@ fn wires(
     canvas(
         |_, _, _| (),
         boundary::paint(move |b: Bounds<Pixels>, _, window, cx| {
+            let before = bounds.get();
             bounds.set((
                 f32::from(b.origin.x),
                 f32::from(b.origin.y),
                 f32::from(b.size.width),
                 f32::from(b.size.height),
             ));
+            // A panel opening beside the canvas narrows it: draw again so
+            // the card being edited is brought back into view.
+            if view.follow.is_some() && (before.2, before.3) != (bounds.get().2, bounds.get().3) {
+                let entity = entity.clone();
+                cx.defer(move |cx| {
+                    let _ = entity.update(cx, |_, cx| cx.notify());
+                });
+            }
             if ready_to_fit && !view.fitted {
                 let entity = entity.clone();
                 let fit_board = fit_board.clone();
@@ -1530,4 +1593,151 @@ pub(super) fn asks_you(mission: &Mission) -> bool {
         .gates
         .iter()
         .any(|gate| gate.kinds.iter().any(|kind| kind == "human"))
+}
+
+impl MissionsPage {
+    /// Add a card where it can be seen: in free space in view, or beside
+    /// the board and brought into view when the view is full.
+    pub(super) fn add_card(&mut self, kind: board::Kind, cx: &mut Context<Self>) {
+        self.place_card(kind, None, cx);
+    }
+
+    /// Add the step that comes after `card`, to its right, wired from it.
+    fn next_step(&mut self, card: &str, cx: &mut Context<Self>) {
+        self.place_card(board::Kind::Formation, Some(card), cx);
+    }
+
+    fn place_card(&mut self, kind: board::Kind, after: Option<&str>, cx: &mut Context<Self>) {
+        let Some(mission) = self.state.mission.clone() else {
+            return;
+        };
+        let layout = self
+            .state
+            .layout
+            .as_ref()
+            .map(|l| l.nodes.clone())
+            .unwrap_or_default();
+        let b = board::board(&mission, &flow::build(&mission), &layout, false);
+        let size = board::new_size(kind);
+        let beside = after.and_then(|id| b.cards.iter().find(|c| c.id == id));
+        let room = super::notes::STICKY_ROOM;
+        let spot = beside
+            .and_then(|c| {
+                let region = (c.x + c.w, c.y - size.1, size.0 * 3., size.1 * 3. + c.h);
+                board::free_spot(&b, region, size, room)
+            })
+            .or_else(|| {
+                self.canvas
+                    .visible()
+                    .and_then(|v| board::free_spot(&b, v, size, room))
+            })
+            .unwrap_or_else(|| {
+                if b.cards.is_empty() {
+                    (FIT_MARGIN, FIT_MARGIN)
+                } else {
+                    let (x, y, w, _) = board::extent(&b);
+                    (x + w + FIT_MARGIN, y)
+                }
+            });
+        self.canvas.show((spot.0, spot.1, size.0, size.1));
+        let (x, y) = (spot.0 as i64, spot.1 as i64);
+        let patch = match kind {
+            board::Kind::Input => {
+                json!({"createInputCard":{"title":"Input","goal":"","x":x,"y":y}})
+            }
+            board::Kind::Formation => {
+                json!({"createFormation":{"type":"solo","title":"New step","x":x,"y":y}})
+            }
+            board::Kind::Gate => {
+                json!({"createGate":{"title":"New gate","kinds":["human"],"x":x,"y":y}})
+            }
+            board::Kind::End => {
+                json!({"createEnd":{"title":"End","outcome":"done","x":x,"y":y}})
+            }
+        };
+        if kind == board::Kind::Formation {
+            self.new_step = Some(beside.and_then(|c| leaving_port(&mission, &c.id)));
+        }
+        self.write_board(patch, WriteMode::Edit, cx);
+        if !self.writing {
+            self.new_step = None;
+        }
+    }
+
+    /// After a write: a step that was being added now exists, so wire it
+    /// from the card it follows and open it for editing.
+    pub(super) fn created_step(&mut self, before: &Mission, cx: &mut Context<Self>) {
+        let Some(from) = self.new_step.take() else {
+            return;
+        };
+        let Some(step) = self.state.mission.as_ref().and_then(|m| {
+            m.formations
+                .iter()
+                .find(|f| !before.formations.iter().any(|b| b.id == f.id))
+                .cloned()
+        }) else {
+            return;
+        };
+        if let (Some(from), Some(port)) = (from, step.inputs.first()) {
+            let to = format!("{}:{}", step.id, port.id);
+            self.write_board(
+                json!({"wireConnection":{"from":from,"to":to,"joinIfOccupied":true}}),
+                WriteMode::Edit,
+                cx,
+            );
+        }
+        self.edit_step(&step.id, cx);
+    }
+
+    /// The "+" beside a card: add the step that comes next.
+    fn canvas_next(
+        &self,
+        t: &parvi_app_kit::theme::Theme,
+        card: &board::Card,
+        view: &View,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let z = view.zoom();
+        let side = size::CONTROL * z.max(ZOOM_MIN * 2.);
+        let (x, y) = view.position(card.x + card.w, card.y);
+        let id = card.id.clone();
+        let selector = format!("canvas-next-{id}");
+        div()
+            .id(SharedString::from(selector.clone()))
+            .debug_selector(move || selector.clone())
+            .absolute()
+            .left(px(x + GAP * z + board::PORT * z / 2.))
+            .top(px(y))
+            .size(px(side))
+            .rounded_full()
+            .border_1()
+            .border_color(t.accent)
+            .bg(t.raised)
+            .text_color(t.accent)
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .hover(|d| d.bg(t.accent).text_color(t.bg))
+            .tooltip(kit::tip("Add the next step"))
+            .child("+")
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |page, _, _, cx| page.next_step(&id, cx)))
+            .into_any_element()
+    }
+}
+
+/// The port a next step is wired from: an Input card's, a step's first
+/// output, or a gate's pass.
+fn leaving_port(m: &Mission, card: &str) -> Option<String> {
+    if m.input_cards.iter().any(|c| c.id == card) {
+        return Some(format!("{card}:out"));
+    }
+    if let Some(f) = m.formations.iter().find(|f| f.id == card) {
+        return f.outputs.first().map(|p| format!("{card}:{}", p.id));
+    }
+    m.gates
+        .iter()
+        .any(|g| g.id == card)
+        .then(|| format!("{card}:pass"))
 }

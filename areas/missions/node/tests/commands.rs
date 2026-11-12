@@ -34,6 +34,7 @@ const EXPECTED: &[&str] = &[
     "run_abort",
     "run_resume",
     "run_land",
+    "run_delete",
     "gate_request",
     "gate_approve",
     "gate_reject",
@@ -433,14 +434,108 @@ async fn a_repository_run_can_be_landed() {
             .unwrap()["outcome"],
         "final"
     );
+    // A repository run keeps its branch until it is landed.
+    let kept = node
+        .call("run_delete", json!({"run":run}))
+        .await
+        .unwrap_err();
+    assert!(kept.message.contains("land it first"), "{}", kept.message);
     assert_eq!(
         node.call("run_land", json!({"run":run,"force":true}))
             .await
             .unwrap()["landed"],
         true
     );
+    node.call("run_delete", json!({"run":run})).await.unwrap();
+    assert!(node.call("run_status", json!({"run":run})).await.is_err());
+    assert!(
+        node.call("run_list", json!({})).await.unwrap()["runs"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     node.stop().await;
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_mission_built_through_commands_stays_arranged() {
+    let node = Node::start(&[sessions::LISTING, parvi_work::LISTING, LAB], "")
+        .await
+        .unwrap();
+    let call = |name: &'static str, args: serde_json::Value| {
+        let node = &node;
+        async move { node.call(name, args).await.unwrap() }
+    };
+    call("mission_new", json!({"slug":"line"})).await;
+    let input = call("mission_create", json!({"mission":"line","title":"Start"})).await;
+    let input = input["inputCard"]["id"].as_str().unwrap().to_owned();
+    let mut steps = Vec::new();
+    for title in ["Write", "Review"] {
+        let step = call(
+            "formation_create",
+            json!({"mission":"line","type":"solo","title":title}),
+        )
+        .await;
+        steps.push(step["formation"].clone());
+    }
+    let port = |n: usize, side: &str| {
+        format!(
+            "{}:{}",
+            steps[n]["id"].as_str().unwrap(),
+            steps[n][side][0]["id"].as_str().unwrap()
+        )
+    };
+    call(
+        "mission_wire",
+        json!({"mission":"line","input":input,"to":port(0, "inputs")}),
+    )
+    .await;
+    call(
+        "formation_wire",
+        json!({"mission":"line","from":port(0, "outputs"),"to":port(1, "inputs")}),
+    )
+    .await;
+    let end = call("end_create", json!({"mission":"line","title":"Done"})).await;
+    let end = end["end"]["id"].as_str().unwrap().to_owned();
+    call(
+        "formation_wire",
+        json!({"mission":"line","from":port(1, "outputs"),"to":format!("{end}:in")}),
+    )
+    .await;
+    let places = |layout: &serde_json::Value| {
+        let mut v: Vec<(String, i64, i64)> = layout["layout"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| {
+                (
+                    n["id"].as_str().unwrap().to_owned(),
+                    n["x"].as_i64().unwrap(),
+                    n["y"].as_i64().unwrap(),
+                )
+            })
+            .collect();
+        v.sort();
+        v
+    };
+    let built = places(&call("layout_show", json!({"mission":"line"})).await);
+    assert_eq!(built.len(), 4);
+    let arranged = places(&call("mission_arrange", json!({"mission":"line"})).await);
+    assert_eq!(
+        built, arranged,
+        "the commands left it as Arrange lays it out"
+    );
+    // Read left to right: Start, Write, Review, Done.
+    let x = |id: &str| built.iter().find(|p| p.0 == id).unwrap().1;
+    let ids = [
+        input.as_str(),
+        steps[0]["id"].as_str().unwrap(),
+        steps[1]["id"].as_str().unwrap(),
+        end.as_str(),
+    ];
+    assert!(ids.windows(2).all(|w| x(w[0]) < x(w[1])));
+    node.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

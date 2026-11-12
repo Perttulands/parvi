@@ -52,6 +52,7 @@ mod run_admission;
 mod run_attempts;
 mod run_bindings;
 mod run_capture;
+mod run_delete;
 mod run_dispatch;
 mod run_escalation;
 mod run_evidence;
