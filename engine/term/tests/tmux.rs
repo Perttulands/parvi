@@ -1386,3 +1386,89 @@ async fn a_repaint_for_a_new_size_is_not_activity() {
     .await;
     engine.stop().await;
 }
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
+/// A follower that only watched, while its program set a mode long after
+/// it attached, leaves the session's options as they were: it neither
+/// sized the window nor skipped a redraw.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_watching_follower_keeps_no_output_for_a_later_mode_change() {
+    let Some(server) = Server::start_in("terminal-modes") else {
+        return;
+    };
+    server.new_session("alpha", 100, 30);
+    let script = server.dir().join("modes.sh");
+    write_script(
+        &script,
+        "#!/bin/sh\nprintf ready\nsleep 2\nprintf '\\033[?25l'\nwhile :; do sleep 1; done\n",
+    );
+    server.run(&[
+        "respawn-pane",
+        "-k",
+        "-t",
+        "alpha",
+        script.to_str().unwrap(),
+    ]);
+    let engine = Engine::start(server.socket());
+    seeded_pane(&engine).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    engine.stop().await;
+    let kept = server.run(&["show-options", "-q", "-t", "alpha"]);
+    assert!(!kept.contains("@parvi-"), "a watcher wrote: {kept}");
+}
+
+/// A follower starts from the last output in any of the session's windows,
+/// not only the one the operator has open.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_follower_starts_from_output_in_another_window() {
+    let Some(server) = Server::start_in("terminal-windows") else {
+        return;
+    };
+    server.new_session("alpha", 100, 30);
+    server.run(&["new-window", "-d", "-t", "alpha"]);
+    let engine = Engine::start(server.socket());
+    let pane = seeded_pane(&engine).await;
+    // Sizing the window makes this follower keep the output as it leaves.
+    engine.claim(pane, 1, 90, 30).await.unwrap();
+    window_becomes(&server, "alpha", "90x30").await;
+    engine.stop().await;
+    let left: u64 = server
+        .run(&["show-options", "-qv", "-t", "alpha", "@parvi-left"])
+        .trim()
+        .parse()
+        .expect("the follower kept its output");
+    while now_secs() <= left + 6 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let wrote = now_secs();
+    server.run(&["send-keys", "-t", "alpha:1", "echo later", "Enter"]);
+    eventually("the other window wrote", || {
+        let text = server.run(&["capture-pane", "-p", "-t", "alpha:1"]);
+        text.lines()
+            .any(|line| line.trim() == "later")
+            .then_some(())
+    })
+    .await;
+
+    let engine = Engine::start(server.socket());
+    seeded_pane(&engine).await;
+    let last = eventually("followed again", || {
+        engine.sessions().first()?.activity.last_output
+    })
+    .await;
+    let last = last
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    assert!(
+        last >= wrote,
+        "started from {last}, before the output at {wrote}"
+    );
+    engine.stop().await;
+}

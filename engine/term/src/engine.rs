@@ -1203,10 +1203,21 @@ fn starting_output(activity: &str) -> Option<u64> {
     }
 }
 
+/// The last output in any of a session's windows, from a line of
+/// [`ACTIVITY_FORMAT`] for each: the window the operator has open need not
+/// be the one that wrote.
+fn session_output<'a>(windows: impl IntoIterator<Item = &'a str>) -> Option<u64> {
+    windows
+        .into_iter()
+        .filter_map(|line| starting_output(line.trim()))
+        .max()
+}
+
 /// The commands that keep the session's last output in tmux as this
 /// follower leaves, for the next one to start from (`starting_output`).
-/// Only a follower that sized the window or saw it redrawn keeps them, so
-/// a session it only watched is left as it was.
+/// Only a follower that sized the window or skipped a redraw (for a new
+/// size, or the modes a program sets as the follower attaches) keeps them,
+/// so a session it only watched is left as it was.
 fn leave_output(session: &str, wrote: SystemTime) -> Option<[String; 2]> {
     let secs = |t: SystemTime| {
         t.duration_since(SystemTime::UNIX_EPOCH)
@@ -1351,9 +1362,9 @@ async fn follow_inner(
     // time before it happens rather than seeding from the attach itself.
     if let Ok(before) = shared
         .backend
-        .command(&["display-message", "-p", "-t", session, ACTIVITY_FORMAT])
+        .command(&["list-windows", "-t", session, "-F", ACTIVITY_FORMAT])
         .await
-        && let Some(seconds) = starting_output(before.trim())
+        && let Some(seconds) = session_output(before.lines())
         && let Some(entry) = shared.state.lock().unwrap().sessions.get_mut(session)
         && entry
             .activity
@@ -1366,6 +1377,7 @@ async fn follow_inner(
     // (its task panicked) left clients set aside.
     restore_set_aside(shared.backend.as_ref(), Some(session)).await;
     let mut client = shared.backend.attach(session).await?;
+    let attached = tokio::time::Instant::now();
     // Kept across loop turns: `read_until` keeps a partly read line here when
     // another branch of the select wins.
     let mut line = Vec::new();
@@ -1396,9 +1408,10 @@ async fn follow_inner(
     let mut shown_before: HashMap<PaneId, VecDeque<String>> = HashMap::new();
     // Our panes that began repainting from the top since the layout changed.
     let mut repainting: HashSet<PaneId> = HashSet::new();
-    // Output tmux counted as activity and we did not: what the next
-    // follower needs told (`leave_output`).
-    let mut tmux_counts_more = false;
+    // A redraw we did not count as output: for a new size, or the modes a
+    // program sets as we attach. tmux counted it, so the next follower
+    // needs told (`leave_output`).
+    let mut skipped_redraw = false;
     let quiet = tokio::time::sleep(ACTIVE_FOR);
     tokio::pin!(quiet);
     // A look at our panes' screens for a waiting prompt is due.
@@ -1429,7 +1442,7 @@ async fn follow_inner(
     send(
         &mut out,
         &mut pending,
-        format!("display-message -p '{ACTIVITY_FORMAT}'"),
+        format!("list-windows -t '{session}' -F '{ACTIVITY_FORMAT}'"),
         Pending::Activity,
     );
 
@@ -1524,7 +1537,9 @@ async fn follow_inner(
                             look.as_mut().reset(tokio::time::Instant::now() + LOOK_AFTER);
                         }
                         if redraw || !shows {
-                            tmux_counts_more = true;
+                            // Modes set later are the program's own doing,
+                            // which tmux counts whether we follow or not.
+                            skipped_redraw |= redraw || attached.elapsed() < REDRAW_FOR;
                             continue;
                         }
                         last_output = tokio::time::Instant::now();
@@ -1647,7 +1662,7 @@ async fn follow_inner(
                 }
                 Some(Request::Stop) | None => {
                     // Letting go of the seat resizes the window too.
-                    let told = tmux_counts_more || seat.held;
+                    let told = skipped_redraw || seat.held;
                     let wrote = if !told {
                         None
                     } else if active {
@@ -2032,7 +2047,7 @@ fn on_reply(
             }
         }
         Pending::Activity => {
-            let seconds = lines.first().and_then(|line| starting_output(line));
+            let seconds = session_output(lines.iter().map(String::as_str));
             if let (true, Some(seconds), Some(entry)) =
                 (ok, seconds, state.sessions.get_mut(session))
                 && entry.activity.last_output.is_none()
