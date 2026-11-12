@@ -442,6 +442,7 @@ impl MissionsPage {
             .when(!running, |d| {
                 d.child(
                     kit::button(t, "canvas-arrange", "Arrange", Kind::Plain)
+                        .debug_selector(|| "arrange".into())
                         .on_click(cx.listener(|p, _, _, cx| p.arrange(cx))),
                 )
             })
@@ -1259,7 +1260,9 @@ fn card_face(
                 .when(!names.is_empty(), |d| {
                     d.child(line(format!("Inputs · {}", names.join(" · ")), t.text2))
                 })
-                .child(line("Human gates · notify me".into(), t.dim))
+                .when(asks_you(mission), |d| {
+                    d.child(line("Human gates · notify me".into(), t.dim))
+                })
         }
         board::Kind::Gate => {
             let Some(g) = mission.gates.iter().find(|g| g.id == card.id) else {
@@ -1519,4 +1522,12 @@ fn harness_mark(harness: &str, text: Hsla, secondary: Hsla, z: f32) -> Option<gp
             .flex_none()
             .into_any_element(),
     )
+}
+
+/// Whether any gate in the mission waits on the operator.
+pub(super) fn asks_you(mission: &Mission) -> bool {
+    mission
+        .gates
+        .iter()
+        .any(|gate| gate.kinds.iter().any(|kind| kind == "human"))
 }

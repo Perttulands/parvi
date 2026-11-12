@@ -330,30 +330,11 @@ fn evidence_links_and_attempt_images(cx: &mut TestAppContext) {
         source: gpui::ScrollSource::Pointer,
     });
     cx.run_until_parked();
-    click(cx, "run-attempts");
-    until(cx, "step attempts", |cx| {
-        cx.debug_bounds("attempt-step-fmn_work").is_some()
-    });
-    cx.simulate_event(gpui::ScrollEvent {
-        position: point(px(700.), px(500.)),
-        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-360.))),
-        modifiers: Default::default(),
-        touch_phase: gpui::TouchPhase::Moved,
-        source: gpui::ScrollSource::Pointer,
-    });
-    cx.run_until_parked();
-    click(cx, "attempt-step-fmn_work");
+    reveal_control(cx, "run-step-attempts-fmn_work");
+    click(cx, "run-step-attempts-fmn_work");
     until(cx, "compare button", |cx| {
         cx.debug_bounds("attempt-compare").is_some()
     });
-    cx.simulate_event(gpui::ScrollEvent {
-        position: point(px(700.), px(500.)),
-        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-200.))),
-        modifiers: Default::default(),
-        touch_phase: gpui::TouchPhase::Moved,
-        source: gpui::ScrollSource::Pointer,
-    });
-    cx.run_until_parked();
     click(cx, "attempt-compare");
     until(cx, "both decoded images", |cx| {
         cx.debug_bounds("attempt-image-1").is_some() && cx.debug_bounds("attempt-image-2").is_some()

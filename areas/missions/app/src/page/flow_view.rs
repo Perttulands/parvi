@@ -21,51 +21,25 @@ impl MissionsPage {
                 let start = id.clone();
                 let edit = id.clone();
                 let selector = format!("flow-input-{id}");
-                let mut card = div()
-                    .debug_selector(move || selector.clone())
-                    .p(px(PAD))
-                    .border_1()
-                    .border_color(t.divider)
-                    .bg(t.surface)
+                let actions = div()
                     .flex()
-                    .flex_col()
                     .gap(px(TAB_GAP))
-                    .child(kit::label(t, "Input"))
-                    .child(input.title.clone())
-                    .child(input.goal.clone());
-                if input.inputs.is_empty() {
-                    card = card.child("Inputs · None declared");
-                }
-                for value in &input.inputs {
-                    card = card.child(format!(
-                        "Input · {} · {} · {}",
-                        value.name,
-                        value.kind,
-                        if value.required {
-                            "required"
-                        } else {
-                            "optional"
-                        }
-                    ));
-                    if !value.description.is_empty() {
-                        card = card.child(div().text_color(t.dim).child(value.description.clone()));
-                    }
-                }
-                if input.outputs.is_empty() {
-                    card = card.child("Outputs · None declared");
-                }
-                for value in &input.outputs {
-                    card = card.child(format!("Output · {}", value.name));
-                }
-                card = card.child("Human gates · Notify me");
-                card = card
+                    .child(
+                        kit::button(
+                            t,
+                            SharedString::from(format!("flow-edit-{id}")),
+                            "Edit",
+                            Kind::Quiet,
+                        )
+                        .on_click(cx.listener(move |page, _, _, cx| page.edit_step(&edit, cx))),
+                    )
                     .child(
                         kit::button(
                             t,
                             SharedString::from(format!("flow-start-{id}")),
-                            "Run",
+                            "Run…",
                             if self.mission_input_runnable(id) {
-                                Kind::Primary
+                                Kind::Plain
                             } else {
                                 Kind::Quiet
                             },
@@ -77,44 +51,106 @@ impl MissionsPage {
                         .on_click(
                             cx.listener(move |page, _, _, cx| page.prepare_card_run(&start, cx)),
                         ),
-                    )
-                    .child(
-                        kit::button(
-                            t,
-                            SharedString::from(format!("flow-edit-{id}")),
-                            "Edit",
-                            Kind::Quiet,
-                        )
-                        .on_click(cx.listener(move |page, _, _, cx| page.edit_step(&edit, cx))),
                     );
+                let mut card = card(t)
+                    .debug_selector(move || selector.clone())
+                    .child(header(
+                        t,
+                        kit::label(t, "Input"),
+                        input.title.clone(),
+                        actions,
+                    ));
+                if !input.goal.trim().is_empty() {
+                    card = card.child(div().text_color(t.text2).child(input.goal.clone()));
+                }
+                if input.inputs.is_empty() {
+                    card = card.child(fact(t, "asks for", "nothing".into()));
+                }
+                for value in &input.inputs {
+                    let mut words = format!(
+                        "{} · {}{}",
+                        value.name,
+                        value.kind,
+                        if value.required { "" } else { ", optional" }
+                    );
+                    if !value.description.is_empty() {
+                        words.push_str(&format!(" — {}", value.description));
+                    }
+                    card = card.child(fact(t, "asks for", words));
+                }
+                if input.outputs.is_empty() {
+                    card = card.child(fact(t, "gives back", "nothing declared".into()));
+                }
+                for value in &input.outputs {
+                    let from = value
+                        .from
+                        .split_once(':')
+                        .map(|(step, _)| format!(" from {}", mission.node_name(step)))
+                        .unwrap_or_else(|| " (not wired yet)".into());
+                    let kind = if value.kind.is_empty() {
+                        "text"
+                    } else {
+                        &value.kind
+                    };
+                    card = card.child(fact(
+                        t,
+                        "gives back",
+                        format!("{} · {kind}{from}", value.name),
+                    ));
+                }
+                if super::canvas::asks_you(mission) {
+                    card = card.child(fact(t, "human gates", "notify me".into()));
+                }
                 body = body.child(card);
-            }
-            if !section.start.is_empty() {
-                body = body.child(format!("Starts at {}", run::target_words(&section.start)));
             }
             for step in &section.steps {
                 let id = step.id.clone();
                 let selector = format!("flow-step-{id}");
-                let mut card = div()
+                let kind = match &step.kind {
+                    flow::StepKind::Formation { .. } => mission
+                        .formations
+                        .iter()
+                        .find(|f| f.id == step.id)
+                        .map(|f| f.kind.clone())
+                        .unwrap_or_default(),
+                    flow::StepKind::Gate { .. } => "gate".into(),
+                };
+                let edit = kit::button(
+                    t,
+                    SharedString::from(format!("flow-edit-{id}")),
+                    "Edit",
+                    Kind::Quiet,
+                )
+                .debug_selector({
+                    let id = id.clone();
+                    move || format!("flow-edit-{id}")
+                })
+                .on_click(cx.listener(move |page, _, _, cx| page.edit_step(&id, cx)));
+                let mut card = card(t)
                     .id(SharedString::from(selector.clone()))
                     .debug_selector(move || selector.clone())
-                    .p(px(PAD))
-                    .border_1()
-                    .border_color(t.divider)
-                    .bg(t.surface)
-                    .flex()
-                    .flex_col()
-                    .gap(px(TAB_GAP))
-                    .child(format!("{} · {}", step.number, mission.node_name(&step.id)));
+                    .child(header(
+                        t,
+                        div()
+                            .flex_none()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(step.number.to_string()),
+                        format!("{}  ·  {kind}", mission.node_name(&step.id)),
+                        div().child(edit),
+                    ));
                 match &step.kind {
                     flow::StepKind::Formation { next } => {
                         if let Some(formation) = mission.formations.iter().find(|f| f.id == step.id)
                         {
-                            card = card.child(kit::label(t, formation.kind.clone()));
                             if let Some(brief) = &formation.brief
                                 && !brief.goal.trim().is_empty()
                             {
-                                card = card.child(brief.goal.clone());
+                                card = card.child(
+                                    div()
+                                        .text_color(t.text2)
+                                        .line_clamp(3)
+                                        .child(brief.goal.trim().to_owned()),
+                                );
                             }
                             if formation.slots.is_empty() {
                                 card = card.child(
@@ -122,14 +158,15 @@ impl MissionsPage {
                                 );
                             } else {
                                 for slot in &formation.slots {
-                                    card = card.child(format!(
-                                        "Staffing · {}",
-                                        crate::store::words::staffing(slot)
+                                    card = card.child(fact(
+                                        t,
+                                        "staffing",
+                                        crate::store::words::staffing(slot),
                                     ));
                                 }
                             }
                         }
-                        card = card.child(format!("Next · {}", run::target_words(next)));
+                        card = card.child(fact(t, "then", run::target_words(next)));
                     }
                     flow::StepKind::Gate {
                         deciders,
@@ -141,49 +178,53 @@ impl MissionsPage {
                             .iter()
                             .map(|d| match d {
                                 flow::Decider::You => "you",
-                                flow::Decider::Judge => "judge",
-                                flow::Decider::Code => "code",
+                                flow::Decider::Judge => "a judge",
+                                flow::Decider::Code => "a check",
                             })
                             .collect::<Vec<_>>()
-                            .join(", ");
-                        card = card
-                            .child(kit::label(t, "Gate"))
-                            .child(format!("Decided by · {who}"));
+                            .join(" and ");
                         if let Some(gate) = mission.gates.iter().find(|g| g.id == step.id)
                             && !gate.criterion.is_empty()
                         {
-                            card = card.child(gate.criterion.clone());
+                            card =
+                                card.child(div().text_color(t.text2).child(gate.criterion.clone()));
                         }
+                        card = card.child(fact(t, "decided by", who));
                         for judge in judges {
                             if let Some(formation) =
                                 mission.formations.iter().find(|f| &f.id == judge)
                             {
-                                card = card.child(format!(
-                                    "Judge · {} · {}",
-                                    mission.node_name(judge),
-                                    formation
-                                        .slots
-                                        .iter()
-                                        .map(crate::store::words::staffing)
-                                        .collect::<Vec<_>>()
-                                        .join(", ")
+                                card = card.child(fact(
+                                    t,
+                                    "judge",
+                                    format!(
+                                        "{} · {}",
+                                        mission.node_name(judge),
+                                        formation
+                                            .slots
+                                            .iter()
+                                            .map(crate::store::words::staffing)
+                                            .collect::<Vec<_>>()
+                                            .join(", ")
+                                    ),
                                 ));
                             }
                         }
                         card = card
-                            .child(format!("Pass · {}", run::target_words(pass)))
-                            .child(format!("Fail · {}", run::target_words(fail)));
+                            .child(fact(t, "on pass", run::target_words(pass)))
+                            .child(fact(t, "on fail", run::target_words(fail)));
                     }
                 }
                 if step.parallel.len() > 1 {
-                    card = card.child(format!(
-                        "Alongside · {}",
+                    card = card.child(fact(
+                        t,
+                        "alongside",
                         step.parallel
                             .iter()
                             .filter(|other| **other != step.id)
                             .map(|other| mission.node_name(other))
                             .collect::<Vec<_>>()
-                            .join(", ")
+                            .join(", "),
                     ));
                 }
                 for limit in mission
@@ -201,28 +242,62 @@ impl MissionsPage {
                     if let Some(n) = limit.tokens {
                         words.push(format!("{n} tokens"));
                     }
-                    card = card.child(format!(
-                        "Limit · {} · {}",
-                        words.join(", "),
-                        limit.when_spent
+                    card = card.child(fact(
+                        t,
+                        "limit",
+                        format!("{}, then {}", words.join(", "), limit.when_spent),
                     ));
                 }
-                card = card.child(
-                    kit::button(
-                        t,
-                        SharedString::from(format!("flow-edit-{id}")),
-                        "Edit",
-                        Kind::Quiet,
-                    )
-                    .debug_selector({
-                        let id = id.clone();
-                        move || format!("flow-edit-{id}")
-                    })
-                    .on_click(cx.listener(move |page, _, _, cx| page.edit_step(&id, cx))),
-                );
                 body = body.child(card);
             }
         }
         body
     }
+}
+
+/// A card on the Flow view.
+fn card(t: &Theme) -> Div {
+    div()
+        .p(px(PAD))
+        .rounded(px(size::RADIUS))
+        .border_1()
+        .border_color(t.divider)
+        .bg(t.surface)
+        .flex()
+        .flex_col()
+        .gap(px(TAB_GAP))
+}
+
+/// A card's first line: a lead, its title and its actions on the right.
+fn header(t: &Theme, lead: Div, title: String, actions: Div) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(PAD))
+        .child(lead)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_ellipsis()
+                .text_color(t.text)
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(title),
+        )
+        .child(actions)
+}
+
+/// One named fact on a card, the name in a narrow dim column.
+fn fact(t: &Theme, name: &'static str, value: String) -> Div {
+    div()
+        .flex()
+        .gap(px(PAD))
+        .child(
+            div()
+                .w(px(size::LABEL_COL / 2.))
+                .flex_none()
+                .text_color(t.dim)
+                .child(name),
+        )
+        .child(div().flex_1().min_w_0().child(value))
 }

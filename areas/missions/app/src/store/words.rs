@@ -296,6 +296,22 @@ pub fn run_branch(run: &Run) -> Option<String> {
     (!run.repository.is_empty()).then(|| format!("parvi/run-{}", run.run_id))
 }
 
+/// A file's size in a few characters: `512 B`, `2 KB`, `1.18 GB`.
+pub fn size_text(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = bytes as f64;
+    let mut unit = 0;
+    while v >= 1024. && unit < UNITS.len() - 1 {
+        v /= 1024.;
+        unit += 1;
+    }
+    if unit >= 3 {
+        format!("{v:.2} {}", UNITS[unit])
+    } else {
+        format!("{v:.0} {}", UNITS[unit])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

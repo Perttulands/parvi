@@ -312,32 +312,38 @@ impl MissionsPage {
                 && self.state.mission.is_some()
                 && self.state.mission_etag.is_some()
             {
-                let selector = format!("mission-rename-{}-{}", group.node, group.slug);
+                let rename = format!("mission-rename-{}-{}", group.node, group.slug);
+                let delete = format!("mission-delete-{}-{}", group.node, group.slug);
                 list = list.child(
-                    kit::button(
-                        t,
-                        SharedString::from(selector.clone()),
-                        "Rename",
-                        Kind::Quiet,
-                    )
-                    .debug_selector(move || selector.clone())
-                    .on_click(
-                        cx.listener(|page, _, window, cx| page.open_mission_rename(window, cx)),
-                    ),
-                );
-                let selector = format!("mission-delete-{}-{}", group.node, group.slug);
-                list = list.child(
-                    kit::button(
-                        t,
-                        SharedString::from(selector.clone()),
-                        "Delete",
-                        Kind::Quiet,
-                    )
-                    .text_color(t.error)
-                    .debug_selector(move || selector.clone())
-                    .on_click(
-                        cx.listener(|page, _, window, cx| page.open_mission_archive(window, cx)),
-                    ),
+                    div()
+                        .flex()
+                        .px(px(PAD))
+                        .gap(px(TAB_GAP))
+                        .child(
+                            kit::button(
+                                t,
+                                SharedString::from(rename.clone()),
+                                "Rename",
+                                Kind::Quiet,
+                            )
+                            .debug_selector(move || rename.clone())
+                            .on_click(cx.listener(
+                                |page, _, window, cx| page.open_mission_rename(window, cx),
+                            )),
+                        )
+                        .child(
+                            kit::button(
+                                t,
+                                SharedString::from(delete.clone()),
+                                "Delete",
+                                Kind::Quiet,
+                            )
+                            .text_color(t.error)
+                            .debug_selector(move || delete.clone())
+                            .on_click(cx.listener(
+                                |page, _, window, cx| page.open_mission_archive(window, cx),
+                            )),
+                        ),
                 );
             }
             if runs.is_empty() {

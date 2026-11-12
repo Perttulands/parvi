@@ -250,7 +250,7 @@ fn step_and_run_bar_open_the_owned_session_and_disable_ended_seats(cx: &mut Test
             .unwrap()
     });
     let bar = format!(
-        "run-bar-seat-{}-{}-live-seat-fmn_work",
+        "flow-fmn_work-seat-{}-{}-live-seat-fmn_work",
         running.run, running.seq
     );
     until(cx, "live run seat", |cx| {
@@ -279,7 +279,7 @@ fn step_and_run_bar_open_the_owned_session_and_disable_ended_seats(cx: &mut Test
             .unwrap();
     });
     let ended = format!(
-        "run-bar-seat-{}-{}-ended-seat-fmn_work",
+        "flow-fmn_work-seat-{}-{}-ended-seat-fmn_work",
         running.run, running.seq
     );
     until(cx, "ended seat", |cx| {
@@ -316,15 +316,12 @@ fn step_and_run_bar_open_the_owned_session_and_disable_ended_seats(cx: &mut Test
         "step-seat-{}-{}-ended-seat-fmn_work",
         running.run, running.seq
     );
-    until(cx, "ended step seat", |cx| {
-        cx.debug_bounds(Box::leak(step_ended.clone().into_boxed_str()))
-            .is_some()
+    until(cx, "step editor", |cx| {
+        cx.debug_bounds("step-save").is_some()
     });
-    click(cx, &step_ended);
-    cx.run_until_parked();
-    assert_eq!(
-        OPENED.lock().unwrap().len(),
-        2,
-        "ended step seat must not open a terminal"
+    assert!(
+        cx.debug_bounds(Box::leak(step_ended.into_boxed_str()))
+            .is_none(),
+        "the step editor offers only seats that can still be opened"
     );
 }

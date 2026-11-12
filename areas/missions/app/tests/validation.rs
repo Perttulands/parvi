@@ -96,9 +96,13 @@ fn run_is_only_emphasized_for_a_current_runnable_mission(cx: &mut TestAppContext
         })
     });
     until(cx, "no selected mission", |cx| {
-        cx.debug_bounds("mission-run-quiet").is_some()
+        cx.debug_bounds("new-mission").is_some()
     });
-    assert!(cx.debug_bounds("mission-run-ready").is_none());
+    assert!(
+        cx.debug_bounds("mission-run-ready").is_none()
+            && cx.debug_bounds("mission-run-quiet").is_none(),
+        "without a mission there is nothing to run"
+    );
     let selector = Box::leak(format!("mission-{}-hello", running.id).into_boxed_str());
     until(cx, "mission listing", |cx| {
         cx.debug_bounds(selector).is_some()
