@@ -9,9 +9,7 @@ pub fn parse_completion_sentinel(captured: &str, run_id: &str) -> Option<Complet
     let mut remaining = captured;
     let mut found = None;
     while let Some((_, tail)) = remaining.split_once(crate::contract_names::DONE) {
-        let Some((raw, after)) = tail.split_once(">>>") else {
-            break;
-        };
+        let (raw, after) = crate::contract_names::sentinel_fields(tail);
         remaining = after;
         let fields: std::collections::BTreeMap<_, _> = raw
             .split_whitespace()
@@ -40,5 +38,16 @@ mod tests {
             "second"
         );
         assert!(parse_completion_sentinel(text, "missing").is_none());
+    }
+    #[test]
+    fn a_sentinel_left_unclosed_still_ends_with_its_line() {
+        // Codex read `artifact=<path-or-ref>>>` as one placeholder and
+        // dropped the closer; the seat had finished all the same.
+        let text = "{\"port\":{\"text\":\"ok\"}}\n<<<PARVI-DONE run-id=run_a status=ok artifact=port_1\nWorked for 18s";
+        let found = parse_completion_sentinel(text, "run_a").unwrap();
+        assert_eq!(
+            (found.status.as_str(), found.artifact.as_str()),
+            ("ok", "port_1")
+        );
     }
 }

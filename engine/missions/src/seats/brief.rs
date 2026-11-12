@@ -105,7 +105,7 @@ fn render_for(request: &FormationExecution, slot: &Slot, final_output: bool) -> 
     }
     let _ = writeln!(
         brief,
-        "\nWhen finished, end your response with <<<PARVI-DONE run-id={} status=ok artifact=<path-or-ref>>>.",
+        "\nWhen finished, end your response with this line, ARTIFACT replaced by the path or port id you produced and the closing >>> kept:\n<<<PARVI-DONE run-id={} status=ok artifact=ARTIFACT>>>",
         request.run_id
     );
     brief

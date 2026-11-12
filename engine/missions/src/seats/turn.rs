@@ -137,7 +137,7 @@ impl TurnWatch<'_> {
                         return Err("seat_idle_without_sentinel: seat remained idle after a continue instruction".into());
                     }
                     let instruction = format!(
-                        "Continue the dispatched work from where you stopped. Follow the original brief and output contract. When complete emit <<<PARVI-DONE run-id={run_id} status=ok artifact=<path-or-ref>>>."
+                        "Continue the dispatched work from where you stopped. Follow the original brief and output contract. When complete end with this line, ARTIFACT replaced by the path or port id you produced and the closing >>> kept: <<<PARVI-DONE run-id={run_id} status=ok artifact=ARTIFACT>>>"
                     );
                     state_event(
                         "seat_idle_recovery",

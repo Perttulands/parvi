@@ -77,7 +77,7 @@ fn matches_sentinel(text: &str, sentinel: &str) -> bool {
     }
     text.split(crate::contract_names::DONE)
         .skip(1)
-        .filter_map(|s| s.split_once(">>>"))
+        .map(crate::contract_names::sentinel_fields)
         .any(|(fields, _)| {
             fields
                 .split_whitespace()
