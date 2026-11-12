@@ -21,14 +21,13 @@ impl Render for Card {
         div()
             .id("work-beside")
             .debug_selector(|| "work-beside".into())
-            .w(px(CARD_W))
-            .min_w(px(CARD_MIN))
-            .h_full()
-            .flex_none()
+            // The page that shows it beside decides the width.
+            .size_full()
+            .overflow_hidden()
             .flex()
             .flex_col()
             .bg(t.surface)
-            .border_l_1()
+            .border_r_1()
             .border_color(t.divider)
             .font_family(FAMILY)
             .when(self.loading, |d| {

@@ -109,7 +109,12 @@ struct Source {
 
 impl Terminals {
     pub fn render_terminals(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let mut row = div().size_full().flex().flex_row();
+        let mut row = div()
+            .size_full()
+            .flex()
+            .flex_row()
+            .capture_any_mouse_down(cx.listener(|s, _, _, _| s.acted = true))
+            .capture_key_down(cx.listener(|s, _, _, _| s.acted = true));
         if self.settings.sessions_open {
             row = row.child(self.render_rail(window, cx));
         }

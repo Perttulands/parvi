@@ -4,7 +4,8 @@
 //!
 //! Claude Code and Codex ask the same way: a numbered menu with one option
 //! marked (`❯` in Claude Code, `›` in Codex), near the bottom of the screen,
-//! with a footer that says Esc cancels, or options that answer yes or no. A
+//! with a footer that says Esc cancels (or names Enter and Esc, as Codex's
+//! "enter continue · esc skip" does), or options that answer yes or no. A
 //! screen counts as waiting only when it has both, so other programs stay
 //! active or idle, never wrongly waiting. Harness completion hooks (CHROTE
 //! 2's `needs-input` event) can become a second source later.
@@ -40,7 +41,9 @@ pub fn waiting<'a>(rows: impl IntoIterator<Item = &'a str>) -> Option<String> {
         .any(|text| text.starts_with("Yes") || text.starts_with("No"));
     let footer = rows[marked..].iter().any(|row| {
         let row = row.to_lowercase();
-        row.contains("esc to cancel") || row.contains("enter to confirm")
+        row.contains("esc to cancel")
+            || row.contains("enter to confirm")
+            || (row.contains("enter") && row.contains("esc"))
     });
     if !answers && !footer {
         return None;
@@ -148,6 +151,8 @@ mod tests {
         );
         // Cut off by a narrow pane: still waiting, with no question.
         assert_eq!(fixture("codex-narrow.txt").as_deref(), Some(""));
+        // Its update menu at start asks nothing, but waits all the same.
+        assert_eq!(fixture("codex-update.txt").as_deref(), Some(""));
     }
 
     #[test]

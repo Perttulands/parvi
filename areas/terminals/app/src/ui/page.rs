@@ -299,6 +299,9 @@ pub struct Terminals {
     pub peek_rows: usize,
     /// The agent event each session was last told seen for, by key text.
     pub seen_sent: HashMap<String, u64>,
+    /// The operator pressed a key or a button on this page, or showed a
+    /// session, since it last drew: he is looking at it.
+    pub acted: bool,
     /// Wakes the page when the network thread fed a screen.
     _woken: Task<()>,
 }
@@ -401,6 +404,7 @@ impl Terminals {
             restarting: HashSet::new(),
             peek_rows: 0,
             seen_sent: HashMap::new(),
+            acted: false,
             _woken: woken,
         };
         s.subscribe_fields(window, cx);
@@ -1284,6 +1288,7 @@ impl Terminals {
     /// A session goes where it is wanted: the focused window if empty, else
     /// the first empty one, else a new window, else the focused one.
     pub fn place(&mut self, k: Key, window: &mut Window, cx: &mut Context<Self>) {
+        self.acted = true;
         if let Some((t, w)) = self.settings.workspace.bound(&k) {
             self.settings.workspace.show_tab(t);
             self.settings.workspace.focus = w;

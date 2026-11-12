@@ -3,7 +3,9 @@
 //! mark on the session's row and tab until he looks at it, and a desktop
 //! notification while the window is not the active one. Looking is the
 //! focused window of the terminal page showing the session while this window
-//! is active; it tells the node, so every device agrees.
+//! is active, or right after the operator acted on the page or showed the
+//! session (which needs no window manager to tell); it tells the node, so
+//! every device agrees.
 
 use super::page::Terminals;
 use crate::store::sessions::{self, Key};
@@ -65,7 +67,8 @@ impl Terminals {
     /// Tells the node the operator is looking at the focused session, once
     /// per report. Runs as the window draws: a lookup and a compare.
     pub fn see_focused(&mut self, window: &Window) {
-        if !self.shown || !window.is_window_active() {
+        let acted = std::mem::take(&mut self.acted);
+        if !self.shown || !(acted || window.is_window_active()) {
             return;
         }
         let Some(key) = self.focused_key() else {

@@ -106,7 +106,9 @@ impl Terminals {
                 self.host.show(cx);
                 // The launcher starts where the focused window's session runs.
                 let near = ws.shown(ws.focus).map(|b| b.key.node.clone());
-                let opened = match ws.empty_window() {
+                // An empty window here, else a new one, else a new tab: the
+                // windows full of sessions stay as they are.
+                let room = |ws: &mut crate::store::workspace::Workspace| match ws.empty_window() {
                     Some(w) => {
                         ws.focus = w;
                         Some(w)
@@ -114,6 +116,25 @@ impl Terminals {
                     None if ws.add_window() && ws.windows()[ws.focus].is_empty() => Some(ws.focus),
                     None => None,
                 };
+                let mut new_tab = false;
+                let opened = room(ws).or_else(|| {
+                    let back = ws.active;
+                    if !ws.add_tab() {
+                        return None;
+                    }
+                    new_tab = true;
+                    room(ws).or_else(|| {
+                        // The tab shown again still held four sessions.
+                        new_tab = false;
+                        ws.close_tab(ws.active);
+                        ws.show_tab(back);
+                        None
+                    })
+                });
+                if new_tab {
+                    self.histories.clear();
+                    self.sync(cx);
+                }
                 match opened {
                     Some(w) => {
                         let l = self.launchers[w].clone();
@@ -125,7 +146,7 @@ impl Terminals {
                         });
                     }
                     None => self.report(
-                        "Every window holds a session; remove one to launch here.",
+                        "Every tab is full; close a tab or remove a window to launch.",
                         false,
                         None,
                     ),

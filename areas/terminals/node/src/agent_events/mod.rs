@@ -152,6 +152,22 @@ pub fn summary(payload: &[u8]) -> String {
     }
 }
 
+/// Whether a payload reports Codex's side task that names the thread, not
+/// the operator's turn: its last message is only `{"title": …}`. Codex
+/// notifies for it just after the real turn, which it would otherwise
+/// replace, with a second report the operator did not ask for.
+fn names_the_thread(payload: &[u8]) -> bool {
+    serde_json::from_slice::<Value>(payload)
+        .ok()
+        .and_then(|doc| {
+            let text = doc.get("last-assistant-message")?.as_str()?.to_owned();
+            let inner = serde_json::from_str::<Value>(&text).ok()?;
+            let fields = inner.as_object()?;
+            Some(fields.len() == 1 && fields.contains_key("title"))
+        })
+        .unwrap_or(false)
+}
+
 #[derive(Deserialize)]
 struct Report {
     session: String,
@@ -176,6 +192,9 @@ async fn report(
         ));
     };
     let body = &body[..body.len().min(MAX_PAYLOAD)];
+    if names_the_thread(body) {
+        return Ok(StatusCode::NO_CONTENT);
+    }
     match hub.record_event(&report.session, kind, summary(body)) {
         Ok(()) => Ok(StatusCode::NO_CONTENT),
         Err(error) => Err(Failure(
@@ -188,6 +207,20 @@ async fn report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codexs_thread_title_is_no_report() {
+        // As Codex 0.167 notifies just after a turn that answered "ok".
+        let title = br#"{"type":"agent-turn-complete","client":"codex-tui","last-assistant-message":"{\"title\":\"Reply with ok\"}"}"#;
+        assert!(names_the_thread(title));
+        let turn = br#"{"type":"agent-turn-complete","last-assistant-message":"ok"}"#;
+        assert!(!names_the_thread(turn));
+        let json_answer = br#"{"last-assistant-message":"{\"title\":\"x\",\"body\":\"y\"}"}"#;
+        assert!(!names_the_thread(json_answer));
+        assert!(!names_the_thread(
+            br#"{"message":"Claude needs your permission"}"#
+        ));
+    }
 
     #[test]
     fn a_summary_is_the_payloads_message_on_one_line_cut_short() {

@@ -1805,6 +1805,79 @@ fn hook_reports_mark_session_and_tab_until_cli_seen(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }
 
+/// Showing a session is looking at it, whether or not a window manager says
+/// the app's window is active: the test window never is, like a bare display.
+#[gpui::test]
+fn clicking_a_marked_session_clears_its_mark(cx: &mut TestAppContext) {
+    let Some(running) = start("terminals-mark-click") else {
+        return;
+    };
+    let (_shell, cx, settings) = open_with_alpha(&running, "mark-click", cx);
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    let key = Key {
+        node: running.node.clone(),
+        user: String::new(),
+        name: "alpha".into(),
+    };
+    let id = page.read_with(cx, |p, _| p.fleet.session(&key).unwrap().id.clone());
+    let url = format!(
+        "{}/api/agent/event?session=%24{}&event=needs-input",
+        running.url,
+        &id[1..]
+    );
+    parvi_node_kit::hook::report(&[url, "{\"message\":\"ready\"}".into()]);
+    until(cx, "the report marks the row", |cx| {
+        page.read_with(cx, |p, _| {
+            p.fleet.session(&key).is_some_and(|s| p.marked(s).is_some())
+        })
+    });
+    click(cx, format!("row-{}::alpha", running.node));
+    until(cx, "showing the session clears its mark", |cx| {
+        page.read_with(cx, |p, _| {
+            p.fleet.session(&key).is_some_and(|s| p.marked(s).is_none())
+        })
+    });
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+/// Alt+N with every window of the tab holding a session opens the launcher
+/// in a new tab and leaves those windows as they were.
+#[gpui::test]
+fn the_launcher_opens_a_new_tab_when_the_windows_are_full(cx: &mut TestAppContext) {
+    let Some(running) = start("terminals-launch-full") else {
+        return;
+    };
+    let (_shell, cx, settings) = open_with_alpha(&running, "launch-full", cx);
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    let full: Vec<Key> = (0..4)
+        .map(|i| Key {
+            node: running.node.clone(),
+            user: String::new(),
+            name: format!("held-{i}"),
+        })
+        .collect();
+    cx.update(|_, cx| {
+        page.update(cx, |p, _| {
+            let ws = &mut p.settings.workspace;
+            ws.set_windows(0, 4);
+            for (w, key) in full.iter().enumerate() {
+                ws.bind_in(0, w, key.clone(), None);
+            }
+        })
+    });
+    cx.simulate_keystrokes("alt-n");
+    page.read_with(cx, |p, _| {
+        let ws = &p.settings.workspace;
+        assert_eq!((ws.count, ws.active), (2, 1), "a new tab is shown");
+        assert!(ws.windows()[ws.focus].is_empty(), "its window is free");
+        assert!(
+            ws.tabs[0].windows.iter().take(4).all(|w| !w.is_empty()),
+            "the full tab is kept"
+        );
+    });
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
 /// Links emitted by a scratch tmux session reach the platform and the page
 /// that answers paths, including a path wrapped by the terminal grid.
 #[gpui::test]

@@ -918,7 +918,13 @@ impl FilesPage {
             .min_h_0()
             .flex()
             .flex_col()
-            .border_1()
+            .map(|d| {
+                if self.beside {
+                    d.border_r_1()
+                } else {
+                    d.border_1()
+                }
+            })
             .border_color(t.divider)
             .child(bar)
             .child(div().flex_1().min_h_0().child(body))
@@ -1272,7 +1278,8 @@ impl Render for FilesPage {
             );
         }
         if self.beside {
-            return page.child(self.viewer(cx));
+            // Beside the terminals it is a column of the page, edge to edge.
+            return page.p_0().gap_0().child(self.viewer(cx));
         }
         if self.dock {
             page = page.w(px(LIST_W)).flex_none();
