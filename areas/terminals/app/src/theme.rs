@@ -21,6 +21,11 @@ pub mod size {
     pub const DOT_SLOT: f32 = 12.;
     /// What another page opens beside the windows (a file a link named).
     pub const BESIDE: f32 = 560.;
+    /// The least a view beside the windows narrows to, to leave them room.
+    pub const BESIDE_MIN: f32 = 400.;
+    /// The width a window keeps readable: under it a drawer lies over the
+    /// windows rather than narrowing them.
+    pub const WINDOW_MIN: f32 = 440.;
     pub const TILE_HEAD: f32 = 34.;
     pub const TILE_GAP: f32 = 6.;
     /// How far either side of the gap between two windows still counts as

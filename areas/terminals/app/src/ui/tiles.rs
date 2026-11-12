@@ -116,11 +116,12 @@ impl Terminals {
         // What another page opened beside the terminals (a file a link
         // named), between the rail and the windows.
         if let Some(beside) = self.host.beside(cx) {
+            let width = self.beside_width(window);
             row = row.child(
                 div()
                     .id("terminals-beside")
                     .debug_selector(|| "terminals-beside".into())
-                    .w(px(size::BESIDE))
+                    .w(px(width))
                     .flex_none()
                     .h_full()
                     .child(beside),
@@ -137,6 +138,24 @@ impl Terminals {
                 .child(self.render_grid(window, cx)),
         )
         .into_any_element()
+    }
+
+    /// The width the windows' row has, beside the rail.
+    fn workspace_room(&self, window: &Window) -> f32 {
+        let rail = if self.settings.sessions_open {
+            size::RAIL
+        } else {
+            0.
+        };
+        window.viewport_size().width / px(1.) - rail
+    }
+
+    /// What a view beside the windows takes: its full width while every
+    /// window keeps a readable width, less down to its least when not.
+    fn beside_width(&self, window: &Window) -> f32 {
+        let windows = self.settings.workspace.windows().len().max(1) as f32;
+        (self.workspace_room(window) - windows * size::WINDOW_MIN)
+            .clamp(size::BESIDE_MIN, size::BESIDE)
     }
 
     fn render_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -208,16 +227,24 @@ impl Terminals {
             self.dragging_over = None;
         }
         let tiles: Vec<AnyElement> = (0..n).map(|i| self.render_tile(i, window, cx)).collect();
-        let drawer_room =
-            (self.is_open(super::surface::SEND) || self.is_open(super::surface::FIND)).then(|| {
-                let room = window.viewport_size().width / px(1.);
-                let width = if self.is_open(super::surface::FIND) {
-                    Some(size::FIND_DRAWER)
-                } else {
-                    self.settings.send_width
-                };
-                crate::store::send::width(width, room)
-            });
+        // A drawer moves the windows aside while each keeps a readable
+        // width; where they would not, it lies over them, and no session is
+        // resized for a drawer that is soon closed.
+        let mut room = self.workspace_room(window);
+        if self.host.beside(cx).is_some() {
+            room -= self.beside_width(window);
+        }
+        let drawer_room = (self.is_open(super::surface::SEND)
+            || self.is_open(super::surface::FIND))
+        .then(|| {
+            let width = if self.is_open(super::surface::FIND) {
+                Some(size::FIND_DRAWER)
+            } else {
+                self.settings.send_width
+            };
+            crate::store::send::width(width, window.viewport_size().width / px(1.))
+        })
+        .filter(|width| room - width >= n as f32 * size::WINDOW_MIN);
         let mut grid = div()
             .id("grid")
             .track_focus(&self.term_focus)
