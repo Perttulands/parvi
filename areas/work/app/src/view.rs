@@ -764,14 +764,21 @@ impl Work {
             .filter(|p| p.read && p.error.is_none())
             .map(|p| p.label.as_str())
             .collect();
-        let latest = self.board.projects.iter().filter_map(|p| p.synced).max();
+        // Beads stores follow their own changes; GitHub is read on asking.
+        let github = self
+            .board
+            .projects
+            .iter()
+            .filter(|p| p.tracker == Tracker::Github)
+            .filter_map(|p| p.synced)
+            .max();
         let mut summary = format!(
             "{} of {} projects read",
             read.len(),
             self.board.projects.len()
         );
-        if let Some(at) = latest {
-            summary.push_str(&format!(" · synced {} ago", when::age(at, now)));
+        if let Some(at) = github {
+            summary.push_str(&format!(" · GitHub read {} ago", when::age(at, now)));
         }
         col = col.child(
             div()
