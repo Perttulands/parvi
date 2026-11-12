@@ -358,6 +358,10 @@ fn the_page_lists_a_task_made_through_the_cli(cx: &mut TestAppContext) {
     until(cx, "delete confirmation", |cx| {
         cx.debug_bounds("task-delete-true").is_some()
     });
+    assert!(
+        cx.debug_bounds("task-delete-label-Confirm delete echo journey-42 copy")
+            .is_some()
+    );
     // A visible confirmation still works after the old three-second expiry.
     std::thread::sleep(Duration::from_millis(3200));
     click(cx, "task-delete-true");

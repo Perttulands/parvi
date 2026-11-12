@@ -14,8 +14,8 @@ fn the_listed_pages_mount_together(cx: &mut TestAppContext) {
     let (tx, _rx) = async_channel::unbounded();
     let mounted = cx.update(|window, cx| {
         let hub = cx.new(|_| Hub::new(Net::start(), tx, None));
-        mount(parvi_app::PAGES, &hub, window, cx).map(|pages| pages.len())
+        mount(parvi_app::PAGES, &hub, window, cx).map(|pages| (pages.len(), pages[0].meta.id))
     });
     // Each listed page, and the shell's Settings page.
-    assert_eq!(mounted.unwrap(), parvi_app::PAGES.len() + 1);
+    assert_eq!(mounted.unwrap(), (parvi_app::PAGES.len() + 1, "terminals"));
 }

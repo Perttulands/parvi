@@ -224,7 +224,16 @@ impl Render for Report {
                 project.name.clone()
             };
             projects = projects.child(
-                kit::button(&t, format!("report-project-{i}"), label, Kind::Quiet)
+                kit::button(&t, format!("report-project-{i}"), "", Kind::Quiet)
+                    .max_w(px(CARD_W - 2. * SPACE_4XL))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(label),
+                    )
                     .debug_selector(move || format!("report-project-{i}"))
                     .on_click(cx.listener(move |r, _, _, cx| {
                         r.selected = Some(project.clone());
@@ -264,6 +273,10 @@ impl Render for Report {
                                 let context = self.context.clone();
                                 move || format!("report-context-{context}")
                             })
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
                             .child(self.context.clone()),
                     )
                     .when_some(self.error.clone(), |d, error| {

@@ -125,6 +125,10 @@ fn search_open_and_follow_a_link_in_the_reader(cx: &mut TestAppContext) {
         cx.debug_bounds("brain-result-0").is_some()
     });
     assert!(cx.debug_bounds("brain-result-selected-0").is_some());
+    cx.simulate_keystrokes("enter");
+    until(cx, "Enter opens the marked result", |cx| {
+        cx.debug_bounds("brain-reading-notes/first.md").is_some()
+    });
     let second = cx.debug_bounds("brain-result-1").unwrap().center();
     cx.simulate_click(second, Modifiers::none());
     until(cx, "selected second result", |cx| {

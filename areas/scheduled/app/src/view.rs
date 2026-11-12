@@ -281,6 +281,12 @@ impl ScheduledPage {
         let paused = task.paused;
         let (dup_node, dup) = (at(node), task.clone());
         let (del_node, del) = (at(node), task.id.clone());
+        let delete_label = if armed {
+            format!("Confirm delete {}", task.name)
+        } else {
+            "Delete".into()
+        };
+        let delete_selector = format!("task-delete-label-{delete_label}");
         let actions = div()
             .flex()
             .flex_wrap()
@@ -326,16 +332,21 @@ impl ScheduledPage {
                     })),
             )
             .child(
-                kit::button(
-                    t,
-                    "task-delete",
-                    if armed { "Confirm delete" } else { "Delete" },
-                    Kind::Quiet,
-                )
-                .debug_selector(move || format!("task-delete-{armed}"))
-                .text_color(t.error)
-                .when(armed, |b| b.border_color(t.error).bg(alpha(t.error, 0.12)))
-                .on_click(cx.listener(move |page, _, _, cx| page.delete(&del_node, &del, cx))),
+                kit::button(t, "task-delete", "", Kind::Quiet)
+                    .max_w_full()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .debug_selector(move || delete_selector.clone())
+                            .child(delete_label),
+                    )
+                    .debug_selector(move || format!("task-delete-{armed}"))
+                    .text_color(t.error)
+                    .when(armed, |b| b.border_color(t.error).bg(alpha(t.error, 0.12)))
+                    .on_click(cx.listener(move |page, _, _, cx| page.delete(&del_node, &del, cx))),
             );
         let next = if task.live() {
             format!(

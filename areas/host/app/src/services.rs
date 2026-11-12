@@ -376,13 +376,19 @@ impl Render for ServicesPage {
                                         "svc-link-{id}-{}",
                                         service.id
                                     )),
-                                    label,
+                                    "",
                                     kit::Kind::Quiet,
                                 )
                                 .w_full()
-                                .overflow_hidden()
-                                .whitespace_nowrap()
-                                .text_ellipsis()
+                                .justify_start()
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
+                                        .text_ellipsis()
+                                        .child(label),
+                                )
                                 .on_click(move |_, _, cx| cx.open_url(&link)),
                             );
                         }
