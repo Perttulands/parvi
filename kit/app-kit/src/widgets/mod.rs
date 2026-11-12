@@ -4,5 +4,6 @@ pub mod field;
 pub mod kit;
 pub mod markdown;
 pub mod pages;
+pub mod path_picker;
 pub mod select;
 pub mod syntax;

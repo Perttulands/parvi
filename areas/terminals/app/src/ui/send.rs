@@ -22,7 +22,7 @@ use crate::store::sessions::{self, Key};
 use crate::theme::{alpha, size, theme};
 use gpui::{
     AnyElement, AsyncApp, ClickEvent, Context, ExternalPaths, FocusHandle, FontWeight, MouseButton,
-    MouseMoveEvent, PathPromptOptions, WeakEntity, Window, div, prelude::*, px,
+    MouseMoveEvent, WeakEntity, Window, div, prelude::*, px,
 };
 use parvi_app_kit::widgets::kit::{self, Kind};
 use parvi_core::NodeId;
@@ -378,22 +378,14 @@ impl Terminals {
         cx.notify();
     }
 
-    fn pick_files(&mut self, cx: &mut Context<Self>) {
-        let picked = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: true,
-            prompt: Some("Attach".into()),
-        });
-        cx.spawn(async move |this, cx| {
-            let answer = picked.await;
-            let _ = this.update(cx, |s, cx| match answer {
-                Ok(Ok(Some(paths))) => s.send_attach(&paths, cx),
-                Ok(Ok(None)) | Err(_) => {}
-                Ok(Err(e)) => s.report(&format!("The file picker failed: {e}"), true, None),
-            });
-        })
-        .detach();
+    fn pick_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        parvi_app_kit::widgets::path_picker::pick(
+            self.host.clone(),
+            "Attach",
+            window,
+            cx,
+            |page, paths, cx| page.send_attach(&paths, cx),
+        );
     }
 
     pub(super) fn render_send(
@@ -513,8 +505,9 @@ impl Terminals {
                 .justify_end()
                 .gap(px(8.))
                 .child(
-                    kit::button(&t, "send-attach", "Attach…", Kind::Quiet)
-                        .on_click(cx.listener(|s, _: &ClickEvent, _, cx| s.pick_files(cx))),
+                    kit::button(&t, "send-attach", "Attach…", Kind::Quiet).on_click(
+                        cx.listener(|s, _: &ClickEvent, window, cx| s.pick_files(window, cx)),
+                    ),
                 )
                 .child(div().flex_1())
                 .child(

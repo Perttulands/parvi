@@ -1329,26 +1329,21 @@ impl FilesPage {
             cx,
         );
     }
-    pub(crate) fn pick_uploads(&mut self, i: usize, folder: String, cx: &mut Context<Self>) {
+    pub(crate) fn pick_uploads(
+        &mut self,
+        i: usize,
+        folder: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let node = NodeId(self.sides[i].pane.node.clone());
-        let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: true,
-            prompt: Some("Upload files".into()),
-        });
-        cx.spawn(async move |this, cx| {
-            let result = picked.await;
-            let _ = this.update(cx, |page, cx| match result {
-                Ok(Ok(Some(paths))) => page.queue_uploads(i, node, folder, &paths, cx),
-                Ok(Ok(None)) | Err(_) => {}
-                Ok(Err(e)) => {
-                    page.error = Some(format!("The file picker failed: {e}"));
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
+        parvi_app_kit::widgets::path_picker::pick(
+            self.host.clone(),
+            "Upload files",
+            window,
+            cx,
+            move |page, paths, cx| page.queue_uploads(i, node, folder, &paths, cx),
+        );
     }
     pub(crate) fn upload_paths(
         &mut self,

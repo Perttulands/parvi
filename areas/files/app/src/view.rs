@@ -400,9 +400,9 @@ impl FilesPage {
                         let id = format!("files-upload-{i}");
                         move || id.clone()
                     })
-                    .on_click(cx.listener(move |p, _, _, cx| {
+                    .on_click(cx.listener(move |p, _, window, cx| {
                         if let Some(folder) = p.sides[i].pane.path.clone() {
-                            p.pick_uploads(i, folder, cx);
+                            p.pick_uploads(i, folder, window, cx);
                         }
                     })),
             )
@@ -950,7 +950,7 @@ impl Render for FilesPage {
                 .child(
                     kit::button(&t, "file-menu-upload", "Upload…", Kind::Quiet)
                         .debug_selector(|| "file-menu-upload".into())
-                        .on_click(cx.listener(move |p, _, _, cx| {
+                        .on_click(cx.listener(move |p, _, window, cx| {
                             p.menu = None;
                             let pane = &p.sides[i].pane;
                             let folder = pane
@@ -959,7 +959,7 @@ impl Render for FilesPage {
                                 .and_then(|_| pane.selected_path())
                                 .or_else(|| pane.path.clone());
                             if let Some(folder) = folder {
-                                p.pick_uploads(i, folder, cx);
+                                p.pick_uploads(i, folder, window, cx);
                             }
                             cx.notify();
                         })),
