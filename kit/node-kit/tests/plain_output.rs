@@ -7,13 +7,13 @@ struct Responses;
 fn answer(name: &str) -> Value {
     match name {
         "host_show" => {
-            json!({"host": {"cpu": {"percent": 12.3}, "gpu": {"name": "GPU", "memory": {"used": 42}}}, "events": []})
+            json!({"host": {"at": 1700000000123_i64, "cpu": {"percent": 12.3}, "gpu": {"name": "GPU", "memory": {"used": 42}}}, "events": [{"at": 1700000000123_i64, "text": "ready"}]})
         }
         "work_show" => {
             json!({"item": {"id": "work-1", "title": "Fix it", "children": [{"id": "work-2", "status": "open"}]}, "warning": null})
         }
         "scheduled_list" => {
-            json!({"tasks": [{"id": "task-1", "targets": [{"sessionName": "worker"}], "schedule": {"kind": "interval", "everyMinutes": 15}, "paused": false}]})
+            json!({"tasks": [{"id": "task-1", "next_run": "2026-11-12T12:00:00Z", "targets": [{"sessionName": "worker"}], "schedule": {"kind": "interval", "everyMinutes": 15}, "paused": false}]})
         }
         "session_launch" => json!({"session": "worker", "warning": null}),
         _ => unreachable!(),
@@ -70,6 +70,17 @@ async fn plain_cli_formats_nested_responses_and_json_stays_the_same() {
         let mut plain = Vec::new();
         assert_eq!(cli::run(noun, &args, &mut plain).await.unwrap(), 0);
         let plain = String::from_utf8(plain).unwrap();
+        if name == "host_show" {
+            let local = jiff::Timestamp::from_millisecond(1700000000123)
+                .unwrap()
+                .to_zoned(jiff::tz::TimeZone::system());
+            let expected = format!("{}{}", local.datetime(), local.offset());
+            assert!(plain.contains(&format!("at: {expected}")), "{plain}");
+            assert!(plain.contains(&format!("at={expected}")), "{plain}");
+        }
+        if name == "scheduled_list" {
+            assert!(plain.contains("next_run=2026-11-12T12:00:00Z"), "{plain}");
+        }
         assert!(
             !plain.contains('{') && !plain.contains("null"),
             "{name}: {plain}"
