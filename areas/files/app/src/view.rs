@@ -202,11 +202,17 @@ impl FilesPage {
                     None => relative.to_owned(),
                 };
                 let label_selector = format!("find-label-{label}");
+                // A long place gives way in its folders: the name and line
+                // always show whole.
+                let (folders, leaf) = match label.rfind('/') {
+                    Some(cut) => (label[..cut].to_owned(), label[cut..].to_owned()),
+                    None => (String::new(), label.clone()),
+                };
                 list = list.child(
                     kit::button(
                         &t,
                         gpui::SharedString::from(format!("find-{path}-{}", line.unwrap_or(0))),
-                        label,
+                        "",
                         Kind::Quiet,
                     )
                     .w_full()
@@ -215,6 +221,17 @@ impl FilesPage {
                     .whitespace_nowrap()
                     .debug_selector(move || selector.clone())
                     .child(div().debug_selector(move || label_selector.clone()))
+                    .when(!folders.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .flex_shrink_1()
+                                .min_w(px(ROW_INSET * 3.))
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .child(folders),
+                        )
+                    })
+                    .child(div().flex_none().child(leaf))
                     // A hit in a file's text shows its line after the place.
                     .children(item.text.as_deref().map(str::trim).map(|text| {
                         div()
@@ -655,10 +672,17 @@ impl FilesPage {
                             .child(if o.saving { "Saving…" } else { "Unsaved" }),
                     )
                 })
+                // Save stands out only while there is something to save.
                 .child(
-                    kit::button(&t, "files-save", "Save", Kind::Primary)
-                        .debug_selector(|| "files-save".into())
-                        .on_click(cx.listener(move |p, _, _, cx| p.save(cx))),
+                    kit::button(
+                        &t,
+                        "files-save",
+                        "Save",
+                        if dirty { Kind::Primary } else { Kind::Quiet },
+                    )
+                    .debug_selector(|| "files-save".into())
+                    .when(!dirty, |b| b.opacity(parvi_app_kit::theme::fade::IDLE))
+                    .on_click(cx.listener(move |p, _, _, cx| p.save(cx))),
                 )
                 .child(
                     kit::button(

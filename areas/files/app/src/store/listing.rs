@@ -1,5 +1,6 @@
-//! What a pane shows of a folder: folders first, then files, by the chosen
-//! column in natural order (`file2` before `file10`), filtered by name.
+//! What a pane shows of a folder: folders first, then files, each with the
+//! hidden (dot) ones after the rest, by the chosen column in natural order
+//! (`file2` before `file10`), filtered by name.
 
 use parvi_files_contract::Entry;
 use std::cmp::Ordering;
@@ -78,15 +79,19 @@ pub fn shown<'a>(entries: &'a [Entry], filter: &str, sort: Sort) -> Vec<&'a Entr
         .filter(|e| q.is_empty() || e.name.to_lowercase().contains(&q))
         .collect();
     out.sort_by(|a, b| {
-        b.folder.cmp(&a.folder).then_with(|| {
-            let o = match sort.by {
-                Column::Name => Ordering::Equal,
-                Column::Size => a.size.cmp(&b.size),
-                Column::Modified => a.modified.cmp(&b.modified),
-            }
-            .then_with(|| natural(&a.name, &b.name));
-            if sort.descending { o.reverse() } else { o }
-        })
+        let hidden = |e: &Entry| e.name.starts_with('.');
+        b.folder
+            .cmp(&a.folder)
+            .then(hidden(a).cmp(&hidden(b)))
+            .then_with(|| {
+                let o = match sort.by {
+                    Column::Name => Ordering::Equal,
+                    Column::Size => a.size.cmp(&b.size),
+                    Column::Modified => a.modified.cmp(&b.modified),
+                }
+                .then_with(|| natural(&a.name, &b.name));
+                if sort.descending { o.reverse() } else { o }
+            })
     });
     out
 }
@@ -118,6 +123,8 @@ mod tests {
             e("z", true, 0, 1),
             e("a.txt", false, 50, 2),
             e("c", true, 0, 9),
+            e(".cache", true, 0, 9),
+            e(".bashrc", false, 1, 1),
             e(
                 ".parvi-transfer-0123456789abcdef0123456789abcdef",
                 true,
@@ -128,13 +135,19 @@ mod tests {
         let names = |s: Sort, f: &str| -> Vec<String> {
             shown(&list, f, s).iter().map(|e| e.name.clone()).collect()
         };
-        assert_eq!(names(Sort::default(), ""), ["c", "z", "a.txt", "b.txt"]);
+        assert_eq!(
+            names(Sort::default(), ""),
+            ["c", "z", ".cache", "a.txt", "b.txt", ".bashrc"]
+        );
         let by_size = Sort::default().toggled(Column::Size);
         assert!(by_size.descending);
-        assert_eq!(names(by_size, ""), ["z", "c", "a.txt", "b.txt"]);
+        assert_eq!(
+            names(by_size, ""),
+            ["z", "c", ".cache", "a.txt", "b.txt", ".bashrc"]
+        );
         assert_eq!(
             names(by_size.toggled(Column::Size), ""),
-            ["c", "z", "b.txt", "a.txt"]
+            ["c", "z", ".cache", "b.txt", "a.txt", ".bashrc"]
         );
         assert_eq!(names(Sort::default(), "TXT"), ["a.txt", "b.txt"]);
     }

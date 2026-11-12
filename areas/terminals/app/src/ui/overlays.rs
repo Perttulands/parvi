@@ -21,7 +21,7 @@ impl Terminals {
     pub fn render_tabs(
         &mut self,
         shown: bool,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = theme(cx).clone();
@@ -34,12 +34,35 @@ impl Terminals {
             .min_w_0()
             .overflow_x_scroll()
             .track_scroll(&self.tab_scroll);
-        // A newly active tab is brought into view; the strip otherwise
-        // stays where the operator scrolled it.
-        let active = self.settings.workspace.active;
-        if self.tab_scrolled != Some(active) {
-            self.tab_scroll.scroll_to_item(active);
-            self.tab_scrolled = Some(active);
+        // The active tab is brought into view whenever it, the number of
+        // tabs or the window's width changes; the strip otherwise stays where
+        // the operator scrolled it.
+        let (active, count) = (
+            self.settings.workspace.active,
+            self.settings.workspace.shown_tabs().len(),
+        );
+        let strip = self.tab_scroll.bounds();
+        let width = f32::from(window.viewport_size().width).round() as i32;
+        let key = (active, count, width);
+        if self.tab_scrolled != Some(key) {
+            self.bring_tab_into_view(active, window, cx);
+            self.tab_scrolled = Some(key);
+        }
+        // Tabs scrolled out of the strip, on either side, as last painted.
+        let offset = self
+            .tab_scroll
+            .offset()
+            .x
+            .clamp(-self.tab_scroll.max_offset().x, px(0.));
+        let (mut before, mut after) = (Vec::new(), Vec::new());
+        for i in 0..count {
+            if let Some(tab) = self.tab_scroll.bounds_for_item(i) {
+                if tab.left() + offset < strip.left() - px(1.) {
+                    before.push(i);
+                } else if tab.right() + offset > strip.right() + px(1.) {
+                    after.push(i);
+                }
+            }
         }
         let ws = &self.settings.workspace;
         let renaming = match self.surfaces.last() {
@@ -77,12 +100,44 @@ impl Terminals {
                     ),
             );
         }
+        let more = |id: &'static str, hidden: &[usize], label: String| {
+            let to = if id == "tabs-before" {
+                hidden.last()
+            } else {
+                hidden.first()
+            }
+            .copied();
+            div()
+                .id(id)
+                .debug_selector(move || id.into())
+                .flex_none()
+                .px(px(6.))
+                .flex()
+                .items_center()
+                .cursor_pointer()
+                .text_size(px(size::SMALL))
+                .text_color(t.accent)
+                .hover(|d| d.text_color(t.text))
+                .child(label)
+                .on_click(cx.listener(move |s, _, window, cx| {
+                    if let Some(i) = to {
+                        s.bring_tab_into_view(i, window, cx);
+                        cx.notify();
+                    }
+                }))
+        };
         let mut bar = div()
             .flex()
             .items_stretch()
             .flex_shrink_1()
             .min_w_0()
-            .child(bar);
+            .when(!before.is_empty(), |d| {
+                d.child(more("tabs-before", &before, format!("‹{}", before.len())))
+            })
+            .child(bar)
+            .when(!after.is_empty(), |d| {
+                d.child(more("tabs-after", &after, format!("{}›", after.len())))
+            });
         if ws.shown_tabs().len() < crate::store::workspace::MAX_TABS {
             bar = bar.child(
                 div()
@@ -100,6 +155,13 @@ impl Terminals {
             );
         }
         bar.into_any_element()
+    }
+
+    /// Scrolls tab `i` into the strip. The scroll lands as the strip is
+    /// laid out, so the cues for hidden tabs are drawn again after it.
+    fn bring_tab_into_view(&self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.tab_scroll.scroll_to_item(i);
+        cx.on_next_frame(window, |_, _, cx| cx.notify());
     }
 
     /// Every terminal tab's menu, CHROTE's: the tab, its layout and

@@ -374,6 +374,10 @@ impl Render for ServicesPage {
                             div().w(px(tokens::LINK_COL)).flex_none().overflow_hidden();
                         if let Some(label) = services_store::link_label(&service.link) {
                             let link = service.link.clone();
+                            let (host, port) = match label.rsplit_once(':') {
+                                Some((host, port)) => (host.to_owned(), format!(":{port}")),
+                                None => (label, String::new()),
+                            };
                             link_column = link_column.child(
                                 kit::button(
                                     &t,
@@ -386,14 +390,19 @@ impl Render for ServicesPage {
                                 )
                                 .w_full()
                                 .justify_start()
+                                .whitespace_nowrap()
+                                .tooltip(kit::tip(link.clone()))
+                                // Links on one host differ in the port: a
+                                // long host gives way, the port shows whole.
                                 .child(
                                     div()
                                         .min_w_0()
+                                        .flex_shrink_1()
                                         .overflow_hidden()
-                                        .whitespace_nowrap()
                                         .text_ellipsis()
-                                        .child(label),
+                                        .child(host),
                                 )
+                                .child(div().flex_none().child(port))
                                 .on_click(move |_, _, cx| cx.open_url(&link)),
                             );
                         }

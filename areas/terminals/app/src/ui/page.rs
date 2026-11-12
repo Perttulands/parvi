@@ -267,9 +267,10 @@ pub struct Terminals {
     /// Number of overview cards fitting in the last painted row.
     pub overview_columns: Rc<Cell<usize>>,
     pub overview_scroll: ScrollHandle,
-    /// The terminal tabs' strip, and the tab it last brought into view.
+    /// The terminal tabs' strip, and the active tab, tab count and window
+    /// width it last brought the active tab into view at.
     pub tab_scroll: ScrollHandle,
-    pub tab_scrolled: Option<usize>,
+    pub tab_scrolled: Option<(usize, usize, i32)>,
     pub hover_row: Option<String>,
     /// Launches asked of a node, by node and request: the recipe, the window
     /// it goes to and that window's tab.

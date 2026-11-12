@@ -17,10 +17,10 @@ use crate::client::NodeClient;
 /// one this machine runs, or `--node` among `args`.
 pub async fn run(noun: &str, args: &[String], out: &mut impl Write) -> Result<i32> {
     let (node, args) = take_node(args)?;
-    // A URL is the node the command talks to; an id is the node the tool
-    // runs on, reached through the one it talks to.
+    // An address is the node the command talks to; an id is the node the
+    // tool runs on, reached through the one it talks to.
     let (url, on) = match node {
-        Some(node) if node.contains("://") => (Some(node), None),
+        Some(node) if crate::client::is_address(&node) => (Some(node), None),
         on => (None, on),
     };
     let client = NodeClient::new(url.as_deref())?;

@@ -48,6 +48,8 @@ pub mod board {
 /// How much of a thing shows when it steps back.
 pub mod fade {
     pub const HOVER: f32 = 0.9;
+    /// A control with nothing to do now.
+    pub const IDLE: f32 = 0.5;
 }
 
 /// Toast timing in milliseconds: in, shown, out.

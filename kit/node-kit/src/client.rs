@@ -21,6 +21,19 @@ pub struct NodeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_node_is_a_url_an_address_or_an_id() {
+        for written in ["http://127.0.0.1:7320", "127.0.0.1:7320", "127.0.0.1:7320/"] {
+            let client = NodeClient::new(Some(written)).unwrap();
+            assert_eq!(client.authority, "127.0.0.1:7320", "{written}");
+            assert_eq!(client.node, None);
+        }
+        let routed = NodeClient::new(Some("landmass-win")).unwrap();
+        assert_eq!(routed.node.as_deref(), Some("landmass-win"));
+        assert!(!is_address("landmass-win"));
+        assert!(NodeClient::new(Some("https://h:1")).is_err());
+    }
     #[tokio::test]
     async fn plain_text_peer_failures_keep_status_and_message() {
         let app = axum::Router::new().route(
@@ -90,6 +103,12 @@ pub struct NodeClient {
     authority: String,
     node: Option<String>,
 }
+/// Whether `--node` names a node by its address (a URL, or `host:port`)
+/// rather than by id: ids have no colon or dot.
+pub fn is_address(node: &str) -> bool {
+    node.contains([':', '.'])
+}
+
 /// A node id as `--node` takes it.
 fn node_id(id: &str) -> Result<String> {
     if id.is_empty()
@@ -139,6 +158,7 @@ impl NodeClient {
                 })
             }
             Some(v) if v.contains("://") => bail!("node URL must use http"),
+            Some(v) if is_address(v) => Self::new(Some(&format!("http://{v}"))),
             Some(v) => Ok(Self {
                 authority: default,
                 node: Some(node_id(v)?),

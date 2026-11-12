@@ -144,22 +144,15 @@ impl Work {
                 }
                 Err(error) => Err((error.message, false)),
             };
-            let mut projects = projects;
-            if let Ok(answer) = projects_task.await
-                && answer.ok()
-                && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&answer.body)
-                && let Some(text) = value["result"]["content"][0]["text"].as_str()
-                && let Ok(snapshot) = serde_json::from_str::<Snapshot>(text)
-            {
-                projects = snapshot.projects;
-            }
-            card.update(cx, |card, cx| {
-                card.loading = false;
-                match result {
-                    Ok((item, line)) => card.work.update(cx, |w, cx| {
+            // The item shows as soon as it is read, with the family this
+            // app already holds; the node's full listing, which can take a
+            // refresh round, fills the family in when it lands.
+            let place = |card: &mut Card, projects: &[ProjectView], cx: &mut Context<Card>| {
+                if let Ok((item, line)) = &result {
+                    card.work.update(cx, |w, cx| {
                         w.board = crate::store::work::Board::from_item(
-                            item,
-                            &projects,
+                            item.clone(),
+                            projects,
                             parvi_app_kit::hub::now_ms(),
                         );
                         // All rows in this board came from the answering node.
@@ -174,13 +167,33 @@ impl Work {
                             },
                         );
                         w.reslice();
-                        w.card_line = Some((w.board.rows[0].reference.clone(), line));
+                        w.card_line = Some((w.board.rows[0].reference.clone(), line.clone()));
                         w.select(0, cx);
-                    }),
-                    Err(error) => card.error = Some(error),
+                    });
                 }
+            };
+            card.update(cx, |card, cx| {
+                card.loading = false;
+                if let Err(error) = &result {
+                    card.error = Some(error.clone());
+                }
+                place(card, &projects, cx);
                 cx.notify();
             });
+            if result.is_err() {
+                return;
+            }
+            if let Ok(answer) = projects_task.await
+                && answer.ok()
+                && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&answer.body)
+                && let Some(text) = value["result"]["content"][0]["text"].as_str()
+                && let Ok(snapshot) = serde_json::from_str::<Snapshot>(text)
+            {
+                card.update(cx, |card, cx| {
+                    place(card, &snapshot.projects, cx);
+                    cx.notify();
+                });
+            }
         })
         .detach();
     }

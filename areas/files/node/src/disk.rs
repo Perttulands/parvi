@@ -45,37 +45,45 @@ pub fn list(roots: &Roots, path: &str) -> Result<Listing, FilesError> {
     })
 }
 
-/// Git repositories immediately below each configured root, with their key documents.
+/// Git repositories immediately below each configured root, with their key
+/// documents, and those one level further down inside a plain folder (such
+/// as `/srv/games/*`), grouped under that folder after the root's own.
 pub fn projects(roots: &Roots) -> Result<parvi_files_contract::Projects, FilesError> {
-    use parvi_files_contract::{Project, ProjectGroup, Projects};
+    use parvi_files_contract::ProjectGroup;
     let mut groups = Vec::new();
     for root in roots.list() {
         let listing = list(roots, &root.path)?;
         let mut projects = Vec::new();
+        let mut nested = Vec::new();
         for entry in listing.entries.into_iter().filter(|e| e.folder) {
             let path = Path::new(&listing.path).join(&entry.name);
             let Some(text) = path.to_str() else { continue };
             let Ok(contents) = list(roots, text) else {
                 continue;
             };
-            if !contents.entries.iter().any(|e| e.name == ".git") {
+            if let Some(project) = project(entry.name.clone(), &contents) {
+                projects.push(project);
                 continue;
             }
-            let documents = ["README.md", "AGENTS.md", "VISION.md"]
-                .into_iter()
-                .filter(|name| {
-                    contents
-                        .entries
-                        .iter()
-                        .any(|e| !e.folder && e.name == *name)
+            if entry.name.starts_with('.') {
+                continue;
+            }
+            let inner: Vec<_> = contents
+                .entries
+                .iter()
+                .filter(|e| e.folder && !e.name.starts_with('.'))
+                .filter_map(|e| {
+                    let path = Path::new(&contents.path).join(&e.name);
+                    let inside = list(roots, path.to_str()?).ok()?;
+                    project(e.name.clone(), &inside)
                 })
-                .map(str::to_owned)
                 .collect();
-            projects.push(Project {
-                name: entry.name,
-                path: contents.path,
-                documents,
-            });
+            if !inner.is_empty() {
+                nested.push(ProjectGroup {
+                    parent: contents.path,
+                    projects: inner,
+                });
+            }
         }
         if !projects.is_empty() {
             groups.push(ProjectGroup {
@@ -83,8 +91,26 @@ pub fn projects(roots: &Roots) -> Result<parvi_files_contract::Projects, FilesEr
                 projects,
             });
         }
+        groups.extend(nested);
     }
-    Ok(Projects { groups })
+    Ok(parvi_files_contract::Projects { groups })
+}
+
+/// The folder listed in `contents` as a project, when it is a Git repository.
+fn project(name: String, contents: &Listing) -> Option<parvi_files_contract::Project> {
+    if !contents.entries.iter().any(|e| e.name == ".git") {
+        return None;
+    }
+    let documents = ["README.md", "AGENTS.md", "VISION.md"]
+        .into_iter()
+        .filter(|doc| contents.entries.iter().any(|e| !e.folder && e.name == *doc))
+        .map(str::to_owned)
+        .collect();
+    Some(parvi_files_contract::Project {
+        name,
+        path: contents.path.clone(),
+        documents,
+    })
 }
 
 /// What a listing shows for an entry: its own metadata, or for a link that
@@ -330,26 +356,32 @@ mod tests {
     }
 
     #[test]
-    fn projects_are_grouped_by_configured_root_and_only_one_level_deep() {
+    fn projects_are_grouped_by_configured_root_and_by_plain_folders_holding_repos() {
         let scratch = Scratch::new();
         let first = scratch.dir("first");
         let second = scratch.dir("second");
         fs::create_dir_all(first.join("repo/.git")).unwrap();
         fs::write(first.join("repo/README.md"), "readme").unwrap();
-        fs::create_dir_all(first.join("plain/nested/.git")).unwrap();
+        fs::create_dir_all(first.join("games/korpi/.git")).unwrap();
+        fs::create_dir_all(first.join("games/art")).unwrap();
+        fs::create_dir_all(first.join("plain/deeper/nested/.git")).unwrap();
+        fs::create_dir_all(first.join(".cache/tool/.git")).unwrap();
         fs::create_dir_all(second.join("worktree")).unwrap();
         fs::write(second.join("worktree/.git"), "gitdir: elsewhere").unwrap();
         fs::write(second.join("worktree/VISION.md"), "vision").unwrap();
         let roots = Roots::new(&[first.clone(), second.clone()], None).unwrap();
         let result = projects(&roots).unwrap();
-        assert_eq!(result.groups.len(), 2);
+        assert_eq!(result.groups.len(), 3);
         assert_eq!(result.groups[0].parent, s(&first));
         assert_eq!(result.groups[0].projects.len(), 1);
         assert_eq!(result.groups[0].projects[0].name, "repo");
         assert_eq!(result.groups[0].projects[0].documents, ["README.md"]);
-        assert_eq!(result.groups[1].parent, s(&second));
-        assert_eq!(result.groups[1].projects[0].name, "worktree");
-        assert_eq!(result.groups[1].projects[0].documents, ["VISION.md"]);
+        assert_eq!(result.groups[1].parent, s(&first.join("games")));
+        assert_eq!(result.groups[1].projects.len(), 1);
+        assert_eq!(result.groups[1].projects[0].name, "korpi");
+        assert_eq!(result.groups[2].parent, s(&second));
+        assert_eq!(result.groups[2].projects[0].name, "worktree");
+        assert_eq!(result.groups[2].projects[0].documents, ["VISION.md"]);
     }
 
     #[test]
