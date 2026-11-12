@@ -82,6 +82,8 @@ pub struct MissionsPage {
     note_etag: Option<String>,
     note_saving: bool,
     wanted: Option<Wanted>,
+    /// A run output on its way into the start form of the mission opening.
+    carry: Option<String>,
     reveal_card: Option<String>,
     seen_run_snapshots: std::collections::BTreeSet<String>,
 }
@@ -181,6 +183,7 @@ impl MissionsPage {
             note_etag: None,
             note_saving: false,
             wanted: None,
+            carry: None,
             reveal_card: None,
             seen_run_snapshots: Default::default(),
         };
@@ -519,6 +522,9 @@ impl MissionsPage {
                                     Ok(v) => {
                                         page.state.mission_etag = v.mission.etag;
                                         page.state.mission = Some(v.mission.mission);
+                                        if let Some(value) = page.carry.take() {
+                                            page.start_with(&value, cx);
+                                        }
                                     }
                                     Err(e) => page.state.error = Some(e.to_string()),
                                 }
@@ -1672,9 +1678,7 @@ impl Render for MissionsPage {
                         .when(matches!(ed.kind, EditKind::Step) && self.slot.is_some(), |mut d| {
                             d = d.child(kit::label(&t, "Staff selected slot"));
                             d = d.child(self.slot_pickers(&t, cx));
-                            d.child(div().child(self.role.clone())).child(div().child(self.harness.clone()))
-                                .child(div().child(self.model.clone())).child(div().child(self.effort.clone()))
-                                .child(left(kit::button(&t, "assign-slot", "Assign", Kind::Quiet).debug_selector(|| "assign-slot".into()).on_click(cx.listener(|p, _, _, cx| p.assign_slot(cx)))))
+                            d.child(left(kit::button(&t, "assign-slot", "Assign", Kind::Quiet).debug_selector(|| "assign-slot".into()).on_click(cx.listener(|p, _, _, cx| p.assign_slot(cx)))))
                         })
                         .when(matches!(ed.kind, EditKind::Step | EditKind::Input), |mut d| {
                             d = d.child(kit::label(&t, "Limits"));

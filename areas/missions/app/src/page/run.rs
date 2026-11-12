@@ -30,6 +30,10 @@ pub(super) struct RunUi {
     abort_armed: bool,
     stop_reason: Entity<TextField>,
     events_open: bool,
+    /// A one-second redraw is pending so a shown running run's clock moves.
+    ticking: bool,
+    /// The output whose list of missions to use it in is open.
+    using: Option<String>,
     canvas_mode: bool,
     fields: BTreeMap<String, Entity<TextField>>,
     responses: BTreeMap<String, Entity<TextField>>,
@@ -73,6 +77,8 @@ impl RunUi {
             abort_armed: false,
             stop_reason: cx.new(|cx| TextField::new(cx, "Why (optional)")),
             events_open: false,
+            ticking: false,
+            using: None,
             canvas_mode: false,
             fields: BTreeMap::new(),
             responses: BTreeMap::new(),
@@ -373,6 +379,30 @@ impl MissionsPage {
         self.run.start_keys_ready = false;
         self.run.starting = true;
         cx.notify();
+    }
+    /// Open another mission with a run's output as its first input.
+    fn use_output(&mut self, node: String, slug: String, value: String, cx: &mut Context<Self>) {
+        self.carry = Some(value);
+        let target = (node.clone(), slug.clone());
+        self.open(node, slug, cx);
+        if self.state.selected.as_ref() != Some(&target) {
+            self.carry = None;
+        }
+    }
+    /// The start form of the open mission, its first input holding `value`.
+    pub(super) fn start_with(&mut self, value: &str, cx: &mut Context<Self>) {
+        self.prepare_run(cx);
+        let first = self
+            .state
+            .mission
+            .as_ref()
+            .and_then(|m| m.input_cards.first())
+            .and_then(|card| card.inputs.first())
+            .map(|input| input.name.clone())
+            .unwrap_or_else(|| "brief".into());
+        if let Some(field) = self.run.fields.get(&first) {
+            field.update(cx, |field, cx| field.set(value, false, cx));
+        }
     }
     /// The start form for a finished run's mission, holding its inputs.
     fn run_again(&mut self, card: &str, inputs: &[(String, String)], cx: &mut Context<Self>) {
@@ -1565,6 +1595,21 @@ impl MissionsPage {
         let Some(run) = self.selected_run().cloned() else {
             return Some(view.child(kit::note(t, "Waiting for run state…", None)));
         };
+        if !run.r#final && !self.run.ticking {
+            // Only a drawn run view asks for the next second; a hidden page
+            // or a finished run draws no more and so stops asking.
+            self.run.ticking = true;
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(1))
+                    .await;
+                let _ = this.update(cx, |page, cx| {
+                    page.run.ticking = false;
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
         let frozen = self.run.frozen.clone();
         let mission = frozen.as_ref().or(self.state.mission.as_ref());
         let title = mission
@@ -2415,17 +2460,27 @@ impl MissionsPage {
             .iter()
             .map(|problem| {
                 let selector = format!("run-problem-{}-{}", problem.seq, problem.reason.text);
-                let name = if problem.node_id.is_empty() {
-                    "Run".to_owned()
-                } else {
-                    name_of(&problem.node_id)
-                };
-                div()
+                let row = div()
                     .debug_selector(move || selector.clone())
                     .flex()
-                    .gap(px(TAB_GAP))
-                    .child(div().flex_none().text_color(t.text2).child(name))
+                    .gap(px(TAB_GAP));
+                // A problem of the whole run reads as a sentence of its own;
+                // one of a step is led by the step's name.
+                if problem.node_id.is_empty() {
+                    row.child(
+                        div()
+                            .text_color(colour)
+                            .child(sentence(&problem.reason.text)),
+                    )
+                } else {
+                    row.child(
+                        div()
+                            .flex_none()
+                            .text_color(t.text2)
+                            .child(name_of(&problem.node_id)),
+                    )
                     .child(div().text_color(colour).child(problem.reason.text.clone()))
+                }
             })
             .collect()
     }
@@ -2474,6 +2529,57 @@ impl MissionsPage {
                 })),
             );
         }
+        let name = output.name.clone();
+        buttons = buttons.child(
+            kit::button(
+                t,
+                SharedString::from(format!("use-output-{}", output.name)),
+                "Use in a mission…",
+                Kind::Quiet,
+            )
+            .debug_selector({
+                let name = name.clone();
+                move || format!("use-output-{name}")
+            })
+            .tooltip(kit::tip("Start a mission with this as its first input"))
+            .on_click(cx.listener(move |p, _, _, cx| {
+                p.run.using = if p.run.using.as_deref() == Some(name.as_str()) {
+                    None
+                } else {
+                    Some(name.clone())
+                };
+                cx.notify();
+            })),
+        );
+        let picker = (self.run.using.as_deref() == Some(output.name.as_str())).then(|| {
+            let mut list = div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(px(TAB_GAP))
+                .child(kit::note(t, "Start with it:", None));
+            for group in crate::store::navigator::groups(&self.state)
+                .into_iter()
+                .filter(|group| group.node == node)
+            {
+                let selector = format!("use-in-{}", group.slug);
+                let value = output.value.clone();
+                let (node, slug) = (group.node.clone(), group.slug.clone());
+                list = list.child(
+                    kit::button(
+                        t,
+                        SharedString::from(selector.clone()),
+                        group.title,
+                        Kind::Plain,
+                    )
+                    .debug_selector(move || selector.clone())
+                    .on_click(cx.listener(move |p, _, _, cx| {
+                        p.use_output(node.clone(), slug.clone(), value.clone(), cx)
+                    })),
+                );
+            }
+            list
+        });
         buttons = buttons.child(
             kit::button(
                 t,
@@ -2519,9 +2625,8 @@ impl MissionsPage {
                 .child(
                     div()
                         .min_w_0()
-                        .text_ellipsis()
                         .text_color(t.dim)
-                        .child(output.value.clone()),
+                        .child(crate::store::words::middle(&output.value)),
                 )
                 .into_any_element()
         };
@@ -2548,6 +2653,7 @@ impl MissionsPage {
                     .child(buttons),
             )
             .child(value)
+            .children(picker)
     }
 
     /// A file a step wrote: its name and size, opened beside the run.
@@ -2619,15 +2725,18 @@ fn given(t: &Theme, run: &RunProjection) -> Div {
             .gap(px(PAD))
             .min_w_0()
             .child(div().flex_none().text_color(t.text2).child(name.to_owned()))
-            .child(div().min_w_0().line_clamp(3).child(value.to_owned()))
+            .child(div().min_w_0().child(value.to_owned()))
     };
     for value in &run.inputs {
         card = card.child(row(&value.name, &value.value));
     }
     if !run.repository.is_empty() {
-        card = card.child(row("repository", &run.repository));
+        card = card.child(row(
+            "repository",
+            &crate::store::words::middle(&run.repository),
+        ));
     } else if !run.cwd.is_empty() {
-        card = card.child(row("folder", &run.cwd));
+        card = card.child(row("folder", &crate::store::words::middle(&run.cwd)));
     }
     card
 }

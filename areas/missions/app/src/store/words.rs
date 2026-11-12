@@ -312,6 +312,21 @@ pub fn size_text(bytes: u64) -> String {
     }
 }
 
+/// The most of a path a line shows: its start and its end, the middle cut,
+/// so the root and the file's own name both stay readable.
+pub fn middle(path: &str) -> String {
+    const SHOWN: usize = 72;
+    const HEAD: usize = 24;
+    let chars: Vec<char> = path.chars().collect();
+    if chars.len() <= SHOWN {
+        return path.to_owned();
+    }
+    let tail = SHOWN - HEAD - 1;
+    let head: String = chars[..HEAD].iter().collect();
+    let end: String = chars[chars.len() - tail..].iter().collect();
+    format!("{head}…{end}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,5 +416,14 @@ mod tests {
         assert_eq!(short_time("2026-11-08T21:31:00Z", now).len(), 5);
         assert!(short_time("2025-01-02T10:00:00Z", now).contains("2025"));
         assert_eq!(short_time("nonsense", now), "");
+    }
+
+    #[test]
+    fn a_long_path_keeps_its_root_and_its_name() {
+        let path = format!("/tmp/{}/run_e29/haiku.txt", "deep/".repeat(30));
+        let shown = middle(&path);
+        assert_eq!(shown.chars().count(), 72);
+        assert!(shown.starts_with("/tmp/deep/") && shown.ends_with("/run_e29/haiku.txt"));
+        assert_eq!(middle("/srv/short"), "/srv/short");
     }
 }

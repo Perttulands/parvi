@@ -7,6 +7,10 @@ rev = 1
 id = "inp_start"
 title = "Input"
 goal = "Deliver the brief"
+[[inputCard.outputs]]
+name = "result"
+kind = "text"
+from = "fmn_work:port_out"
 [[formation]]
 id = "fmn_work"
 type = "solo"

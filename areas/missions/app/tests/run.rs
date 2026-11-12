@@ -571,6 +571,42 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
             .for_page("test", &[])
             .ask(
                 Ask::Reveal {
+                    what: "run".into(),
+                    id: run_id.clone(),
+                    node: Some(NodeId(running.id.clone())),
+                    part: None,
+                    beside: false,
+                },
+                cx,
+            )
+            .unwrap();
+    });
+    until(cx, "the run's output", |cx| {
+        cx.debug_bounds("use-output-result").is_some()
+    });
+    click(cx, "use-output-result");
+    until(cx, "missions to use it in", |cx| {
+        cx.debug_bounds("use-in-gated").is_some()
+    });
+    click(cx, "use-in-gated");
+    until(cx, "start form holding the output", |cx| {
+        cx.debug_bounds("run-start").is_some()
+    });
+    assert!(
+        !shell
+            .read_with(cx, |s, cx| s.hub().read(cx).unsaved(cx))
+            .is_empty(),
+        "the output fills the next mission's first input"
+    );
+    click(cx, "run-cancel");
+    until(cx, "start form closed again", |cx| {
+        cx.debug_bounds("run-start").is_none()
+    });
+    shell.update(cx, |s, cx| {
+        Host::new(s.hub())
+            .for_page("test", &[])
+            .ask(
+                Ask::Reveal {
                     what: "mission".into(),
                     id: "gated".into(),
                     node: None,
