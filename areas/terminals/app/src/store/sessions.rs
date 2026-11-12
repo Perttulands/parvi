@@ -99,15 +99,16 @@ pub fn natural(a: &str, b: &str) -> std::cmp::Ordering {
 }
 
 /// Sessions in groups: main first, other last, the rest by name; within a
-/// group by name, in natural order. A group of one is no group: its session
-/// joins other, so a header never stands over a single row.
-pub fn groups<'a>(sessions: &[&'a Session]) -> Vec<(String, Vec<&'a Session>)> {
+/// group by name, in natural order. A group of one among `all` is no group:
+/// its session joins other, so a header never stands over a single row, and
+/// a search that shows one of a group still shows it under that group.
+pub fn groups<'a>(all: &[Session], shown: &[&'a Session]) -> Vec<(String, Vec<&'a Session>)> {
     let named = |s: &Session| {
         let g = group(&s.name);
-        let alone = g != "main" && sessions.iter().filter(|o| group(&o.name) == g).count() < 2;
+        let alone = g != "main" && all.iter().filter(|o| group(&o.name) == g).count() < 2;
         if alone { "other".to_string() } else { g }
     };
-    let mut list: Vec<(String, &Session)> = sessions.iter().map(|s| (named(s), *s)).collect();
+    let mut list: Vec<(String, &Session)> = shown.iter().map(|s| (named(s), *s)).collect();
     list.sort_by(|(ga, a), (gb, b)| {
         (group_rank(ga), ga)
             .cmp(&(group_rank(gb), gb))
@@ -278,6 +279,14 @@ pub fn started_waiting<'a>(before: &[Session], after: &'a [Session]) -> Vec<&'a 
 /// The session's agent event while it is news: nobody has looked since.
 pub fn news(s: &Session) -> Option<&AgentEvent> {
     s.event.as_ref().filter(|e| !e.seen)
+}
+
+/// The session whose agent reported last and has not been looked at.
+pub fn newest_news(all: &[Session]) -> Option<&Session> {
+    all.iter()
+        .filter_map(|s| news(s).map(|e| (e.at, s)))
+        .max_by_key(|(at, _)| *at)
+        .map(|(_, s)| s)
 }
 
 /// The sessions in `after` whose agent reported since `before`: an unseen
@@ -472,7 +481,7 @@ mod tests {
             s("api-x"),
         ];
         let refs: Vec<&Session> = list.iter().collect();
-        let g: Vec<(String, Vec<String>)> = groups(&refs)
+        let g: Vec<(String, Vec<String>)> = groups(&list, &refs)
             .into_iter()
             .map(|(g, v)| (g, v.iter().map(|s| s.name.clone()).collect()))
             .collect();
@@ -481,6 +490,9 @@ mod tests {
         assert_eq!(g[1].1, ["claude-a", "claude-b"]);
         // api-x is alone in its group, so it joins other.
         assert_eq!(g[2].1, ["api-x", "solo"]);
+        // A search showing one of the claude sessions keeps it under claude.
+        let found = groups(&list, &[&list[1]]);
+        assert_eq!(found[0].0, "claude");
     }
 
     #[test]
@@ -507,7 +519,7 @@ mod tests {
         );
         let list = [s("build10"), s("build9")];
         let refs: Vec<&Session> = list.iter().collect();
-        let g = groups(&refs);
+        let g = groups(&list, &refs);
         let names: Vec<&str> = g[0].1.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["build9", "build10"]);
     }
@@ -593,6 +605,10 @@ mod tests {
             report_title(&again[0], again[0].event.as_ref().unwrap()),
             "a finished"
         );
+        assert_eq!(newest_news(&again).unwrap().name, "a", "b's is seen");
+        again[1].event = event(12, false);
+        assert_eq!(newest_news(&again).unwrap().name, "b", "the latest");
+        assert!(newest_news(&before).is_none());
     }
 
     #[test]

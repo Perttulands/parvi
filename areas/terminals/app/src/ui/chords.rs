@@ -4,6 +4,7 @@
 
 use super::page::Terminals;
 use super::surface::{self, Surface};
+use crate::store::sessions::{self, Key};
 use gpui::{Context, WeakEntity, Window};
 use parvi_app_kit::chords::Chord;
 use parvi_app_kit::widgets::field;
@@ -22,6 +23,7 @@ pub enum Action {
     Send,
     Overview,
     Find,
+    Reported,
 }
 
 /// Every chord acting on `page`, its `tabs` first, as CHROTE lists them.
@@ -61,6 +63,8 @@ fn chords(page: &WeakEntity<Terminals>, tabs: usize) -> Vec<Chord> {
         // history (Alt+F is the shell's forward-word).
         chord("v", "Overview of every session", Action::Overview).alt("v", Some(false)),
         chord("h", "Search every scrollback", Action::Find).alt("h", Some(false)),
+        // J for jump: answering a toast without finding its row.
+        chord("j", "Go to the session that reported", Action::Reported).alt("j", Some(false)),
     ]);
     all
 }
@@ -161,6 +165,13 @@ impl Terminals {
                 }
                 return;
             }
+            Action::Reported => {
+                match sessions::newest_news(&self.fleet.all) {
+                    Some(s) => self.place(Key::of(s), window, cx),
+                    None => self.report("No agent has reported since you looked.", false, None),
+                }
+                return;
+            }
             Action::Find => {
                 if self.is_open(surface::FIND) {
                     self.close(surface::FIND, cx);
@@ -229,6 +240,7 @@ mod tests {
             ("s", false, Some("Send from the focused session")),
             ("2", false, Some("Terminal tab 2")),
             ("6", false, Some("Terminal tab 6")),
+            ("j", false, Some("Go to the session that reported")),
             // Alt+F is the shell's forward-word.
             ("f", false, None),
         ];
@@ -251,6 +263,7 @@ mod tests {
             ("n", Some("Launcher in the focused window")),
             ("s", Some("Send from the focused session")),
             ("3", Some("Terminal tab 3")),
+            ("j", Some("Go to the session that reported")),
             ("i", None),
             ("r", None),
         ];

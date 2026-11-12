@@ -131,7 +131,7 @@ impl Terminals {
                 shown += found.len();
                 block =
                     block.child(self.environment_heading(&t, &n.environment, n.live || !d.live));
-                for (group, members) in sessions::groups(&found) {
+                for (group, members) in sessions::groups(&n.sessions, &found) {
                     if !self.settings.collapsed_groups.contains(&group) {
                         self.rail_shown.extend(members.iter().map(|s| Key::of(s)));
                     }
