@@ -7,7 +7,8 @@
 ## What it is
 
 Parvi is the operator's agent workspace. It runs a machine full of command-line
-agents from one window, and chains agents and human gates into missions.
+agents from one window, and sets off missions: longer pieces of work done by
+several agents without the operator.
 
 Everything serves running agents. Every journey ends in one of two actions: the
 operator prompts an agent, or makes a small edit by hand. Files, work items, the
@@ -42,8 +43,10 @@ build. Nothing stays compatible with the old tools.
 - **Files, Work, Brain.** What you read before you prompt, beside the terminal.
 - **Host.** Services, scheduled prompts, health, settings, install and upgrade
   that never stop a session.
-- **Missions.** Design a multi-agent workflow, have your agent build and run it,
-  and understand its runs at a glance.
+- **Missions.** Missions scale what one operator gets done. Define a graph of
+  work for several agents, set up what it needs, set it off and come back to
+  the result. A mission rarely waits for a person: when the operator is needed,
+  one mission ends with something to look at and the next starts from it.
 
 ## After that
 
