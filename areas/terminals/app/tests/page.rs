@@ -56,7 +56,8 @@ impl Page for Toy {
 
     fn answer(&mut self, ask: Ask, from: &'static str, _: &mut Window, cx: &mut Context<Self>) {
         if ask.beside() {
-            self.host.show_beside(from, cx.new(|cx| Note(cx.focus_handle())).into(), cx);
+            self.host
+                .show_beside(from, cx.new(|cx| Note(cx.focus_handle())).into(), cx);
         }
         ITEM_ASK.with(|slot| *slot.borrow_mut() = Some(ask));
     }

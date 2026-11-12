@@ -1762,9 +1762,7 @@ impl Render for Terminals {
         // the focus while it lives elsewhere, so its closing is enough.
         let beside = self.host.beside(cx).is_some();
         let beside_closed = std::mem::replace(&mut self.beside_open, beside) && !beside;
-        if self.shown
-            && self.surfaces.is_empty()
-            && (beside_closed || window.focused(cx).is_none())
+        if self.shown && self.surfaces.is_empty() && (beside_closed || window.focused(cx).is_none())
         {
             window.focus(&self.term_focus, cx);
         }
