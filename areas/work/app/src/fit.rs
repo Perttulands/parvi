@@ -8,15 +8,13 @@ use crate::store::work::{COLUMNS, Column};
 
 use crate::tokens::*;
 
-/// What goes first when Title runs short: Updated (Idle says it in days)
-/// and Size as CHROTE's compact table, then what the card says again.
-/// ID and Title always stay.
-const DROPS: [Column; 7] = [
-    Column::Updated,
+/// What goes first when Title runs short: Size as CHROTE's compact table,
+/// then what the card says again. ID and Title always stay.
+const DROPS: [Column; 6] = [
     Column::Size,
     Column::Type,
     Column::Kids,
-    Column::Idle,
+    Column::Updated,
     Column::Project,
     Column::Status,
 ];
@@ -30,7 +28,6 @@ pub fn width(c: Column) -> Option<f32> {
         Column::Project => Some(COLUMN_PROJECT_W),
         Column::Status => Some(COLUMN_STATUS_W),
         Column::Updated => Some(COLUMN_UPDATED_W),
-        Column::Idle => Some(COLUMN_IDLE_W),
         Column::Size => Some(COLUMN_SIZE_W),
         Column::Kids => Some(COLUMN_KIDS_W),
     }
@@ -89,14 +86,14 @@ mod tests {
         assert_eq!(columns(1000.), COLUMNS.to_vec());
         assert_eq!(
             columns(900.),
-            vec![Id, Type, Title, Project, Status, Idle, Size, Kids]
+            vec![Id, Type, Title, Project, Status, Updated, Kids]
         );
         assert_eq!(
             columns(850.),
-            vec![Id, Type, Title, Project, Status, Idle, Kids]
+            vec![Id, Title, Project, Status, Updated, Kids]
         );
-        assert_eq!(columns(750.), vec![Id, Title, Project, Status, Idle, Kids]);
-        assert_eq!(columns(700.), vec![Id, Title, Project, Status, Idle]);
+        assert_eq!(columns(750.), vec![Id, Title, Project, Status, Updated]);
+        assert_eq!(columns(700.), vec![Id, Title, Project, Status]);
         // The table beside the card at 1600 px with the column open.
         assert_eq!(columns(620.), vec![Id, Title, Project, Status]);
         assert_eq!(columns(500.), vec![Id, Title, Status]);

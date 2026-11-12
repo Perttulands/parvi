@@ -25,9 +25,11 @@ use super::github::Gh;
 use super::item::Item;
 use super::model::{ProjectView, RepoView, Snapshot, StoreView};
 
-/// How often a watched store's manifest is looked at, and how recent a
-/// GitHub read a new watcher takes as it is. A Beads store costs a file
-/// read unless it changed.
+/// How often a watched store's manifest is looked at: a few small file
+/// reads, so a change made in a shell shows within seconds. A Beads store
+/// is read only when its manifest changed.
+pub const LOOK: Duration = Duration::from_secs(3);
+/// How recent a GitHub read a new watcher takes as it is.
 pub const EVERY: Duration = Duration::from_secs(60);
 /// Limit tracker processes while letting independent projects overlap.
 const READ_CONCURRENCY: usize = 8;
@@ -254,7 +256,7 @@ impl Drop for Subscription {
     }
 }
 
-/// Looks at every project concurrently, at once and then each [`EVERY`] or
+/// Looks at every project concurrently, at once and then each [`LOOK`] or
 /// when a refresh is asked, publishing each as it arrives, until aborted.
 /// The stores' manifests are looked at every round; GitHub is read in the
 /// first round (unless read within [`EVERY`]) and in a refresh's.
@@ -362,7 +364,7 @@ async fn rounds(work: Arc<Inner>) {
         }
         // A refresh is only ever asked for; GitHub is not read on a timer.
         tokio::select! {
-            () = tokio::time::sleep(EVERY) => {}
+            () = tokio::time::sleep(LOOK) => {}
             () = work.refresh.notified() => {}
         }
         github = false;
@@ -633,7 +635,7 @@ pub(super) mod tests {
         while store(&*watching.next().await, 0).items.is_none() {}
         tokio::task::yield_now().await;
         tokio::time::pause();
-        tokio::time::advance(EVERY).await;
+        tokio::time::advance(LOOK).await;
         tokio::task::yield_now().await;
         assert_eq!(
             fake.runs("bd").len(),
@@ -652,8 +654,8 @@ pub(super) mod tests {
                 items: Arc::new(fresh),
             },
         );
-        tokio::time::advance(EVERY).await;
-        tokio::time::timeout(EVERY * 2, async {
+        tokio::time::advance(LOOK).await;
+        tokio::time::timeout(LOOK * 2, async {
             loop {
                 let changed = watching.next().await;
                 if store(&changed, 0).items.as_ref().unwrap()[0].status == "closed" {

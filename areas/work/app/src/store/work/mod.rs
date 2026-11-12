@@ -186,7 +186,7 @@ pub struct Board {
     pub rows: Vec<Row>,
     /// The links between rows, across stores.
     pub links: Links,
-    /// Each row's days, for the strip and the Idle column.
+    /// Each row's days, for the strip and the range.
     pub days: Days,
     /// Row index by reference, and by bare Bead id where it is unique.
     by_ref: HashMap<String, usize>,

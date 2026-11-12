@@ -502,8 +502,8 @@ fn leaves_a_date_written_as_zero_or_before_2000_off_the_strip() {
     let d = &odd.days;
     assert_eq!(d.first, day("2026-10-01"));
     assert_eq!(
-        (d.created[1], d.updated[1], d.closed[1], d.idle[1]),
-        (None, None, None, None)
+        (d.created[1], d.updated[1], d.closed[1]),
+        (None, None, None)
     );
 }
 
@@ -649,16 +649,12 @@ fn orders_ids_naturally() {
 }
 
 #[test]
-fn orders_by_size_and_by_idle_days_largest_first_ties_by_id() {
+fn orders_by_size_largest_first_ties_by_id() {
     let b = sorting_board();
     assert_eq!(sorted(&b, Column::Size, true), ["a-10", "a-2", "a-1"]);
-    assert_eq!(sorted(&b, Column::Idle, true), ["a-2", "a-1", "a-10"]);
-    assert_eq!(b.days.idle, [Some(20), Some(1), Some(10)]);
-    // A first click sorts both largest first.
+    // A first click sorts largest first.
     let mut s = Slice::default();
     s.sort_by(Column::Size);
-    assert!(s.descending);
-    s.sort_by(Column::Idle);
     assert!(s.descending);
     let gh = board_of(vec![repo()]);
     assert_eq!(sorted(&gh, Column::Size, true), ["#11", "#10", "#12"]);

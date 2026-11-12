@@ -54,7 +54,6 @@ pub const COLUMN_TYPE_W: f32 = 72.;
 pub const COLUMN_PROJECT_W: f32 = 150.;
 pub const COLUMN_STATUS_W: f32 = 112.;
 pub const COLUMN_UPDATED_W: f32 = 76.;
-pub const COLUMN_IDLE_W: f32 = 52.;
 pub const COLUMN_SIZE_W: f32 = 56.;
 pub const COLUMN_KIDS_W: f32 = 48.;
 

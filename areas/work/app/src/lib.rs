@@ -165,7 +165,7 @@ impl Work {
             report: None,
             snapshots: BTreeMap::new(),
             board: Board::default(),
-            slice: Slice::default(),
+            slice: Slice::unfinished(),
             sliced: Sliced::default(),
             selected: None,
             selected_node: None,

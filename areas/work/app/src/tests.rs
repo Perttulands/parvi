@@ -73,6 +73,14 @@ fn page(cx: &mut TestAppContext) -> (Entity<Work>, &mut VisualTestContext) {
     (work, cx)
 }
 
+/// Lets every status through, closed and deferred too.
+fn every_status(work: &Entity<Work>, cx: &mut VisualTestContext) {
+    work.update(cx, |w, _| {
+        w.slice.statuses = None;
+        w.reslice();
+    });
+}
+
 fn ids(work: &Entity<Work>, cx: &mut VisualTestContext) -> Vec<String> {
     work.read_with(cx, |w, _| {
         w.sliced
@@ -140,6 +148,9 @@ fn a_wide_graph_can_be_panned_with_its_buttons(cx: &mut TestAppContext) {
 #[gpui::test]
 fn draws_every_item_of_every_project_in_one_table_and_says_what_failed(cx: &mut TestAppContext) {
     let (work, cx) = page(cx);
+    // The tab opens on what is unfinished: the two closed Beads wait.
+    assert_eq!(ids(&work, cx).len(), 6);
+    every_status(&work, cx);
     // Five Beads, two issues and a pull request.
     assert_eq!(ids(&work, cx).len(), 8);
     work.read_with(cx, |w, _| {
@@ -240,6 +251,7 @@ fn says_it_is_still_reading_while_no_project_has_answered(cx: &mut TestAppContex
 #[gpui::test]
 fn the_keys_walk_open_and_let_go_and_slash_searches(cx: &mut TestAppContext) {
     let (work, cx) = page(cx);
+    every_status(&work, cx);
     cx.update(|_, cx| work.update(cx, |w, cx| w.sort_by(Column::Id, cx)));
     let first = ids(&work, cx);
     assert_eq!(selected(&work, cx), None);
@@ -279,6 +291,7 @@ fn the_keys_walk_open_and_let_go_and_slash_searches(cx: &mut TestAppContext) {
 #[gpui::test]
 fn keeps_one_project_by_its_name_and_sorts_by_size(cx: &mut TestAppContext) {
     let (work, cx) = page(cx);
+    every_status(&work, cx);
     work.update(cx, |w, _| {
         w.slice.only_project("/srv/data/context");
         w.reslice();
@@ -460,6 +473,7 @@ fn a_new_snapshot_keeps_the_query_the_selection_the_card_and_the_range(cx: &mut 
 #[gpui::test]
 fn a_drag_across_the_strip_keeps_those_days(cx: &mut TestAppContext) {
     let (work, cx) = page(cx);
+    every_status(&work, cx);
     let (first, today) = work.read_with(cx, |w, _| (w.board.days.first, w.board.days.today));
     cx.update(|_, cx| {
         work.update(cx, |w, cx| {
@@ -567,4 +581,18 @@ fn folders_written_two_ways_match() {
     assert!(super::same_folder("/home/example/project/", "~/project"));
     assert!(super::same_folder("/srv/x", "/srv/x/"));
     assert!(!super::same_folder("/srv/x", "/srv/y"));
+}
+
+#[gpui::test]
+fn a_search_that_only_finished_work_answers_says_so_and_shows_it(cx: &mut TestAppContext) {
+    let (work, cx) = page(cx);
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("evidence");
+    assert_eq!(ids(&work, cx), Vec::<String>::new());
+    let show = cx
+        .debug_bounds("work-every-status")
+        .expect("the empty table offers every status")
+        .center();
+    cx.simulate_click(show, gpui::Modifiers::none());
+    assert_eq!(ids(&work, cx), ["ctx-xvl"]);
 }

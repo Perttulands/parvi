@@ -1,6 +1,6 @@
 //! Days, as the strip counts them (CHROTE's `beadsSlice.ts`, the strip):
-//! each row's local calendar days of creation, last update and close, how
-//! many days it has been idle, and the first day any project holds.
+//! each row's local calendar days of creation, last update and close, and the
+//! first day any project holds.
 
 use super::{Board, Status};
 use time::{Date, Duration};
@@ -52,8 +52,6 @@ pub struct Days {
     pub updated: Vec<Option<i32>>,
     /// A finished row with no close time closed on its last update.
     pub closed: Vec<Option<i32>>,
-    /// Whole days since the last update.
-    pub idle: Vec<Option<u32>>,
     /// The day each project was first seen: its earliest creation.
     pub project_first: Vec<Option<i32>>,
 }
@@ -87,11 +85,6 @@ impl Days {
             d.created.push(created);
             d.updated.push(updated);
             d.closed.push(closed);
-            d.idle.push(
-                r.updated
-                    .filter(|&m| m >= EARLIEST)
-                    .map(|m| (now.saturating_sub(m) / DAY_MS as u64) as u32),
-            );
         }
         d
     }

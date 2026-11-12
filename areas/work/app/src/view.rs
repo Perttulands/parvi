@@ -19,10 +19,7 @@ use parvi_app_kit::widgets::select;
 use std::rc::Rc;
 
 fn right_aligned(c: Column) -> bool {
-    matches!(
-        c,
-        Column::Updated | Column::Idle | Column::Size | Column::Kids
-    )
+    matches!(c, Column::Updated | Column::Size | Column::Kids)
 }
 
 pub(super) fn status_colour(t: &Theme, s: Status) -> gpui::Hsla {
@@ -383,11 +380,6 @@ impl Work {
                     )
                     .child(div().text_color(t.text2).child(raw_label(r))),
                 Column::Updated => div().text_color(t.text2).child(updated.clone()),
-                Column::Idle => div().text_color(t.text2).child(
-                    self.board.days.idle[i]
-                        .map(|d| format!("{d}d"))
-                        .unwrap_or_default(),
-                ),
                 Column::Size => div().text_color(t.text2).child(size_label(r.size)),
                 Column::Kids => {
                     div()
@@ -414,6 +406,11 @@ impl Work {
     fn table(&self, cx: &mut Context<Self>) -> Div {
         let t = theme(cx).clone();
         let n = self.sliced.rows.len();
+        let hidden: usize = STATUSES
+            .into_iter()
+            .filter(|&s| !self.slice.keeps_status(s))
+            .map(|s| self.sliced.status_counts[s as usize])
+            .sum();
         let empty: Option<Div> = (n == 0).then(|| {
             let none_read = self.board.projects.iter().all(|p| !p.read);
             let reading = self
@@ -429,10 +426,29 @@ impl Work {
                 "No projects are configured on this node: add a `beads` or `github` line to its work.conf.".to_string()
             } else if none_read {
                 "No project could be read yet; the footer says why.".to_string()
+            } else if hidden > 0 {
+                format!("No match here. Matches with other statuses: {hidden}.")
             } else {
                 "Nothing in this slice.".to_string()
             };
-            div().p(px(SPACE_4XL)).text_color(t.text2).child(why)
+            div()
+                .p(px(SPACE_4XL))
+                .flex()
+                .items_center()
+                .gap(px(GAP))
+                .text_color(t.text2)
+                .child(why)
+                .when(hidden > 0 && !none_read, |d| {
+                    d.child(
+                        kit::button(&t, "work-every-status", "Show every status", Kind::Plain)
+                            .debug_selector(|| "work-every-status".into())
+                            .on_click(cx.listener(|w, _, _, cx| {
+                                w.slice.statuses = None;
+                                w.reslice();
+                                cx.notify();
+                            })),
+                    )
+                })
         });
         div()
             .flex_1()

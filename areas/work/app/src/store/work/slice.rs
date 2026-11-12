@@ -13,19 +13,17 @@ pub enum Column {
     Project,
     Status,
     Updated,
-    Idle,
     Size,
     Kids,
 }
 
-pub const COLUMNS: [Column; 9] = [
+pub const COLUMNS: [Column; 8] = [
     Column::Id,
     Column::Type,
     Column::Title,
     Column::Project,
     Column::Status,
     Column::Updated,
-    Column::Idle,
     Column::Size,
     Column::Kids,
 ];
@@ -39,7 +37,6 @@ impl Column {
             Column::Project => "PROJECT",
             Column::Status => "STATUS",
             Column::Updated => "UPDATED",
-            Column::Idle => "IDLE",
             Column::Size => "SIZE",
             Column::Kids => "KIDS",
         }
@@ -48,10 +45,7 @@ impl Column {
     /// The direction of a first click: text A to Z, times and counts
     /// largest first.
     pub fn natural_descending(self) -> bool {
-        matches!(
-            self,
-            Column::Updated | Column::Idle | Column::Size | Column::Kids
-        )
+        matches!(self, Column::Updated | Column::Size | Column::Kids)
     }
 }
 
@@ -101,6 +95,18 @@ pub struct Sliced {
 }
 
 impl Slice {
+    /// What the tab opens on: the work still to do, newest first.
+    pub fn unfinished() -> Slice {
+        Slice {
+            statuses: Some(BTreeSet::from([
+                Status::Open,
+                Status::InProgress,
+                Status::Blocked,
+            ])),
+            ..Slice::default()
+        }
+    }
+
     pub fn sort_by(&mut self, c: Column) {
         if self.sort == c {
             self.descending = !self.descending;
@@ -222,7 +228,6 @@ impl Slice {
         let rows = &board.rows;
         let projects = &board.projects;
         let kids = |i: usize| board.links.children.get(i).map_or(0, Vec::len);
-        let idle = |i: usize| d.idle.get(i).copied().flatten();
         // CHROTE's order: the column, ties by id, the whole reversed when
         // descending; status ties go to the most recently updated.
         out.rows.sort_by(|&a, &b| {
@@ -246,7 +251,6 @@ impl Slice {
                     .then_with(|| y.updated.cmp(&x.updated))
                     .then_with(by_id),
                 Column::Updated => x.updated.cmp(&y.updated).then_with(by_id),
-                Column::Idle => idle(a).cmp(&idle(b)).then_with(by_id),
                 Column::Size => x.size.cmp(&y.size).then_with(by_id),
                 Column::Kids => kids(a).cmp(&kids(b)).then_with(by_id),
             };
