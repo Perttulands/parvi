@@ -141,6 +141,9 @@ fn search_open_and_follow_a_link_in_the_reader(cx: &mut TestAppContext) {
     until(cx, "linked page", |cx| {
         cx.debug_bounds("brain-reading-notes/second.md").is_some()
     });
+    until(cx, "the trail back to the first page", |cx| {
+        cx.debug_bounds("brain-trail-notes/first.md").is_some()
+    });
     let back = cx
         .debug_bounds("brain-trail-notes/first.md")
         .unwrap()
