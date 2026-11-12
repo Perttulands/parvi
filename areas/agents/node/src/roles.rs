@@ -331,7 +331,18 @@ pub fn commands(s: Arc<Service>, node: String) -> Vec<Command> {
     ];
     NAMES.iter().map(|&name| {
         let (s, node) = (s.clone(), node.clone());
-        Command::new(name, "Read or change the role library.", move || {
+        let description = match name {
+            "role_list" => "List the roles a seat can take; --capable filters by capability.",
+            "role_inspect" => "Print one role.",
+            "role_usage" => "Show where a role is used.",
+            "role_new" => "Add a role to the library.",
+            "role_edit" => "Change a role with a JSON change object.",
+            "role_retire" => "Retire a role so it is no longer offered.",
+            "role_restore" => "Bring a retired role back.",
+            "role_delete" => "Delete a role; a built-in one comes back as shipped.",
+            _ => "List the saved characters: a role with its harness, model and effort.",
+        };
+        Command::new(name, description, move || {
             let (props, required) = match name {
                 "role_list" => (json!({"capable":{"type":"string"},"assignable":{"type":"boolean"}}), vec![]),
                 "role_characters" => (json!({}), vec![]),

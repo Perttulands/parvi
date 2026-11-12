@@ -14,6 +14,9 @@ use std::sync::{
 #[derive(Clone, Debug)]
 pub struct FormationExecution {
     pub run_id: String,
+    /// What its seats are called where people see them: the mission, the
+    /// run's number and the step, as `plan-then-review-3-review`.
+    pub seat_name: String,
     pub formation: Formation,
     pub bindings: BindingsSnapshot,
     pub cwd: PathBuf,

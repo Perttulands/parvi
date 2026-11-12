@@ -38,5 +38,5 @@ pub use run_attempts::{
 };
 pub use run_projection::{
     Escalation, GateInput, GateRequest, PublicEvent, PublicInputRef, PublicOrigin, RunProjection,
-    WaitingGate,
+    WaitingGate, plain_reason,
 };

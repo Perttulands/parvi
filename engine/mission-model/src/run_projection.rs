@@ -167,3 +167,63 @@ pub struct GateRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pick: Option<Value>,
 }
+
+/// A stop's reason as a person reads it: the codes a program matches on
+/// (`seat_error: …`, `… (executor_failed)`) taken off, the sentence kept.
+pub fn plain_reason(detail: &str) -> String {
+    let code = |word: &str| {
+        // A code may name what it is about: `invalid_judge_result[gate]`.
+        let word = match word.split_once('[') {
+            Some((word, rest)) if rest.ends_with(']') => word,
+            _ => word,
+        };
+        !word.is_empty()
+            && word.contains('_')
+            && word.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+    };
+    let mut text = detail.trim();
+    loop {
+        let before = text;
+        if let Some((head, rest)) = text.split_once(": ")
+            && code(head)
+        {
+            text = rest.trim_start();
+        }
+        if let Some(open) = text.rfind(" (")
+            && text.ends_with(')')
+            && code(&text[open + 2..text.len() - 1])
+        {
+            text = text[..open].trim_end();
+        }
+        if text == before {
+            break;
+        }
+    }
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_reason_reads_without_its_codes() {
+        assert_eq!(
+            super::plain_reason("seat_idle_without_sentinel: the agent stopped (seat_error)"),
+            "The agent stopped"
+        );
+        assert_eq!(
+            super::plain_reason(
+                "seat_error: seat_stuck: the agent did not take its brief. Its screen says: model: gone"
+            ),
+            "The agent did not take its brief. Its screen says: model: gone"
+        );
+        assert_eq!(
+            super::plain_reason("invalid_judge_result[gate_review]: missing verdict block"),
+            "Missing verdict block"
+        );
+        assert_eq!(super::plain_reason("escalation"), "Escalation");
+    }
+}

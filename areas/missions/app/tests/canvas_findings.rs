@@ -134,6 +134,12 @@ fn canvas_shows_exact_findings_on_cards_and_edges_and_clears_them(cx: &mut TestA
                 || label.origin.y + label.size.height <= pin.origin.y
         );
     }
+    // The list of what the mission lacks opens from its heading.
+    let toggle = cx.debug_bounds("canvas-findings-toggle").unwrap().center();
+    cx.simulate_click(toggle, Modifiers::none());
+    until(cx, "findings list", |cx| {
+        cx.debug_bounds("canvas-findings-list").is_some()
+    });
     let rt = tokio::runtime::Runtime::new().unwrap();
     let client = NodeClient::new(Some(&format!("{}/", running.url))).unwrap();
     let (report, _) = rt
@@ -206,7 +212,7 @@ fn canvas_shows_exact_findings_on_cards_and_edges_and_clears_them(cx: &mut TestA
         .unwrap();
     assert!(report["errors"].as_array().unwrap().is_empty());
     assert!(report["warnings"].as_array().unwrap().is_empty());
-    assert!(cx.debug_bounds("canvas-findings-list").is_none());
+    assert!(cx.debug_bounds("canvas-findings").is_none());
     assert!(cx.debug_bounds("validation-card-step_work").is_none());
     assert!(cx.debug_bounds("validation-card-gate_review").is_none());
     assert!(cx.debug_bounds("validation-edge-edge_duplicate").is_none());

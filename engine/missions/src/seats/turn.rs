@@ -22,7 +22,8 @@ pub struct TurnWatch<'a> {
     pub roots: &'a TranscriptRoots,
     pub run_id: &'a str,
     pub canceled: &'a AtomicBool,
-    pub continued: bool,
+    /// Reminders already sent to this dispatch, from its record.
+    pub reminded: usize,
 }
 impl TurnWatch<'_> {
     /// The callback durably records the native acknowledgement. It may be
@@ -42,7 +43,7 @@ impl TurnWatch<'_> {
             roots,
             run_id,
             canceled,
-            continued,
+            reminded,
         } = self;
         let pane = *pane;
         let kind = *kind;
@@ -51,9 +52,8 @@ impl TurnWatch<'_> {
             .ok_or("owned seat is unavailable")?
             .updates;
         let mut acknowledged = false;
-        let mut quiet_since: Option<Instant> = None;
         let mut transcript_stamp: Option<(u64, Option<SystemTime>)> = None;
-        let mut continued = *continued;
+        let mut nudges = super::state::Reminders::new(*reminded);
         let mut waits = super::state::WaitTracker::new(Instant::now());
         loop {
             if canceled.load(Ordering::Acquire) {
@@ -129,19 +129,28 @@ impl TurnWatch<'_> {
                 && screen
                     .as_ref()
                     .is_some_and(|screen| harness::input_clear(kind, screen));
-            if !idle || activity {
-                quiet_since = None;
-            } else if let Some(since) = quiet_since {
-                if since.elapsed() >= Duration::from_secs(300) {
-                    if continued {
-                        return Err("seat_idle_without_sentinel: seat remained idle after a continue instruction".into());
-                    }
+            let ended = matches!(turn.state, TurnState::EndedWithoutSentinel);
+            match nudges.observe(idle, ended, activity, Instant::now()) {
+                None => (),
+                Some(super::state::Nudge::GiveUp) => {
+                    let said = screen.as_ref().map(super::state::screen_words).unwrap_or_default();
+                    return Err(format!(
+                        "seat_idle_without_sentinel: the agent stopped without saying it was done, even after {} reminders. Open its terminal to see where it stopped, then resume the run.{}",
+                        super::state::REMINDERS,
+                        if ended || said.is_empty() { String::new() } else { format!(" Its screen says: {said}") }
+                    ));
+                }
+                Some(super::state::Nudge::Remind) => {
                     let instruction = format!(
-                        "Continue the dispatched work from where you stopped. Follow the original brief and output contract. When complete end with this line, ARTIFACT replaced by the path or port id you produced and the closing >>> kept: <<<PARVI-DONE run-id={run_id} status=ok artifact=ARTIFACT>>>"
+                        "Your last reply did not end with the done line, so this step is still open. If the work is finished, reply with only the done line; otherwise finish it first. The done line, ARTIFACT replaced by the path or port id you produced and the closing >>> kept: <<<PARVI-DONE run-id={run_id} status=ok artifact=ARTIFACT>>>"
                     );
                     state_event(
                         "seat_idle_recovery",
-                        "sending one continue instruction after five idle minutes",
+                        if ended {
+                            "the agent ended its turn without the done line; reminding it"
+                        } else {
+                            "the agent has sat at an empty prompt without the done line; reminding it"
+                        },
                         crate::run_storage::now(),
                     )?;
                     stage_pointer(
@@ -153,11 +162,7 @@ impl TurnWatch<'_> {
                         canceled,
                     )
                     .await.map_err(|error| error.message)?;
-                    continued = true;
-                    quiet_since = None;
                 }
-            } else {
-                quiet_since = Some(Instant::now());
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }

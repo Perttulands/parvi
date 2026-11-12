@@ -27,6 +27,26 @@ const HARNESSES: &[Harness] = &[
     },
 ];
 
+/// A harness as the operator may name it: the UI's word (`Claude`,
+/// `codex`) or its id (`claude-code`).
+pub fn harness_id(name: &str) -> String {
+    match name.trim().to_lowercase().as_str() {
+        "claude" => "claude-code".into(),
+        "codex" => "openai-codex".into(),
+        other => other.into(),
+    }
+}
+
+/// A harness id as the operator says it.
+pub fn harness_word(id: &str) -> &str {
+    match id {
+        "claude-code" => "Claude",
+        "openai-codex" => "Codex",
+        "pi" => "Pi",
+        other => other,
+    }
+}
+
 /// The effort policy, one line, for messages that ask for an effort.
 const EFFORT_POLICY: &str = "low for errands (verifier, scout); medium for making things (builder, debugger, operator); xhigh for architecture and review (reviewer, judge, architect, designer, planner, orchestrator); max for consequential reviews, chosen by hand";
 
@@ -136,6 +156,53 @@ impl Harnesses {
         .map_err(|message| crate::Error::new("invalid_contract", message))
     }
 
+    /// [`Harnesses::check`], and also that the model is one the harness
+    /// offers on this node when that can be known. For a choice being made
+    /// now; a saved mission is not refused for a model the node lacks, and
+    /// the harness says so in its own words when the seat starts.
+    pub fn check_offered(
+        &self,
+        subject: &str,
+        harness: &str,
+        model: &str,
+        effort: &str,
+    ) -> Result<(), crate::Error> {
+        self.check(subject, harness, model, effort)?;
+        match self.offered(harness) {
+            Some(offered)
+                if !model.is_empty()
+                    && !offered.iter().any(|id| id == model)
+                    && !(harness == "claude-code" && model.starts_with("claude-")) =>
+            {
+                Err(crate::Error::new(
+                    "invalid_contract",
+                    format!(
+                        "{subject} model {model:?} is not one {} offers on this node; use {}, or leave it empty for the harness's default",
+                        harness_word(harness),
+                        offered.join(", ")
+                    ),
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// The models a harness is known to offer here, when that can be known:
+    /// Claude's names and Codex's cached list. Claude also takes a full
+    /// `claude-…` id.
+    fn offered(&self, harness: &str) -> Option<Vec<String>> {
+        let ids: Vec<String> = self
+            .models(harness)
+            .iter()
+            .filter_map(|m| m["id"].as_str().map(str::to_owned))
+            .collect();
+        match harness {
+            "openai-codex" if !ids.is_empty() => Some(ids),
+            "claude-code" => Some(ids),
+            _ => None,
+        }
+    }
+
     fn model_efforts(&self, harness: &str, model: &str) -> Option<Vec<String>> {
         if harness != "openai-codex" || model.is_empty() {
             return None;
@@ -185,6 +252,26 @@ mod tests {
         assert_eq!(
             harnesses.check("slot", "openai-codex", "gpt-other", "ultra"),
             Ok(())
+        );
+        assert_eq!(
+            harnesses
+                .check_offered("slot", "openai-codex", "gpt-5.4-mini", "low")
+                .unwrap_err()
+                .message,
+            r#"slot model "gpt-5.4-mini" is not one Codex offers on this node; use gpt-small, or leave it empty for the harness's default"#
+        );
+        assert_eq!(
+            harnesses.check("slot", "claude-code", "haiku", "low"),
+            Ok(())
+        );
+        assert_eq!(
+            harnesses.check_offered("slot", "claude-code", "claude-haiku-5-5", "low"),
+            Ok(())
+        );
+        assert!(
+            harnesses
+                .check_offered("slot", "claude-code", "gpt-small", "low")
+                .is_err()
         );
         assert_eq!(
             harnesses

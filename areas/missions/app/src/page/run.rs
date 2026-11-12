@@ -327,6 +327,10 @@ impl MissionsPage {
     }
     /// Start at the Input card whose play control was used.
     pub(super) fn prepare_card_run(&mut self, id: &str, cx: &mut Context<Self>) {
+        if !self.mission_input_runnable(id) {
+            self.run_tried = true;
+            self.findings_open = true;
+        }
         if self.unsaved(cx).is_some() {
             self.state.error = Some("Save or discard the current draft first.".into());
             cx.notify();
@@ -1259,7 +1263,7 @@ impl MissionsPage {
                     .absolute()
                     .inset_0()
                     .occlude()
-                    .bg(parvi_app_kit::theme::alpha(t.bg, 0.3))
+                    .bg(parvi_app_kit::theme::alpha(t.bg, SCRIM))
                     .flex()
                     .justify_center()
                     .items_start()
@@ -1354,7 +1358,7 @@ impl MissionsPage {
                 .absolute()
                 .inset_0()
                 .occlude()
-                .bg(parvi_app_kit::theme::alpha(t.bg, 0.3))
+                .bg(parvi_app_kit::theme::alpha(t.bg, SCRIM))
                 .flex()
                 .justify_center()
                 .items_start()
@@ -1653,7 +1657,7 @@ impl MissionsPage {
                     .absolute()
                     .inset_0()
                     .occlude()
-                    .bg(parvi_app_kit::theme::alpha(t.bg, 0.3))
+                    .bg(parvi_app_kit::theme::alpha(t.bg, SCRIM))
                     .flex()
                     .justify_center()
                     .items_center()
@@ -1739,6 +1743,11 @@ impl MissionsPage {
         )];
         facts.push(if run.r#final {
             format!("took {}", crate::store::words::run_span(&run, now))
+        } else if run.status == "blocked" {
+            format!(
+                "stopped {}, waiting for you",
+                crate::store::words::short_time(&run.updated_at, now)
+            )
         } else {
             format!("running {}", crate::store::words::run_span(&run, now))
         });
@@ -2560,11 +2569,43 @@ impl MissionsPage {
             .selected_run()
             .map(|run| run.events.as_slice())
             .unwrap_or_default();
+        // The error and the block it caused often say the same; each is
+        // said once, in plain words.
+        let mut said: Vec<(String, String)> = events
+            .iter()
+            .rev()
+            .find(|e| e.kind == "run_blocked")
+            .filter(|_| {
+                self.selected_run()
+                    .is_some_and(|run| run.status == "blocked")
+            })
+            .map(|e| {
+                let text = e.detail.as_str();
+                (
+                    e.node_id.clone(),
+                    parvi_missions_contract::plain_reason(text),
+                )
+            })
+            .into_iter()
+            .collect();
         evidence
             .problems
             .iter()
+            .filter(|problem| {
+                let key = (
+                    problem.node_id.clone(),
+                    parvi_missions_contract::plain_reason(&problem.reason.text),
+                );
+                let fresh = !said.contains(&key);
+                said.push(key);
+                fresh
+            })
             .map(|problem| {
-                let reason = run_state::problem_now(events, problem.seq, &problem.reason.text);
+                let reason = parvi_missions_contract::plain_reason(&run_state::problem_now(
+                    events,
+                    problem.seq,
+                    &problem.reason.text,
+                ));
                 let selector = format!("run-problem-{}-{}", problem.seq, problem.reason.text);
                 let row = div()
                     .debug_selector(move || selector.clone())
@@ -2834,7 +2875,7 @@ impl MissionsPage {
         let (name, path) = if !run.repository.is_empty() {
             ("repository", &run.repository)
         } else {
-            ("folder", &run.cwd)
+            ("works in", &run.cwd)
         };
         if !path.is_empty() {
             let (owner, open) = (node.to_owned(), path.clone());
@@ -2895,7 +2936,14 @@ fn step_colour(t: &Theme, state: Option<run_state::NodeState>) -> gpui::Hsla {
 fn sentence(phrase: &str) -> String {
     let mut chars = phrase.chars();
     match chars.next() {
-        Some(first) => first.to_uppercase().chain(chars).collect::<String>() + ".",
+        Some(first) => {
+            let text = first.to_uppercase().chain(chars).collect::<String>();
+            if text.ends_with(['.', '!', '?']) {
+                text
+            } else {
+                text + "."
+            }
+        }
         None => String::new(),
     }
 }

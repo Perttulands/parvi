@@ -42,6 +42,17 @@ impl Drop for Running {
     }
 }
 fn start() -> Running {
+    // The node checks a chosen model against this host's Codex models; give
+    // it the one the roles fake offers. Alone in its binary, so the
+    // process-wide variable is safe to set.
+    let codex = std::env::temp_dir().join(format!("parvi-staffing-codex-{}", std::process::id()));
+    std::fs::create_dir_all(&codex).unwrap();
+    std::fs::write(
+        codex.join("models_cache.json"),
+        r#"{"models":[{"slug":"gpt-6","supported_reasoning_levels":[{"effort":"low"},{"effort":"high"}]}]}"#,
+    )
+    .unwrap();
+    unsafe { std::env::set_var("CODEX_HOME", &codex) };
     let (ready, wait) = mpsc::channel();
     let (stop, stopped) = mpsc::channel();
     let thread = std::thread::spawn(move || {

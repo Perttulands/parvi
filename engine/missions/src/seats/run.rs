@@ -163,9 +163,10 @@ impl LocalSeats {
             roots: self.roots(),
             run_id: &dispatch.run_id,
             canceled,
-            continued: events
+            reminded: events
                 .iter()
-                .any(|event| event.kind == "seat_idle_recovery"),
+                .filter(|event| event.kind == "seat_idle_recovery")
+                .count(),
         };
         let report = std::sync::Mutex::new(&mut report);
         let answer = watch.wait(&mut pointer, |selected, turn| {

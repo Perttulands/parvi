@@ -99,6 +99,7 @@ impl SeatSide for Away {
 fn execution(turn: Option<TurnWorkspace>, canceled: Arc<AtomicBool>) -> FormationExecution {
     FormationExecution {
         run_id: "run_1".into(),
+        seat_name: String::new(),
         formation: Formation {
             id: "fmn_build".into(),
             kind: "solo".into(),

@@ -331,6 +331,8 @@ impl MissionsPage {
                                 |page, _, window, cx| page.open_mission_rename(window, cx),
                             )),
                         )
+                        // Delete keeps its distance from Rename.
+                        .child(div().flex_1())
                         .child(
                             kit::button(
                                 t,

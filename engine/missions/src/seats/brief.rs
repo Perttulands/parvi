@@ -36,6 +36,10 @@ fn render_for(request: &FormationExecution, slot: &Slot, final_output: bool) -> 
         request.cwd.display(),
         request.artifact_dir.display()
     );
+    let _ = writeln!(
+        brief,
+        "Work in the working directory and write what you make there, unless the goal names another place. The attempt directory is Parvi's record of this attempt, not where results go.\n"
+    );
     if let Some(turn) = &request.turn {
         let _ = writeln!(brief, "Starting commit: {}", turn.commit);
     }
@@ -120,6 +124,7 @@ mod tests {
     fn execution(run_work: &str, brief_work: &str) -> FormationExecution {
         FormationExecution {
             run_id: "run_1".into(),
+            seat_name: String::new(),
             formation: Formation {
                 id: "fmn_work".into(),
                 title: "Work".into(),

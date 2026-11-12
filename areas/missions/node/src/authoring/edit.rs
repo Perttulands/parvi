@@ -1,5 +1,7 @@
 //! Translate CLI authoring commands into one node edit.
-use super::{Args, endpoint, select, selected_input, set_node_flag, slot_id, value_flags};
+use super::{
+    Args, Side, endpoint, only_slot, select, selected_input, set_node_flag, slot_id, value_flags,
+};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
@@ -163,8 +165,10 @@ pub(super) fn operation<'a>(
         }
         ("formation", "assign" | "unassign") => {
             let id = node("formations")?;
-            let selector = a.flag("slot").context("--slot is required")?;
-            let slot = slot_id(m, &id, selector)?;
+            let slot = match a.flag("slot") {
+                Some(selector) => slot_id(m, &id, selector)?,
+                None => only_slot(m, &id)?,
+            };
             v = json!({"formationId":id,"slotId":slot,"agentId":a.flag("role").unwrap_or(""),"harness":a.flag("harness").unwrap_or(""),"model":a.flag("model").unwrap_or(""),"effort":a.flag("effort").unwrap_or("")});
             ("assignSlot", None)
         }
@@ -187,7 +191,7 @@ pub(super) fn operation<'a>(
         }
         ("formation", "set-port") => {
             let formation = node("formations")?;
-            let full = endpoint(m, &format!("{formation}:{}", a.arg(2)?))?;
+            let full = endpoint(m, &format!("{formation}:{}", a.arg(2)?), Side::From)?;
             v["formationId"] = json!(formation);
             v["portId"] = json!(full.split_once(':').unwrap().1);
             for (flag, key) in [("label", "label"), ("kind", "kind")] {
@@ -198,7 +202,7 @@ pub(super) fn operation<'a>(
             ("updatePort", None)
         }
         ("formation", "wire") => {
-            v = json!({"from":endpoint(m,a.arg(1)?)?,"to":endpoint(m,a.arg(2)?)?,"joinIfOccupied":a.has("join")});
+            v = json!({"from":endpoint(m,a.arg(1)?,Side::From)?,"to":endpoint(m,a.arg(2)?,Side::To)?,"joinIfOccupied":a.has("join")});
             ("wireConnection", None)
         }
         ("mission", "wire") => {
@@ -207,11 +211,11 @@ pub(super) fn operation<'a>(
             } else {
                 (selected_input(m, Some(a.arg(1)?))?, a.arg(2)?)
             };
-            v = json!({"from":format!("{input}:out"),"to":endpoint(m,to)?});
+            v = json!({"from":format!("{input}:out"),"to":endpoint(m,to,Side::To)?});
             ("wireConnection", None)
         }
         ("formation", "unwire") => {
-            v = json!({"from":endpoint(m,a.arg(1)?)?,"to":endpoint(m,a.arg(2)?)?});
+            v = json!({"from":endpoint(m,a.arg(1)?,Side::From)?,"to":endpoint(m,a.arg(2)?,Side::To)?});
             ("unwireConnection", None)
         }
         ("gate", "create") => {

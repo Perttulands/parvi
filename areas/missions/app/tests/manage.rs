@@ -261,6 +261,8 @@ fn designs_a_multi_gate_mission_and_shows_findings_on_the_canvas(cx: &mut TestAp
                 .any(|c| c["from"].as_str().unwrap().starts_with(&input))
     });
     until(cx, "next step open", |cx| has(cx, "step-title"));
+    // Once something follows the Input, its + is gone: no wire runs past it.
+    until(cx, "+ gone once wired", |cx| !has(cx, &next));
     for (button, field, count) in [("new-step", "formations", 2), ("new-gate", "gates", 1)] {
         until(cx, "board ready for edit", |cx| has(cx, "undo"));
         click(cx, button);
@@ -287,9 +289,8 @@ fn designs_a_multi_gate_mission_and_shows_findings_on_the_canvas(cx: &mut TestAp
             .iter()
             .any(|node| node["id"] == gate_id && (node["x"] != 200 || node["y"] != 200))
     });
-    // The findings panel narrows the canvas when it arrives; Fit after it.
     until(cx, "arranged canvas", |cx| {
-        has(cx, "canvas-fit") && has(cx, "canvas-findings-list")
+        has(cx, "canvas-fit") && has(cx, "canvas-findings")
     });
     click(cx, "canvas-fit");
     let gate = format!("mission-card-{gate_id}");

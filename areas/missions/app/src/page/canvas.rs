@@ -22,6 +22,8 @@ const DASH_LONG: f32 = 5.;
 const TITLE_SIZE: f32 = 16.;
 const RING_SIZE: f32 = 30.;
 const GAP: f32 = 8.;
+/// A finding's mark beside a control's size.
+const BADGE_SCALE: f32 = 0.75;
 const SLOT_PAD: f32 = 10.;
 const POOL_LABEL: f32 = 14.;
 const CHIP_PAD: f32 = 6.;
@@ -330,9 +332,20 @@ impl MissionsPage {
             layer = layer.child(self.canvas_card(
                 t, mission, card, &view, running, state, attempts, &findings, cx,
             ));
+            layer = layer.children(self.card_badge(t, mission, card, &view, &findings));
         }
         if !running {
-            for card in board.cards.iter().filter(|c| c.kind != board::Kind::End) {
+            // "+" offers what comes next, so only where nothing does yet; a
+            // wire never runs through it.
+            let open = |card: &board::Card| {
+                leaving_port(mission, &card.id)
+                    .is_some_and(|port| !mission.connections.iter().any(|c| c.from == port))
+            };
+            for card in board
+                .cards
+                .iter()
+                .filter(|c| c.kind != board::Kind::End && open(c))
+            {
                 layer = layer.child(self.canvas_next(t, card, &view, cx));
             }
         }
@@ -392,11 +405,7 @@ impl MissionsPage {
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            let color = if matching.iter().any(|(_, error)| *error) {
-                t.error
-            } else {
-                parvi_app_kit::theme::rgb(t.ansi[3])
-            };
+            let color = self.finding_color(t, matching.iter().any(|(_, error)| *error));
             layer = layer.child(
                 div()
                     .id(SharedString::from(selector.clone()))
@@ -415,58 +424,92 @@ impl MissionsPage {
                     .tooltip(kit::tip(message)),
             );
         }
-        let summary = if !findings.is_empty() {
-            let mut list = div()
-                .id("canvas-findings-list")
-                .debug_selector(|| "canvas-findings-list".into())
-                .max_h(px(size::LABEL_COL))
-                .overflow_y_scroll()
+        // What the mission still lacks, over the canvas's corner: a short
+        // to-do while it is being built, open and in red once a run was
+        // asked for and could not start.
+        if !findings.is_empty() {
+            let open = self.findings_open;
+            let errors = findings.iter().filter(|(_, error)| *error).count();
+            let heading = if self.run_tried && errors > 0 {
+                format!("{errors} to fix before it can run")
+            } else {
+                format!("{} to do before it can run", findings.len())
+            };
+            let mut overlay = div()
+                .id("canvas-findings")
+                .debug_selector(|| "canvas-findings".into())
+                .absolute()
+                .occlude()
+                .top(px(PAD))
+                .right(px(PAD))
+                .max_w(px(size::LABEL_COL))
                 .flex()
                 .flex_col()
-                .gap(px(TAB_GAP));
-            for (finding, error) in &findings {
-                let title = if finding.node_id.is_empty() {
-                    "Mission".to_owned()
-                } else if mission
-                    .connections
-                    .iter()
-                    .any(|edge| edge.id == finding.node_id)
-                {
-                    "Connection".to_owned()
-                } else {
-                    mission.node_name(&finding.node_id).to_owned()
-                };
-                let selector =
-                    format!("validation-message-{}-{}", finding.node_id, finding.message);
-                let message = crate::store::validation::readable_message(mission, &finding.message);
-                let display_selector = format!("validation-display-{title}: {message}");
-                let color = if *error {
-                    t.error
-                } else {
-                    parvi_app_kit::theme::rgb(t.ansi[3])
-                };
-                list = list.child(
+                .gap(px(TAB_GAP))
+                .p(px(TAB_GAP))
+                .rounded(px(size::RADIUS))
+                .border_1()
+                .border_color(if self.run_tried { t.error } else { t.divider })
+                .bg(t.surface)
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
                     div()
-                        .debug_selector(move || selector.clone())
-                        .text_color(color)
-                        .child(
-                            div()
-                                .debug_selector(move || display_selector.clone())
-                                .child(format!("{title}: {message}")),
-                        ),
+                        .id("canvas-findings-toggle")
+                        .debug_selector(|| "canvas-findings-toggle".into())
+                        .cursor_pointer()
+                        .text_color(if self.run_tried { t.error } else { t.text2 })
+                        .child(format!("{} {heading}", if open { "▾" } else { "▸" }))
+                        .on_click(cx.listener(|p, _, _, cx| {
+                            p.findings_open = !p.findings_open;
+                            cx.notify();
+                        })),
                 );
+            if open {
+                let mut list = div()
+                    .id("canvas-findings-list")
+                    .debug_selector(|| "canvas-findings-list".into())
+                    .max_h(px(size::LABEL_COL))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap(px(TAB_GAP));
+                for (finding, error) in &findings {
+                    let title = if finding.node_id.is_empty() {
+                        "Mission".to_owned()
+                    } else if mission
+                        .connections
+                        .iter()
+                        .any(|edge| edge.id == finding.node_id)
+                    {
+                        "Connection".to_owned()
+                    } else {
+                        mission.node_name(&finding.node_id).to_owned()
+                    };
+                    let selector =
+                        format!("validation-message-{}-{}", finding.node_id, finding.message);
+                    let message =
+                        crate::store::validation::readable_message(mission, &finding.message);
+                    let display_selector = format!("validation-display-{title}: {message}");
+                    let color = if self.run_tried {
+                        self.finding_color(t, *error)
+                    } else {
+                        t.text
+                    };
+                    list = list.child(
+                        div()
+                            .debug_selector(move || selector.clone())
+                            .text_color(color)
+                            .child(
+                                div()
+                                    .debug_selector(move || display_selector.clone())
+                                    .child(format!("{title}: {message}")),
+                            ),
+                    );
+                }
+                overlay = overlay.child(list);
             }
-            Some(
-                kit::panel(t)
-                    .flex_none()
-                    .w(px(size::LABEL_COL))
-                    .p(px(PAD))
-                    .child(kit::label(t, "Mission findings"))
-                    .child(list),
-            )
-        } else {
-            None
-        };
+            layer = layer.child(overlay);
+        }
         if !running && let Some(at) = view.menu {
             layer = layer.child(self.canvas_menu(t, mission, at, &view, cx));
         }
@@ -532,7 +575,65 @@ impl MissionsPage {
             .size_full()
             .flex()
             .child(layer.flex_1().min_w_0().min_h_0().child(controls))
-            .children(summary)
+    }
+
+    /// The mark of a card that has findings: astride its top-left corner,
+    /// outside the card, so it covers none of the card's words.
+    fn card_badge(
+        &self,
+        t: &parvi_app_kit::theme::Theme,
+        mission: &Mission,
+        card: &board::Card,
+        view: &View,
+        findings: &[(parvi_missions_contract::Finding, bool)],
+    ) -> Option<AnyElement> {
+        let issues: Vec<_> = findings
+            .iter()
+            .filter(|(finding, _)| finding.node_id == card.id)
+            .collect();
+        if issues.is_empty() {
+            return None;
+        }
+        let z = view.zoom;
+        let side = size::CONTROL * z * BADGE_SCALE;
+        let (x, y) = view.position(card.x, card.y);
+        let selector = format!("validation-card-{}", card.id);
+        let message = issues
+            .iter()
+            .map(|(finding, _)| {
+                crate::store::validation::readable_message(mission, &finding.message)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Some(
+            div()
+                .id(SharedString::from(selector.clone()))
+                .debug_selector(move || selector.clone())
+                .absolute()
+                .left(px(x - side / 2.))
+                .top(px(y - side / 2.))
+                .size(px(side))
+                .rounded_full()
+                .bg(self.finding_color(t, issues.iter().any(|(_, error)| *error)))
+                .text_color(t.bg)
+                .text_size(px(size::SMALL * z))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child("!")
+                .tooltip(kit::tip(message))
+                .into_any_element(),
+        )
+    }
+
+    /// A finding's colour: red or amber once a run was asked for, a quiet
+    /// to-do while the mission is being built.
+    fn finding_color(&self, t: &parvi_app_kit::theme::Theme, error: bool) -> gpui::Hsla {
+        match (self.run_tried, error) {
+            (false, _) => t.text2,
+            (true, true) => t.error,
+            (true, false) => parvi_app_kit::theme::rgb(t.ansi[3]),
+        }
     }
     #[allow(clippy::too_many_arguments)]
     fn canvas_card(
@@ -556,11 +657,7 @@ impl MissionsPage {
             .iter()
             .filter(|(finding, _)| finding.node_id == id)
             .collect();
-        let issue_color = if issues.iter().any(|(_, error)| *error) {
-            t.error
-        } else {
-            parvi_app_kit::theme::rgb(t.ansi[3])
-        };
+        let issue_color = self.finding_color(t, issues.iter().any(|(_, error)| *error));
         let color = match state {
             Some(crate::store::run_state::NodeState::Done) => parvi_app_kit::theme::rgb(t.ansi[2]),
             Some(
@@ -593,7 +690,7 @@ impl MissionsPage {
             .h(px(card.h * z))
             .overflow_hidden()
             .border_1()
-            .border_color(if !issues.is_empty() {
+            .border_color(if !issues.is_empty() && self.run_tried {
                 issue_color
             } else if self.reveal_card.as_deref() == Some(&id) || card.kind == board::Kind::Input {
                 t.accent
@@ -611,33 +708,6 @@ impl MissionsPage {
             .cursor_pointer()
             .debug_selector(move || selector.clone())
             .child(face);
-        let rendered = if issues.is_empty() {
-            rendered
-        } else {
-            let selector = format!("validation-card-{id}");
-            let message = issues
-                .iter()
-                .map(|(finding, _)| {
-                    crate::store::validation::readable_message(mission, &finding.message)
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            rendered.child(
-                div()
-                    .id(SharedString::from(selector.clone()))
-                    .debug_selector(move || selector.clone())
-                    .absolute()
-                    .top(px(EDGE * z))
-                    .left(px(EDGE * z))
-                    .px(px(GAP * z))
-                    .rounded(px(size::RADIUS * z))
-                    .bg(issue_color)
-                    .text_color(t.bg)
-                    .text_size(px(size::SMALL * z))
-                    .child("!")
-                    .tooltip(kit::tip(message)),
-            )
-        };
         let rendered = if card.kind == board::Kind::Input && !running {
             let card_id = card.id.clone();
             let runnable = self.mission_input_runnable(&card_id);
@@ -1667,8 +1737,8 @@ impl MissionsPage {
                 json!({"createEnd":{"title":"End","outcome":"done","x":x,"y":y}})
             }
         };
-        if kind == board::Kind::Formation {
-            self.new_step = Some(beside.and_then(|c| leaving_port(&mission, &c.id)));
+        if matches!(kind, board::Kind::Formation | board::Kind::End) {
+            self.new_step = Some((kind, beside.and_then(|c| leaving_port(&mission, &c.id))));
         }
         self.write_board(patch, WriteMode::Edit, cx);
         if !self.writing {
@@ -1676,12 +1746,28 @@ impl MissionsPage {
         }
     }
 
-    /// After a write: a step that was being added now exists, so wire it
-    /// from the card it follows and open it for editing.
+    /// After a write: a step or End that was being added now exists, so
+    /// wire it from the card it follows; a step opens for editing.
     pub(super) fn created_step(&mut self, before: &Mission, cx: &mut Context<Self>) {
-        let Some(from) = self.new_step.take() else {
+        let Some((kind, from)) = self.new_step.take() else {
             return;
         };
+        if kind == board::Kind::End {
+            let end = self.state.mission.as_ref().and_then(|m| {
+                m.ends
+                    .iter()
+                    .find(|e| !before.ends.iter().any(|b| b.id == e.id))
+                    .map(|e| e.id.clone())
+            });
+            if let (Some(from), Some(end)) = (from, end) {
+                self.write_board(
+                    json!({"wireConnection":{"from":from,"to":format!("{end}:in"),"joinIfOccupied":true}}),
+                    WriteMode::Edit,
+                    cx,
+                );
+            }
+            return;
+        }
         let Some(step) = self.state.mission.as_ref().and_then(|m| {
             m.formations
                 .iter()
@@ -1714,13 +1800,12 @@ impl MissionsPage {
         let side = size::CONTROL * z.max(ZOOM_MIN * 2.);
         let (x, y) = view.position(card.x + card.w, card.y);
         let id = card.id.clone();
+        let end_id = card.id.clone();
         let selector = format!("canvas-next-{id}");
-        div()
+        let end_selector = format!("canvas-end-{id}");
+        let next = div()
             .id(SharedString::from(selector.clone()))
             .debug_selector(move || selector.clone())
-            .absolute()
-            .left(px(x + GAP * z + board::PORT * z / 2.))
-            .top(px(y))
             .size(px(side))
             .rounded_full()
             .border_1()
@@ -1735,7 +1820,39 @@ impl MissionsPage {
             .tooltip(kit::tip("Add the next step"))
             .child("+")
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(move |page, _, _, cx| page.next_step(&id, cx)))
+            .on_click(cx.listener(move |page, _, _, cx| page.next_step(&id, cx)));
+        // Ending the mission here is as near as adding a step.
+        let end = div()
+            .id(SharedString::from(end_selector.clone()))
+            .debug_selector(move || end_selector.clone())
+            .h(px(side))
+            .px(px(TAB_GAP * z.max(ZOOM_MIN * 2.)))
+            .rounded_full()
+            .border_1()
+            .border_color(t.divider)
+            .bg(t.raised)
+            .text_color(t.text2)
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .hover(|d| d.border_color(t.accent).text_color(t.accent))
+            .tooltip(kit::tip("End the mission here"))
+            .child("End")
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |page, _, _, cx| {
+                page.place_card(board::Kind::End, Some(&end_id), cx)
+            }));
+        div()
+            .absolute()
+            .left(px(x + GAP * z + board::PORT * z / 2.))
+            .top(px(y))
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(px(TAB_GAP * z.max(ZOOM_MIN * 2.)))
+            .child(next)
+            .child(end)
             .into_any_element()
     }
 }

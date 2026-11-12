@@ -99,7 +99,7 @@ pub use executor::{
 };
 pub use harness::{
     Claude, Codex, HarnessAdapter, Harnesses, Keys, Launch, Pi, Pointer, Shell, SlotBinding,
-    TokenUsage, TranscriptRoots, Turn, TurnState, codex_threads,
+    TokenUsage, TranscriptRoots, Turn, TurnState, codex_threads, harness_id, harness_word,
 };
 pub use kept_copy::{Budget, KeptCopy};
 pub use layout_placement::free_layout_position;

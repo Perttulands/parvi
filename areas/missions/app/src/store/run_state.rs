@@ -351,7 +351,7 @@ pub fn points(run: &Run) -> Vec<Point> {
                     if b.detail.is_empty() {
                         b.code.replace('_', " ")
                     } else {
-                        b.detail.clone()
+                        parvi_missions_contract::plain_reason(&b.detail)
                     }
                 })
                 .unwrap_or_else(|| run.block_code.replace('_', " "));

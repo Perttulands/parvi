@@ -119,7 +119,7 @@ impl CharacterStore {
             ));
         }
         crate::Harnesses::from_host()
-            .check(
+            .check_offered(
                 "character",
                 &character.harness,
                 &character.model,

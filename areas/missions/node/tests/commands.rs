@@ -588,6 +588,69 @@ async fn end_create_help_names_the_outcomes_and_default() {
     node.stop().await;
 }
 
+/// An agent building a one-seat mission names no seat and no port, and a
+/// wrong name is answered with the names there are.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_simple_mission_needs_no_seat_or_port_names() {
+    let node = Node::start(&[sessions::LISTING, parvi_work::LISTING, LAB], "")
+        .await
+        .unwrap();
+    node.call("mission_new", json!({"slug":"plain"}))
+        .await
+        .unwrap();
+    node.call("mission_create", json!({"mission":"plain"}))
+        .await
+        .unwrap();
+    let step = node
+        .call(
+            "formation_create",
+            json!({"mission":"plain","title":"Answer"}),
+        )
+        .await
+        .unwrap();
+    let step_id = step["formation"]["id"].as_str().unwrap().to_owned();
+    let assigned = node
+        .call(
+            "formation_assign",
+            json!({"mission":"plain","formation":"Answer","harness":"Claude","model":"haiku","effort":"low"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(assigned["changed"][0]["slots"][0]["harness"], "claude-code");
+    assert!(assigned.get("formations").is_none() && assigned["mission"] == "plain");
+    node.call("end_create", json!({"mission":"plain","title":"Done"}))
+        .await
+        .unwrap();
+    node.call("mission_wire", json!({"mission":"plain","to":"Answer"}))
+        .await
+        .unwrap();
+    node.call(
+        "formation_wire",
+        json!({"mission":"plain","from":"Answer","to":"Done"}),
+    )
+    .await
+    .unwrap();
+    let edges = node
+        .call("mission_inspect", json!({"mission":"plain"}))
+        .await
+        .unwrap()["mission"]["connections"]
+        .to_string();
+    assert!(edges.matches(&step_id).count() == 2, "{edges}");
+    let wrong = node
+        .call(
+            "mission_run",
+            json!({"mission":"plain","input":"topic=fog"}),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        wrong.contains("this mission has: Input") && wrong.contains("takes: brief"),
+        "{wrong}"
+    );
+    node.stop().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn specialized_authoring_commands_build_and_edit_a_graph() {
     let node = Node::start(&[sessions::LISTING, parvi_work::LISTING, LAB], "")
@@ -697,10 +760,7 @@ async fn specialized_authoring_commands_build_and_edit_a_graph() {
         )
         .await
         .unwrap();
-    assert_eq!(
-        stamped["mission"]["formations"][0]["slots"][0]["effort"],
-        "high"
-    );
+    assert_eq!(stamped["changed"][0]["slots"][0]["effort"], "high");
     node.call(
         "formation_unassign",
         json!({"mission":"board","formation":step_id,"slot":"seat"}),
@@ -720,7 +780,7 @@ async fn specialized_authoring_commands_build_and_edit_a_graph() {
         )
         .await
         .unwrap();
-    let input_port = with_input["mission"]["formations"][0]["inputs"]
+    let input_port = with_input["changed"][0]["inputs"]
         .as_array()
         .unwrap()
         .iter()
@@ -736,7 +796,7 @@ async fn specialized_authoring_commands_build_and_edit_a_graph() {
         )
         .await
         .unwrap();
-    let output_port = with_output["mission"]["formations"][0]["outputs"]
+    let output_port = with_output["changed"][0]["outputs"]
         .as_array()
         .unwrap()
         .iter()

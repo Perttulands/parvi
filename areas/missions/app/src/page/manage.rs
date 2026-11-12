@@ -291,7 +291,7 @@ impl MissionsPage {
                 .absolute()
                 .inset_0()
                 .occlude()
-                .bg(parvi_app_kit::theme::alpha(t.bg, 0.3))
+                .bg(parvi_app_kit::theme::alpha(t.bg, SCRIM))
                 .flex()
                 .justify_center()
                 .items_start()

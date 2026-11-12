@@ -96,12 +96,17 @@ impl LocalSeats {
                 .map_err(|e| e.to_string())?;
             // The name is derived from the dispatch, so a session found under it
             // was created by an earlier attempt that crashed before binding it.
-            let name = format!(
-                "parvi-{}-{}-{}",
-                component(&request.run_id),
-                component(&request.slot_id),
-                &hex::encode(Sha256::digest(request.id.as_bytes()))[..8]
-            );
+            let hash = hex::encode(Sha256::digest(request.id.as_bytes()));
+            let name = if request.name.is_empty() {
+                format!(
+                    "parvi-{}-{}-{}",
+                    component(&request.run_id),
+                    component(&request.slot_id),
+                    &hash[..8]
+                )
+            } else {
+                format!("{}-{}", readable(&request.name), &hash[..4])
+            };
             if let Some(session) = self.engine.find(&name).await.map_err(|e| e.to_string())? {
                 return self.bind_created(&request.id, name, session).await;
             }
@@ -335,6 +340,28 @@ pub(crate) fn adapter(name: &str) -> Result<(Harness, Arc<dyn HarnessAdapter>), 
         _ => Err(format!("unknown harness {name:?}")),
     }
 }
+/// A name people read in a session list: lower case words joined by
+/// dashes, at most 48 characters.
+fn readable(text: &str) -> String {
+    let words: Vec<String> = text
+        .to_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_owned)
+        .collect();
+    let mut name = String::new();
+    for word in words {
+        if !name.is_empty() && name.len() + 1 + word.len() > 48 {
+            break;
+        }
+        if !name.is_empty() {
+            name.push('-');
+        }
+        name.push_str(&word);
+    }
+    if name.is_empty() { "seat".into() } else { name }
+}
+
 fn component(text: &str) -> String {
     let value: String = text
         .chars()
@@ -354,6 +381,18 @@ fn component(text: &str) -> String {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_seat_is_named_so_a_person_can_read_it() {
+        assert_eq!(
+            super::readable("Plan then review-3-Review: the plan"),
+            "plan-then-review-3-review-the-plan"
+        );
+        assert_eq!(
+            super::readable("a very long mission title that goes on-12-and a step"),
+            "a-very-long-mission-title-that-goes-on-12-and-a"
+        );
+        assert_eq!(super::readable("ÄÖ"), "seat");
+    }
     #[test]
     fn encodes_base64_with_padding() {
         assert_eq!(super::base64(b"Man"), "TWFu");

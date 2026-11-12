@@ -133,8 +133,13 @@ pub(crate) fn apply(doc: &mut DocumentMut, mission: &Mission, patch: Patch) -> R
                 .iter()
                 .find(|s| s.id == slot_id)
                 .ok_or_else(not_found)?;
-            let (agent_id, harness, model, effort) =
-                (agent_id.trim(), harness.trim(), model.trim(), effort.trim());
+            let harness = crate::harness::harness_id(&harness);
+            let (agent_id, harness, model, effort) = (
+                agent_id.trim(),
+                harness.as_str(),
+                model.trim(),
+                effort.trim(),
+            );
             if !agent_id.is_empty() && crate::roles::check_role_id(agent_id).is_err() {
                 return Err(Error::new("invalid_slot_settings", "invalid role id"));
             }
@@ -143,7 +148,7 @@ pub(crate) fn apply(doc: &mut DocumentMut, mission: &Mission, patch: Patch) -> R
                 .any(|s| !s.is_empty())
             {
                 crate::Harnesses::from_host()
-                    .check("slot", harness, model, effort)
+                    .check_offered("slot", harness, model, effort)
                     .map_err(|e| Error::new("invalid_slot_settings", e.message))?;
             }
             if (

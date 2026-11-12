@@ -573,15 +573,43 @@ async fn start(m: Missions, name: &str, a: &Value) -> Result<Value, Error> {
     let selector = required(a, "mission")?;
     let edit = m.store.mission_edit(selector)?;
     let mission = edit.mission;
-    let pick = |items: Vec<(&str, &str)>, wanted: Option<&str>| -> Result<String, Error> {
+    // A wrong name is answered with the names there are; --input is the
+    // easiest to mistake for an input value.
+    let inputs: Vec<String> = mission
+        .input_cards
+        .iter()
+        .flat_map(|c| c.inputs.iter().map(|i| i.name.clone()))
+        .collect();
+    let pick = |what: &str,
+                items: Vec<(&str, &str)>,
+                wanted: Option<&str>|
+     -> Result<String, Error> {
+        let titles: Vec<&str> = items.iter().map(|(_, title)| *title).collect();
         let found: Vec<_> = items
-            .into_iter()
+            .iter()
             .filter(|(id, title)| wanted.is_none_or(|w| w == *id || w == *title))
             .collect();
         match found.as_slice() {
             [(id, _)] => Ok((*id).into()),
-            [] => Err(Error::new("not_found", "run target not found")),
-            _ => Err(bad("run target is ambiguous; name its id")),
+            [] => {
+                let mut message = format!(
+                    "no {what} named {:?}; this mission has: {}",
+                    wanted.unwrap_or(""),
+                    titles.join(", ")
+                );
+                if what == "Input card" {
+                    let names = if inputs.is_empty() {
+                        "brief".to_owned()
+                    } else {
+                        inputs.join(", ")
+                    };
+                    message.push_str(&format!(
+                        ". --input picks an Input card; give input values with --inputs '{{\"name\":\"value\"}}' (this mission takes: {names})"
+                    ));
+                }
+                Err(Error::new("not_found", message))
+            }
+            _ => Err(bad(format!("{what} is ambiguous; name its id"))),
         }
     };
     let mut request = RunStart {
@@ -607,6 +635,7 @@ async fn start(m: Missions, name: &str, a: &Value) -> Result<Value, Error> {
     }
     if name == "mission_run" {
         request.input_card_id = pick(
+            "Input card",
             mission
                 .input_cards
                 .iter()
@@ -616,6 +645,7 @@ async fn start(m: Missions, name: &str, a: &Value) -> Result<Value, Error> {
         )?;
     } else {
         request.formation_id = pick(
+            "step",
             mission
                 .formations
                 .iter()

@@ -163,6 +163,12 @@ pub(super) async fn stage_guarded(
         if let Some((state, detail, since)) = waits.observe(state, Instant::now()) {
             state_event(state, detail, since)?;
         }
+        if let Some(state) = waits.stuck(Instant::now()) {
+            return Err(super::state::stuck_reason(
+                state,
+                engine.screen(pane).as_ref(),
+            ));
+        }
         tokio::select! {
             received = updates.recv() => match received {
                 Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => (),

@@ -62,24 +62,89 @@ fn slot_id(m: &Value, formation_id: &str, selector: &str) -> Result<String> {
         _ => bail!("slot {selector:?} is ambiguous"),
     }
 }
-fn endpoint(m: &Value, endpoint: &str) -> Result<String> {
-    let (node, port) = endpoint
-        .split_once(':')
-        .context("endpoint needs node:port")?;
+/// Which end of a connection an endpoint names, so a bare node can stand for
+/// its only port on that side.
+#[derive(Clone, Copy, PartialEq)]
+enum Side {
+    From,
+    To,
+}
+/// A step with one seat needs no --slot; one with several names them.
+fn only_slot(m: &Value, formation_id: &str) -> Result<String> {
+    let formation = m["formations"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|f| f["id"] == formation_id)
+        .context("step not found")?;
+    let slots: Vec<_> = formation["slots"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .collect();
+    match slots.as_slice() {
+        [slot] => Ok(text(slot, "id")),
+        _ => bail!(
+            "this step has several seats; name one with --slot: {}",
+            slots
+                .iter()
+                .map(|s| text(s, "label"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+fn endpoint(m: &Value, endpoint: &str, side: Side) -> Result<String> {
+    let (node, port) = endpoint.split_once(':').unwrap_or((endpoint, ""));
     let mut found = Vec::new();
     for key in ["inputCards", "formations", "gates", "ends"] {
         for item in m[key].as_array().into_iter().flatten() {
             if item["id"] == node || item["title"] == node {
-                found.push(item)
+                found.push((key, item))
             }
         }
     }
-    let node = match found.as_slice() {
-        [node] => *node,
+    let (list, node) = match found.as_slice() {
+        [found] => *found,
         [] => bail!("node {node:?} not found"),
         _ => bail!("node {node:?} is ambiguous"),
     };
     let id = text(node, "id");
+    let port = if !port.is_empty() {
+        port.to_owned()
+    } else if list == "formations" {
+        let key = if side == Side::From {
+            "outputs"
+        } else {
+            "inputs"
+        };
+        let ports: Vec<_> = node[key].as_array().into_iter().flatten().collect();
+        match ports.as_slice() {
+            [one] => text(one, "id"),
+            [] => bail!("{:?} has no {key}; add one first", text(node, "title")),
+            _ => bail!(
+                "{:?} has several {key}; name one as {}:<port>, one of {}",
+                text(node, "title"),
+                text(node, "title"),
+                ports
+                    .iter()
+                    .map(|p| text(p, "label"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }
+    } else if list == "ends" || (list == "gates" && side == Side::To) {
+        "in".to_owned()
+    } else if list == "gates" {
+        bail!(
+            "a gate has two ways out; name one as {}:pass or {}:fail",
+            text(node, "title"),
+            text(node, "title")
+        )
+    } else {
+        "out".to_owned()
+    };
+    let port = port.as_str();
     if let Some(ports) = node
         .get("slots")
         .and_then(|_| node.get("inputs"))
@@ -748,28 +813,53 @@ pub fn call(m: &Missions, name: &str, input: &Value) -> std::result::Result<Valu
     }
     m.changed();
     let after = super::commands::document(result.mission, result.etag)?;
-    let mut answer = json!({"node":m.node,"mission":after});
-    if let Some(key) = created {
-        let list = match key {
-            "inputCard" => "inputCards",
-            "formation" => "formations",
-            "gate" => "gates",
-            "end" => "ends",
-            "limit" => "limits",
-            _ => unreachable!(),
+    Ok(brief_answer(&m.node, &before, &after, created))
+}
+
+/// An edit answers with what it changed, not the whole mission: the cards
+/// and connections that are new or different, and the ids of those removed.
+/// `parvi mission inspect` shows the whole.
+fn brief_answer(node: &str, before: &Value, after: &Value, created: Option<&str>) -> Value {
+    let mut answer = json!({"node":node,"mission":after["slug"],"title":after["title"],"rev":after["rev"],"etag":after["etag"]});
+    let mut changed = Vec::new();
+    let mut removed = Vec::new();
+    for (key, items) in after.as_object().into_iter().flatten() {
+        let Some(items) = items.as_array() else {
+            continue;
         };
-        let old = before[list].as_array();
-        if let Some(item) = answer["mission"][list]
-            .as_array()
-            .and_then(|items| {
-                items
-                    .iter()
-                    .find(|item| !old.is_some_and(|old| old.iter().any(|o| o["id"] == item["id"])))
-            })
-            .cloned()
+        let old = before[key].as_array().cloned().unwrap_or_default();
+        changed.extend(items.iter().filter(|item| !old.contains(item)).cloned());
+        removed.extend(
+            old.iter()
+                .filter(|o| {
+                    o.get("id").is_some() && !items.iter().any(|item| item["id"] == o["id"])
+                })
+                .map(|o| o["id"].clone()),
+        );
+        if let Some(created) = created
+            && key == created_list(created)
+            && let Some(item) = items
+                .iter()
+                .find(|item| !old.iter().any(|o| o["id"] == item["id"]))
         {
-            answer[key] = item;
+            answer[created] = item.clone();
         }
     }
-    Ok(answer)
+    if !changed.is_empty() {
+        answer["changed"] = json!(changed);
+    }
+    if !removed.is_empty() {
+        answer["removed"] = json!(removed);
+    }
+    answer
+}
+fn created_list(key: &str) -> &'static str {
+    match key {
+        "inputCard" => "inputCards",
+        "formation" => "formations",
+        "gate" => "gates",
+        "end" => "ends",
+        "limit" => "limits",
+        _ => unreachable!(),
+    }
 }

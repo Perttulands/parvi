@@ -11,6 +11,8 @@ pub use local::LocalSeats;
 mod brief;
 mod executor;
 #[cfg(test)]
+mod executor_resume;
+#[cfg(test)]
 mod executor_wait;
 mod run;
 pub use executor::SeatExecutor;

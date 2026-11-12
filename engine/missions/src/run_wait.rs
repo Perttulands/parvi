@@ -54,7 +54,9 @@ impl Coordinator {
                         .is_some_and(|event| event.seq > since));
             let outcome = if run.r#final {
                 Some("final")
-            } else if until != WaitUntil::Final && needs_you {
+            } else if needs_you && (until != WaitUntil::Final || run.status == "blocked") {
+                // A blocked run goes nowhere until someone acts, so even a
+                // wait for the end answers it.
                 Some("needs-you")
             } else if until == WaitUntil::AnyChange && cursor > since {
                 Some("changed")

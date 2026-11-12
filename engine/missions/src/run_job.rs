@@ -108,6 +108,7 @@ pub(crate) fn execute_formation(
     };
     let call = FormationExecution {
         run_id: id.into(),
+        seat_name: seat_name(c, id, mission, &formation),
         formation: formation.clone(),
         bindings,
         cwd: turn_workspace,
@@ -548,4 +549,33 @@ pub(crate) fn start_ready(
         return Ok(true);
     }
     Ok(false)
+}
+
+/// The readable stem of a step's seat names: a few words of the mission,
+/// the run's number as the Missions list shows it, and a few of the step.
+fn seat_name(
+    c: &Coordinator,
+    id: &str,
+    mission: &Mission,
+    step: &parvi_mission_model::Formation,
+) -> String {
+    let words = |text: &str, most: usize| {
+        text.split(|ch: char| !ch.is_ascii_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .take(most)
+            .collect::<Vec<_>>()
+            .join("-")
+    };
+    let number = c
+        .list(Some(&mission.slug), false)
+        .ok()
+        .and_then(|runs| runs.into_iter().find(|run| run.run_id == id))
+        .map(|run| run.number)
+        .unwrap_or_default();
+    let step = if step.title.trim().is_empty() {
+        &step.id
+    } else {
+        &step.title
+    };
+    format!("{}-{number}-{}", words(&mission.slug, 4), words(step, 3))
 }

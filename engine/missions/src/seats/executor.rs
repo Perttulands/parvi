@@ -174,6 +174,7 @@ impl SeatExecutor {
             run_id: request.run_id.clone(),
             node_id: request.formation.id.clone(),
             slot_id: slot.id.clone(),
+            name: seat_name(request, slot),
             harness: slot.harness.clone(),
             model: slot.model.clone(),
             effort: slot.effort.clone(),
@@ -340,8 +341,49 @@ impl SeatExecutor {
     }
     /// Reattach to a dispatch, and to the correction it owes, until its result.
     async fn reattach_seat(&self, request: &OpenDispatch) -> Result<FormationResult, String> {
-        let result = self.wait(request, &request.dispatch_id).await?;
-        let Some((id, error)) = owed_correction(request, &result) else {
+        let mut result = self.wait(request, &request.dispatch_id).await?;
+        // A turn that stopped short left its seat for the operator. Each
+        // resume asks that seat to go on once; continuations an earlier
+        // resume finished are stepped over, and one a restart interrupted
+        // is waited for.
+        let mut continuation = 0;
+        let mut phase = "initial".to_owned();
+        while stopped_short(&result) {
+            continuation += 1;
+            phase = format!("continue-{continuation}");
+            let id = dispatch_key(
+                &request.run_id,
+                &request.node_id,
+                &request.slot_id,
+                request.attempt,
+                &phase,
+            );
+            if let Ok(Some(earlier)) = self.seats.result(&id) {
+                result = earlier;
+                continue;
+            }
+            if self.seats.dispatch_info(&id).is_err() {
+                let original = self
+                    .seats
+                    .dispatch_info(&request.dispatch_id)
+                    .map_err(|error| error.message)?;
+                let continued = Dispatch {
+                    id: id.clone(),
+                    brief: continuation_prompt(&original.brief),
+                    reuse_dispatch: Some(request.dispatch_id.clone()),
+                    ..original
+                };
+                self.seats.dispatch(continued).await.map_err(|error| {
+                    format!(
+                        "seat_gone: the step's terminal is no longer there to go on in ({}). Run the step again to start it afresh.",
+                        error.message
+                    )
+                })?;
+            }
+            result = self.wait(request, &id).await?;
+            break;
+        }
+        let Some((id, error)) = owed_correction(request, &phase, &result) else {
             return recovered_result(request, result);
         };
         // The same one-turn correction the live run asks for, on the
@@ -713,6 +755,11 @@ impl SeatExecutor {
         if error.contains("seat_ledger_unavailable") || error.contains("seat stream closed") {
             return error;
         }
+        // A seat that stopped short stays, so the operator can look at it,
+        // help it on, and resume the run onto it.
+        if error.contains("seat_idle_without_sentinel") || error.contains("seat_stuck") {
+            return error;
+        }
         if let Err(cleanup) = self.cleanup(id, seat, slot, sink) {
             return format!("{error}; cleanup: {cleanup}");
         }
@@ -725,7 +772,7 @@ impl Executor for SeatExecutor {
     }
     fn recover_completed(&self, request: OpenDispatch) -> Option<FormationResult> {
         let result = self.seats.result(&request.dispatch_id).ok()??;
-        match owed_correction(&request, &result) {
+        match owed_correction(&request, "initial", &result) {
             Some((id, _)) => recovered_result(&request, self.seats.result(&id).ok()??).ok(),
             None => recovered_result(&request, result).ok(),
         }
@@ -763,17 +810,40 @@ impl Executor for SeatExecutor {
         self.runtime.block_on(async {
             let (mut replay, prepared) = self.replay(request, &request.dispatch_id).await?;
             let mut answer = request.dispatch_id.clone();
-            if let Some(result) = self.seats.result(&request.dispatch_id).map_err(|error| error.message)?
-                && let Some((id, _)) = owed_correction(request, &result)
-                && matches!(self.seats.result(&id), Ok(Some(_)))
-            {
-                let (events, corrected) = self.replay(request, &id).await?;
-                let (seat, path) = corrected.ok_or("correction seat missing")?;
-                let slot = request.formation.slots.iter().find(|slot| slot.id == request.slot_id).ok_or("slot missing")?;
+            let mut phase = "initial".to_owned();
+            let slot = request.formation.slots.iter().find(|slot| slot.id == request.slot_id).ok_or("slot missing")?;
+            // The turns that followed on the same seat: continuations after a
+            // resume, then the output correction the last of them owed.
+            let follow = |replay: &mut Vec<ExecutionEvent>, id: String, label: String, events: Vec<ExecutionEvent>, seat: Option<(SeatId, String)>| -> Result<(), String> {
+                let (seat, path) = seat.ok_or("follow-up seat missing")?;
                 let brief = self.seats.dispatch_info(&id).map_err(|error| error.message)?.brief;
-                let data = dispatch_data(&id, &request.node_id, slot, &seat, &path, &brief, "output-correction", false);
+                let data = dispatch_data(&id, &request.node_id, slot, &seat, &path, &brief, &label, false);
                 replay.push(ExecutionEvent { kind: "slot_dispatch".into(), slot_id: request.slot_id.clone(), data });
                 replay.extend(events);
+                Ok(())
+            };
+            let mut continuation = 0;
+            while let Some(result) = self.seats.result(&answer).map_err(|error| error.message)?
+                && stopped_short(&result)
+            {
+                continuation += 1;
+                let next = format!("continue-{continuation}");
+                let id = dispatch_key(&request.run_id, &request.node_id, &request.slot_id, request.attempt, &next);
+                if !matches!(self.seats.result(&id), Ok(Some(_))) {
+                    break;
+                }
+                let (events, seat) = self.replay(request, &id).await?;
+                follow(&mut replay, id.clone(), next.clone(), events, seat)?;
+                answer = id;
+                phase = next;
+            }
+            if let Some(result) = self.seats.result(&answer).map_err(|error| error.message)?
+                && let Some((id, _)) = owed_correction(request, &phase, &result)
+                && matches!(self.seats.result(&id), Ok(Some(_)))
+            {
+                let (events, seat) = self.replay(request, &id).await?;
+                let label = if phase == "initial" { "output-correction".to_owned() } else { format!("{phase}-correction") };
+                follow(&mut replay, id.clone(), label, events, seat)?;
                 answer = id;
             }
             if let Some((seat, _)) = prepared {
@@ -782,7 +852,7 @@ impl Executor for SeatExecutor {
                 if invalid_judge {
                     let slot = request.formation.slots.iter().find(|slot| slot.id == request.slot_id).cloned().ok_or("slot missing")?;
                     let execution = FormationExecution {
-                        run_id: request.run_id.clone(), formation: request.formation.clone(),
+                        run_id: request.run_id.clone(), seat_name: persisted.name.clone(), formation: request.formation.clone(),
                         bindings: crate::BindingsSnapshot { schema: 1, run_id: request.run_id.clone(), mission_id: String::new(), mission_slug: String::new(), mission_rev: 0, input_card_id: String::new(), bindings: Vec::new(), gate_bindings: Vec::new() },
                         cwd: persisted.cwd, turn: persisted.turn.clone(), artifact_dir: request.artifact_dir.clone(), context_paths: Vec::new(), work: String::new(), inputs: Vec::new(), input_text: String::new(), attempt: request.attempt, judge: true, pick_attempts: Vec::new(),
                         canceled: request.canceled.clone().unwrap_or_default(), stopping: request.stopping.clone().unwrap_or_default(), limits: Default::default(),
@@ -1052,9 +1122,26 @@ fn correction_prompt(prompt: &str, error: &str) -> String {
         "{prompt}\nYour previous output was rejected: {error}. Correct the output contract, preserving your work. A text ref must be an absolute path to a UTF-8 file of at most 8192 bytes. To route a path as text, put it in text and omit ref. Return a fresh complete answer and the completion sentinel.\n"
     )
 }
-/// The output correction owed by an initial turn that completed with a
-/// rejected output contract: its dispatch id and the rejection.
-fn owed_correction(request: &OpenDispatch, result: &DispatchResult) -> Option<(String, String)> {
+/// A turn that stopped without its done line, or never took its brief,
+/// and left its seat for the operator to help on.
+fn stopped_short(result: &DispatchResult) -> bool {
+    result.status == "error"
+        && (result.text.starts_with("seat_idle_without_sentinel")
+            || result.text.starts_with("seat_stuck"))
+}
+fn continuation_prompt(prompt: &str) -> String {
+    format!(
+        "{prompt}\nThis step stopped before you said it was done, and the operator has resumed it. If the work is finished, give your final answer again, ending with the done line; otherwise finish it first.\n"
+    )
+}
+/// The output correction owed by a turn (the initial one, or a continuation
+/// after a resume) that completed with a rejected output contract: its
+/// dispatch id and the rejection.
+fn owed_correction(
+    request: &OpenDispatch,
+    phase: &str,
+    result: &DispatchResult,
+) -> Option<(String, String)> {
     let key = |phase| {
         dispatch_key(
             &request.run_id,
@@ -1067,9 +1154,14 @@ fn owed_correction(request: &OpenDispatch, result: &DispatchResult) -> Option<(S
     if result.status != "ok" || request.dispatch_id != key("initial") {
         return None;
     }
+    let correction = if phase == "initial" {
+        "output-correction".to_owned()
+    } else {
+        format!("{phase}-correction")
+    };
     formation_outputs(&request.formation, &result.text)
         .err()
-        .map(|error| (key("output-correction"), error))
+        .map(|error| (key(&correction), error))
 }
 #[allow(clippy::too_many_arguments)]
 fn dispatch_data(
@@ -1118,4 +1210,17 @@ async fn published_turn(
         slot_id: slot.into(),
         data: data.as_object().cloned().unwrap_or_default(),
     })
+}
+
+/// A seat's readable name: the step's, and the slot's label on a team.
+fn seat_name(request: &FormationExecution, slot: &Slot) -> String {
+    if request.seat_name.is_empty() {
+        return String::new();
+    }
+    let label = slot.label.trim();
+    if request.formation.slots.len() > 1 && !label.is_empty() {
+        format!("{}-{label}", request.seat_name)
+    } else {
+        request.seat_name.clone()
+    }
 }

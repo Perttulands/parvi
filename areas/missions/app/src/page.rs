@@ -33,6 +33,10 @@ const START_FORM_MAX: f32 = 680.;
 const TAB_GAP: f32 = 6.;
 const EDGE: f32 = 2.;
 const EDITOR_W: f32 = 360.;
+/// A file opened from a run, beside it.
+const BESIDE_W: f32 = 560.;
+/// How much a dialog's backdrop dims the page behind it.
+const SCRIM: f32 = 0.7;
 pub struct MissionsPage {
     host: Host,
     focus: FocusHandle,
@@ -86,9 +90,14 @@ pub struct MissionsPage {
     /// A run output on its way into the start form of the mission opening.
     carry: Option<String>,
     reveal_card: Option<String>,
-    /// A step being added: once it exists, wire it from this port (if any)
-    /// and open it in the editor.
-    new_step: Option<Option<String>>,
+    /// A step or End being added: once it exists, wire it from this port
+    /// (if any); a step then opens in the editor.
+    new_step: Option<(board::Kind, Option<String>)>,
+    /// The operator asked to run this mission while it could not: what it
+    /// still lacks now reads as a problem rather than as a to-do.
+    run_tried: bool,
+    /// The to-do list over the canvas is open.
+    findings_open: bool,
     /// A staffing pick made while another write was in flight.
     staff_pending: bool,
     seen_run_snapshots: std::collections::BTreeSet<String>,
@@ -193,6 +202,8 @@ impl MissionsPage {
             carry: None,
             reveal_card: None,
             new_step: None,
+            run_tried: false,
+            findings_open: false,
             staff_pending: false,
             seen_run_snapshots: Default::default(),
         };
@@ -470,6 +481,8 @@ impl MissionsPage {
         self.run = run::RunUi::new(cx);
         if self.state.selected.as_ref() != Some(&(node.clone(), slug.clone())) {
             self.canvas = canvas::View::default();
+            self.run_tried = false;
+            self.findings_open = false;
         }
         self.reveal_card = None;
         self.generation += 1;
@@ -1049,7 +1062,7 @@ impl MissionsPage {
     fn select_slot(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.group_is_dirty(10..14, cx) {
             if let Some(ed) = &mut self.editor {
-                ed.error = Some("Save the staffing draft before selecting another slot.".into());
+                ed.error = Some("Save this agent's staffing before choosing another.".into());
             }
             cx.notify();
             return;
@@ -1589,6 +1602,20 @@ impl Render for MissionsPage {
                     .when_some(self.state.error.clone(), |d, e| d.child(div().text_color(t.error).child(e)))
                     .child(div().id("missions-board-scroll").flex_1().overflow_scroll().child(content)),
             )
+            // A file a run names opens here, beside the run that made it.
+            .when_some(self.host.beside(cx), |root, beside| {
+                root.child(
+                    div()
+                        .id("missions-beside")
+                        .debug_selector(|| "missions-beside".into())
+                        .w(px(BESIDE_W))
+                        .flex_none()
+                        .h_full()
+                        .border_l_1()
+                        .border_color(t.divider)
+                        .child(beside),
+                )
+            })
             .when_some(self.editor.as_ref(), |root, ed| {
                 root.child(
                     div()
@@ -1643,7 +1670,19 @@ impl Render for MissionsPage {
                                 .debug_selector(|| "step-goal".into())
                                 .child(self.goal.clone()),
                         )
-                        .when(matches!(ed.kind, EditKind::Step), |d| d.child(kit::label(&t, "Formation type"))
+                        // Who does the step comes first: it is what a new step lacks.
+                        .when(matches!(ed.kind, EditKind::Step), |mut d| {
+                            if let Some(f) = self.state.mission.as_ref().and_then(|m| m.formations.iter().find(|f| f.id == ed.id)) {
+                                d = d.child(kit::label(&t, "Agents"));
+                                for slot in &f.slots {
+                                    let id = slot.id.clone(); let selected = id.clone(); let selector = format!("slot-{id}");
+                                    d = d.child(left(kit::button(&t, gpui::SharedString::from(format!("slot-{id}")), crate::store::words::slot_label(slot), Kind::Quiet).debug_selector(move || selector.clone()).on_click(cx.listener(move |p, _, _, cx| p.select_slot(&selected, cx)))));
+                                }
+                            }
+                            d
+                        })
+                        .when(matches!(ed.kind, EditKind::Step) && self.slot.is_some(), |d| d.child(self.slot_pickers(&t, cx)))
+                        .when(matches!(ed.kind, EditKind::Step), |d| d.child(kit::label(&t, "Team"))
                             .child({ let current = self.state.mission.as_ref().and_then(|m| m.formations.iter().find(|f| f.id == ed.id)).map(|f| f.kind.as_str()); let pick = |id: &'static str, text: &'static str, ty: &'static str| kit::button(&t, id, text, if current == Some(ty) { Kind::Plain } else { Kind::Quiet }).on_click(cx.listener(move |p, _, _, cx| p.set_type(ty, cx))); div().flex().gap(px(TAB_GAP)).child(pick("type-solo", "Solo", "solo")).child(pick("type-peer", "Peer", "peer")).child(pick("type-orchestrated", "Orchestrated", "orchestrated")) })
                             .child(kit::label(&t, "Device")).child(div().flex().gap(px(TAB_GAP)).child(div().flex_1().child(self.extra.clone()))
                             .child(left(kit::button(&t, "set-device", "Set device", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.set_device(cx)))))))
@@ -1671,17 +1710,9 @@ impl Render for MissionsPage {
                                     .child(left(kit::button(&t, "port-add-in", "+ Input port", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.port_edit("input", cx)))))
                                     .child(left(kit::button(&t, "port-add-out", "+ Output port", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.port_edit("output", cx)))))
                                     .when(self.port.is_some(), |d| d.child(left(kit::button(&t, "port-update", "Rename port", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.port_edit("update", cx))))).child(left(kit::button(&t, "port-remove", "Remove port", Kind::Quiet).debug_selector(|| "port-remove".into()).on_click(cx.listener(|p, _, _, cx| p.port_edit("remove", cx))))))
-                                    .child(kit::label(&t, "Slots"));
-                                for slot in &f.slots {
-                                    let id = slot.id.clone(); let selected = id.clone(); let selector = format!("slot-{id}");
-                                    d = d.child(left(kit::button(&t, gpui::SharedString::from(format!("slot-{id}")), crate::store::words::slot_label(slot), Kind::Quiet).debug_selector(move || selector.clone()).on_click(cx.listener(move |p, _, _, cx| p.select_slot(&selected, cx)))));
-                                }
+                                    ;
                             }
                             d
-                        })
-                        .when(matches!(ed.kind, EditKind::Step) && self.slot.is_some(), |mut d| {
-                            d = d.child(kit::label(&t, "Staff selected slot"));
-                            d.child(self.slot_pickers(&t, cx))
                         })
                         .when(matches!(ed.kind, EditKind::Step | EditKind::Input), |mut d| {
                             d = d.child(kit::label(&t, "Limits"));

@@ -22,6 +22,7 @@ async fn a_message_is_not_pasted_into_a_pane_the_seat_no_longer_owns() {
         run_id: "run_1".into(),
         node_id: "step".into(),
         slot_id: "worker".into(),
+        name: String::new(),
         harness: "claude".into(),
         model: "model".into(),
         effort: "medium".into(),

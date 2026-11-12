@@ -1,7 +1,7 @@
 #![cfg(unix)]
 use gpui::{
-    App, Context, IntoElement, Modifiers, ParentElement, TestAppContext, VisualTestContext, Window,
-    div, point, px,
+    App, AppContext, Context, IntoElement, Modifiers, ParentElement, TestAppContext,
+    VisualTestContext, Window, div, point, px,
 };
 use parvi_app_kit::{Ask, Host, Mounted, Page, ask::Answers, mount};
 use parvi_core::NodeId;
@@ -17,7 +17,15 @@ use std::{
 };
 
 static OPENED: Mutex<Vec<Ask>> = Mutex::new(Vec::new());
-struct ToyFiles;
+/// Answers as Files does: a beside ask opens a view beside the page that
+/// asked, which that page must draw.
+struct ToyFiles(Host);
+struct Opened;
+impl gpui::Render for Opened {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().child("Opened file")
+    }
+}
 impl gpui::Render for ToyFiles {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div().child("Files")
@@ -27,12 +35,16 @@ impl Page for ToyFiles {
     const ID: &'static str = "toy-files";
     const TITLE: &'static str = "Files";
     const ANSWERS: &'static [Answers] = &[Answers::OpenPath];
-    fn answer(&mut self, ask: Ask, _: &'static str, _: &mut Window, _: &mut Context<Self>) {
+    fn answer(&mut self, ask: Ask, from: &'static str, _: &mut Window, cx: &mut Context<Self>) {
+        if ask.beside() {
+            let view = cx.new(|_| Opened);
+            self.0.show_beside(from, view.into(), cx);
+        }
         OPENED.lock().unwrap().push(ask);
     }
 }
 fn toy_files(host: Host, window: &mut Window, cx: &mut App) -> Mounted {
-    mount(host, window, cx, |_, _, _| ToyFiles)
+    mount(host, window, cx, |host, _, _| ToyFiles(host))
 }
 struct Scripted;
 impl Executor for Scripted {
@@ -273,6 +285,9 @@ fn evidence_links_and_attempt_images(cx: &mut TestAppContext) {
     });
     click(cx, &file_selector);
     until(cx, "file ask", |_| !OPENED.lock().unwrap().is_empty());
+    until(cx, "the file shown beside the run", |cx| {
+        cx.debug_bounds("missions-beside").is_some()
+    });
     assert_eq!(
         OPENED.lock().unwrap().last().unwrap(),
         &Ask::OpenPath {

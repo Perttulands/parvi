@@ -17,6 +17,9 @@ pub struct Dispatch {
     pub run_id: String,
     pub node_id: String,
     pub slot_id: String,
+    /// The readable stem of the seat's session name; blank names it by ids.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
     pub harness: String,
     pub model: String,
     pub effort: String,
@@ -500,6 +503,7 @@ mod tests {
             run_id: "run_1".into(),
             node_id: "step".into(),
             slot_id: "worker".into(),
+            name: String::new(),
             harness: "pi".into(),
             model: "model".into(),
             effort: "medium".into(),

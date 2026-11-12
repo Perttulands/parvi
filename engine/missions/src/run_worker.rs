@@ -224,6 +224,7 @@ pub(crate) fn error_code(detail: &str) -> &'static str {
         "unknown_dispatch",
         "completion_sentinel_timeout",
         "seat_idle_without_sentinel",
+        "seat_stuck",
         "missing_output_payload",
         "invalid_output_payloads",
         "invalid_output_ref",

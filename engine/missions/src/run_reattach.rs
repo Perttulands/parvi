@@ -360,7 +360,29 @@ pub(crate) fn resolve(
         }
     }
     if !failed.is_empty() {
-        c.append(id, RunEvent { kind:"run_blocked".into(), timestamp:crate::run_storage::now(), data:json!({"code":"dispatch_reattach_failed","reason":format!("dispatch reattach failed: {}", reasons.join("; ")),"resumeAllowed":true,"resumePolicy":"explicit","openDispatches":failed}).as_object().unwrap().clone(), ..Default::default() })?;
+        // A seat that stopped short again, or whose terminal is gone, keeps
+        // its own code and words; anything else is a reattach failure.
+        let (code, reason) = match reasons.as_slice() {
+            [one]
+                if matches!(
+                    crate::run_worker::error_code(one),
+                    "seat_idle_without_sentinel" | "seat_stuck"
+                ) || one.contains("seat_gone") =>
+            {
+                let detail = one.split_once(": ").map_or(one.as_str(), |(_, rest)| rest);
+                let code = if detail.contains("seat_gone") {
+                    "seat_gone"
+                } else {
+                    crate::run_worker::error_code(detail)
+                };
+                (code, detail.to_owned())
+            }
+            _ => (
+                "dispatch_reattach_failed",
+                format!("dispatch reattach failed: {}", reasons.join("; ")),
+            ),
+        };
+        c.append(id, RunEvent { kind:"run_blocked".into(), timestamp:crate::run_storage::now(), data:json!({"code":code,"reason":reason,"resumeAllowed":true,"resumePolicy":"explicit","openDispatches":failed}).as_object().unwrap().clone(), node_id: if failed.len() == 1 { failed[0]["nodeId"].as_str().unwrap_or("").into() } else { String::new() }, ..Default::default() })?;
         return Ok(false);
     }
     Ok(true)
