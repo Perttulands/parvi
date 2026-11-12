@@ -99,19 +99,23 @@ pub fn natural(a: &str, b: &str) -> std::cmp::Ordering {
 }
 
 /// Sessions in groups: main first, other last, the rest by name; within a
-/// group by name, in natural order.
+/// group by name, in natural order. A group of one is no group: its session
+/// joins other, so a header never stands over a single row.
 pub fn groups<'a>(sessions: &[&'a Session]) -> Vec<(String, Vec<&'a Session>)> {
-    let mut list: Vec<&Session> = sessions.to_vec();
-    list.sort_by(|a, b| {
-        let (ga, gb) = (group(&a.name), group(&b.name));
-        (group_rank(&ga), ga)
-            .cmp(&(group_rank(&gb), gb))
+    let named = |s: &Session| {
+        let g = group(&s.name);
+        let alone = g != "main" && sessions.iter().filter(|o| group(&o.name) == g).count() < 2;
+        if alone { "other".to_string() } else { g }
+    };
+    let mut list: Vec<(String, &Session)> = sessions.iter().map(|s| (named(s), *s)).collect();
+    list.sort_by(|(ga, a), (gb, b)| {
+        (group_rank(ga), ga)
+            .cmp(&(group_rank(gb), gb))
             .then_with(|| natural(&a.name, &b.name))
             .then_with(|| a.user.cmp(&b.user))
     });
     let mut out: Vec<(String, Vec<&Session>)> = Vec::new();
-    for s in list {
-        let g = group(&s.name);
+    for (g, s) in list {
         match out.last_mut() {
             Some((name, v)) if *name == g => v.push(s),
             _ => out.push((g, vec![s])),
@@ -404,28 +408,6 @@ pub fn split_name(name: &str) -> (&str, &str) {
     }
 }
 
-/// A tag's name for a narrow window: the part after the last hyphen kept
-/// whole and the head clipped, as CHROTE's tag does, because names share
-/// their prefixes and the tail tells them apart (`forge-existing` reads
-/// `fo…existing` in eleven characters).
-pub fn elide_head(name: &str, max: usize) -> String {
-    let chars: Vec<char> = name.chars().collect();
-    if chars.len() <= max || max < 2 {
-        return name.to_string();
-    }
-    let cut = chars.iter().rposition(|c| *c == '-').map_or(0, |i| i + 1);
-    let tail = chars.len() - cut;
-    if tail + 1 >= max {
-        let mut s = String::from("…");
-        s.extend(&chars[chars.len() - (max - 1)..]);
-        return s;
-    }
-    let mut s: String = chars[..max - 1 - tail].iter().collect();
-    s.push('…');
-    s.extend(&chars[cut..]);
-    s
-}
-
 /// The last `n` lines of a screen's text that hold something: a screen
 /// whose output sits at the top shows it, not its empty rows.
 pub fn screen_tail(text: &str, n: usize) -> String {
@@ -495,8 +477,10 @@ mod tests {
             .map(|(g, v)| (g, v.iter().map(|s| s.name.clone()).collect()))
             .collect();
         let names: Vec<&str> = g.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(names, ["main", "api", "claude", "other"]);
-        assert_eq!(g[2].1, ["claude-a", "claude-b"]);
+        assert_eq!(names, ["main", "claude", "other"]);
+        assert_eq!(g[1].1, ["claude-a", "claude-b"]);
+        // api-x is alone in its group, so it joins other.
+        assert_eq!(g[2].1, ["api-x", "solo"]);
     }
 
     #[test]
@@ -652,15 +636,6 @@ mod tests {
             "parvi-…fin-terminals"
         );
         assert_eq!(rail_name("short", 22), "short");
-    }
-
-    #[test]
-    fn a_tag_keeps_the_tail_of_its_name_and_clips_the_head() {
-        assert_eq!(elide_head("forge-existing", 20), "forge-existing");
-        assert_eq!(elide_head("forge-existing", 11), "fo…existing");
-        assert_eq!(elide_head("service-controller-agent", 12), "servic…agent");
-        assert_eq!(elide_head("averyveryverylongname", 8), "…ongname");
-        assert_eq!(elide_head("forge-existing", 6), "…sting");
     }
 
     #[test]

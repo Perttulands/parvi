@@ -8,6 +8,8 @@ use parvi_app_kit::Build;
 use parvi_app_shell::start;
 use std::borrow::Cow;
 
+/// The first page is the one the app opens on: the terminals, where the
+/// operator spends the day.
 pub const PAGES: &[Build] = &[
     parvi_terminals_app::build,
     parvi_agents_app::build,

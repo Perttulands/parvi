@@ -34,10 +34,6 @@ mod drag;
 pub const CLAIM_EXPLANATION: &str =
     "Set the tmux window to this device's size. Other devices keep watching, at that size.";
 
-fn tag_label(name: &str, active: bool) -> String {
-    sessions::elide_head(name, if active { 10 } else { 9 })
-}
-
 /// Why a pane cannot be claimed: tmux keeps its window at a fixed size.
 fn pinned(s: &parvi_terminals_contract::Session, pane: u32) -> Option<String> {
     if s.pinned != Some(true) {
@@ -618,8 +614,12 @@ impl Terminals {
         Some(self.settings.workspace.shown(i)?.key.node.clone())
     }
 
-    /// The passport of the node window `i` shows a session of.
+    /// The passport of the node window `i` shows a session of, when the
+    /// fleet has more than one node to tell apart.
     fn passport_here(&self, i: usize, t: &Theme) -> Option<gpui::Div> {
+        if self.fleet.clients().len() < 2 {
+            return None;
+        }
         let p = self.where_is(&self.window_node(i)?)?;
         Some(place::passport(t, &p.device, &p.environment))
     }
@@ -727,7 +727,6 @@ impl Terminals {
             None => None,
         });
         let history = active && self.histories.contains_key(&i);
-        let label = tag_label(&key.name, active);
         let id = i * 100 + n;
         let (k_show, k_menu, k_remove) = (key.clone(), key.clone(), key.clone());
         let name = key.name.clone();
@@ -769,7 +768,12 @@ impl Terminals {
                     .as_ref()
                     .and_then(|s| super::rail::running_mark(t, s, cx)),
             )
-            .child(div().flex_none().whitespace_nowrap().child(label))
+            // The name keeps its room; badges give way before it.
+            .child(
+                super::rail::clipped_name(&sessions::rail_name(&key.name, size::RAIL_NAME_COLUMNS))
+                    .flex_none()
+                    .whitespace_nowrap(),
+            )
             // What a terminal does not show is said for the one on screen;
             // in a narrow window the badges give way, never the name or ×.
             .children(session.iter().filter(|_| active).map(|s| {
@@ -1781,18 +1785,6 @@ impl EntityInputHandler for Terminals {
 mod tests {
     use super::*;
     use parvi_terminals_contract::{Pane, Session};
-
-    #[test]
-    fn window_tags_keep_the_distinguishing_suffix() {
-        for active in [true, false] {
-            let first = tag_label("w2-beta-very-long-worker-one", active);
-            let second = tag_label("w2-beta-very-long-worker-two", active);
-            assert!(first.contains('…') && first.ends_with("one"), "{first}");
-            assert!(second.contains('…') && second.ends_with("two"), "{second}");
-            assert_ne!(first, second);
-        }
-        assert_eq!(tag_label("shell", true), "shell");
-    }
 
     #[test]
     fn a_drop_lands_only_where_it_would_change_something() {

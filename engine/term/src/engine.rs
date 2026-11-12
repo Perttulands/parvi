@@ -23,7 +23,7 @@
 //! Nobody is detached. Releasing undoes exactly that, so the window goes back to
 //! whoever sized it before, or keeps its size if nobody did.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -58,6 +58,11 @@ const MAX_GRID: u16 = 10000;
 
 /// A session counts as active for this long after its last output.
 const ACTIVE_FOR: Duration = Duration::from_secs(5);
+
+/// Output this soon after a session's window changed size, with nothing
+/// typed since, is the programs redrawing for it, and leaves the session's
+/// last output where it was.
+const REDRAW_FOR: Duration = Duration::from_secs(1);
 
 /// After output, how long until the screens are read for a waiting prompt.
 /// At most one look per this long while output flows, and always one after
@@ -1165,6 +1170,17 @@ enum Pending {
 
 const LIST_PANES_FORMAT: &str = "#{pane_id} #{pane_width} #{pane_height}";
 
+/// Whether `after` shows a line of text `before` did not: a redraw shows
+/// the same lines laid out again, their spacing aside (vim's ruler moves).
+fn adds_a_line(before: &str, after: &str) -> bool {
+    let words = |line: &str| line.split_whitespace().collect::<Vec<_>>().join(" ");
+    let had: HashSet<String> = before.lines().map(words).collect();
+    after
+        .lines()
+        .map(words)
+        .any(|line| !line.is_empty() && !had.contains(&line))
+}
+
 /// Follows one session until its client exits or the engine stops.
 async fn follow(
     shared: Arc<Shared>,
@@ -1220,8 +1236,8 @@ async fn follow_inner(
     // the session has gone quiet. Shared state changes only when it does.
     let mut active = false;
     let mut last_output = tokio::time::Instant::now();
-    // tmux reports a layout change before an interactive shell redraws its
-    // existing prompt in response to the resize.
+    // tmux reports a layout change before the programs in the window
+    // redraw for their new size (a shell its prompt, vim its screen).
     let mut layout_changed: Option<tokio::time::Instant> = None;
     let quiet = tokio::time::sleep(ACTIVE_FOR);
     tokio::pin!(quiet);
@@ -1315,15 +1331,17 @@ async fn follow_inner(
                         if pane.owner != session {
                             continue;
                         }
-                        let possible_redraw = pane.synced
-                            && layout_changed.is_some_and(|at| at.elapsed() < Duration::from_secs(2))
-                            && data.starts_with(b"\r\x1b[K\r");
-                        let before = possible_redraw.then(|| pane.screen.screen().contents());
-                        let mut unchanged_redraw = false;
+                        // What a program writes just after its window
+                        // changed size is its redraw, not news, unless it
+                        // puts a line on screen that was not there before.
+                        let mut redraw = layout_changed.is_some_and(|at| at.elapsed() < REDRAW_FOR);
                         if pane.synced {
+                            let before = redraw.then(|| pane.screen.screen().contents());
                             let data = pane.utf8.pass(data);
                             pane.screen.process(&data);
-                            unchanged_redraw = before.is_some_and(|text| text == pane.screen.screen().contents());
+                            if let Some(before) = before {
+                                redraw = !adds_a_line(&before, &pane.screen.screen().contents());
+                            }
                             pane.changes += 1;
                             pane.tell_viewers(|_| PaneUpdate::Output(data.into()));
                         } else if pane.capture.is_some() {
@@ -1331,14 +1349,14 @@ async fn follow_inner(
                             // cannot be discarded when that capture is applied.
                             pane.late_output = true;
                         }
-                        if unchanged_redraw {
+                        if !looking {
+                            looking = true;
+                            look.as_mut().reset(tokio::time::Instant::now() + LOOK_AFTER);
+                        }
+                        if redraw {
                             continue;
                         }
                         last_output = tokio::time::Instant::now();
-                        if !looking {
-                            looking = true;
-                            look.as_mut().reset(last_output + LOOK_AFTER);
-                        }
                         if !active {
                             active = true;
                             quiet.as_mut().reset(last_output + ACTIVE_FOR);
@@ -1429,6 +1447,8 @@ async fn follow_inner(
             }
             request = requests.recv() => match request {
                 Some(Request::Input(pane, data)) => {
+                    // What answers typing is news, however soon it comes.
+                    layout_changed = None;
                     send(&mut out, &mut pending, control::send_keys_hex(pane, &data), Pending::Input);
                 }
                 Some(Request::Claim { cols, rows }) => {
@@ -1437,6 +1457,7 @@ async fn follow_inner(
                 Some(Request::Release) => seat.release(&mut out, &mut pending),
                 Some(Request::RefreshFacts) => request_facts(session, &mut out, &mut pending),
                 Some(Request::Send(delivery)) => {
+                    layout_changed = None;
                     deliveries.push(session, delivery, &mut out, &mut pending);
                 }
                 Some(Request::Stop) | None => {
@@ -1862,6 +1883,15 @@ fn seed(capture: &[String], x: u16, y: u16, alternate: bool, visible: bool) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_redraw_adds_no_line_and_output_does() {
+        let before = "$ ls\nnotes.txt\n$ ";
+        assert!(!adds_a_line(before, "$ ls\n  notes.txt  \n\n$"));
+        assert!(adds_a_line(before, "$ ls\nnotes.txt\n$ echo hi\nhi"));
+        assert!(!adds_a_line("~\n~\n", "~\n~\n~\n"));
+        assert!(!adds_a_line("x\n  1,1     All", "x\n 1,1  All"));
+    }
 
     #[test]
     fn facts_read_the_command_and_a_folder_with_spaces() {

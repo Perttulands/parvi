@@ -205,32 +205,30 @@ impl Terminals {
         let header = div()
             .id(gpui::SharedString::from(format!("group-{name}")))
             .px(px(12.))
-            .py(px(8.))
+            .pt(px(8.))
+            .pb(px(3.))
             .flex()
             .items_center()
-            .gap(px(8.))
+            .gap(px(6.))
             .cursor_pointer()
-            .hover(|s| s.bg(t.accent_light()))
+            .text_size(px(11.))
+            .text_color(t.text2)
+            .hover(|s| s.text_color(t.text))
             .child(
                 div()
-                    .w(px(12.))
-                    .text_size(px(10.))
+                    .w(px(10.))
+                    .text_size(px(8.))
                     .text_color(t.dim)
                     .child(if collapsed { "▶" } else { "▼" }),
             )
             .child(
                 div()
-                    .flex_1()
-                    .text_size(px(14.))
-                    .font_weight(FontWeight::BOLD)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .child(name.to_uppercase()),
             )
             .child(
                 div()
-                    .px(px(6.))
-                    .rounded(px(8.))
-                    .bg(t.raised)
-                    .text_size(px(12.))
+                    .flex_1()
                     .text_color(t.dim)
                     .child(members.len().to_string()),
             )
@@ -638,8 +636,13 @@ pub(super) fn running_mark(t: &Theme, s: &Session, cx: &gpui::App) -> Option<Any
 /// A session's name as CHROTE's `SessionLabel` draws it: the head clipped
 /// with an ellipsis when the row is narrow, the tail always whole.
 fn name_label(name: &str) -> gpui::Div {
-    let label = sessions::rail_name(name, size::RAIL_NAME_COLUMNS);
-    let (head, tail) = sessions::split_name(&label);
+    clipped_name(&sessions::rail_name(name, size::RAIL_NAME_COLUMNS))
+}
+
+/// A name that gives way from its head when its room is short, its tail
+/// (what tells sessions apart) always whole.
+pub(super) fn clipped_name(label: &str) -> gpui::Div {
+    let (head, tail) = sessions::split_name(label);
     div()
         .min_w_0()
         .flex()

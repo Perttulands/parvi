@@ -1230,3 +1230,76 @@ async fn following_idle_sessions_preserves_their_old_activity() {
     .await;
     engine.stop().await;
 }
+
+/// A program that repaints its whole screen when its window changes size,
+/// as vim does, has not written anything new: the claim that resized it
+/// leaves the session idle and its last output where it was. Writing later
+/// is news again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_repaint_for_a_new_size_is_not_activity() {
+    let Some(server) = Server::start_in("terminal-repaint") else {
+        return;
+    };
+    server.new_session("alpha", 100, 30);
+    let script = server.dir().join("repaint.sh");
+    write_script(
+        &script,
+        format!(
+            "#!/bin/sh\npaint() {{ printf '\\033[2J\\033[Hready\\n'; }}\ntrap 'paint; touch {}' WINCH\npaint\nwhile :; do sleep 0.2; done\n",
+            server.dir().join("repainted").display()
+        ),
+    );
+    server.run(&[
+        "respawn-pane",
+        "-k",
+        "-t",
+        "alpha",
+        script.to_str().unwrap(),
+    ]);
+    let wrote_at = || -> u64 {
+        server
+            .display("alpha", "#{window_activity}")
+            .parse()
+            .unwrap()
+    };
+    let before = wrote_at();
+    while std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        <= before + 1
+    {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let engine = Engine::start(server.socket());
+    let pane = seeded_pane(&engine).await;
+    let last = |engine: &Engine| engine.sessions()[0].activity.last_output;
+    let idle = eventually("seeded idle", || last(&engine)).await;
+
+    engine.claim(pane, 1, 80, 24).await.unwrap();
+    eventually("the program repainted", || {
+        server.dir().join("repainted").exists().then_some(())
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let session = &engine.sessions()[0];
+    assert!(!session.activity.active, "a repaint made it active");
+    assert_eq!(
+        session.activity.last_output,
+        Some(idle),
+        "a repaint moved its last output"
+    );
+
+    // The same repaint with no new size is the program writing.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let pid = server.display("alpha", "#{pane_pid}");
+    std::process::Command::new("kill")
+        .args(["-WINCH", pid.trim()])
+        .status()
+        .unwrap();
+    eventually("a later write is news", || {
+        engine.sessions()[0].activity.active.then_some(())
+    })
+    .await;
+    engine.stop().await;
+}
