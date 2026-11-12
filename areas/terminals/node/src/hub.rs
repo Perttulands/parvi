@@ -255,12 +255,13 @@ impl Hub {
         (pane <= PANE_MASK).then(|| (self.index(server) << PANE_BITS) | pane)
     }
 
-    /// Returns once every server's sessions are listed with their panes
-    /// ([`Engine::ready`]), so a command right after the node starts sees
-    /// the sessions that were already there.
+    /// Returns once every server's sessions are listed afresh with their
+    /// panes ([`Engine::fresh`], [`Engine::ready`]), so a command sees the
+    /// sessions there are now, though nobody looks at the list meanwhile.
     pub async fn ready(&self) -> Result<()> {
         let all = async {
             for server in &self.servers {
+                server.engine.fresh().await;
                 server.engine.ready().await;
             }
         };
@@ -365,6 +366,7 @@ impl Hub {
         let mut changes = self.watch();
         let (server, id) = self.session(session)?;
         launch::rename(server.backend(), id, name).await?;
+        server.engine.fresh().await;
         let listed = async {
             while !self
                 .sessions()
@@ -401,6 +403,12 @@ impl Hub {
             total: self.servers.len(),
             failures,
         }
+    }
+
+    /// Someone looks at every server's session list until these are
+    /// dropped ([`Engine::look`]).
+    pub fn look(&self) -> Vec<parvi_term::engine::Looking> {
+        self.servers.iter().map(|s| s.engine.look()).collect()
     }
 
     /// A receiver that changes whenever any server's sessions or panes do.

@@ -39,7 +39,7 @@ impl SessionsRunner {
     }
 
     /// The session a target names: on its user's server, by name.
-    fn find(&self, target: &Target) -> Result<SessionInfo, String> {
+    async fn find(&self, target: &Target) -> Result<SessionInfo, String> {
         let sessions = &self.sessions;
         let user = target.unix_user.as_str();
         let server = if user.is_empty() || user == self.own {
@@ -52,7 +52,9 @@ impl SessionsRunner {
             ));
         };
         sessions
-            .list()
+            .listed()
+            .await
+            .map_err(|e| format!("{e:#}"))?
             .into_iter()
             .find(|s| s.name == target.session_name && s.user.as_deref() == server)
             .ok_or_else(|| format!("no session {} on this node", target.label()))
@@ -61,7 +63,7 @@ impl SessionsRunner {
 
 impl Runner for SessionsRunner {
     fn validate<'a>(&'a self, target: &'a Target) -> BoxFuture<'a, Result<(), String>> {
-        Box::pin(async move { self.find(target).map(|_| ()) })
+        Box::pin(async move { self.find(target).await.map(|_| ()) })
     }
 
     fn send<'a>(
@@ -73,7 +75,7 @@ impl Runner for SessionsRunner {
         Box::pin(async move {
             let start = tokio::time::Instant::now();
             let queued = async {
-                let session = self.find(target)?;
+                let session = self.find(target).await?;
                 let pane = self
                     .sessions
                     .active_pane(&session.id)

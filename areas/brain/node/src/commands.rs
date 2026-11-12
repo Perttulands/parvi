@@ -184,7 +184,9 @@ pub fn commands(
                         )
                     })?;
                     let found: Vec<_> = sessions
-                        .list()
+                        .listed()
+                        .await
+                        .map_err(|e| Error::new(UNAVAILABLE, format!("{e:#}")))?
                         .into_iter()
                         .filter(|s| {
                             s.id == target

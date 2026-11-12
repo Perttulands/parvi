@@ -340,6 +340,8 @@ pub async fn launch(
         let _ = run(backend, &["kill-session", "-t", &id]).await;
         return Err(error.context("sizing the new session"));
     }
+    // Listed now, though nobody may be looking at the list.
+    engine.fresh().await;
 
     let mut attach_warning = None;
     let pane = if gate.is_some() {

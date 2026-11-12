@@ -24,6 +24,7 @@
 //! whoever sized it before, or keeps its size if nobody did.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -120,6 +121,13 @@ struct Shared {
     generation: watch::Sender<u64>,
     /// Each rename once, as (old name, new name), whoever made it.
     renamed: broadcast::Sender<(String, String)>,
+    /// How many are looking at the session list ([`Engine::look`]); while
+    /// none are, the supervisor lists the server only when asked or told.
+    lookers: AtomicUsize,
+    /// Asks the supervisor to list the server now.
+    wake: Notify,
+    /// Bumped as each listing of the server finishes.
+    listings: watch::Sender<u64>,
 }
 
 #[derive(Default)]
@@ -340,6 +348,9 @@ impl Engine {
             state: Mutex::new(State::default()),
             generation,
             renamed: broadcast::channel(16).0,
+            lookers: AtomicUsize::new(0),
+            wake: Notify::new(),
+            listings: watch::channel(0).0,
         });
         let (stop, stopped) = oneshot::channel();
         let supervisor = tokio::spawn(supervise(shared.clone(), stopped));
@@ -353,7 +364,10 @@ impl Engine {
     /// Starts a fixed-size session owned by the caller.
     pub async fn create_session(&self, spec: crate::SessionSpec) -> Result<crate::SessionRef> {
         spec.validate()?;
-        self.shared.backend.create_session(&spec).await
+        let created = self.shared.backend.create_session(&spec).await?;
+        // The list takes it in now, not when someone next looks.
+        self.shared.wake.notify_one();
+        Ok(created)
     }
 
     /// Kills an owned session only on the server which created it.
@@ -579,6 +593,26 @@ impl Engine {
         }
     }
 
+    /// Someone looks at the session list until the guard is dropped (an
+    /// app connected): sessions this engine does not follow are listed
+    /// again every second meanwhile. With nobody looking, the server is
+    /// listed only when [`Engine::fresh`] asks or a follower hears of a
+    /// change from tmux.
+    pub fn look(&self) -> Looking {
+        self.shared.lookers.fetch_add(1, Ordering::SeqCst);
+        self.shared.wake.notify_one();
+        Looking(self.shared.clone())
+    }
+
+    /// Returns once the server has been listed since this was called, for
+    /// an answer that must not be older than the question.
+    pub async fn fresh(&self) {
+        let mut listed = self.shared.listings.subscribe();
+        listed.borrow_and_update();
+        self.shared.wake.notify_one();
+        let _ = listed.changed().await;
+    }
+
     /// A receiver that changes whenever sessions or panes come or go.
     pub fn watch(&self) -> watch::Receiver<u64> {
         self.shared.generation.subscribe()
@@ -759,6 +793,15 @@ impl Engine {
     }
 }
 
+/// Someone looking at the session list ([`Engine::look`]).
+pub struct Looking(Arc<Shared>);
+
+impl Drop for Looking {
+    fn drop(&mut self) {
+        self.0.lookers.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 impl Drop for Engine {
     fn drop(&mut self) {
         if let Some(supervisor) = self.supervisor.get_mut().unwrap().take() {
@@ -906,13 +949,17 @@ async fn supervise(shared: Arc<Shared>, mut stopped: oneshot::Receiver<()>) {
         if first {
             shared.bump();
         }
+        shared.listings.send_modify(|n| *n += 1);
 
-        // Wait for something to change. With no sessions there is no client to
-        // hear about new ones, so look again after a moment.
+        // Wait for something to change. A follower hears of sessions from
+        // tmux. With none, or for sessions nobody follows, look again after
+        // a moment, but only while someone looks at the list.
+        let looked_at = shared.lookers.load(Ordering::SeqCst) > 0;
         let msg = tokio::select! {
             _ = &mut stopped => break,
             msg = rx.recv() => msg,
-            _ = tokio::time::sleep(NO_SERVER_RETRY), if tasks.is_empty() || shared.lazy => None,
+            () = shared.wake.notified() => None,
+            _ = tokio::time::sleep(NO_SERVER_RETRY), if looked_at && (tasks.is_empty() || shared.lazy) => None,
         };
         let mut msgs: Vec<SupervisorMsg> = msg.into_iter().collect();
         while let Ok(msg) = rx.try_recv() {

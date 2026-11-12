@@ -23,6 +23,13 @@ impl Sessions for Provided {
         self.hub.sessions()
     }
 
+    fn listed(&self) -> Reply<'_, Vec<SessionInfo>> {
+        Box::pin(async move {
+            self.hub.ready().await?;
+            Ok(self.hub.sessions())
+        })
+    }
+
     fn users(&self) -> Vec<String> {
         self.hub.users()
     }

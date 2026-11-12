@@ -16,6 +16,8 @@ use parvi_testkit::tmux::{Server, eventually, write_script};
 
 /// The pane of the only session, once seeded.
 async fn seeded_pane(engine: &Engine) -> u32 {
+    // The session was made behind the engine's back, and nobody looks.
+    engine.fresh().await;
     eventually("the pane seeded", || {
         let snapshot = engine.snapshot();
         let pane = snapshot.sessions.first()?.panes.first()?.clone();

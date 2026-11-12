@@ -33,4 +33,5 @@ parvi-terminals = { path = "../node" }
 parvi-files = { path = "../../files/node" }
 parvi-testkit = { path = "../../../kit/testkit" }
 parvi-node-kit = { path = "../../../kit/node-kit" }
+parvi-term = { path = "../../../engine/term" }
 tokio = { version = "1", features = ["full"] }

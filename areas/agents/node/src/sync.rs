@@ -28,7 +28,8 @@ pub(crate) async fn sync_fetched(
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     let taken: Vec<String> = sessions
-        .list()
+        .listed()
+        .await?
         .into_iter()
         .filter(|s| s.user.is_none())
         .map(|s| s.name)

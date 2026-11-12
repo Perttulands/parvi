@@ -19,8 +19,12 @@ use crate::{Screen, SessionRef, SessionSpec};
 pub type Renames = broadcast::Receiver<(String, String)>;
 
 pub trait Sessions: Send + Sync {
-    /// Every session this node follows, with its node-wide ids.
+    /// Every session this node follows, with its node-wide ids, as last
+    /// listed: with nobody looking at the list that may be a while ago.
     fn list(&self) -> Vec<SessionInfo>;
+
+    /// Every session as the servers hold them now, listed for this ask.
+    fn listed(&self) -> Reply<'_, Vec<SessionInfo>>;
 
     /// The Unix users besides the node's own whose servers are followed.
     fn users(&self) -> Vec<String>;

@@ -125,6 +125,11 @@ impl Sessions for FakeSessions {
         self.state.lock().unwrap().sessions.clone()
     }
 
+    fn listed(&self) -> Reply<'_, Vec<SessionInfo>> {
+        let list = self.list();
+        Box::pin(async move { Ok(list) })
+    }
+
     fn users(&self) -> Vec<String> {
         self.state.lock().unwrap().users.clone()
     }

@@ -2621,20 +2621,36 @@ fn connecting_the_app_preserves_idle_session_activity(cx: &mut TestAppContext) {
         running.fixture.join("no-launch.conf")
     );
     let second = runtime.block_on(Node::start(AREAS, &config)).unwrap();
-    runtime.block_on(parvi_testkit::tmux::eventually(
-        "second node lists both sessions with their old output times",
-        || {
-            let sessions = second.sessions().list();
-            (sessions.len() == 2
-                && sessions.iter().all(|s| {
-                    s.activity
-                        .last_output
-                        .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
-                        .is_some_and(|age| Some(age.as_secs()) == baseline[&s.name].as_u64())
-                }))
-            .then_some(())
+    // Nobody looks at the second node, so it lists when asked.
+    let second_lists = |what: &str, check: &dyn Fn(&[parvi_term::engine::SessionInfo]) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let sessions = runtime.block_on(second.sessions().listed()).unwrap();
+            if check(&sessions) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "second node: {what}: {sessions:?}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    let seconds = |s: &parvi_term::engine::SessionInfo| {
+        s.activity
+            .last_output
+            .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|age| age.as_secs())
+    };
+    second_lists(
+        "lists both sessions with their old output times",
+        &|sessions| {
+            sessions.len() == 2
+                && sessions
+                    .iter()
+                    .all(|s| seconds(s) == baseline[&s.name].as_u64())
         },
-    ));
+    );
     let (_shell, cx, settings) = open_with_alpha(&running, "idle-journey", cx);
     // Exercise a resize even when another follower makes automatic claim wait.
     cx.simulate_keystrokes("alt-c");
@@ -2699,29 +2715,10 @@ fn connecting_the_app_preserves_idle_session_activity(cx: &mut TestAppContext) {
         .find(|s| s["name"] == "alpha")
         .unwrap();
     assert!(alpha["last_output"].as_u64().unwrap() > baseline["alpha"].as_u64().unwrap());
-    runtime.block_on(parvi_testkit::tmux::eventually(
-        "second node observes actual output",
-        || {
-            let sessions = second.sessions().list();
-            let alpha = sessions.iter().find(|s| s.name == "alpha")?;
-            let beta = sessions.iter().find(|s| s.name == "beta")?;
-            let alpha_seconds = alpha
-                .activity
-                .last_output?
-                .duration_since(std::time::UNIX_EPOCH)
-                .ok()?
-                .as_secs();
-            let beta_seconds = beta
-                .activity
-                .last_output?
-                .duration_since(std::time::UNIX_EPOCH)
-                .ok()?
-                .as_secs();
-            (alpha_seconds > baseline["alpha"].as_u64()?
-                && beta_seconds == baseline["beta"].as_u64()?)
-            .then_some(())
-        },
-    ));
+    second_lists("observes actual output", &|sessions| {
+        let of = |name: &str| sessions.iter().find(|s| s.name == name).and_then(seconds);
+        of("alpha") > baseline["alpha"].as_u64() && of("beta") == baseline["beta"].as_u64()
+    });
     runtime.block_on(second.stop());
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }

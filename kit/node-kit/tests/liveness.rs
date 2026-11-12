@@ -89,5 +89,5 @@ async fn a_silent_client_is_let_go_and_an_answering_one_kept() {
     assert!(!given_back(1), "the client answering pings was let go");
     reading.abort();
     drop(silent);
-    node.stop().await;
+    node.stop().await.unwrap();
 }

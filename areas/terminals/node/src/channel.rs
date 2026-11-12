@@ -48,6 +48,8 @@ pub(crate) struct Terminal {
     subscriptions: HashMap<PaneId, JoinHandle<()>>,
     overview: Option<JoinHandle<()>>,
     searching: Option<JoinHandle<()>>,
+    /// The client looks at the session list while it is connected.
+    _looking: Vec<parvi_term::engine::Looking>,
 }
 
 impl Terminal {
@@ -58,6 +60,7 @@ impl Terminal {
         launcher.look();
         let mut launcher_changes = launcher.watch();
         let changes = hub.watch();
+        let looking = hub.look();
         hub.refresh_facts();
         let first = frames::launcher(
             &launcher_changes.borrow_and_update(),
@@ -77,6 +80,7 @@ impl Terminal {
             subscriptions: HashMap::new(),
             overview: None,
             searching: None,
+            _looking: looking,
         }
     }
 

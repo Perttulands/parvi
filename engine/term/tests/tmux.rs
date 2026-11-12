@@ -1472,3 +1472,82 @@ async fn a_follower_starts_from_output_in_another_window() {
     );
     engine.stop().await;
 }
+
+/// A tmux server's backend that counts the commands run on it.
+struct Counting {
+    inner: parvi_term::backend::tmux::Socket,
+    commands: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl parvi_term::backend::Backend for Counting {
+    fn launch_gate(&self, channel: &str) -> Option<String> {
+        self.inner.launch_gate(channel)
+    }
+    fn create_session<'a>(
+        &'a self,
+        spec: &'a parvi_term::SessionSpec,
+    ) -> parvi_term::backend::Reply<'a, parvi_term::SessionRef> {
+        self.inner.create_session(spec)
+    }
+    fn kill_session<'a>(
+        &'a self,
+        session: &'a parvi_term::SessionRef,
+    ) -> parvi_term::backend::Reply<'a, ()> {
+        self.inner.kill_session(session)
+    }
+    fn command<'a>(&'a self, args: &'a [&'a str]) -> parvi_term::backend::Reply<'a, String> {
+        self.commands
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.command(args)
+    }
+    fn size<'a>(
+        &'a self,
+        session: &'a str,
+        cols: u16,
+        rows: u16,
+    ) -> parvi_term::backend::Reply<'a, ()> {
+        self.inner.size(session, cols, rows)
+    }
+    fn stream<'a>(
+        &'a self,
+        args: &'a [&'a str],
+    ) -> parvi_term::backend::Reply<'a, parvi_term::backend::Stream> {
+        self.inner.stream(args)
+    }
+    fn attach<'a>(&'a self, session: &'a str) -> parvi_term::backend::Attaching<'a> {
+        self.inner.attach(session)
+    }
+}
+
+/// With nobody looking at the session list, a node that follows no session
+/// runs no tmux commands; it lists while someone looks, and once for an
+/// ask that must be current.
+#[tokio::test(flavor = "multi_thread")]
+async fn nobody_looking_runs_nothing() {
+    let Some(server) = Server::start() else {
+        return;
+    };
+    server.new_session("alpha", 100, 30);
+    let commands = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = || commands.load(std::sync::atomic::Ordering::SeqCst);
+    let engine = Engine::start_lazy(Counting {
+        inner: server.socket(),
+        commands: commands.clone(),
+    });
+    engine.ready().await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let before = count();
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert_eq!(count(), before, "polled tmux while nobody looked");
+
+    server.new_session("beta", 100, 30);
+    engine.fresh().await;
+    assert_eq!(engine.sessions().len(), 2, "an ask lists the server now");
+
+    let looking = engine.look();
+    let before = count();
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert!(count() > before, "nothing listed while someone looked");
+    drop(looking);
+    engine.stop().await;
+}
