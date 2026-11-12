@@ -186,6 +186,12 @@ impl SeatSide for LocalSeats {
                 let seat = (self.records().seat(&id))
                     .map_err(|e| e.to_string())?
                     .ok_or("dispatch has no seat")?;
+                // After a server restart the recorded pane id can be
+                // another program's pane.
+                self.engine()
+                    .verify(&seat.session)
+                    .await
+                    .map_err(|e| e.to_string())?;
                 self.engine()
                     .deliver(seat.session.pane_id, text, true)
                     .await
