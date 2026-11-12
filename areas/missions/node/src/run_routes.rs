@@ -51,6 +51,17 @@ fn bad_json(e: JsonRejection) -> ApiError {
 fn response<T: serde::Serialize>(result: Result<T, parvi_core::Error>) -> ResultResponse {
     Ok(Json(result?).into_response())
 }
+/// Runs a coordinator call that may wait on seats (a tmux command, a seat
+/// ending) off the async workers: such a call drives the node's runtime from
+/// its own thread, and doing that from a worker can stall the whole node.
+async fn off<T: Send + 'static>(
+    c: Coordinator,
+    call: impl FnOnce(Coordinator) -> T + Send + 'static,
+) -> Result<T, ApiError> {
+    tokio::task::spawn_blocking(move || call(c))
+        .await
+        .map_err(|e| parvi_core::Error::new("internal", e.to_string()).into())
+}
 async fn list(
     State(c): State<Coordinator>,
     q: Result<Query<contract::RunsQuery>, QueryRejection>,
@@ -75,8 +86,8 @@ async fn frozen(State(c): State<Coordinator>, Path(id): Path<String>) -> ResultR
     .into_response())
 }
 async fn seats(State(c): State<Coordinator>, Path(id): Path<String>) -> ResultResponse {
-    let seats = c
-        .seats(&id)?
+    let seats = off(c, move |c| c.seats(&id))
+        .await??
         .into_iter()
         .map(|seat| contract::AgentSeat {
             dispatch_id: seat.dispatch_id,
@@ -131,7 +142,8 @@ async fn verdict(
     if body.actor.trim().is_empty() {
         body.actor = "human:operator".into();
     }
-    c.record_verdict(&id, &gate, body)?;
+    let run = id.clone();
+    off(c, move |c| c.record_verdict(&run, &gate, body)).await??;
     Ok((StatusCode::ACCEPTED, Json(contract::RunId { run_id: id })).into_response())
 }
 async fn pick(
@@ -143,7 +155,8 @@ async fn pick(
     if body.actor.trim().is_empty() {
         body.actor = "human:operator".into();
     }
-    c.record_pick(&id, &gate, body)?;
+    let run = id.clone();
+    off(c, move |c| c.record_pick(&run, &gate, body)).await??;
     Ok((StatusCode::ACCEPTED, Json(contract::RunId { run_id: id })).into_response())
 }
 async fn resume(
@@ -152,7 +165,7 @@ async fn resume(
     body: Result<Json<ResumeRequest>, JsonRejection>,
 ) -> ResultResponse {
     let Json(body) = body.map_err(bad_json)?;
-    response(c.resume(&id, body))
+    response(off(c, move |c| c.resume(&id, body)).await?)
 }
 async fn abort(
     State(c): State<Coordinator>,
@@ -160,7 +173,7 @@ async fn abort(
     body: Result<Json<contract::Abort>, JsonRejection>,
 ) -> ResultResponse {
     let Json(body) = body.map_err(bad_json)?;
-    response(c.abort(&id, &body.requested_by, &body.reason))
+    response(off(c, move |c| c.abort(&id, &body.requested_by, &body.reason)).await?)
 }
 async fn land(
     State(c): State<Coordinator>,
@@ -170,7 +183,7 @@ async fn land(
     let Json(body) = body.map_err(bad_json)?;
     Ok(Json(contract::Landed {
         landed: true,
-        notes: c.land(&id, body.force)?,
+        notes: off(c, move |c| c.land(&id, body.force)).await??,
     })
     .into_response())
 }
@@ -201,11 +214,14 @@ async fn start(
         .and_then(|h| h.to_str().ok())
         .unwrap_or("")
         .into();
-    let result = if req.formation_id.is_empty() {
-        c.start_mission(req)
-    } else {
-        c.start_formation(req)
-    };
+    let result = off(c, move |c| {
+        if req.formation_id.is_empty() {
+            c.start_mission(req)
+        } else {
+            c.start_formation(req)
+        }
+    })
+    .await?;
     match result {
         Ok(run_id) => Ok((StatusCode::ACCEPTED, Json(contract::RunId { run_id })).into_response()),
         Err(AdmissionFailure::Findings(findings)) => Ok((

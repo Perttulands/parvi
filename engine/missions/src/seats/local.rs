@@ -262,9 +262,19 @@ impl LocalSeats {
 /// What the seat's session runs. On Windows the harness runs in PowerShell,
 /// which finds npm's `.cmd` and `.ps1` shims as a person's prompt would;
 /// the command is passed encoded, so no quoting layer can split it.
+/// On Unix it runs under `env -u` for the variables by which a harness marks
+/// its own child processes: a node started from inside an agent's session
+/// would otherwise hand them to every seat, and a Claude seat that believes
+/// it is a child keeps no transcript, so its turn could never be seen to end.
 fn command(launch: crate::Launch) -> Vec<String> {
     if !cfg!(windows) {
-        return launch.argv;
+        let mut argv = vec!["env".to_owned()];
+        for name in INHERITED_MARKERS {
+            argv.extend(["-u".to_owned(), (*name).to_owned()]);
+        }
+        argv.push("--".into());
+        argv.extend(launch.argv);
+        return argv;
     }
     let utf16: Vec<u8> = launch
         .command
@@ -281,6 +291,24 @@ fn command(launch: crate::Launch) -> Vec<String> {
         base64(&utf16),
     ]
 }
+const INHERITED_MARKERS: &[&str] = &[
+    "CLAUDECODE",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_SSE_PORT",
+    "CLAUDE_PID",
+    "CLAUDE_EFFORT",
+    "CODEX_THREAD_ID",
+    "CODEX_SANDBOX",
+    "CODEX_SANDBOX_NETWORK_DISABLED",
+    "AI_AGENT",
+];
 fn base64(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
@@ -332,5 +360,28 @@ mod tests {
         assert_eq!(super::base64(b"Ma"), "TWE=");
         assert_eq!(super::base64(b"M"), "TQ==");
         assert_eq!(super::base64(b""), "");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn a_seat_does_not_inherit_the_markers_of_the_agent_that_started_its_node() {
+        let argv = super::command(crate::Launch {
+            command: String::new(),
+            argv: vec![
+                "sh".into(),
+                "-c".into(),
+                "echo ${CLAUDECODE:-none} ${CLAUDE_CODE_CHILD_SESSION:-none} $KEPT".into(),
+            ],
+        });
+        let out = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .env("CLAUDECODE", "1")
+            .env("CLAUDE_CODE_CHILD_SESSION", "1")
+            .env("KEPT", "kept")
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            "none none kept"
+        );
     }
 }

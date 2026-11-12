@@ -444,7 +444,12 @@ async fn call(m: Missions, name: &str, a: Value) -> Result<Value, Error> {
         "gate_request" => m
             .coordinator
             .gate_driver_request(required(&a, "run")?, required(&a, "gate")?),
-        "run_seats" => Ok(json!({"node":node,"seats":m.coordinator.seats(required(&a,"run")?)?})),
+        "run_seats" => {
+            let id = required(&a, "run")?.to_owned();
+            let coordinator = m.coordinator.clone();
+            let seats = blocking(move || coordinator.seats(&id)).await?;
+            Ok(json!({"node":node,"seats":seats}))
+        }
         "run_logs" => Ok(json!({"node":node,"events":m.coordinator.events(required(&a,"run")?)?})),
         "run_abort" => {
             let id = required(&a, "run")?.to_owned();

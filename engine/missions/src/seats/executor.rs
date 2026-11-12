@@ -10,7 +10,10 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, atomic::Ordering},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -730,8 +733,15 @@ impl Executor for SeatExecutor {
     fn reattach(&self, request: OpenDispatch) -> Result<FormationResult, crate::Error> {
         (|| -> Result<FormationResult, String> {
             let result = self.runtime.block_on(self.reattach_seat(&request));
-            if request.limits.is_spent() {
-                // A live attempt the limit cut off ends its seat the same way.
+            let raised = |flag: &Option<Arc<AtomicBool>>| {
+                flag.as_ref().is_some_and(|f| f.load(Ordering::Acquire))
+            };
+            let canceled = raised(&request.canceled)
+                && !raised(&request.stopping)
+                && self.seats.away(&request.formation.device).is_none();
+            if request.limits.is_spent() || canceled {
+                // A live attempt the limit cut off or an abort stopped ends
+                // its seat the same way.
                 self.runtime.block_on(async {
                     if let Some(seat) = self.seat_of(&request.dispatch_id).await? {
                         self.seats
