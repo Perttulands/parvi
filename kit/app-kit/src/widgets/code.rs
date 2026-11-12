@@ -206,6 +206,21 @@ impl Code {
         cx.notify();
     }
 
+    /// The first and last line (1-based) the selection covers, or none
+    /// while nothing is selected. A selection ending where a line starts
+    /// does not cover that line.
+    pub fn selected_lines(&self) -> Option<(usize, usize)> {
+        if self.selected.is_empty() {
+            return None;
+        }
+        let first = self.line_of(self.selected.start);
+        let mut last = self.line_of(self.selected.end);
+        if last > first && self.starts[last] == self.selected.end {
+            last -= 1;
+        }
+        Some((first + 1, last + 1))
+    }
+
     fn line_of(&self, at: usize) -> usize {
         match self.starts.binary_search(&at) {
             Ok(i) => i,
@@ -1037,6 +1052,21 @@ mod tests {
         assert_eq!(from_shown(line, 10), 4);
         assert_eq!(from_shown(line, 99), line.len());
         assert_eq!(starts_of("a\nbc\n"), vec![0, 2, 5]);
+    }
+
+    #[gpui::test]
+    fn selected_lines_count_from_one(cx: &mut gpui::TestAppContext) {
+        let code = cx.new(Code::new);
+        code.update(cx, |c, cx| {
+            c.set("one\ntwo\nthree", cx);
+            assert_eq!(c.selected_lines(), None);
+            c.selected = 4..5;
+            assert_eq!(c.selected_lines(), Some((2, 2)));
+            c.selected = 0..8;
+            assert_eq!(c.selected_lines(), Some((1, 2)));
+            c.selected = 2..10;
+            assert_eq!(c.selected_lines(), Some((1, 3)));
+        });
     }
 
     #[gpui::test]

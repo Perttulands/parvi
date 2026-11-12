@@ -1740,13 +1740,20 @@ impl FilesPage {
         }
     }
 
+    /// Sends the open file, or the selected entry, to a session. Lines
+    /// selected in the open file are named after the path (`path:12-18`).
     pub fn send(&self, cx: &mut Context<Self>) {
-        let path = self
-            .side
-            .opened
-            .as_ref()
-            .map(|o| o.path.clone())
-            .or_else(|| self.side.pane.selected_path());
+        let opened = self.side.opened.as_ref().map(|o| {
+            let lines = matches!(o.show, Show::Text { .. })
+                .then(|| self.side.code.read(cx).selected_lines())
+                .flatten();
+            match lines {
+                Some((first, last)) if first == last => format!("{}:{first}", o.path),
+                Some((first, last)) => format!("{}:{first}-{last}", o.path),
+                None => o.path.clone(),
+            }
+        });
+        let path = opened.or_else(|| self.side.pane.selected_path());
         if let Some(path) = path {
             let _ = self.host.ask(
                 Ask::Send {
