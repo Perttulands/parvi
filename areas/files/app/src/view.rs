@@ -197,6 +197,16 @@ impl FilesPage {
                     .whitespace_nowrap()
                     .debug_selector(move || selector.clone())
                     .child(div().debug_selector(move || label_selector.clone()))
+                    // A hit in a file's text shows its line after the place.
+                    .children(item.text.as_deref().map(str::trim).map(|text| {
+                        div()
+                            .min_w_0()
+                            .pl(px(ROW_INSET))
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .text_color(t.text)
+                            .child(text.to_owned())
+                    }))
                     .on_mouse_down(MouseButton::Right, {
                         let path = path.clone();
                         cx.listener(move |p, e: &gpui::MouseDownEvent, window, cx| {
