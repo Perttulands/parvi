@@ -98,27 +98,23 @@ pub fn launch_paste(all: &[Session], node: &str, sid: &str) -> Option<(Key, bool
 }
 
 /// The session Send opens aimed at, by one rule the operator can predict:
-/// the terminal a view `beside` it sits by, when Send came from that view;
-/// else the session the asking page names (a run's own seat); else the
-/// last session the operator sent to from this app (`last`, a
-/// [`Key::text`]). Only a session still listed in `all`, and never one
-/// picked by the list's order.
-pub fn first_target(
-    all: &[Session],
-    beside: Option<&Key>,
-    named: Option<&Key>,
-    last: Option<&str>,
-) -> Option<Key> {
-    let live = |k: &Key| crate::store::sessions::find(all, k).is_some();
-    beside
-        .filter(|k| live(k))
-        .or(named.filter(|k| live(k)))
-        .cloned()
-        .or_else(|| {
-            all.iter()
-                .map(Key::of)
-                .find(|k| Some(k.text().as_str()) == last)
-        })
+/// the session a page names when it asks for one (a run's own seat), else
+/// the session of the terminal window that last had focus. Only a session
+/// still listed in `all`, and never one picked by the list's order.
+pub fn first_target(all: &[Session], named: Option<&Key>, focused: Option<&Key>) -> Option<Key> {
+    let live = |k: &&Key| crate::store::sessions::find(all, k).is_some();
+    named.filter(live).or(focused.filter(live)).cloned()
+}
+
+/// Whether the drawer, `width` wide in a page `room` wide, opens on the
+/// left so that it covers less of the target's window, which spans `span`
+/// (left and right edge). On the right unless the left covers less.
+pub fn drawer_left(span: Option<(f32, f32)>, width: f32, room: f32) -> bool {
+    let Some((l, r)) = span else {
+        return false;
+    };
+    let covered = |from: f32, to: f32| (r.min(to) - l.max(from)).max(0.);
+    covered(0., width) < covered(room - width, room)
 }
 
 /// The drawer's width: the one remembered on this device, else the
@@ -158,7 +154,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn send_aims_at_the_terminal_beside_else_the_named_else_the_last_sent() {
+    fn send_aims_at_the_named_else_the_focused_window() {
         let session = |name: &str| Session {
             node: "n".into(),
             name: name.into(),
@@ -166,26 +162,28 @@ mod tests {
         };
         let all = [session("codex-srv"), session("mine"), session("seat")];
         let key = |name: &str| Key::of(&session(name));
-        let last = key("mine").text();
         assert_eq!(
-            first_target(&all, Some(&key("seat")), None, Some(&last)),
+            first_target(&all, Some(&key("seat")), Some(&key("mine"))),
             Some(key("seat"))
         );
         assert_eq!(
-            first_target(&all, None, Some(&key("seat")), Some(&last)),
-            Some(key("seat"))
-        );
-        assert_eq!(
-            first_target(&all, None, None, Some(&last)),
+            first_target(&all, None, Some(&key("mine"))),
             Some(key("mine"))
         );
-        // Nothing sent to yet, or the last one gone: no target, not the
-        // first in the list.
-        assert_eq!(first_target(&all, None, None, None), None);
-        assert_eq!(
-            first_target(&all[..1], Some(&key("seat")), None, Some(&last)),
-            None
-        );
+        // No focused session, or it is gone: no target, not the first in
+        // the list.
+        assert_eq!(first_target(&all, None, None), None);
+        assert_eq!(first_target(&all[..1], None, Some(&key("mine"))), None);
+    }
+
+    #[test]
+    fn the_drawer_opens_away_from_the_target_window() {
+        // Three windows across 1440, the drawer 380 wide.
+        assert!(drawer_left(Some((1100., 1440.)), 380., 1440.));
+        assert!(!drawer_left(Some((260., 620.)), 380., 1440.));
+        assert!(!drawer_left(None, 380., 1440.));
+        // One window across the page: the left covers the rail instead.
+        assert!(drawer_left(Some((260., 1440.)), 380., 1440.));
     }
 
     #[test]

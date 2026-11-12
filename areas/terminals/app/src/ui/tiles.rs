@@ -220,6 +220,29 @@ impl Terminals {
             .on_click(cx.listener(|s, _, window, cx| {
                 s.run(super::chords::Action::Sessions, window, cx);
             }));
+        let finding = self.is_open(super::surface::FIND);
+        let search = div()
+            .id("search-scrollback")
+            .debug_selector(|| "search-scrollback".into())
+            .h_full()
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .cursor_pointer()
+            .text_color(if finding { t.text } else { t.text2 })
+            .when(finding, |d| d.border_b_2().border_color(t.accent))
+            .hover(|d| d.text_color(t.text))
+            .child("Search scrollback")
+            .child(
+                div()
+                    .text_size(px(size::SMALL))
+                    .text_color(t.dim)
+                    .child("Alt+H"),
+            )
+            .on_click(cx.listener(|s, _, window, cx| {
+                s.run(super::chords::Action::Find, window, cx);
+            }));
         let layout = div()
             .ml_auto()
             .flex()
@@ -248,6 +271,7 @@ impl Terminals {
             .border_b_1()
             .border_color(t.divider)
             .child(tab)
+            .child(search)
             .child(layout)
     }
 

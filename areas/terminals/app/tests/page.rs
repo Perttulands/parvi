@@ -56,7 +56,7 @@ impl Page for Toy {
 
     fn answer(&mut self, ask: Ask, from: &'static str, _: &mut Window, cx: &mut Context<Self>) {
         if ask.beside() {
-            self.host.show_beside(from, cx.new(|_| Note).into(), cx);
+            self.host.show_beside(from, cx.new(|cx| Note(cx.focus_handle())).into(), cx);
         }
         ITEM_ASK.with(|slot| *slot.borrow_mut() = Some(ask));
     }
@@ -317,9 +317,8 @@ fn a_page_hands_a_reference_into_a_session_through_send(cx: &mut TestAppContext)
         shell.read_with(cx, |s, _| s.shown_page()) == Some("toy")
     });
     click(cx, "toy-send".into());
-    // The ask brings the Terminals page forward. Nothing was sent to before
-    // and the toy is beside no terminal, so Send aims nowhere and refuses
-    // until the operator picks; then it pastes the reference and submits.
+    // The ask brings the Terminals page forward with Send aimed at the
+    // session of the window that last had focus, named in the drawer.
     until(cx, "the Send drawer", |cx| {
         cx.debug_bounds("send-go").is_some()
     });
@@ -328,14 +327,12 @@ fn a_page_hands_a_reference_into_a_session_through_send(cx: &mut TestAppContext)
         Some("terminals")
     );
     let page = PAGE.with(|p| p.borrow().clone()).expect("the page");
-    assert_eq!(page.read_with(cx, |p, _| p.send_target.clone()), None);
-    click(cx, "send-go".into());
-    cx.run_until_parked();
+    let aimed = page.read_with(cx, |p, _| p.send_target.clone());
+    assert_eq!(aimed.map(|k| k.name), Some("alpha".to_string()));
     assert!(
-        page.read_with(cx, |p, _| p.send.sending.is_none()),
-        "no target, no send"
+        cx.debug_bounds("send-aimed-alpha").is_some(),
+        "named at the top"
     );
-    click(cx, format!("send-target-{}::alpha", running.node));
     click(cx, "send-go".into());
     until(cx, "the reference's output in the session", |cx| {
         shown(cx).contains("sent-42")
@@ -371,11 +368,11 @@ fn an_ask_that_names_a_session_aims_send_at_it_not_at_the_focused_one(cx: &mut T
     let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
 }
 
-struct Note;
+struct Note(gpui::FocusHandle);
 
 impl Render for Note {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().child("beside")
+        div().track_focus(&self.0).child("beside")
     }
 }
 
@@ -400,15 +397,20 @@ fn other_pages_read_the_sessions_and_open_views_beside_them(cx: &mut TestAppCont
         "{listed:?}"
     );
     assert!(cx.debug_bounds("terminals-beside").is_none());
-    cx.update(|_, cx| toy.show_beside("terminals", cx.new(|_| Note).into(), cx));
+    let note = cx.update(|_, cx| cx.new(|cx| Note(cx.focus_handle())));
+    cx.update(|_, cx| toy.show_beside("terminals", note.clone().into(), cx));
     cx.run_until_parked();
     assert!(
         cx.debug_bounds("terminals-beside").is_some(),
         "drawn beside"
     );
+    cx.update(|window, cx| window.focus(&note.read(cx).0.clone(), cx));
     cx.update(|_, cx| toy.close_beside("terminals", cx));
     cx.run_until_parked();
     assert!(cx.debug_bounds("terminals-beside").is_none(), "closed");
+    // The view lives on, holding the focus; the terminal takes it back.
+    let page = PAGE.with(|p| p.borrow().clone()).expect("the page");
+    assert!(cx.update(|window, cx| page.read(cx).term_focus.is_focused(window)));
     let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
 }
 
@@ -1716,7 +1718,6 @@ fn pasted_attachment_reaches_the_node_and_session(cx: &mut TestAppContext) {
     until(cx, "clipboard attachment", |cx| {
         page.read_with(cx, |p, _| !p.send.files.is_empty())
     });
-    click(cx, format!("send-target-{}::alpha", running.node));
     click(cx, "send-go".into());
     let mut path = std::path::PathBuf::new();
     until(cx, "reference and drop path delivered", |_| {

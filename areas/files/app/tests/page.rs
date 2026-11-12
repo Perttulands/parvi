@@ -408,12 +408,6 @@ fn browse_find_edit_save_and_send_to_a_session(cx: &mut TestAppContext) {
         shell.read_with(cx, |s, _| s.shown_page()),
         Some("terminals")
     );
-    // The files page sits beside no terminal and nothing was sent to
-    // before: the operator picks the target.
-    click(
-        cx,
-        Box::leak(format!("send-target-{}::alpha", running.node).into_boxed_str()),
-    );
     click(cx, "send-go");
     let expected = format!("path {}", file.display());
     until(cx, "reference delivered to session", |_| {

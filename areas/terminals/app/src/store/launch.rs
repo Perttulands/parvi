@@ -23,7 +23,7 @@ pub fn notify_label(command: &str) -> Option<&'static str> {
     let program = program.split('.').next()?;
     match program {
         "claude" => Some("Notify when it finishes or needs you"),
-        "codex" => Some("Notify when it finishes"),
+        "codex" => Some("Notify when it finishes (not when it asks)"),
         _ => None,
     }
 }

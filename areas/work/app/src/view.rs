@@ -540,21 +540,34 @@ impl Work {
         if !r.assignees.is_empty() {
             facts.push(format!("assigned to {}", r.assignees.join(", ")));
         }
-        let mut head = div().flex().items_center().gap(px(SPACE_XS)).child(
-            div()
-                .flex_1()
-                .text_color(t.text2)
-                .child(format!("{} · {}", r.id, p.label)),
-        );
+        // The buttons keep their words: past the room they wrap to a line
+        // of their own rather than clip.
+        let mut head = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(SPACE_XS))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .text_color(t.text2)
+                    .child(format!("{} · {}", r.id, p.label)),
+            );
         if r.url.is_some() {
             head = head.child(
                 kit::button(&t, "w-open", "Open on GitHub", Kind::Quiet)
+                    .flex_none()
                     .on_click(cx.listener(|w, _, _, cx| w.open_url(cx))),
             );
         }
         if !self.trail.is_empty() {
             head = head.child(
                 kit::button(&t, "w-back", "Back", Kind::Quiet)
+                    .flex_none()
                     .debug_selector(|| "w-back".into())
                     .tooltip(kit::tip("Alt+Left"))
                     .on_click(cx.listener(|w, _, _, cx| w.back(cx))),
@@ -563,6 +576,7 @@ impl Work {
         if p.checkout.is_some() {
             head = head.child(
                 kit::button(&t, "w-start", "Start session", Kind::Primary)
+                    .flex_none()
                     .debug_selector(|| "work-start".into())
                     .on_click(cx.listener(|w, _, _, cx| w.start_session(cx))),
             );
@@ -570,21 +584,22 @@ impl Work {
         head = head
             .child(
                 kit::button(&t, "w-send", "Send…", Kind::Quiet)
+                    .flex_none()
                     .debug_selector(|| "work-send".into())
                     .tooltip(kit::tip("Alt+S"))
                     .on_click(cx.listener(|w, _, window, cx| w.send(window, cx))),
             )
             .child(
-                kit::button(&t, "w-close", "Close", Kind::Quiet).on_click(cx.listener(
-                    |w, _, _, cx| {
+                kit::button(&t, "w-close", "Close", Kind::Quiet)
+                    .flex_none()
+                    .on_click(cx.listener(|w, _, _, cx| {
                         if let Some(from) = w.beside_from {
                             w.host.close_beside(from, cx);
                         } else {
                             w.card = false;
                             cx.notify();
                         }
-                    },
-                )),
+                    })),
             );
         let mut pull_facts: Option<Div> = None;
         if let Some(pf) = &r.pull {

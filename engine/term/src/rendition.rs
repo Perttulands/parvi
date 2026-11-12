@@ -7,6 +7,11 @@ use vt100::{Color, Screen};
 /// This cannot detect an SGR change made after that cell was written, or
 /// infer attributes at column zero; those cases fall back to this heuristic
 /// (default attributes when there is no preceding cell).
+///
+/// The background is not carried: erases paint with it, so a wrong guess
+/// floods the screen. Codex's composer sits on a gray band and its redraw
+/// after a resize erases the whole screen before setting any colour, which
+/// left Parvi gray where tmux was not.
 pub(crate) fn before_cursor(screen: &Screen, row: u16, col: u16) -> Vec<u8> {
     let Some(mut col) = col.checked_sub(1) else {
         return b"\x1b[0m".to_vec();
@@ -35,7 +40,6 @@ pub(crate) fn before_cursor(screen: &Screen, row: u16, col: u16) -> Vec<u8> {
         }
     }
     color(&mut params, 38, cell.fgcolor());
-    color(&mut params, 48, cell.bgcolor());
     format!("\x1b[{}m", params.join(";")).into_bytes()
 }
 
@@ -67,9 +71,20 @@ mod tests {
         let cell = next.screen().cell(0, 0).unwrap();
         assert!(cell.dim() && cell.italic() && cell.underline() && cell.inverse());
         assert_eq!(cell.fgcolor(), Color::Rgb(1, 2, 3));
-        assert_eq!(cell.bgcolor(), Color::Idx(42));
         next.process(&before_cursor(source.screen(), 0, 0));
         next.process(b"y");
         assert!(!next.screen().cell(0, 1).unwrap().dim());
+    }
+
+    #[test]
+    fn an_erase_after_a_cursor_in_a_coloured_band_leaves_the_screen_plain() {
+        // Codex after a resize: cursor in its gray composer, then a full
+        // erase before any colour is set.
+        let mut source = vt100::Parser::new(4, 10, 0);
+        source.process(b"\x1b[3;1H\x1b[48;2;30;30;30m> \x1b[K\x1b[0m");
+        let mut next = vt100::Parser::new(4, 10, 0);
+        next.process(&before_cursor(source.screen(), 2, 2));
+        next.process(b"\x1b[1;1H\x1b[J");
+        assert_eq!(next.screen().cell(1, 5).unwrap().bgcolor(), Color::Default);
     }
 }

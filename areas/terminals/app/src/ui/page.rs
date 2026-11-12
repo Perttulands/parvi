@@ -230,6 +230,10 @@ pub struct Terminals {
     pub places: BTreeMap<String, Place>,
     /// The page is the one shown.
     pub shown: bool,
+    /// The drawers put away while another page shows.
+    put_away: Vec<Surface>,
+    /// A view was beside the page when it last drew.
+    beside_open: bool,
     /// What is open over the page, bottom first, as this page opened it.
     pub surfaces: Vec<Surface>,
     /// Status lines said since the page last handed them to the app.
@@ -372,6 +376,8 @@ impl Terminals {
             settings,
             places,
             shown: false,
+            put_away: vec![],
+            beside_open: false,
             surfaces: vec![],
             said,
             geo: Rc::new(RefCell::new([Geo::default(); 4])),
@@ -1011,7 +1017,7 @@ impl Terminals {
                 self.peek = None;
                 self.sync(cx);
             }
-            Surface::Send => {
+            Surface::Send if self.shown => {
                 self.send_closed(window, cx);
             }
             _ => {}
@@ -1671,8 +1677,24 @@ impl Page for Terminals {
         Some(self.render_tabs(shown, window, cx))
     }
 
-    fn shown(&mut self, shown: bool, _window: &mut Window, cx: &mut Context<Self>) {
+    /// The search and Send drawers belong to this page: they go while
+    /// another page shows, and come back with it.
+    fn shown(&mut self, shown: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.shown = shown;
+        if shown {
+            for s in std::mem::take(&mut self.put_away) {
+                self.open(s, window, cx);
+            }
+        } else {
+            let away: Vec<Surface> = (self.surfaces.iter())
+                .filter(|s| matches!(s, Surface::Find | Surface::Send))
+                .cloned()
+                .collect();
+            for s in &away {
+                self.close(s.name(), cx);
+            }
+            self.put_away = away;
+        }
         cx.notify();
     }
 
@@ -1687,16 +1709,10 @@ impl Page for Terminals {
                     user: t.user,
                     name: t.name,
                 });
-                // Asked while this page shows a view beside its windows: the
-                // terminal that view sits by is the focused window's.
-                let beside = (self.shown && self.host.beside(cx).is_some())
-                    .then(|| self.focused_key())
-                    .flatten();
                 let target = crate::store::send::first_target(
                     &self.fleet.all,
-                    beside.as_ref(),
                     named.as_ref(),
-                    self.settings.recent_targets.first().map(String::as_str),
+                    self.focused_key().as_ref(),
                 );
                 self.handoff(Some(reference), target, window, cx);
             }
@@ -1741,6 +1757,17 @@ impl Render for Terminals {
             .height;
         self.peek_rows = ((page * size::PEEK_SHARE - px(size::PEEK_HEAD)) / cell).max(1.) as usize;
         self.see_focused(window);
+        // What had the keyboard went away (a view beside closed): it comes
+        // back to the terminal that looks focused. A closed view can keep
+        // the focus while it lives elsewhere, so its closing is enough.
+        let beside = self.host.beside(cx).is_some();
+        let beside_closed = std::mem::replace(&mut self.beside_open, beside) && !beside;
+        if self.shown
+            && self.surfaces.is_empty()
+            && (beside_closed || window.focused(cx).is_none())
+        {
+            window.focus(&self.term_focus, cx);
+        }
         self.render_terminals(window, cx)
     }
 }

@@ -21,7 +21,7 @@ use crate::store::send;
 use crate::store::sessions::{self, Key};
 use crate::theme::{alpha, size, theme};
 use gpui::{
-    AnyElement, AsyncApp, ClickEvent, Context, ExternalPaths, FocusHandle, FontWeight, MouseButton,
+    AnyElement, AsyncApp, ClickEvent, Context, ExternalPaths, FontWeight, MouseButton,
     MouseMoveEvent, WeakEntity, Window, div, prelude::*, px,
 };
 use parvi_app_kit::widgets::kit::{self, Kind};
@@ -58,10 +58,11 @@ pub struct Draft {
     pub uploading: bool,
     /// The focused tile grid before the drawer made room for itself.
     pub launch_grid: Option<super::page::Grid>,
-    /// What had the focus when the drawer opened.
-    pub opener: Option<FocusHandle>,
     /// The inner edge is being dragged.
     pub resizing: bool,
+    /// The drawer opened on the left, clear of its target's window. Chosen
+    /// once as it opens, so it never jumps under the pointer.
+    pub left: bool,
 }
 
 /// A local file or a clipboard image kept in memory until sent.
@@ -124,13 +125,11 @@ impl Terminals {
             self.open(Surface::Send, window, cx);
             return;
         }
-        let opener = window.focused(cx);
         let launch_grid = self.launch_grids.borrow()[self.settings.workspace.focus];
         self.send = Draft {
             reference,
             source,
             launch_grid,
-            opener,
             ..Default::default()
         };
         self.send_target = target;
@@ -138,16 +137,22 @@ impl Terminals {
         self.send_query.update(cx, |f, cx| f.set("", false, cx));
         self.send_note.update(cx, |f, cx| f.set("", false, cx));
         self.open(Surface::Send, window, cx);
+        // Where the windows move aside for the drawer it covers none of
+        // them; otherwise it opens on the side away from the target.
+        let room = window.viewport_size().width / px(1.);
+        self.send.left = self.drawer_room(window, cx).is_none()
+            && send::drawer_left(
+                self.aimed_span(),
+                send::width(self.settings.send_width, room),
+                room,
+            );
     }
 
-    /// The drawer closed: the focus goes back to what had it.
-    pub(super) fn send_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        match self.send.opener.take() {
-            Some(f) if self.surfaces.is_empty() => {
-                window.focus(&f, cx);
-                true
-            }
-            _ => false,
+    /// The drawer closed: the keyboard goes back to the terminal, whichever
+    /// view Send came from.
+    pub(super) fn send_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.surfaces.is_empty() {
+            window.focus(&self.term_focus, cx);
         }
     }
 
@@ -412,6 +417,7 @@ impl Terminals {
             .flex_col()
             .gap(px(8.))
             .child(kit::label(&t, "Target"))
+            .child(self.render_send_aimed(&t))
             .child(self.send_query.clone())
             .child(self.render_send_targets(cx));
         // The list shows whole rows; say what lies past its end.
@@ -523,16 +529,20 @@ impl Terminals {
         body = body.child(
             div()
                 .flex()
+                .flex_wrap()
                 .justify_end()
                 .gap(px(8.))
                 .child(
-                    kit::button(&t, "send-attach", "Attach…", Kind::Quiet).on_click(
-                        cx.listener(|s, _: &ClickEvent, window, cx| s.pick_files(window, cx)),
-                    ),
+                    kit::button(&t, "send-attach", "Attach…", Kind::Quiet)
+                        .flex_none()
+                        .on_click(
+                            cx.listener(|s, _: &ClickEvent, window, cx| s.pick_files(window, cx)),
+                        ),
                 )
                 .child(div().flex_1())
                 .child(
                     kit::button(&t, "send-paste", "Paste only", Kind::Plain)
+                        .flex_none()
                         .when(blocked, |b| b.opacity(0.5))
                         .on_click(cx.listener(|s, _: &ClickEvent, window, cx| {
                             s.send_now(false, window, cx)
@@ -540,6 +550,7 @@ impl Terminals {
                 )
                 .child(
                     kit::button(&t, "send-go", go, Kind::Primary)
+                        .flex_none()
                         .debug_selector(|| "send-go".into())
                         .when(blocked, |b| b.opacity(0.5))
                         .on_click(cx.listener(|s, _: &ClickEvent, window, cx| {
@@ -547,17 +558,25 @@ impl Terminals {
                         })),
                 ),
         );
+        let left = self.send.left;
         let drawer = div()
             .id("send")
-            .debug_selector(|| "send-drawer".into())
+            .debug_selector(move || {
+                if left {
+                    "send-drawer-left"
+                } else {
+                    "send-drawer"
+                }
+                .into()
+            })
             .absolute()
             .top_0()
             .bottom_0()
-            .right_0()
+            .when(left, |d| d.left_0().border_r_1().flex_row_reverse())
+            .when(!left, |d| d.right_0().border_l_1())
             .w(px(width))
             .flex()
             .bg(t.surface)
-            .border_l_1()
             .border_color(t.divider)
             .shadow_lg()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -599,7 +618,8 @@ impl Terminals {
             .when(resizing, |d| {
                 d.cursor_col_resize()
                     .on_mouse_move(cx.listener(move |s, e: &MouseMoveEvent, _, cx| {
-                        let w = room - e.position.x / px(1.);
+                        let x = e.position.x / px(1.);
+                        let w = if left { x } else { room - x };
                         s.settings.send_width = Some(send::width(Some(w), room));
                         cx.notify();
                     }))
@@ -613,6 +633,67 @@ impl Terminals {
                     )
             })
             .into_any_element()
+    }
+
+    /// The left and right edge of the window showing the session Send aims
+    /// at, as last painted.
+    fn aimed_span(&self) -> Option<(f32, f32)> {
+        let k = self.send_target.as_ref().filter(|_| !self.send.new_agent)?;
+        let geo = self.geo.borrow();
+        let ws = &self.settings.workspace;
+        (0..ws.windows().len())
+            .find(|&i| ws.shown(i).is_some_and(|b| &b.key == k))
+            .and_then(|i| geo.get(i).and_then(|g| g.body))
+            .map(|b| {
+                let l = f32::from(b.origin.x);
+                (l, l + f32::from(b.size.width))
+            })
+    }
+
+    /// The target, named where the drawer starts: what Enter sends to.
+    fn render_send_aimed(&self, t: &crate::theme::Theme) -> gpui::Div {
+        let aimed = (!self.send.new_agent)
+            .then(|| self.send_target.clone())
+            .flatten();
+        let line = div()
+            .flex_none()
+            .h(px(size::ROW))
+            .flex()
+            .items_center()
+            .gap(px(6.));
+        match aimed {
+            Some(k) => {
+                let name = k.name.clone();
+                let focused = self.focused_key().as_ref() == Some(&k);
+                line.debug_selector(move || format!("send-aimed-{name}"))
+                    .child(div().text_color(t.text2).child("To"))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(k.name),
+                    )
+                    .when(focused, |d| {
+                        d.child(
+                            div()
+                                .text_size(px(size::SMALL))
+                                .text_color(t.dim)
+                                .child("the focused window"),
+                        )
+                    })
+            }
+            None if self.send.new_agent => {
+                line.child(div().text_color(t.text2).child("To a new agent"))
+            }
+            None => line.debug_selector(|| "send-aimed-none".into()).child(
+                div()
+                    .text_color(t.text2)
+                    .child("No target yet: pick one below"),
+            ),
+        }
     }
 
     fn render_send_head(&self, t: &crate::theme::Theme, cx: &mut Context<Self>) -> gpui::Div {
@@ -702,7 +783,7 @@ impl Terminals {
                             div()
                                 .text_size(px(10.))
                                 .text_color(t.dim)
-                                .child("focused tile"),
+                                .child("focused window"),
                         )
                     })
                     .on_click(
