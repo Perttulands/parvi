@@ -198,17 +198,35 @@ async fn author_and_run_with_tools() {
         .unwrap();
     let run = started["runId"].as_str().unwrap();
     assert!(node.call("run_list", json!({})).await.unwrap()["runs"].is_array());
-    assert_eq!(
-        node.call("run_wait", json!({"run":run,"until":"final","timeout":5}))
-            .await
-            .unwrap()["outcome"],
-        "final"
-    );
+    let waited = node
+        .call("run_wait", json!({"run":run,"until":"final","timeout":5}))
+        .await
+        .unwrap();
+    assert_eq!(waited["outcome"], "final");
+    assert!(waited["outputs"].is_array());
     assert_eq!(
         node.call("run_status", json!({"run":run})).await.unwrap()["runId"],
         run
     );
-    assert!(node.call("run_logs", json!({"run":run})).await.unwrap()["events"].is_array());
+    let logs = node.call("run_logs", json!({"run":run})).await.unwrap();
+    let step_event = logs["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["nodeId"] == "fmn_work")
+        .expect("a step's event");
+    assert!(
+        !step_event["step"].as_str().unwrap_or("").is_empty(),
+        "a log line names its step: {step_event}"
+    );
+    let valid = node
+        .call("mission_validate", json!({"mission":"hello"}))
+        .await
+        .unwrap();
+    assert_eq!(
+        (&valid["valid"], &valid["summary"]),
+        (&json!(true), &json!("valid"))
+    );
     assert!(node.call("run_seats", json!({"run":run})).await.unwrap()["seats"].is_array());
     // A durable, resumable run: copy the engine's actual snapshots from the
     // completed run, then record a shutdown block for a fresh run id.

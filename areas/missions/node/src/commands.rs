@@ -301,8 +301,9 @@ async fn call(m: Missions, name: &str, a: Value) -> Result<Value, Error> {
         "mission_validate" => {
             let edit = m.store.mission_edit(required(&a, "mission")?)?;
             let report = validate(&edit.mission, &m.store.roles(), &Harnesses::from_host());
+            let valid = report.errors.is_empty();
             Ok(
-                json!({"node":node,"missionRev":edit.mission.rev,"missionEtag":edit.etag,"errors":report.errors,"warnings":report.warnings}),
+                json!({"node":node,"valid":valid,"summary":validation_summary(report.errors.len(), report.warnings.len()),"missionRev":edit.mission.rev,"missionEtag":edit.etag,"errors":report.errors,"warnings":report.warnings}),
             )
         }
         "mission_edit" => {
@@ -450,7 +451,27 @@ async fn call(m: Missions, name: &str, a: Value) -> Result<Value, Error> {
             let seats = blocking(move || coordinator.seats(&id)).await?;
             Ok(json!({"node":node,"seats":seats}))
         }
-        "run_logs" => Ok(json!({"node":node,"events":m.coordinator.events(required(&a,"run")?)?})),
+        "run_logs" => {
+            let id = required(&a, "run")?;
+            let mission = m.coordinator.frozen_mission(id).ok();
+            let events = m.coordinator.events(id)?;
+            let events: Vec<Value> = events
+                .into_iter()
+                .map(|event| {
+                    let step = [&event.node_id, &event.gate_id]
+                        .into_iter()
+                        .find(|id| !id.is_empty())
+                        .and_then(|id| mission.as_ref().map(|m| m.node_name(id).to_owned()))
+                        .unwrap_or_default();
+                    let mut v = value(event)?;
+                    if !step.is_empty() {
+                        v["step"] = json!(step);
+                    }
+                    Ok(v)
+                })
+                .collect::<Result<_, Error>>()?;
+            Ok(json!({"node":node,"events":events}))
+        }
         "run_abort" => {
             let id = required(&a, "run")?.to_owned();
             let actor = optional(&a, "actor", "agent:parvi")?.to_owned();
@@ -674,7 +695,27 @@ async fn wait(m: Missions, a: &Value) -> Result<Value, Error> {
         .iter()
         .flat_map(|ask| ask["commands"].as_array().into_iter().flatten().cloned())
         .collect();
+    let outputs: Vec<Value> = run
+        .outputs
+        .iter()
+        .map(|o| json!({"name":o.name,"kind":o.kind,"value":o.value}))
+        .collect();
     Ok(
-        json!({"outcome":answer.outcome,"status":run.status,"cursor":answer.cursor,"asks":asks,"next":next}),
+        json!({"outcome":answer.outcome,"status":run.status,"cursor":answer.cursor,"asks":asks,"next":next,"outputs":outputs}),
     )
+}
+
+/// One line a person reads first: whether the mission can run as it is.
+fn validation_summary(errors: usize, warnings: usize) -> String {
+    let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
+    match (errors, warnings) {
+        (0, 0) => "valid".into(),
+        (0, w) => format!("valid, with {}", plural(w, "warning")),
+        (e, 0) => format!("not valid: {}", plural(e, "error")),
+        (e, w) => format!(
+            "not valid: {} and {}",
+            plural(e, "error"),
+            plural(w, "warning")
+        ),
+    }
 }
