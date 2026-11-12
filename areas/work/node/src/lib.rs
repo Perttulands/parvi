@@ -82,24 +82,17 @@ impl Area for WorkArea {
                 async move {
                     let all = flag(&args, "all", false)
                         .map_err(|e| Error::new("bad_request", e.to_string()))?;
-                    let mut watching = work.subscribe();
-                    work.refresh();
+                    let _watching = work.subscribe();
+                    let requested = work.refresh();
                     let read = async {
-                        loop {
-                            let mut snapshot =
-                                serde_json::to_value(&*watching.next().await).map_err(failed)?;
-                            if snapshot["projects"].as_array().is_some_and(|p| {
-                                p.iter()
-                                    .all(|p| p.get("synced").is_some() || p.get("error").is_some())
-                            }) {
-                                if !all {
-                                    omit_closed(&mut snapshot);
-                                }
-                                snapshot["items"] = json!(listed_items(&snapshot));
-                                snapshot["node"] = json!(node);
-                                return Ok(snapshot);
-                            }
+                        let mut snapshot = serde_json::to_value(&*work.refreshed(requested).await)
+                            .map_err(failed)?;
+                        if !all {
+                            omit_closed(&mut snapshot);
                         }
+                        snapshot["items"] = json!(listed_items(&snapshot));
+                        snapshot["node"] = json!(node);
+                        Ok(snapshot)
                     };
                     tokio::time::timeout(Duration::from_secs(30), read)
                         .await

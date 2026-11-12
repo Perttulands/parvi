@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Result;
+use futures_util::{StreamExt, stream};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -28,6 +29,8 @@ use super::model::{ProjectView, RepoView, Snapshot, StoreView};
 /// GitHub read a new watcher takes as it is. A Beads store costs a file
 /// read unless it changed.
 pub const EVERY: Duration = Duration::from_secs(60);
+/// Limit tracker processes while letting independent projects overlap.
+const READ_CONCURRENCY: usize = 8;
 
 /// The Work module's state on this node. Cheap to clone.
 #[derive(Clone)]
@@ -47,6 +50,8 @@ pub(super) struct Inner {
     pub(super) prefixes: Mutex<HashMap<String, String>>,
     /// A watcher asked to read everything again now.
     refresh: tokio::sync::Notify,
+    /// The latest requested refresh whose entire round has completed.
+    refreshed: watch::Sender<u64>,
 }
 
 struct Read {
@@ -61,8 +66,8 @@ struct Poll {
     /// When GitHub was last read, so a watcher who comes back soon gets
     /// the repositories as they were without spending the rate limit again.
     last_github: Option<Instant>,
-    /// A refresh was asked for and not yet done.
-    refresh: bool,
+    /// The latest refresh requested, including one currently being read.
+    refresh: u64,
 }
 
 impl Default for Work {
@@ -101,6 +106,7 @@ impl Work {
             stores: Mutex::default(),
             prefixes: Mutex::default(),
             refresh: tokio::sync::Notify::new(),
+            refreshed: watch::Sender::new(0),
         }))
     }
 
@@ -154,9 +160,22 @@ impl Work {
 
     /// Reads every project again now, GitHub too, for the watchers: what a
     /// Refresh press asks. Only while some watcher keeps the poller running.
-    pub fn refresh(&self) {
-        self.0.poll.lock().unwrap().refresh = true;
+    pub fn refresh(&self) -> u64 {
+        let mut poll = self.0.poll.lock().unwrap();
+        poll.refresh += 1;
+        let requested = poll.refresh;
+        drop(poll);
         self.0.refresh.notify_one();
+        requested
+    }
+
+    /// Waits for the requested refresh, then returns its completed snapshot.
+    pub async fn refreshed(&self, requested: u64) -> Arc<Snapshot> {
+        if !self.0.config.projects.is_empty() {
+            let mut done = self.0.refreshed.subscribe();
+            let _ = done.wait_for(|generation| *generation >= requested).await;
+        }
+        self.0.snapshot.borrow().clone()
     }
 
     /// Starts watching: the snapshot now, and again each time it changes.
@@ -181,8 +200,13 @@ impl Inner {
     /// since, else read now, as always when it has no manifest. Also says
     /// whether this read them.
     pub(super) async fn store(&self, folder: &str) -> Result<(Arc<Vec<Item>>, bool)> {
+        self.store_now(folder, false).await
+    }
+
+    async fn store_now(&self, folder: &str, force: bool) -> Result<(Arc<Vec<Item>>, bool)> {
         let marker = beads::marker(folder).ok();
-        if let Some(read) = self.stores.lock().unwrap().get(folder)
+        if !force
+            && let Some(read) = self.stores.lock().unwrap().get(folder)
             && marker.is_some()
             && read.marker == marker
         {
@@ -230,7 +254,7 @@ impl Drop for Subscription {
     }
 }
 
-/// Looks at every project in turn, at once and then each [`EVERY`] or
+/// Looks at every project concurrently, at once and then each [`EVERY`] or
 /// when a refresh is asked, publishing each as it arrives, until aborted.
 /// The stores' manifests are looked at every round; GitHub is read in the
 /// first round (unless read within [`EVERY`]) and in a refresh's.
@@ -239,32 +263,18 @@ async fn rounds(work: Arc<Inner>) {
     let mut attempted: HashMap<usize, Result<Vec<u8>, String>> = HashMap::new();
     let mut github = github_wait(&work).is_zero();
     loop {
-        if std::mem::take(&mut work.poll.lock().unwrap().refresh) {
+        let requested = work.poll.lock().unwrap().refresh;
+        let refreshing = requested > *work.refreshed.borrow();
+        if refreshing {
             github = true;
             // Every store is read again, one without a manifest too.
             attempted.clear();
         }
+        let mut jobs = Vec::new();
         for (index, project) in work.config.projects.iter().enumerate() {
             match project {
                 Project::GitHub(_) if !github => {}
-                Project::GitHub(repo) => {
-                    let read = work.gh.read(repo).await;
-                    work.snapshot.send_modify(|snapshot| {
-                        let ProjectView::Github(view) =
-                            &mut Arc::make_mut(snapshot).projects[index]
-                        else {
-                            unreachable!("views follow the configuration")
-                        };
-                        match read {
-                            Ok(fresh) => {
-                                view.work = Some(fresh);
-                                view.synced = Some(unix_ms());
-                                view.error = None;
-                            }
-                            Err(error) => view.error = Some(format!("{error:#}")),
-                        }
-                    });
-                }
+                Project::GitHub(_) => jobs.push((index, project, None)),
                 Project::Beads(store) => {
                     let marker = beads::marker(&store.folder);
                     let due = due(attempted.get(&index), &marker);
@@ -283,35 +293,72 @@ async fn rounds(work: Arc<Inner>) {
                         });
                         continue;
                     }
-                    let read = work.store(&store.folder).await;
-                    work.snapshot.send_if_modified(|snapshot| {
-                        let ProjectView::Beads(view) = &mut Arc::make_mut(snapshot).projects[index]
-                        else {
-                            unreachable!("views follow the configuration")
-                        };
-                        let unwatched_changed = view.unwatched != unseen;
-                        view.unwatched = unseen;
-                        match read {
-                            Ok((_, false)) if view.error.is_none() && view.items.is_some() => {
-                                unwatched_changed
-                            }
-                            Ok((items, _)) => {
-                                view.items = Some(items.to_vec());
-                                view.synced = Some(unix_ms());
-                                view.error = None;
-                                true
-                            }
-                            Err(error) => {
-                                view.error = Some(format!("{error:#}"));
-                                true
-                            }
-                        }
-                    });
+                    jobs.push((index, project, unseen));
                 }
             }
         }
+        stream::iter(jobs)
+            .for_each_concurrent(READ_CONCURRENCY, |(index, project, unseen)| {
+                let work = &work;
+                async move {
+                    match project {
+                        Project::GitHub(repo) => {
+                            let read = work.gh.read(repo).await;
+                            work.snapshot.send_modify(|snapshot| {
+                                let ProjectView::Github(view) =
+                                    &mut Arc::make_mut(snapshot).projects[index]
+                                else {
+                                    unreachable!("views follow the configuration")
+                                };
+                                match read {
+                                    Ok(fresh) => {
+                                        view.work = Some(fresh);
+                                        view.synced = Some(unix_ms());
+                                        view.error = None;
+                                    }
+                                    Err(error) => view.error = Some(format!("{error:#}")),
+                                }
+                            });
+                        }
+                        Project::Beads(store) => {
+                            let read = work.store_now(&store.folder, refreshing).await;
+                            work.snapshot.send_if_modified(|snapshot| {
+                                let ProjectView::Beads(view) =
+                                    &mut Arc::make_mut(snapshot).projects[index]
+                                else {
+                                    unreachable!("views follow the configuration")
+                                };
+                                let unwatched_changed = view.unwatched != unseen;
+                                view.unwatched = unseen;
+                                match read {
+                                    Ok((items, false))
+                                        if view.error.is_none()
+                                            && view.items.as_deref() == Some(items.as_slice()) =>
+                                    {
+                                        unwatched_changed
+                                    }
+                                    Ok((items, _)) => {
+                                        view.items = Some(items.to_vec());
+                                        view.synced = Some(unix_ms());
+                                        view.error = None;
+                                        true
+                                    }
+                                    Err(error) => {
+                                        view.error = Some(format!("{error:#}"));
+                                        true
+                                    }
+                                }
+                            });
+                        }
+                    }
+                }
+            })
+            .await;
         if github {
             work.poll.lock().unwrap().last_github = Some(Instant::now());
+        }
+        if refreshing {
+            work.refreshed.send_replace(requested);
         }
         // A refresh is only ever asked for; GitHub is not read on a timer.
         tokio::select! {
@@ -448,6 +495,66 @@ pub(super) mod tests {
     }
 
     #[tokio::test]
+    async fn twenty_one_slow_stores_overlap_with_a_bounded_number_of_processes() {
+        let fixture = fixture("beads.json");
+        let fake = Fake::new(
+            "parallel-stores",
+            "exit 1",
+            &format!(
+                "echo start >> \"$(dirname \"$0\")/overlap\"; sleep 1; echo end >> \"$(dirname \"$0\")/overlap\"; {fixture}"
+            ),
+        );
+        let mut projects = Vec::new();
+        for i in 0..21 {
+            let folder = fake.dir.join(format!("store-{i}"));
+            let noms = folder.join(".beads/embeddeddolt/tst/.dolt/noms");
+            std::fs::create_dir_all(&noms).unwrap();
+            std::fs::write(noms.join("manifest"), "one").unwrap();
+            projects.push(Project::Beads(Store {
+                folder: folder.display().to_string(),
+            }));
+        }
+        let work = fake.work(projects);
+        let mut watching = work.subscribe();
+        let start = Instant::now();
+        tokio::time::timeout(Duration::from_secs(12), async {
+            loop {
+                let snapshot = watching.next().await;
+                if snapshot
+                    .projects
+                    .iter()
+                    .all(|p| matches!(p, ProjectView::Beads(s) if s.items.is_some()))
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("21 one-second stores should not read serially");
+        let elapsed = start.elapsed();
+        let log = std::fs::read_to_string(fake.dir.join("overlap")).unwrap();
+        let (mut running, mut peak, mut finished) = (0, 0, 0);
+        for line in log.lines() {
+            match line {
+                "start" => {
+                    running += 1;
+                    peak = peak.max(running);
+                }
+                "end" => {
+                    running -= 1;
+                    finished += 1;
+                }
+                _ => panic!("unexpected fake-bd event: {line}"),
+            }
+        }
+        assert_eq!(finished, 21);
+        assert!(
+            peak > 1 && peak <= READ_CONCURRENCY,
+            "peak {peak}, elapsed {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn reads_only_while_watched() {
         let fake = Fake::new("watched", &fixture("parvi.json"), &fixture("beads.json"));
         let work = fake.work(vec![
@@ -507,6 +614,61 @@ pub(super) mod tests {
             "changed: read again"
         );
         assert_eq!(fake.runs("bd").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_changed_marker_publishes_even_if_an_item_lookup_already_filled_the_cache() {
+        let fake = Fake::new("marker-after-lookup", "exit 1", "cat items.json");
+        let items = fake.dir.join("store/items.json");
+        let data = |status: &str| {
+            format!(
+                r#"[{{"id":"tst-1","title":"Task","status":"{status}","created_at":"2026-11-01T00:00:00Z","updated_at":"2026-11-01T00:00:00Z"}}]"#
+            )
+        };
+        std::fs::write(&items, data("open")).unwrap();
+        let work = fake.work(vec![Project::Beads(Store {
+            folder: fake.store(),
+        })]);
+        let mut watching = work.subscribe();
+        while store(&*watching.next().await, 0).items.is_none() {}
+        tokio::task::yield_now().await;
+        tokio::time::pause();
+        tokio::time::advance(EVERY).await;
+        tokio::task::yield_now().await;
+        assert_eq!(
+            fake.runs("bd").len(),
+            1,
+            "unchanged marker does not read bd"
+        );
+        std::fs::write(&items, data("closed")).unwrap();
+        fake.touch("changed");
+        let snapshot = watching.changes.borrow_and_update().clone();
+        let mut fresh = store(&snapshot, 0).items.as_ref().unwrap().clone();
+        fresh[0].status = "closed".into();
+        work.0.stores.lock().unwrap().insert(
+            fake.store(),
+            Read {
+                marker: Some(beads::marker(&fake.store()).unwrap()),
+                items: Arc::new(fresh),
+            },
+        );
+        tokio::time::advance(EVERY).await;
+        tokio::time::timeout(EVERY * 2, async {
+            loop {
+                let changed = watching.next().await;
+                if store(&changed, 0).items.as_ref().unwrap()[0].status == "closed" {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("the marker publishes the cached change");
+        assert_eq!(
+            fake.runs("bd").len(),
+            1,
+            "the cached lookup supplies the changed snapshot without another read"
+        );
+        tokio::time::resume();
     }
 
     #[tokio::test]

@@ -190,6 +190,51 @@ fn says_it_is_still_reading_while_no_project_has_answered(cx: &mut TestAppContex
     });
     // Drawn, it says so: the page renders without a panic at any state.
     cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("work-loading-Reading projects: 0 of 2 loaded")
+            .is_some()
+    );
+    cx.update(|_, cx| {
+        work.update(cx, |w, cx| {
+            w.snapshots.insert(
+                "node".into(),
+                Snapshot {
+                    projects: vec![
+                        store("/one", vec![b("one-1")]),
+                        Project::Beads(Store {
+                            folder: "/two".into(),
+                            ..Store::default()
+                        }),
+                    ],
+                },
+            );
+            w.rebuild(cx);
+        })
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("work-loading-Reading projects: 1 of 2 loaded")
+            .is_some()
+    );
+    cx.update(|_, cx| {
+        work.update(cx, |w, cx| {
+            w.snapshots.insert(
+                "node".into(),
+                Snapshot {
+                    projects: vec![
+                        store("/one", vec![b("one-1")]),
+                        store("/two", vec![b("two-1")]),
+                    ],
+                },
+            );
+            w.rebuild(cx);
+        })
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("work-loading-Reading projects: 1 of 2 loaded")
+            .is_none()
+    );
 }
 
 #[gpui::test]
