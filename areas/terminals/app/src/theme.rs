@@ -17,6 +17,8 @@ pub mod size {
     pub const RAIL: f32 = 260.;
     /// Name budget in the standard rail, leaving room for age and actions.
     pub const RAIL_NAME_COLUMNS: usize = 22;
+    /// The room a rail row keeps for its news dot.
+    pub const DOT_SLOT: f32 = 12.;
     /// What another page opens beside the windows (a file a link named).
     pub const BESIDE: f32 = 560.;
     pub const TILE_HEAD: f32 = 34.;

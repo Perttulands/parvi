@@ -23,7 +23,7 @@
 //! Nobody is detached. Releasing undoes exactly that, so the window goes back to
 //! whoever sized it before, or keeps its size if nobody did.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -63,6 +63,9 @@ const ACTIVE_FOR: Duration = Duration::from_secs(5);
 /// typed since, is the programs redrawing for it, and leaves the session's
 /// last output where it was.
 const REDRAW_FOR: Duration = Duration::from_secs(1);
+
+/// How many layouts back a pane's text is remembered to tell a redraw by.
+const REDRAW_LAYOUTS: usize = 4;
 
 /// After output, how long until the screens are read for a waiting prompt.
 /// At most one look per this long while output flows, and always one after
@@ -1170,15 +1173,29 @@ enum Pending {
 
 const LIST_PANES_FORMAT: &str = "#{pane_id} #{pane_width} #{pane_height}";
 
-/// Whether `after` shows a line of text `before` did not: a redraw shows
-/// the same lines laid out again, their spacing aside (vim's ruler moves).
-fn adds_a_line(before: &str, after: &str) -> bool {
-    let words = |line: &str| line.split_whitespace().collect::<Vec<_>>().join(" ");
-    let had: HashSet<String> = before.lines().map(words).collect();
+/// Whether `after` shows text none of the screens `before` did. A redraw for a new size
+/// shows the same text laid out again: lines wrapped at other places, rules
+/// drawn longer or shorter, rulers moved, text cut with `…`. So each word
+/// of `after`, split at its `…`, is looked for in all of `before` with its
+/// spacing gone and repeated characters counted once.
+fn adds_text<'a>(before: impl IntoIterator<Item = &'a str>, after: &str) -> bool {
+    fn squeeze(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        for c in text.chars().filter(|c| !c.is_whitespace()) {
+            if !out.ends_with(c) {
+                out.push(c);
+            }
+        }
+        out
+    }
+    let had: Vec<String> = before.into_iter().map(squeeze).collect();
     after
-        .lines()
-        .map(words)
-        .any(|line| !line.is_empty() && !had.contains(&line))
+        .split_whitespace()
+        .flat_map(|word| word.split('…'))
+        .any(|part| {
+            let part = squeeze(part);
+            !part.is_empty() && !had.iter().any(|text| text.contains(&part))
+        })
 }
 
 /// Follows one session until its client exits or the engine stops.
@@ -1239,6 +1256,11 @@ async fn follow_inner(
     // tmux reports a layout change before the programs in the window
     // redraw for their new size (a shell its prompt, vim its screen).
     let mut layout_changed: Option<tokio::time::Instant> = None;
+    // Our panes' text as it stood before the last few layout changes,
+    // which their redraw is told apart from new output by: a program that
+    // cut its text short for a narrow window shows it whole again when it
+    // widens.
+    let mut shown_before: HashMap<PaneId, VecDeque<String>> = HashMap::new();
     let quiet = tokio::time::sleep(ACTIVE_FOR);
     tokio::pin!(quiet);
     // A look at our panes' screens for a waiting prompt is due.
@@ -1327,20 +1349,21 @@ async fn follow_inner(
                     Event::Notification(Notification::Output { pane, data }) => {
                         deliveries.heard_output(pane, tokio::time::Instant::now());
                         let mut state = shared.state.lock().unwrap();
+                        let id = pane;
                         let Some(pane) = state.panes.get_mut(&pane) else { continue };
                         if pane.owner != session {
                             continue;
                         }
                         // What a program writes just after its window
                         // changed size is its redraw, not news, unless it
-                        // puts a line on screen that was not there before.
+                        // puts text on screen that was not there before.
                         let mut redraw = layout_changed.is_some_and(|at| at.elapsed() < REDRAW_FOR);
                         if pane.synced {
-                            let before = redraw.then(|| pane.screen.screen().contents());
                             let data = pane.utf8.pass(data);
                             pane.screen.process(&data);
-                            if let Some(before) = before {
-                                redraw = !adds_a_line(&before, &pane.screen.screen().contents());
+                            if redraw && let Some(before) = shown_before.get(&id) {
+                                let after = pane.screen.screen().contents();
+                                redraw = !adds_text(before.iter().map(String::as_str), &after);
                             }
                             pane.changes += 1;
                             pane.tell_viewers(|_| PaneUpdate::Output(data.into()));
@@ -1385,6 +1408,19 @@ async fn follow_inner(
                             }
                     }
                     Event::Notification(Notification::WindowsChanged) => {
+                        // Changes in a burst are one: the text before the
+                        // first is what the redraw shows again.
+                        if layout_changed.is_none_or(|at| at.elapsed() >= REDRAW_FOR) {
+                            let state = shared.state.lock().unwrap();
+                            shown_before.retain(|id, _| state.panes.get(id).is_some_and(|p| p.owner == session));
+                            for (id, p) in state.panes.iter().filter(|(_, p)| p.owner == session && p.synced) {
+                                let texts = shown_before.entry(*id).or_default();
+                                texts.push_back(p.screen.screen().contents());
+                                if texts.len() > REDRAW_LAYOUTS {
+                                    texts.pop_front();
+                                }
+                            }
+                        }
                         layout_changed = Some(tokio::time::Instant::now());
                         send(&mut out, &mut pending, list_panes(session), Pending::ListPanes);
                         request_facts(session, &mut out, &mut pending);
@@ -1885,12 +1921,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_redraw_adds_no_line_and_output_does() {
+    fn a_redraw_adds_no_text_and_output_does() {
         let before = "$ ls\nnotes.txt\n$ ";
-        assert!(!adds_a_line(before, "$ ls\n  notes.txt  \n\n$"));
-        assert!(adds_a_line(before, "$ ls\nnotes.txt\n$ echo hi\nhi"));
-        assert!(!adds_a_line("~\n~\n", "~\n~\n~\n"));
-        assert!(!adds_a_line("x\n  1,1     All", "x\n 1,1  All"));
+        assert!(!adds_text([before], "$ ls\n  notes.txt  \n\n$"));
+        assert!(adds_text([before], "$ ls\nnotes.txt\n$ echo hi\nhi"));
+        assert!(!adds_text(["~\n~\n"], "~\n~\n~\n"));
+        // vim's ruler moves, a rule grows, a long line wraps elsewhere.
+        assert!(!adds_text(["x\n  1,1     All"], "x\n 1,1  All"));
+        let rule = "────\nReply with the single\nword hi";
+        assert!(!adds_text(
+            [rule],
+            "──────────\nReply with the single word\nhi"
+        ));
+        let path = "$ /tmp/a/very/lo\nng/path";
+        assert!(!adds_text([path], "$ /tmp/a/ve\nry/long/path"));
+        // Text cut short, at the end or in the middle.
+        assert!(!adds_text(["saving is off"], "saving is of…"));
+        assert!(!adds_text(["/…/own-term/proj/alpha"], "/…/proj/alpha"));
+        // Widened again, it shows what an earlier, wider screen showed.
+        let (wide, narrow) = ("saving is off — inherited", "saving is of…");
+        assert!(adds_text([narrow], wide));
+        assert!(!adds_text([wide, narrow], wide));
     }
 
     #[test]

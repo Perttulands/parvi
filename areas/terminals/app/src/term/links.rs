@@ -153,6 +153,21 @@ impl Text {
             }
         }
         links.extend(joined.into_iter().map(|(_, _, l)| l));
+        // A path relative to the pane's folder, where nothing above is.
+        for (i, n) in relative_paths(&self.chars) {
+            let cut = (i == 0 && self.cut_before) || (i + n == end && self.cut_after);
+            let cells = self.cells(i, n);
+            if !cut
+                && !links
+                    .iter()
+                    .any(|link| cells.iter().any(|cell| link.cells.contains(cell)))
+            {
+                links.push(Link {
+                    target: Target::Path(self.chars[i..i + n].iter().collect()),
+                    cells,
+                });
+            }
+        }
         // A URL or path takes precedence over a work-like substring.
         for (i, n) in work_items(&self.chars) {
             let cut = (i == 0 && self.cut_before) || (i + n == end && self.cut_after);
@@ -317,6 +332,53 @@ fn paths(t: &[char]) -> Vec<(usize, usize)> {
     out
 }
 
+/// The paths relative to the pane's folder in `t`, as (start, length):
+/// a word that names a file by its extension (`notes.txt`,
+/// `src/ui/rail.rs:12`) or starts at `./` or `../`. A word with slashes but
+/// no extension (`and/or`) or a number (`v2.1.3`) is not one, nor a repo
+/// before its `#42`.
+fn relative_paths(t: &[char]) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < t.len() {
+        let starts = (name_char(t[i]) || t[i] == '.')
+            && (i == 0 || !(name_char(t[i - 1]) || "/:#".contains(t[i - 1])));
+        if !starts {
+            i += 1;
+            continue;
+        }
+        let j = run(t, i);
+        let n = trailing_trimmed(&t[i..j]);
+        let word: String = t[i..i + n].iter().collect();
+        if t.get(j) != Some(&'#') && names_a_file(&word) {
+            out.push((i, n));
+        }
+        i = j.max(i + 1);
+    }
+    out
+}
+
+/// A relative word that reads as a file: `./` or `../` before it, or a
+/// last name with an extension of letters and digits after a name with a
+/// letter in it.
+fn names_a_file(word: &str) -> bool {
+    if word.starts_with('/') || word.contains("//") {
+        return false;
+    }
+    if (word.starts_with("./") || word.starts_with("../")) && word.len() > 3 {
+        return true;
+    }
+    let last = word.rsplit('/').next().unwrap_or(word);
+    let Some((base, ext)) = last.rsplit_once('.') else {
+        return false;
+    };
+    base.chars().filter(|c| c.is_ascii_alphabetic()).count() >= 1
+        && base.trim_start_matches('.').chars().count() >= 2
+        && (1..=8).contains(&ext.len())
+        && ext.chars().all(|c| c.is_ascii_alphanumeric())
+        && ext.chars().any(|c| c.is_ascii_alphabetic())
+}
+
 /// Recognize complete tokens, so a path or a larger word is never offered as
 /// a partial item id. Soft-wrapped rows have already been joined by `Text`.
 fn work_items(t: &[char]) -> Vec<(usize, usize)> {
@@ -433,10 +495,27 @@ mod tests {
         let l = link(&s, 0, 8).unwrap();
         assert_eq!(l.target, Target::Path("/srv/parvi/src/main.rs".into()));
         assert_eq!(link(&s, 0, 3), None);
-        // A relative path or a lone slash is not a link.
+        // A lone slash, or a word with slashes but no file in it, is not a link.
         let s = screen(60, 2, "a/b and / alone");
         assert_eq!(link(&s, 0, 1), None);
         assert_eq!(link(&s, 0, 8), None);
+    }
+
+    #[test]
+    fn a_file_named_relative_to_the_pane_opens() {
+        let s = screen(
+            80,
+            2,
+            "edited src/ui/rail.rs:12 and notes.txt. see ./run and v2.1.3 e.g. x",
+        );
+        let at = |col| link(&s, 0, col).map(|l| l.target);
+        assert_eq!(at(9), Some(Target::Path("src/ui/rail.rs".into())));
+        assert_eq!(at(31), Some(Target::Path("notes.txt".into())));
+        assert_eq!(at(47), Some(Target::Path("./run".into())));
+        // A version, an abbreviation and a plain word are not files.
+        assert_eq!(at(56), None);
+        assert_eq!(at(63), None);
+        assert_eq!(at(0), None);
     }
 
     #[test]

@@ -1570,7 +1570,14 @@ impl Terminals {
         let ask = match target {
             links::Target::Path(path) => Ask::OpenPath {
                 node: NodeId(node),
-                path,
+                path: match self.cwd_of(i) {
+                    Some(cwd) if !path.starts_with('/') => format!(
+                        "{}/{}",
+                        cwd.trim_end_matches('/'),
+                        path.trim_start_matches("./")
+                    ),
+                    _ => path,
+                },
                 beside: true,
             },
             links::Target::WorkItem(id) => Ask::Reveal {
@@ -1585,6 +1592,16 @@ impl Terminals {
         if let Err(e) = self.host.ask(ask, cx) {
             self.report(&e.message, true, None);
         }
+    }
+
+    /// The folder of the session window `i` shows, which relative paths
+    /// its output names are relative to.
+    fn cwd_of(&self, i: usize) -> Option<String> {
+        let session = match self.histories.get(&i) {
+            Some(h) => self.fleet.session_of_pane(&h.pane.node, h.pane.pane),
+            None => self.fleet.session(&self.settings.workspace.shown(i)?.key),
+        };
+        session?.cwd.clone()
     }
 
     fn term_mouse_up(&mut self, e: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {

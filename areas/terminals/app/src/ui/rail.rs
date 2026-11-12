@@ -282,7 +282,7 @@ impl Terminals {
         let selector = id.to_string();
         place::edge(div().id(id).debug_selector(move || selector), device)
             .min_h(px(size::ROW))
-            .pl(px(8.))
+            .pl(px(2.))
             .pr(px(4.))
             .flex()
             .items_center()
@@ -307,13 +307,21 @@ impl Terminals {
             .when(in_focused, |d| d.bg(t.raised))
             .when(picked, |d| d.bg(t.accent_soft()))
             .hover(|d| d.bg(t.accent_light()))
+            // The news dot keeps its room on every row, so the names stand
+            // in one column; what a session runs is said on the right.
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(size::DOT_SLOT))
+                    .flex()
+                    .justify_center()
+                    .map(|d| match &mark {
+                        Some(e) => d.child(event_dot(t, &key, e)),
+                        None if waiting.is_some() => d.child(kit::waiting_dot(t)),
+                        None => d,
+                    }),
+            )
             .when_some(s.user.clone(), |d, u| d.child(kit::user_square(t, &u)))
-            .children(running_mark(t, s, cx))
-            .map(|d| match &mark {
-                Some(e) => d.child(event_dot(t, &key, e)),
-                None if waiting.is_some() => d.child(kit::waiting_dot(t)),
-                None => d,
-            })
             .child(
                 div()
                     .flex_1()
@@ -333,6 +341,9 @@ impl Terminals {
                             .child(e.summary.clone())
                     })),
             )
+            .children(running_mark(t, s, cx).filter(
+                |_| !matches!(sessions::running(s), sessions::Running::Command(c) if c == s.name),
+            ))
             .children(
                 glyphs(s)
                     .into_iter()
