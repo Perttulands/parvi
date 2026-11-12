@@ -25,9 +25,7 @@ Each directory under an area, `kit/`, `bin/` and `engine/` is one crate. The
 areas are terminals, files, work, brain, host, scheduled, agents and missions;
 fleet becomes one after the first release. Launching sessions and agent events
 live in terminals. Settings is not an area: the shell's Settings page lists
-what pages declare. While areas move in parallel, only the foundation's owner
-and the lead edit `kit/` and `bin/`; an area agent that needs a change there
-files a bead.
+what pages declare.
 
 ## Rules the compiler holds
 

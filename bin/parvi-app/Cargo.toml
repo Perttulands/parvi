@@ -21,7 +21,6 @@ parvi-app-kit = { path = "../../kit/app-kit" }
 parvi-app-shell = { path = "../../kit/app-shell" }
 gpui = { package = "gpui-pre", version = "=0.3.12" }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12" }
-async-channel = "2"
 log = "0.4"
 # The pages, one line each, as in PAGES.
 parvi-agents-app = { path = "../../areas/agents/app" }
@@ -42,4 +41,5 @@ gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features =
 embed-resource = "3"
 
 [dev-dependencies]
+async-channel = "2"
 gpui = { package = "gpui-pre", version = "=0.3.12", features = ["test-support"] }

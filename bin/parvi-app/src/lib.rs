@@ -47,7 +47,7 @@ pub fn run() {
             .position(|a| a == "--node")
             .and_then(|i| args.get(i + 1).cloned())
     };
-    let failed_notices = app_log::install();
+    app_log::install();
     gpui_platform::application().run(move |cx: &mut App| {
         if let Err(e) = cx.text_system().add_fonts(fonts()) {
             panic!("the bundled fonts did not load: {e}");
@@ -66,22 +66,7 @@ pub fn run() {
                 ..Default::default()
             },
             |window, cx| {
-                let shell =
-                    cx.new(|cx| start(PAGES, node, parvi_app_kit::settings::path(), window, cx));
-                let hub = shell.read(cx).hub().downgrade();
-                window
-                    .spawn(cx, async move |cx| {
-                        while let Ok(why) = failed_notices.recv().await {
-                            let status = parvi_app_kit::host::Status::failure(format!(
-                                "A desktop notification could not be shown: {why}"
-                            ));
-                            if hub.update(cx, |h, cx| h.report(status, cx)).is_err() {
-                                break;
-                            }
-                        }
-                    })
-                    .detach();
-                shell
+                cx.new(|cx| start(PAGES, node, parvi_app_kit::settings::path(), window, cx))
             },
         );
         if let Err(e) = opened {

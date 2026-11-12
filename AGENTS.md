@@ -11,14 +11,25 @@ missions in one Rust binary, used through a native app and the `parvi` CLI.
   never on the real fleet or the real Tailscale. A test needs only Rust and
   tmux: any other program (`bd`, `gh`, a harness) is a fake the test writes.
 - Other agents run at the same time. Pick unique scratch names and ports.
-- Build and test the crates you changed, through `heavy run`. CI runs the whole
-  workspace. Chase a flake by reading the code and writing a deterministic
-  test, not by rerunning.
+- Build and test through `heavy run --memory <GiB>`.
+
+## Owning a piece
+
+You own an outcome, such as a page being good on its journeys, and keep going
+until it is. Fix what you find where it lives, in any directory. Push to main
+when the crates you changed pass the checks; CI runs the whole workspace, and a
+red main is fixed forward by whoever broke it. Tell the other owners only when
+you change a `contract` or `kit/` interface they use. File a bead only for work
+you will not finish yourself.
+
+For anything on screen, run the app against a node of your own on a private
+display and look at the screenshot. A passing test does not show that a page
+is good.
 
 ## Code
 
-- Work inside your area's directory. If a change seems to need another area's
-  internals or a new central list, the design is wrong: stop and say so.
+- `ARCHITECTURE.md` lists the boundaries the build holds. If a change needs to
+  break one, the design is wrong: stop and say so.
 - In the native app every visual value is a token, and stores stay apart from
   views.
 - Land a rename or reshape whole: no shims, aliases or dead code.
@@ -29,4 +40,6 @@ missions in one Rust binary, used through a native app and the `parvi` CLI.
 Before pushing: `cargo fmt --check`, then `cargo clippy -- -D warnings` and
 `PARVI_REQUIRE_TMUX=1 cargo test` for the crates you changed (`-p <crate>`).
 If `tmux` on `PATH` is a wrapper that refuses `kill-server`, set `PARVI_TMUX` to
-the real binary.
+the real binary. Write a test for behaviour that could break again, not for how
+something looks. Chase a flake by reading the code and writing a deterministic
+test, not by rerunning.
