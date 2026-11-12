@@ -138,7 +138,8 @@ fn resolve_events(events: &[RunEvent], mission: &Mission) -> Result<Resolved, Mi
     }
     let picks = picked(events);
     let mut run_picks: Vec<_> = roots
-        .into_iter()
+        .iter()
+        .cloned()
         .flat_map(|origin| inherited_picks(origin, &inputs, &picks, mission))
         .collect();
     run_picks.sort_by_key(|pick| pick["seq"].as_u64().unwrap_or(0));
@@ -199,6 +200,46 @@ fn resolve_events(events: &[RunEvent], mission: &Mission) -> Result<Resolved, Mi
                 mission,
             ),
         });
+    }
+    // A mission that declares no outputs still produced something: what
+    // reached a done End, named after the step that made it.
+    if mission
+        .input_card()
+        .is_none_or(|card| card.outputs.is_empty())
+    {
+        let mut ends: Vec<(String, String)> = roots
+            .iter()
+            .map(|(node, port, _)| (node.clone(), port.clone()))
+            .collect();
+        ends.dedup();
+        for (node, port) in ends {
+            let Some((attempt, payload)) = reached.get(&(node.clone(), port.clone())) else {
+                continue;
+            };
+            let text = |key| payload.get(key).and_then(|v| v.as_str()).unwrap_or("");
+            let (kind, value) = match text("ref") {
+                "" => ("text", text("text")),
+                path if std::path::Path::new(path).is_dir() => ("folder", path),
+                path => ("file", path),
+            };
+            if value.trim().is_empty() || result.iter().any(|o: &RunOutput| o.value == value) {
+                continue;
+            }
+            let name = mission
+                .formations
+                .iter()
+                .find(|f| f.id == node)
+                .map_or(node.clone(), |f| f.title.clone());
+            result.push(RunOutput {
+                name,
+                kind: kind.into(),
+                value: value.into(),
+                node_id: node.clone(),
+                port_id: port.clone(),
+                attempt: *attempt,
+                picks: inherited_picks((node, port, *attempt), &inputs, &picks, mission),
+            });
+        }
     }
     if problems.is_empty() {
         Ok(Resolved {
@@ -370,6 +411,40 @@ mod tests {
         let outputs = resolve_events(&events, &mission).unwrap().outputs;
         assert_eq!(outputs[0].value, "fixed");
         assert_eq!(outputs[0].attempt, 2);
+    }
+    #[test]
+    fn a_mission_without_declared_outputs_shows_what_reached_its_end() {
+        let mission = Mission {
+            formations: vec![parvi_mission_model::Formation {
+                id: "write".into(),
+                title: "Write the plan".into(),
+                ..Default::default()
+            }],
+            ends: vec![End {
+                id: "done".into(),
+                outcome: "done".into(),
+                ..Default::default()
+            }],
+            connections: vec![Connection {
+                id: "finish".into(),
+                from: "write:out".into(),
+                to: "done:in".into(),
+            }],
+            ..Default::default()
+        };
+        let events = vec![event(
+            "node_output",
+            "write",
+            1,
+            json!({"outputs":{"out":{"text":"the plan"}}}),
+        )];
+        let outputs = resolve_events(&events, &mission).unwrap().outputs;
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(
+            (outputs[0].name.as_str(), outputs[0].kind.as_str()),
+            ("Write the plan", "text")
+        );
+        assert_eq!(outputs[0].value, "the plan");
     }
     #[test]
     fn only_done_paths_contribute_and_blank_required_output_fails() {
@@ -652,8 +727,13 @@ mod tests {
             ),
         ];
         let resolved = resolve_events(&events, &mission).unwrap();
-        assert!(resolved.outputs.is_empty());
         assert_eq!(resolved.picks.len(), 1);
+        // With nothing declared, what reached the End stands as the outputs,
+        // the picked one carrying its pick.
+        let values: Vec<_> = resolved.outputs.iter().map(|o| o.value.as_str()).collect();
+        assert_eq!(values, ["picked", "unrelated"]);
+        assert_eq!(resolved.outputs[0].picks.len(), 1);
+        assert!(resolved.outputs[1].picks.is_empty());
         mission.input_cards.push(InputCard {
             outputs: vec![MissionOutput {
                 name: "other".into(),

@@ -677,20 +677,27 @@ impl MissionsPage {
                         page.run.uncertain = None;
                         match serde_json::from_slice::<AdmissionRejection>(&a.body) {
                             Ok(rejection) => {
-                                page.run.error = Some(format!(
-                                    "{}: {}",
-                                    rejection.error.code, rejection.error.message
-                                ));
+                                page.run.error = Some(if rejection.findings.is_empty() {
+                                    format!("The run could not start: {}", rejection.error.message)
+                                } else {
+                                    "The run could not start:".into()
+                                });
+                                let name_of = |id: &str| {
+                                    page.state
+                                        .mission
+                                        .as_ref()
+                                        .and_then(|m| m.formations.iter().find(|f| f.id == id))
+                                        .map_or(id.to_owned(), |f| f.title.clone())
+                                };
                                 page.run.findings = rejection
                                     .findings
-                                    .into_iter()
+                                    .iter()
                                     .map(|f| {
-                                        format!(
-                                            "{} · {} · {}",
-                                            f.code.as_str(),
-                                            f.node_id,
-                                            f.message
-                                        )
+                                        if f.node_id.is_empty() {
+                                            f.message.clone()
+                                        } else {
+                                            format!("{}: {}", name_of(&f.node_id), f.message)
+                                        }
                                     })
                                     .collect();
                             }
@@ -1042,6 +1049,74 @@ impl MissionsPage {
         };
         div().child(button)
     }
+    /// Where an input's value can come from besides typing: a file picked
+    /// on this device, or what an earlier run produced.
+    fn input_sources(
+        &self,
+        t: &Theme,
+        name: &str,
+        kind: &str,
+        field: &Entity<TextField>,
+        cx: &mut Context<Self>,
+    ) -> Option<Div> {
+        let mut row = div().flex().flex_wrap().items_center().gap(px(TAB_GAP));
+        let mut any = kind == "file";
+        if kind == "file" {
+            let field = field.clone();
+            let selector = format!("run-input-{name}-choose");
+            row = row.child(
+                kit::button(
+                    t,
+                    SharedString::from(selector.clone()),
+                    "Choose file…",
+                    Kind::Quiet,
+                )
+                .debug_selector(move || selector.clone())
+                .on_click(cx.listener(move |p, _, window, cx| {
+                    let field = field.clone();
+                    parvi_app_kit::widgets::path_picker::pick(
+                        p.host.clone(),
+                        "Choose a file",
+                        window,
+                        cx,
+                        move |_, paths, cx| {
+                            if let Some(path) = paths.first() {
+                                let path = path.to_string_lossy().into_owned();
+                                field.update(cx, |f, cx| f.set(&path, false, cx));
+                            }
+                            cx.notify();
+                        },
+                    );
+                })),
+            );
+        }
+        let runs = self
+            .state
+            .selected
+            .as_ref()
+            .and_then(|(node, _)| self.state.nodes.get(node))
+            .map(|feed| crate::store::run_state::earlier_outputs(feed.runs.values(), kind, 4))
+            .unwrap_or_default();
+        if !runs.is_empty() {
+            any = true;
+            row = row.child(kit::note(t, "From earlier runs:", None));
+        }
+        for (index, (label, value)) in runs.into_iter().enumerate() {
+            let field = field.clone();
+            let selector = format!("run-input-{name}-earlier-{index}");
+            let tip = value.clone();
+            row = row.child(
+                kit::button(t, SharedString::from(selector.clone()), label, Kind::Quiet)
+                    .debug_selector(move || selector.clone())
+                    .tooltip(kit::tip(tip))
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        field.update(cx, |f, cx| f.set(&value, false, cx));
+                        cx.notify();
+                    })),
+            );
+        }
+        any.then_some(row)
+    }
     pub(super) fn run_start_form(
         &self,
         t: &Theme,
@@ -1099,12 +1174,13 @@ impl MissionsPage {
                 if !description.is_empty() {
                     form = form.child(div().text_color(t.dim).child(description.to_owned()));
                 }
+                form = form.children(self.input_sources(t, name, kind, field, cx));
             }
             form = form
                 .child("Working directory")
                 .child(div().child(self.run.cwd.clone()))
                 .child("Repository")
-                .child(div().child(self.run.repository.clone()))
+                .child(self.repository_picker(t, &self.run.repository, "run-repository", cx))
                 .child("Base")
                 .child(div().child(self.run.base.clone()))
                 .child("Work reference")
@@ -1297,22 +1373,16 @@ impl MissionsPage {
         let run = self.selected_run()?.clone();
         let (node, _) = self.state.selected.clone()?;
         if let Some(window) = &self.run.attempt_window {
-            let mut panel = div()
-                .id("attempts-window")
-                .track_focus(&self.run.attempts_focus)
-                .on_key_down(cx.listener(Self::attempts_key))
+            let mut bar = div()
                 .flex()
-                .flex_col()
-                .gap(px(PAD))
-                .debug_selector(|| "attempts-window".into())
-                .child(format!("Attempts: {}", window.title))
+                .items_center()
+                .gap(px(TAB_GAP))
                 .child(
-                    kit::button(t, "attempts-close", "Close", Kind::Quiet)
-                        .debug_selector(|| "attempts-close".into())
-                        .on_click(cx.listener(|p, _, _, cx| {
-                            p.run.attempt_window = None;
-                            cx.notify();
-                        })),
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(format!("Attempts: {}", window.title)),
                 )
                 .child(
                     kit::button(t, "attempt-prev", "Previous", Kind::Quiet).on_click(cx.listener(
@@ -1345,7 +1415,7 @@ impl MissionsPage {
                         })),
                 );
             if window.compare.is_some() {
-                panel = panel.child(
+                bar = bar.child(
                     kit::button(
                         t,
                         "attempt-side",
@@ -1364,7 +1434,24 @@ impl MissionsPage {
                     })),
                 );
             }
-            let mut pips = div().flex().gap(px(PAD));
+            bar = bar.child(
+                kit::button(t, "attempts-close", "Close", Kind::Plain)
+                    .debug_selector(|| "attempts-close".into())
+                    .on_click(cx.listener(|p, _, _, cx| {
+                        p.run.attempt_window = None;
+                        cx.notify();
+                    })),
+            );
+            let mut panel = div()
+                .id("attempts-window")
+                .track_focus(&self.run.attempts_focus)
+                .on_key_down(cx.listener(Self::attempts_key))
+                .flex()
+                .flex_col()
+                .gap(px(PAD))
+                .debug_selector(|| "attempts-window".into())
+                .child(bar);
+            let mut pips = div().flex().flex_wrap().gap(px(PAD));
             for attempt in window.attempts() {
                 let number = attempt.attempt;
                 let label = format!(
@@ -2090,14 +2177,28 @@ impl MissionsPage {
             view = view.child(row);
         }
 
-        // What the run produced, first because it is what the operator came for.
-        if !run.outputs.is_empty() {
+        // What the run produced, first because it is what the operator came
+        // for: its outputs, then the files its agents wrote.
+        let written = self
+            .run
+            .evidence
+            .evidence
+            .as_ref()
+            .map(|e| e.written_outputs(&run.cwd, &run.outputs))
+            .unwrap_or_default();
+        if !run.outputs.is_empty() || !written.is_empty() {
             let mut list = div()
                 .flex()
                 .flex_col()
                 .gap(px(TAB_GAP))
                 .child(kit::label(t, "Produced"));
             for output in &run.outputs {
+                list = list.child(self.output_row(t, &run, output, &node, &place, &name_of, cx));
+            }
+            if !written.is_empty() {
+                list = list.child(kit::note(t, "Files it wrote", None));
+            }
+            for output in &written {
                 list = list.child(self.output_row(t, &run, output, &node, &place, &name_of, cx));
             }
             view = view.child(list);
@@ -2152,7 +2253,7 @@ impl MissionsPage {
             let flow = flow::build(mission);
             for section in &flow.sections {
                 if section.input.is_some() {
-                    view = view.child(given(t, &run));
+                    view = view.child(self.given(t, &run, &node, cx));
                 }
                 for step in &section.steps {
                     let status = state.states.get(&step.id).copied();
@@ -2707,39 +2808,53 @@ impl MissionsPage {
             cx.notify();
         }
     }
-}
 
-/// What the run was given: its inputs and the folder it worked in.
-fn given(t: &Theme, run: &RunProjection) -> Div {
-    let mut card = div()
-        .flex()
-        .flex_col()
-        .gap(px(4.))
-        .p(px(PAD))
-        .rounded(px(size::RADIUS))
-        .border_1()
-        .border_color(t.divider)
-        .child(kit::label(t, "Given"));
-    let row = |name: &str, value: &str| {
-        div()
+    /// What the run was given: its inputs and the folder it worked in, the
+    /// folder opening in Files.
+    fn given(&self, t: &Theme, run: &RunProjection, node: &str, cx: &mut Context<Self>) -> Div {
+        let mut card = div()
             .flex()
-            .gap(px(PAD))
-            .min_w_0()
-            .child(div().flex_none().text_color(t.text2).child(name.to_owned()))
-            .child(div().min_w_0().child(value.to_owned()))
-    };
-    for value in &run.inputs {
-        card = card.child(row(&value.name, &value.value));
+            .flex_col()
+            .gap(px(4.))
+            .p(px(PAD))
+            .rounded(px(size::RADIUS))
+            .border_1()
+            .border_color(t.divider)
+            .child(kit::label(t, "Given"));
+        let row = |name: &str| {
+            div()
+                .flex()
+                .gap(px(PAD))
+                .min_w_0()
+                .child(div().flex_none().text_color(t.text2).child(name.to_owned()))
+        };
+        for value in &run.inputs {
+            card = card.child(row(&value.name).child(div().min_w_0().child(value.value.clone())));
+        }
+        let (name, path) = if !run.repository.is_empty() {
+            ("repository", &run.repository)
+        } else {
+            ("folder", &run.cwd)
+        };
+        if !path.is_empty() {
+            let (owner, open) = (node.to_owned(), path.clone());
+            card = card.child(
+                row(name).child(
+                    div()
+                        .id("run-folder")
+                        .debug_selector(|| "run-folder".into())
+                        .min_w_0()
+                        .cursor_pointer()
+                        .text_color(t.accent)
+                        .hover(|s| s.bg(t.raised))
+                        .tooltip(kit::tip("Open in Files"))
+                        .child(crate::store::words::middle(path))
+                        .on_click(cx.listener(move |p, _, _, cx| p.open_beside(&owner, &open, cx))),
+                ),
+            );
+        }
+        card
     }
-    if !run.repository.is_empty() {
-        card = card.child(row(
-            "repository",
-            &crate::store::words::middle(&run.repository),
-        ));
-    } else if !run.cwd.is_empty() {
-        card = card.child(row("folder", &crate::store::words::middle(&run.cwd)));
-    }
-    card
 }
 
 /// A state in a small coloured box.

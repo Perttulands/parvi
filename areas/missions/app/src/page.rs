@@ -59,6 +59,8 @@ pub struct MissionsPage {
     history: undo::History,
     writing: bool,
     roles: Option<parvi_agents_contract::roles::Roles>,
+    /// The repositories the node's config names, for a step's Repository.
+    repositories: Option<Vec<String>>,
     role: Entity<TextField>,
     harness: Entity<TextField>,
     model: Entity<TextField>,
@@ -87,6 +89,8 @@ pub struct MissionsPage {
     /// A step being added: once it exists, wire it from this port (if any)
     /// and open it in the editor.
     new_step: Option<Option<String>>,
+    /// A staffing pick made while another write was in flight.
+    staff_pending: bool,
     seen_run_snapshots: std::collections::BTreeSet<String>,
 }
 #[derive(Clone, Copy)]
@@ -163,6 +167,7 @@ impl MissionsPage {
             history: undo::History::default(),
             writing: false,
             roles: None,
+            repositories: None,
             role: cx.new(|cx| TextField::new(cx, "Role id")),
             harness: cx.new(|cx| TextField::new(cx, "Harness")),
             model: cx.new(|cx| TextField::new(cx, "Model")),
@@ -188,6 +193,7 @@ impl MissionsPage {
             carry: None,
             reveal_card: None,
             new_step: None,
+            staff_pending: false,
             seen_run_snapshots: Default::default(),
         };
         for field in [
@@ -469,6 +475,8 @@ impl MissionsPage {
         self.generation += 1;
         let generation = self.generation;
         self.state.selected = Some((node.clone(), slug.clone()));
+        // Read now, so a form that offers them does not reflow as it opens.
+        self.read_repositories(node.clone(), cx);
         self.state.mission = None;
         self.state.mission_etag = None;
         self.validation.clear();
@@ -724,9 +732,10 @@ impl MissionsPage {
             && let Some((node, _)) = self.state.selected.clone()
         {
             let asked = self.host.request(
-                Request::get(NodeId(node), parvi_agents_contract::roles::PATH),
+                Request::get(NodeId(node.clone()), parvi_agents_contract::roles::PATH),
                 cx,
             );
+            self.read_repositories(node, cx);
             let generation = self.generation;
             cx.spawn(async move |this, cx| {
                 let answer = asked.await;
@@ -879,6 +888,9 @@ impl MissionsPage {
                                 page.state.layout = Some(v.layout.layout);
                                 page.state.error = None;
                                 page.created_step(&mission, cx);
+                                if std::mem::take(&mut page.staff_pending) {
+                                    page.assign_slot(cx);
+                                }
                             }
                             Err(e) => page.state.error = Some(e.to_string()),
                         }
@@ -1189,7 +1201,7 @@ impl MissionsPage {
         let patch = json!({"updateFormation":{"id":ed.id,"device":self.extra.read(cx).text}});
         self.write_board(patch, WriteMode::Edit, cx);
     }
-    fn assign_slot(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn assign_slot(&mut self, cx: &mut Context<Self>) {
         let (Some(ed), Some(slot)) = (&self.editor, &self.slot) else {
             return;
         };
@@ -1635,7 +1647,7 @@ impl Render for MissionsPage {
                             .child({ let current = self.state.mission.as_ref().and_then(|m| m.formations.iter().find(|f| f.id == ed.id)).map(|f| f.kind.as_str()); let pick = |id: &'static str, text: &'static str, ty: &'static str| kit::button(&t, id, text, if current == Some(ty) { Kind::Plain } else { Kind::Quiet }).on_click(cx.listener(move |p, _, _, cx| p.set_type(ty, cx))); div().flex().gap(px(TAB_GAP)).child(pick("type-solo", "Solo", "solo")).child(pick("type-peer", "Peer", "peer")).child(pick("type-orchestrated", "Orchestrated", "orchestrated")) })
                             .child(kit::label(&t, "Device")).child(div().flex().gap(px(TAB_GAP)).child(div().flex_1().child(self.extra.clone()))
                             .child(left(kit::button(&t, "set-device", "Set device", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.set_device(cx)))))))
-                        .when(matches!(ed.kind, EditKind::Step), |d| d.child(kit::label(&t, "Repository")).child(div().child(self.repository.clone()))
+                        .when(matches!(ed.kind, EditKind::Step), |d| d.child(kit::label(&t, "Repository")).child(self.repository_picker(&t, &self.repository, "repository", cx))
                             .child(kit::label(&t, "Work")).child(div().child(self.work.clone()))
                             .child(kit::label(&t, "Files")).child(div().child(self.files.clone()))
                             .child(kit::label(&t, "Links")).child(div().child(self.links.clone())))
@@ -1669,8 +1681,7 @@ impl Render for MissionsPage {
                         })
                         .when(matches!(ed.kind, EditKind::Step) && self.slot.is_some(), |mut d| {
                             d = d.child(kit::label(&t, "Staff selected slot"));
-                            d = d.child(self.slot_pickers(&t, cx));
-                            d.child(left(kit::button(&t, "assign-slot", "Assign", Kind::Quiet).debug_selector(|| "assign-slot".into()).on_click(cx.listener(|p, _, _, cx| p.assign_slot(cx)))))
+                            d.child(self.slot_pickers(&t, cx))
                         })
                         .when(matches!(ed.kind, EditKind::Step | EditKind::Input), |mut d| {
                             d = d.child(kit::label(&t, "Limits"));

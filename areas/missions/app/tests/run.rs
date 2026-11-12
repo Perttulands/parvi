@@ -658,7 +658,9 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
         let client = NodeClient::new(Some(&format!("{}/", running.url))).unwrap();
         let (mission, etag) = client.request(http::Method::GET, "/api/missions/admission-findings", None, None).await.unwrap();
         let error = client.request(http::Method::POST, "/api/runs", Some(json!({"mission":"admission-findings", "inputCardId":"inp", "expectedRev":mission["mission"]["rev"], "inputs":{"topic":"A topic"}})), Some(&etag)).await.unwrap_err();
-        error.downcast_ref::<parvi_node_kit::NodeError>().unwrap().findings.as_ref().unwrap().as_array().unwrap().iter().map(|f| format!("{} · {} · {}", f["code"].as_str().unwrap(), f["nodeId"].as_str().unwrap(), f["message"].as_str().unwrap())).collect::<Vec<_>>()
+        // Each finding reads as a sentence, named by its step's title.
+        let title = |id: &str| mission["mission"]["formations"].as_array().unwrap().iter().find(|f| f["id"] == id).map_or(id.to_owned(), |f| f["title"].as_str().unwrap().to_owned());
+        error.downcast_ref::<parvi_node_kit::NodeError>().unwrap().findings.as_ref().unwrap().as_array().unwrap().iter().map(|f| match f["nodeId"].as_str().unwrap() { "" => f["message"].as_str().unwrap().to_owned(), id => format!("{}: {}", title(id), f["message"].as_str().unwrap()) }).collect::<Vec<_>>()
     });
     assert!(expected.len() > 1);
     click(cx, "run-start");

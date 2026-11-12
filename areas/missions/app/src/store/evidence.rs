@@ -9,8 +9,41 @@ pub struct Evidence {
     pub problems: Vec<Problem>,
     pub briefs: Vec<Brief>,
     pub files: Vec<File>,
+    /// Files the run's agents wrote into its folder.
+    #[serde(default)]
+    pub written: Vec<Written>,
     #[serde(default)]
     pub truncated: bool,
+}
+#[derive(Clone, Debug, Deserialize)]
+pub struct Written {
+    pub path: String,
+    pub size: u64,
+}
+
+impl Evidence {
+    /// The files the run wrote that are not already among `outputs`, each
+    /// as an output named by its path in the run's folder `cwd`.
+    pub fn written_outputs(
+        &self,
+        cwd: &str,
+        outputs: &[parvi_missions_contract::RunOutput],
+    ) -> Vec<parvi_missions_contract::RunOutput> {
+        let base = format!("{}/", cwd.trim_end_matches('/'));
+        self.written
+            .iter()
+            .filter(|w| !outputs.iter().any(|o| o.value == w.path))
+            .map(|w| parvi_missions_contract::RunOutput {
+                name: w.path.strip_prefix(&base).unwrap_or(&w.path).to_owned(),
+                kind: "file".into(),
+                value: w.path.clone(),
+                node_id: String::new(),
+                port_id: String::new(),
+                attempt: 0,
+                picks: Vec::new(),
+            })
+            .collect()
+    }
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

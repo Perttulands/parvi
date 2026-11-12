@@ -271,11 +271,15 @@ fn designs_a_multi_gate_mission_and_shows_findings_on_the_canvas(cx: &mut TestAp
             .iter()
             .any(|node| node["id"] == gate_id && (node["x"] != 200 || node["y"] != 200))
     });
-    until(cx, "arranged canvas", |cx| has(cx, "canvas-fit"));
+    // The findings panel narrows the canvas when it arrives; Fit after it.
+    until(cx, "arranged canvas", |cx| {
+        has(cx, "canvas-fit") && has(cx, "canvas-findings-list")
+    });
     click(cx, "canvas-fit");
     let gate = format!("mission-card-{gate_id}");
     until(cx, "judge gate card", |cx| has(cx, &gate));
     click(cx, &gate);
+    cx.run_until_parked();
     until(cx, "gate editor", |cx| has(cx, "step-extra"));
     click(cx, "step-extra");
     cx.simulate_keystrokes("ctrl-a");

@@ -96,8 +96,21 @@ impl Coordinator {
             let dir = root.join(&formation.id);
             walk(&dir, &formation.id, 0, &mut files, &mut truncated).map_err(crate::error::io)?;
         }
+        // What the run's agents wrote into its folder: a mission need not
+        // declare a file for the operator to find it.
+        let mut written = Vec::new();
+        if only.is_none()
+            && let Some(first) = events.first()
+            && let Some(cwd) = first.data.get("cwd").and_then(Value::as_str)
+            && let Ok(started) = time::OffsetDateTime::parse(
+                &first.timestamp,
+                &time::format_description::well_known::Rfc3339,
+            )
+        {
+            changed(Path::new(cwd), started.into(), 0, &mut written);
+        }
         Ok(
-            json!({"runId":id,"problems":problems,"briefs":briefs,"files":files,"truncated":truncated}),
+            json!({"runId":id,"problems":problems,"briefs":briefs,"files":files,"written":written,"truncated":truncated}),
         )
     }
 }
@@ -113,6 +126,35 @@ fn problem(event: &RunEvent) -> bool {
             .and_then(Value::as_str)
             .is_some_and(|s| s != "ok"),
         _ => false,
+    }
+}
+/// Files under `dir` changed since `since`, leaving out hidden ones (a
+/// checkout's .git among them), a few levels deep and at most a page.
+fn changed(dir: &Path, since: std::time::SystemTime, depth: usize, out: &mut Vec<Value>) {
+    const MOST: usize = 200;
+    if depth > 4 || out.len() >= MOST {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<_> = entries.flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
+        if out.len() >= MOST || entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_dir() {
+            changed(&entry.path(), since, depth + 1, out);
+        } else if kind.is_file()
+            && let Ok(meta) = entry.metadata()
+            && meta.modified().is_ok_and(|m| m >= since)
+        {
+            out.push(json!({"path":entry.path(),"size":meta.len()}));
+        }
     }
 }
 fn walk(
@@ -161,4 +203,42 @@ fn walk(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn lists_files_written_since_the_start_and_leaves_hidden_ones_out() {
+        let dir = parvi_testkit::fresh_dir("written");
+        fs::create_dir_all(dir.join("notes")).unwrap();
+        fs::create_dir_all(dir.join(".git")).unwrap();
+        fs::write(dir.join("plan.txt"), "plan").unwrap();
+        fs::write(dir.join("notes/review.txt"), "ok").unwrap();
+        fs::write(dir.join(".git/HEAD"), "ref").unwrap();
+        let started = SystemTime::now() - Duration::from_secs(60);
+        let mut written = Vec::new();
+        changed(&dir, started, 0, &mut written);
+        let paths: Vec<_> = written
+            .iter()
+            .map(|w| w["path"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                dir.join("notes/review.txt").to_str().unwrap(),
+                dir.join("plan.txt").to_str().unwrap()
+            ]
+        );
+        let mut later = Vec::new();
+        changed(
+            &dir,
+            SystemTime::now() + Duration::from_secs(60),
+            0,
+            &mut later,
+        );
+        assert!(later.is_empty());
+    }
 }

@@ -14,6 +14,27 @@ impl MissionsPage {
     ) -> Div {
         let flow = flow::build(mission);
         let mut body = div().flex().flex_col().gap(px(PAD)).p(px(PAD)).w_full();
+        if mission.input_cards.is_empty() && mission.formations.is_empty() {
+            return body.child(
+                card(t)
+                    .debug_selector(|| "flow-empty".into())
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child("This mission is empty"))
+                    .child(div().text_color(t.text2).child(
+                        "Start with an Input: what you hand the mission when you run it. \
+                         Then add a step with the + on its card, and an End where the work is done.",
+                    ))
+                    .child(
+                        div().flex().gap(px(TAB_GAP)).child(
+                            kit::button(t, "flow-empty-input", "Add the Input", Kind::Primary)
+                                .debug_selector(|| "flow-empty-input".into())
+                                .on_click(cx.listener(|page, _, _, cx| {
+                                    page.mission_canvas_mode = true;
+                                    page.add_card(board::Kind::Input, cx);
+                                })),
+                        ),
+                    ),
+            );
+        }
         for section in &flow.sections {
             if let Some(id) = &section.input
                 && let Some(input) = mission.input_cards.iter().find(|c| &c.id == id)

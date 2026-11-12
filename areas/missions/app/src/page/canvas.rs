@@ -137,11 +137,15 @@ impl View {
         let (_, _, w, h) = self.bounds.get();
         (w / 2., h / 2.)
     }
+    /// Fit the whole board left of the zoom controls. The view is the
+    /// operator's again, so it stops following an edited card.
     fn fit(&mut self, board: &board::Board) {
         let (_, _, w, h) = self.bounds.get();
+        let w = w - CONTROLS_W;
         if w <= 0. || h <= 0. {
             return;
         }
+        self.follow = None;
         let (x, y, bw, bh) = board::extent(board);
         let z = ((w - FIT_MARGIN) / bw)
             .min((h - FIT_MARGIN) / bh)

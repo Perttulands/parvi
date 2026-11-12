@@ -99,6 +99,10 @@ pub struct Coordinator {
     pub(crate) inner: Arc<Inner>,
 }
 impl Coordinator {
+    /// The repositories this node's config names, which a step may work in.
+    pub fn repositories(&self) -> Vec<String> {
+        self.inner.settings.repositories.keys().cloned().collect()
+    }
     pub fn seats(&self, id: &str) -> Result<Vec<crate::AgentSeat>, crate::Error> {
         (|| -> io::Result<Vec<crate::AgentSeat>> {
             let events = self.ledger(id)?.read().map_err(crate::error::to_io)?;
@@ -472,7 +476,11 @@ impl Coordinator {
                 Finding::new(
                     parvi_mission_model::Code::NoCheckout,
                     "",
-                    format!("no checkout for {repo}"),
+                    format!(
+                        "No repository named \"{repo}\" is set up on this node. \
+                         Pick one the node knows, or add it under [missions] repositories \
+                         in the node's config."
+                    ),
                 )
             })
             .collect();

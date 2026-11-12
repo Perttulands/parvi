@@ -418,6 +418,27 @@ pub fn phrase(point: &Point, title: &str) -> String {
     }
 }
 
+/// What earlier runs produced that could fill an input of `kind`: the
+/// latest first, each value once, at most `most`, as (label, value).
+pub fn earlier_outputs<'a>(
+    runs: impl IntoIterator<Item = &'a Run>,
+    kind: &str,
+    most: usize,
+) -> Vec<(String, String)> {
+    let mut runs: Vec<&Run> = runs.into_iter().filter(|run| run.r#final).collect();
+    runs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    let mut found: Vec<(String, String)> = Vec::new();
+    for run in runs {
+        for output in run.outputs.iter().filter(|o| o.kind == kind) {
+            if found.len() < most && !found.iter().any(|(_, value)| value == &output.value) {
+                let label = format!("{} · {}", output.name, run.mission_slug);
+                found.push((label, output.value.clone()));
+            }
+        }
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -526,5 +547,40 @@ mod tests {
             ..ev(3, "seat_state", "work")
         });
         assert_eq!(seat_note(&events, "work"), None);
+    }
+
+    #[test]
+    fn earlier_outputs_offer_finished_runs_latest_first_by_kind() {
+        let output = |name: &str, kind: &str, value: &str| serde_json::json!({"name":name,"kind":kind,"value":value,"nodeId":"s","portId":"out","attempt":1});
+        let mut old = test_run("succeeded");
+        old.r#final = true;
+        old.updated_at = "2026-11-10T10:00:00Z".into();
+        old.outputs = serde_json::from_value(serde_json::json!([
+            output("plan", "file", "/w/plan.txt"),
+            output("note", "text", "hello")
+        ]))
+        .unwrap();
+        let mut new = test_run("succeeded");
+        new.r#final = true;
+        new.mission_slug = "review".into();
+        new.updated_at = "2026-11-11T10:00:00Z".into();
+        new.outputs = serde_json::from_value(serde_json::json!([
+            output("review", "file", "/w/review.txt"),
+            output("plan", "file", "/w/plan.txt")
+        ]))
+        .unwrap();
+        let mut going = test_run("running");
+        going.outputs = new.outputs.clone();
+        going.outputs[0].value = "/w/partial.txt".into();
+        let files = earlier_outputs([&old, &new, &going], "file", 5);
+        assert_eq!(
+            files,
+            [
+                ("review · review".to_owned(), "/w/review.txt".to_owned()),
+                ("plan · review".to_owned(), "/w/plan.txt".to_owned())
+            ]
+        );
+        assert_eq!(earlier_outputs([&old, &new], "text", 5).len(), 1);
+        assert_eq!(earlier_outputs([&old, &new], "file", 1).len(), 1);
     }
 }

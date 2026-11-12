@@ -25,6 +25,7 @@ pub fn routes(m: Missions) -> Router {
             axum::routing::put(put_character).delete(delete_character),
         )
         .route("/api/gate-profiles", get(gate_profiles))
+        .route("/api/repositories", get(repositories))
         .route("/api/missions/{id}", get(read).patch(edit).delete(delete))
         .route("/api/missions/{id}/validation", get(validation))
         .route("/api/missions/{id}/notes", get(notes).patch(edit_notes))
@@ -456,6 +457,10 @@ async fn delete_character(State(m): State<Missions>, Path(id): Path<String>) -> 
     character_store(&m).delete(&id)?;
     m.changed();
     Ok(Json(parvi_missions_contract::Deleted { deleted: id }).into_response())
+}
+/// The repositories a step may name, as configured on this node.
+async fn repositories(State(m): State<Missions>) -> Response {
+    Json(json!({"repositories": m.coordinator.repositories()})).into_response()
 }
 async fn gate_profiles() -> Response {
     let profiles: parvi_missions_contract::GateProfiles =

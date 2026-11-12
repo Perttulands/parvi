@@ -389,8 +389,15 @@ pub fn free_spot(
     let step = PORT;
     let rows = ((vh - size.1) / step).max(0.) as usize;
     let cols = ((vw - size.0) / step).max(0.) as usize;
-    let grid = (0..=rows)
-        .flat_map(|r| (0..=cols).map(move |c| (vx + c as f32 * step, vy + r as f32 * step)));
+    // Failing those, the free place nearest the middle of the view.
+    let middle = (vx + (vw - size.0) / 2., vy + (vh - size.1) / 2.);
+    let mut grid: Vec<(f32, f32)> = (0..=rows)
+        .flat_map(|r| (0..=cols).map(move |c| (vx + c as f32 * step, vy + r as f32 * step)))
+        .collect();
+    grid.sort_by(|a, b| {
+        let d = |p: &(f32, f32)| (p.0 - middle.0).powi(2) + (p.1 - middle.1).powi(2);
+        d(a).total_cmp(&d(b))
+    });
     first
         .chain(grid)
         .find(|&(x, y)| inside(x, y) && !taken(x, y))
@@ -492,11 +499,10 @@ mod tests {
         assert!(at.0 + size.0 <= view.0 + view.2 && at.1 + size.1 <= view.1 + view.3);
         // A view the cards fill leaves no place; one beside them has one.
         assert_eq!(free_spot(&b, (x0, y0, w, h), (w, h), 0.), None);
+        // On an empty board the first card lands in the middle of the view.
         let empty = Board::default();
-        assert_eq!(
-            free_spot(&empty, (500., 300., 800., 600.), size, 0.),
-            Some((500., 300.))
-        );
+        let (x, y) = free_spot(&empty, (500., 300., 800., 600.), size, 0.).unwrap();
+        assert!((x + size.0 / 2. - 900.).abs() <= PORT && (y + size.1 / 2. - 600.).abs() <= PORT);
     }
 
     #[test]

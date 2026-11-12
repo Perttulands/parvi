@@ -446,3 +446,16 @@ async fn default_role_store_is_shared_and_isolated() {
     node.stop().await;
     other.stop().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn lists_the_repositories_a_step_may_name() {
+    let node = Node::start(AREAS, "[missions]\nrepositories = { app = \"/tmp\" }\n")
+        .await
+        .unwrap();
+    let client = NodeClient::new(Some(&format!("{}/", node.url()))).unwrap();
+    let (listed, _) = client
+        .request(Method::GET, "/api/repositories", None, None)
+        .await
+        .unwrap();
+    assert_eq!(listed["repositories"], json!(["app"]));
+}

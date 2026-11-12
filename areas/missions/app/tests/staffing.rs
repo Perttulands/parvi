@@ -97,10 +97,7 @@ fn until(
     }
 }
 fn click(cx: &mut VisualTestContext, selector: &'static str) {
-    if selector.starts_with("slot-")
-        || selector.starts_with("staffing-")
-        || selector == "assign-slot"
-    {
+    if selector.starts_with("slot-") || selector.starts_with("staffing-") {
         for _ in 0..8 {
             let at = cx.debug_bounds(selector).expect(selector).center();
             let y = f32::from(at.y);
@@ -216,9 +213,7 @@ fn catalog_pickers_offer_sorted_roles_and_model_efforts_and_save_the_choice(
     until(cx, "effort", |cx| {
         cx.debug_bounds("staffing-effort-high-selected").is_some()
     });
-    // Assignment can be below the viewport after the choice rows expand.
-    scroll(cx, -500.);
-    click(cx, "assign-slot");
+    // Each pick staffs the slot; nothing else needs pressing.
     let rt = tokio::runtime::Runtime::new().unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {

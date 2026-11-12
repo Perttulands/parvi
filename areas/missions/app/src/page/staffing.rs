@@ -128,6 +128,86 @@ impl MissionsPage {
                 field.update(cx, |f, cx| f.set(value, false, cx));
             }
         }
+        // A pick staffs the slot at once: no separate Assign, nothing for
+        // Save. One made during another write follows when that lands.
+        if self.writing {
+            self.staff_pending = true;
+        } else {
+            self.assign_slot(cx);
+        }
         cx.notify();
+    }
+}
+
+impl MissionsPage {
+    /// A step's repository, picked from those the node's config names; a
+    /// step with none works in the run's folder.
+    pub(super) fn repository_picker(
+        &self,
+        t: &Theme,
+        field: &Entity<TextField>,
+        prefix: &'static str,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let current = field.read(cx).text.clone();
+        let names = self.repositories.clone().unwrap_or_default();
+        let mut chips = div().flex().flex_wrap().gap(px(TAB_GAP));
+        let known = current.is_empty() || names.contains(&current);
+        for (name, label) in std::iter::once((String::new(), "None".to_owned()))
+            .chain(names.iter().map(|n| (n.clone(), n.clone())))
+            .chain((!known).then(|| (current.clone(), format!("{current} (not set up here)"))))
+        {
+            let on = name == current;
+            let selector = format!(
+                "{prefix}-{}{}",
+                if name.is_empty() { "none" } else { &name },
+                if on { "-selected" } else { "" }
+            );
+            let field = field.clone();
+            chips = chips.child(
+                chip(t, SharedString::from(selector.clone()), on)
+                    .debug_selector(move || selector.clone())
+                    .child(label)
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        field.update(cx, |f, cx| f.set(&name, false, cx));
+                        cx.notify();
+                    })),
+            );
+        }
+        let hint = match &self.repositories {
+            None => "Reading what this node offers…",
+            Some(names) if names.is_empty() => {
+                "None set up on this node; add one under [missions] repositories in its config."
+            }
+            Some(_) => "Works on its own branch. Add more under [missions] repositories.",
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(size::RADIUS))
+            .when(!names.is_empty() || !current.is_empty(), |d| d.child(chips))
+            .child(div().text_color(t.dim).child(hint))
+    }
+
+    /// Read the repositories the node's config names.
+    pub(super) fn read_repositories(&mut self, node: String, cx: &mut Context<Self>) {
+        let listed = self
+            .host
+            .request(Request::get(NodeId(node), "/api/repositories"), cx);
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let listed = listed.await;
+            let _ = this.update(cx, |page, cx| {
+                if page.generation == generation {
+                    page.repositories = listed
+                        .ok()
+                        .filter(|a| a.ok())
+                        .and_then(|a| serde_json::from_slice::<serde_json::Value>(&a.body).ok())
+                        .and_then(|v| serde_json::from_value(v["repositories"].clone()).ok());
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 }
