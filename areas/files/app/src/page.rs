@@ -636,6 +636,25 @@ impl FilesPage {
         .detach();
     }
 
+    fn refresh_folder(
+        &mut self,
+        node: &str,
+        folder: &str,
+        select: Option<(usize, String)>,
+        cx: &mut Context<Self>,
+    ) {
+        for i in 0..self.sides.len() {
+            if self.sides[i].pane.node == node && self.sides[i].pane.path.as_deref() == Some(folder)
+            {
+                let selected = select
+                    .as_ref()
+                    .filter(|(side, _)| *side == i)
+                    .map(|(_, name)| name.clone());
+                self.list(i, folder.to_owned(), selected, cx);
+            }
+        }
+    }
+
     pub fn list(&mut self, i: usize, path: String, select: Option<String>, cx: &mut Context<Self>) {
         self.list_with_menu(i, path, select, None, cx);
     }
@@ -767,7 +786,10 @@ impl FilesPage {
             pretty: None,
             editing: false,
             saving: false,
-            source: false,
+            source: matches!(
+                crate::store::kinds::kind(&name),
+                crate::store::kinds::Kind::Json
+            ),
             diff_open: false,
             diff: None,
         });
@@ -1077,9 +1099,9 @@ impl FilesPage {
                     if let Some(d) = open::acknowledged(&now, &sent) {
                         p.drafts.insert(new_key, d);
                     }
-                    if mode == open::Write::Copy {
-                        p.list(i, folder, Some(paths::base_name(&target).to_owned()), cx);
-                    }
+                    let selection = (mode == open::Write::Copy)
+                        .then(|| (i, paths::base_name(&target).to_owned()));
+                    p.refresh_folder(&node, &folder, selection, cx);
                 }
                 cx.notify();
             },
@@ -1269,6 +1291,19 @@ impl FilesPage {
                 if !(200..300).contains(&s) {
                     p.fail(s, &b)
                 } else {
+                    if action == "delete"
+                        && let Some(deleted) = &selected
+                    {
+                        for side in &mut p.sides {
+                            if side
+                                .opened
+                                .as_ref()
+                                .is_some_and(|o| o.node == node && paths::inside(deleted, &o.path))
+                            {
+                                side.opened = None;
+                            }
+                        }
+                    }
                     let select = if let Some((from, to)) = moved {
                         store::drafts::move_drafts(&mut p.drafts, &node, &from, &to);
                         for side in &mut p.sides {
@@ -1287,7 +1322,7 @@ impl FilesPage {
                     } else {
                         None
                     };
-                    p.list(i, folder, select, cx)
+                    p.refresh_folder(&node, &folder, select.map(|name| (i, name)), cx)
                 }
                 cx.notify()
             },
@@ -1411,12 +1446,12 @@ impl FilesPage {
             request,
             move |page, status, body, cx| {
                 if (200..300).contains(&status) {
-                    if page.sides[upload.side].pane.node == upload.node.as_str()
-                        && page.sides[upload.side].pane.path.as_deref()
-                            == Some(upload.folder.as_str())
-                    {
-                        page.list(upload.side, upload.folder.clone(), Some(target_name), cx);
-                    }
+                    page.refresh_folder(
+                        upload.node.as_str(),
+                        &upload.folder,
+                        Some((upload.side, target_name)),
+                        cx,
+                    );
                     page.uploading = false;
                     page.next_upload(cx);
                 } else if status == 409
@@ -1548,6 +1583,22 @@ impl FilesPage {
             self.open(i, pin.path, window, cx);
         }
     }
+    fn show_notice(&mut self, message: String, cx: &mut Context<Self>) {
+        self.notice = Some(message.clone());
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(5))
+                .await;
+            let _ = this.update(cx, |page, cx| {
+                if page.notice.as_deref() == Some(message.as_str()) {
+                    page.notice = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     pub fn download(&mut self, i: usize, cx: &mut Context<Self>) {
         let pane = &self.sides[i].pane;
         let Some(path) = pane.selected_path() else {
@@ -1599,10 +1650,10 @@ impl FilesPage {
                     let (destination, result) = task.await;
                     let _ = this.update(cx, |page, cx| {
                         match result {
-                            Ok(()) => {
-                                page.notice =
-                                    Some(format!("Downloaded to {}", destination.display()))
-                            }
+                            Ok(()) => page.show_notice(
+                                format!("Downloaded to {}", destination.display()),
+                                cx,
+                            ),
                             Err(e) => {
                                 page.error = Some(format!(
                                     "Could not download to {}: {e}",
@@ -1723,6 +1774,13 @@ impl FilesPage {
                                         transfer.wait("The copy did not finish; retry it.");
                                     }
                                     if progress.state == "done" {
+                                        cx.spawn(async move |this, cx| {
+                                            cx.background_executor()
+                                                .timer(std::time::Duration::from_secs(5))
+                                                .await;
+                                            let _ = this.update(cx, |_, cx| cx.notify());
+                                        })
+                                        .detach();
                                         for side in 0..2 {
                                             if page.sides[side].pane.node == job.target_node
                                                 && page.sides[side].pane.path.as_deref()
