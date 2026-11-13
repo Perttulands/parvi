@@ -12,7 +12,6 @@ pub const GAP: f32 = 10.;
 pub const SMALL_GAP: f32 = 8.;
 pub const HAIRLINE: f32 = 1.;
 pub const THIN: f32 = 2.;
-pub const WALL: f32 = 2.;
 pub const COL: f32 = 180.;
 pub const ACTION_COL: f32 = 80.;
 pub const LINK_COL: f32 = 180.;

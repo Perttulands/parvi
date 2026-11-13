@@ -223,8 +223,8 @@ impl Render for ServicesPage {
             let mut room = div()
                 .flex()
                 .flex_col()
-                .border(px(tokens::WALL))
-                .border_color(t.identity_of(&node.device))
+                .border_1()
+                .border_color(t.divider)
                 .rounded(px(size::RADIUS))
                 .bg(t.surface)
                 .child(div().p(px(tokens::PAD)).child(kit::device_label(

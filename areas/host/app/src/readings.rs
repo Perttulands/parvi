@@ -110,8 +110,8 @@ impl Render for ReadingsPage {
             let state = self.state.nodes.get(node.id.as_str());
             body = body.child(
                 div()
-                    .border(px(tokens::WALL))
-                    .border_color(t.identity_of(&node.device))
+                    .border_1()
+                    .border_color(t.divider)
                     .rounded(px(size::RADIUS))
                     .bg(t.surface)
                     .child(self.render_floor(&t, node, state, false, &span, cx)),
