@@ -1,31 +1,24 @@
-//! Agents: harnesses, tools and their skills checkouts across nodes.
+//! Agents: whether the harnesses can run with their skills current, and
+//! what to do where they cannot, across nodes; and the roles library.
 mod library;
 mod role_state;
 pub mod state;
 mod view;
 mod tokens {
-    pub const RAIL_W: f32 = 300.;
-    pub const DETAIL_MAX: f32 = 1100.;
-    pub const AVATAR: f32 = 28.;
-    pub const TITLE: f32 = 24.;
+    /// An off line's name column and its fix's.
+    pub const SUBJECT_W: f32 = 160.;
+    pub const FIX_W: f32 = 220.;
+    /// Above and below an off line, which may wrap.
+    pub const OFF_PAD: f32 = 6.;
+    /// A sync on its way.
     pub const DIMMED: f32 = 0.5;
-    pub const P2: f32 = 2.;
+    /// The role library's measures.
     pub const P4: f32 = 4.;
-    pub const P6: f32 = 6.;
     pub const P8: f32 = 8.;
-    pub const P10: f32 = 10.;
-    pub const P12: f32 = 12.;
-    pub const P20: f32 = 20.;
-    pub const LARGE_AVATAR: f32 = 42.;
-    pub const TABLE_ROW: f32 = 32.;
-    pub const SELECTED: f32 = 0.1;
-    pub const HOVER: f32 = 0.04;
-    pub const LINE: f32 = 0.5;
 }
-use gpui::{App, AppContext, Context, Entity, IntoElement, Render, Window};
+use gpui::{App, Context, IntoElement, Render, Window};
 use parvi_app_kit::host::Status;
 use parvi_app_kit::link::client::LinkState;
-use parvi_app_kit::widgets::field::{FieldEvent, TextField};
 use parvi_app_kit::{Host, Mounted, Page, mount};
 use parvi_core::NodeId;
 use state::{Agents, Synced, WATCH};
@@ -35,9 +28,7 @@ pub struct AgentsPage {
     host: Host,
     library: library::Library,
     state: Agents,
-    filter: Option<Entity<TextField>>,
     places: BTreeMap<String, String>,
-    show_sync_failures: bool,
 }
 impl AgentsPage {
     fn new(host: Host, _: &mut Window, _: &mut Context<Self>) -> Self {
@@ -45,33 +36,14 @@ impl AgentsPage {
             host,
             library: library::Library::default(),
             state: Agents::default(),
-            filter: None,
             places: BTreeMap::new(),
-            show_sync_failures: false,
         }
-    }
-    fn agents_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<TextField> {
-        if let Some(field) = &self.filter {
-            return field.clone();
-        }
-        let field = cx.new(|cx| TextField::new(cx, "filter agents"));
-        cx.subscribe_in(&field, window, |_, _, event, _, cx| {
-            if let FieldEvent::Changed = event {
-                cx.notify();
-            }
-        })
-        .detach();
-        self.filter = Some(field.clone());
-        field
     }
     fn place_name(&self, node: &str) -> String {
         self.places
             .get(node)
             .cloned()
             .unwrap_or_else(|| node.to_owned())
-    }
-    fn place_tag(&self, t: &parvi_app_kit::theme::Theme, node: &str) -> gpui::Div {
-        parvi_app_kit::widgets::kit::note(t, self.place_name(node), Some(t.text2))
     }
     fn agents_reports(&self) -> Vec<(&str, &state::Report)> {
         self.state

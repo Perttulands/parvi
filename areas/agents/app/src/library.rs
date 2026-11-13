@@ -1,11 +1,13 @@
 use crate::{AgentsPage, role_state as role_library, tokens};
-use gpui::{AnyElement, AppContext, Context, Entity, Window, div, prelude::*, px};
+use gpui::{AnyElement, AppContext, Context, Entity, SharedString, Window, div, prelude::*, px};
 use parvi_agents_contract::roles::{Role, Roles, Usage};
 use parvi_app_kit::link::http::ANSWER;
-use parvi_app_kit::theme::{board, theme};
+use parvi_app_kit::menu::MenuRow;
+use parvi_app_kit::theme::{size, theme};
 use parvi_app_kit::widgets::{
     field::TextField,
     kit::{self, Kind},
+    pane,
 };
 use serde_json::json;
 
@@ -21,7 +23,6 @@ pub(crate) struct Library {
     form: Option<Form>,
     error: Option<String>,
     busy: bool,
-    confirming_delete: bool,
     note: Option<Entity<TextField>>,
 }
 pub(crate) struct Form {
@@ -152,7 +153,6 @@ impl AgentsPage {
         self.library.selected = None;
         self.library.form = None;
         self.library.wanted = id.clone();
-        self.library.confirming_delete = false;
         self.library.note = Some(cx.new(|cx| TextField::new(cx, "Add a note").prose()));
         self.library.usage = None;
         let path = role_path(&id);
@@ -350,6 +350,50 @@ impl AgentsPage {
             cx,
         );
     }
+    /// Deletes the chosen role; the menu that offers it has asked twice.
+    fn role_delete(&mut self, cx: &mut Context<Self>) {
+        let l = &self.library;
+        let Some(role) = &l.selected else {
+            return;
+        };
+        let (node, id, etag) = (l.node.clone(), role.id.clone(), role.etag.clone());
+        self.role_write(
+            node,
+            id.clone(),
+            "DELETE",
+            role_path(&id),
+            None,
+            Some(etag),
+            cx,
+        );
+    }
+    /// What the role's "…" offers: Retire or Restore, and Delete when no
+    /// mission slot uses it.
+    fn role_menu(&self, cx: &mut Context<Self>) -> Vec<MenuRow> {
+        let l = &self.library;
+        let Some(role) = &l.selected else {
+            return vec![];
+        };
+        let page = cx.entity().downgrade();
+        let retired = role.status == "retired";
+        let mut retire = MenuRow::new(if retired { "Restore" } else { "Retire" }, {
+            let page = page.clone();
+            move |_, cx| {
+                let _ = page.update(cx, |s, cx| s.role_status(!retired, cx));
+            }
+        });
+        if !retired {
+            retire = retire.hint("Out of staffing; its slots need restaffing");
+        }
+        let mut delete = MenuRow::new("Delete", move |_, cx| {
+            let _ = page.update(cx, |s, cx| s.role_delete(cx));
+        })
+        .danger();
+        if !role_library::may_delete(l.usage.as_ref()) {
+            delete = delete.refused(role_library::usage_words(l.usage.as_ref()));
+        }
+        vec![retire, delete]
+    }
     pub(crate) fn render_role_library(
         &mut self,
         _window: &mut Window,
@@ -357,117 +401,111 @@ impl AgentsPage {
     ) -> AnyElement {
         let t = theme(cx).clone();
         let l = &self.library;
-        let mut rail = div()
-            .id("roles-rail")
-            .w(px(tokens::RAIL_W))
-            .h_full()
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .gap(px(tokens::P4))
-            .p(px(tokens::P8))
-            .bg(t.surface)
+        let list_head = pane::head(&t)
             .child(
-                kit::button(&t, "library-back", "← Agents", Kind::Quiet).on_click(cx.listener(
-                    |s, _, _, cx| {
-                        s.library.open = false;
-                        cx.notify();
-                    },
-                )),
+                pane::act(&t, "library-back", "← Agents").on_click(cx.listener(|s, _, _, cx| {
+                    s.library.open = false;
+                    cx.notify();
+                })),
             )
-            .child(kit::label(&t, "Roles by place"));
-        for node in self
+            .child(div().flex_1())
+            .child(
+                pane::act(&t, "role-new", "New")
+                    .on_click(cx.listener(|s, _, _, cx| s.role_form(true, cx))),
+            );
+        let mut rows = div().flex().flex_col();
+        let nodes: Vec<String> = self
             .host
             .nodes(cx)
             .into_iter()
             .map(|n| n.id.to_string())
-            .collect::<Vec<_>>()
-        {
-            let name = self.place_name(&node);
-            let chosen = node == l.node;
-            rail = rail.child(
-                kit::button(
-                    &t,
-                    format!("role-node-{node}"),
-                    name,
-                    if chosen { Kind::Primary } else { Kind::Quiet },
-                )
-                .on_click(cx.listener(move |s, _, _, cx| {
-                    let l = &mut s.library;
-                    if l.busy {
-                        return;
-                    }
-                    l.node = node.clone();
-                    l.roles.clear();
-                    l.unreadable.clear();
-                    l.selected = None;
-                    l.wanted.clear();
-                    l.usage = None;
-                    l.form = None;
-                    s.load_role_library(cx);
-                })),
-            );
+            .collect();
+        // Each device keeps its own roles; choose which when there are several.
+        if nodes.len() > 1 {
+            rows = rows.child(pane::label(&t, "Device"));
+            for node in nodes {
+                let name = self.place_name(&node);
+                let chosen = node == l.node;
+                rows = rows.child(
+                    pane::row(&t, SharedString::from(format!("role-node-{node}")), chosen)
+                        .child(pane::cell(name))
+                        .on_click(cx.listener(move |s, _, _, cx| {
+                            let l = &mut s.library;
+                            if l.busy {
+                                return;
+                            }
+                            l.node = node.clone();
+                            l.roles.clear();
+                            l.unreadable.clear();
+                            l.selected = None;
+                            l.wanted.clear();
+                            l.usage = None;
+                            l.form = None;
+                            s.load_role_library(cx);
+                        })),
+                );
+            }
+            rows = rows.child(pane::label(&t, "Roles"));
         }
-        rail = rail.child(
-            kit::button(&t, "role-new", "+ New role", Kind::Plain)
-                .on_click(cx.listener(|s, _, _, cx| s.role_form(true, cx))),
-        );
         for role in &l.roles {
             let id = role.id.clone();
-            let label = format!(
-                "{}{}",
-                if role.display_name.is_empty() {
-                    &role.id
-                } else {
-                    &role.display_name
-                },
-                if role.status == "retired" {
-                    " · retired"
-                } else {
-                    ""
-                }
-            );
-            rail = rail.child(
-                kit::button(&t, format!("role-{id}"), label, Kind::Quiet)
-                    .debug_selector({
-                        let selector = format!("role-{id}");
-                        move || selector.clone()
+            let name = if role.display_name.is_empty() {
+                role.id.clone()
+            } else {
+                role.display_name.clone()
+            };
+            let selector = format!("role-{id}");
+            rows = rows.child(
+                pane::row(&t, SharedString::from(selector.clone()), l.wanted == id)
+                    .debug_selector(move || selector)
+                    .child(pane::cell(name))
+                    .when(role.status == "retired", |d| {
+                        d.child(pane::meta(&t, "retired", None))
                     })
                     .on_click(cx.listener(move |s, _, _, cx| s.inspect_role(id.clone(), cx))),
             );
         }
-        let mut detail = div()
-            .id("roles-detail")
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .overflow_y_scroll()
-            .p(px(board::PAD))
-            .flex()
-            .flex_col()
-            .gap(px(tokens::P8));
+        let list = pane::list(&t, "roles-list", list_head, rows);
+
+        let quiet = l.error.is_none() && l.unreadable.is_empty();
+        let mut notes = div().flex().flex_col().gap(px(tokens::P4));
         if let Some(e) = &l.error {
-            detail = detail.child(kit::note(&t, e.clone(), Some(t.error)));
-        }
-        if l.busy {
-            detail = detail.child(kit::note(&t, "Working…", Some(t.dim)));
+            notes = notes.child(div().text_color(t.error).child(e.clone()));
         }
         for item in &l.unreadable {
-            detail = detail.child(kit::note(
-                &t,
-                format!("{}: {}", item.name, item.reason),
-                Some(t.error),
-            ));
+            notes = notes.child(
+                div()
+                    .text_color(t.error)
+                    .child(format!("{}: {}", item.name, item.reason)),
+            );
         }
-        if let Some(form) = &l.form {
-            detail = detail.child(kit::label(
-                &t,
-                if form.creating {
-                    "New role"
-                } else {
-                    "Edit role"
-                },
-            ));
+        let (head, body) = if let Some(form) = &l.form {
+            let head = pane::head(&t)
+                .child(pane::title(
+                    &t,
+                    if form.creating {
+                        "New role"
+                    } else {
+                        "Edit role"
+                    },
+                ))
+                .child(pane::act(&t, "role-cancel", "Cancel").on_click(cx.listener(
+                    |s, _, _, cx| {
+                        s.library.form = None;
+                        cx.notify();
+                    },
+                )))
+                .child(
+                    kit::button(&t, "role-save", "Save", Kind::Primary)
+                        .debug_selector(|| "role-save".into())
+                        .when(l.busy, |b| b.opacity(tokens::DIMMED))
+                        .on_click(cx.listener(|s, _, _, cx| s.save_role(cx))),
+                );
+            let mut body = div()
+                .flex()
+                .flex_col()
+                .gap(px(size::SECTION_GAP))
+                .when(!quiet, |d| d.child(notes));
             for (label, field) in [
                 ("ID", &form.id),
                 ("Name", &form.name),
@@ -477,173 +515,144 @@ impl AgentsPage {
             ] {
                 if label != "ID" || form.creating {
                     let selector = format!("role-field-{label}");
-                    detail = detail.child(kit::label(&t, label)).child(
-                        div()
-                            .id(selector.clone())
-                            .debug_selector(move || selector.clone())
-                            .child(field.clone()),
+                    body = body.child(
+                        pane::section(&t, label).child(
+                            div()
+                                .id(selector.clone())
+                                .debug_selector(move || selector.clone())
+                                .child(field.clone()),
+                        ),
                     );
                 }
             }
-            detail = detail.child(
-                div()
-                    .flex()
-                    .gap(px(tokens::P8))
-                    .child(
-                        kit::button(&t, "role-save", "Save", Kind::Primary)
-                            .debug_selector(|| "role-save".into())
-                            .on_click(cx.listener(|s, _, _, cx| s.save_role(cx))),
-                    )
-                    .child(
-                        kit::button(&t, "role-cancel", "Cancel", Kind::Plain).on_click(
-                            cx.listener(|s, _, _, cx| {
-                                s.library.form = None;
-                                cx.notify();
-                            }),
-                        ),
-                    ),
-            );
+            (head, body)
         } else if let Some(role) = &l.selected {
-            detail = detail
+            let head = pane::head(&t)
+                .child(pane::title(&t, role.display_name.clone()))
                 .child(
-                    div()
-                        .text_size(px(tokens::TITLE))
-                        .child(role.display_name.clone()),
+                    pane::act(&t, "role-edit", "Edit")
+                        .debug_selector(|| "role-edit".into())
+                        .on_click(cx.listener(|s, _, _, cx| s.role_form(false, cx))),
                 )
-                .child(kit::note(
-                    &t,
-                    format!("{} · {} · {}", role.id, role.kind, role.status),
-                    Some(t.dim),
-                ))
-                .child(role.summary.clone())
-                .child(kit::note(
-                    &t,
-                    format!("Capabilities: {}", role.tags.join(", ")),
-                    Some(t.dim),
-                ))
-                .child(kit::label(&t, "Mission usage"))
-                .child(role_library::usage_words(l.usage.as_ref()));
-            detail = detail.child(kit::label(&t, "Notes"));
-            for note in &role.notes {
-                detail = detail
-                    .child(kit::note(
-                        &t,
-                        format!("{} · {}", note.actor, note.ts),
-                        Some(t.dim),
-                    ))
-                    .child(note.text.clone());
+                .child(pane::act(&t, "role-more", "…").on_click(cx.listener(
+                    |s, e: &gpui::ClickEvent, _, cx| {
+                        let rows = s.role_menu(cx);
+                        s.host.menu(rows, e.position(), cx);
+                    },
+                )));
+            let mut body = div()
+                .flex()
+                .flex_col()
+                .gap(px(size::SECTION_GAP))
+                .when(!quiet, |d| d.child(notes))
+                .child(div().whitespace_normal().child(role.summary.clone()));
+            let mut lines = div().flex().flex_col().child(pane::line(
+                &t,
+                "Kind",
+                div().child(role.kind.clone()),
+            ));
+            if role.status != "active" {
+                lines = lines.child(pane::line(&t, "Status", div().child(role.status.clone())));
             }
-            if let Some(note) = &l.note {
-                detail = detail.child(note.clone()).child(
-                    kit::button(&t, "role-add-note", "Add note", Kind::Plain)
-                        .on_click(cx.listener(|s, _, _, cx| s.add_role_note(cx))),
-                );
+            if !role.tags.is_empty() {
+                lines = lines.child(pane::line(
+                    &t,
+                    "Capabilities",
+                    div().child(role.tags.join(", ")),
+                ));
             }
-            detail = detail.child(
-                kit::button(&t, "role-edit", "Edit", Kind::Plain)
-                    .debug_selector(|| "role-edit".into())
-                    .on_click(cx.listener(|s, _, _, cx| s.role_form(false, cx))),
-            );
-            if let Some(usage) = &l.usage {
+            lines = lines.child(pane::line(
+                &t,
+                "Used by",
+                div().child(role_library::usage_words(l.usage.as_ref())),
+            ));
+            body = body.child(lines);
+            if let Some(usage) = &l.usage
+                && (!usage.usage.is_empty() || !usage.unreadable.is_empty())
+            {
+                let mut uses = pane::section(&t, "Mission slots");
                 for (index, u) in usage.usage.iter().enumerate() {
                     let slug = u.mission_slug.clone();
                     let node = l.node.clone();
-                    detail = detail.child(
-                        kit::button(
-                            &t,
-                            format!("role-use-{index}"),
-                            format!(
+                    uses = uses.child(
+                        pane::row(&t, ("role-use", index), false)
+                            .mx_0()
+                            .child(pane::cell(format!(
                                 "{} / {} / {}",
                                 u.mission_title, u.formation_title, u.slot_label
-                            ),
-                            Kind::Quiet,
-                        )
-                        .on_click(cx.listener(move |s, _, window, cx| {
-                            let _ = window;
-                            let _ = s.host.ask(
-                                parvi_app_kit::Ask::Reveal {
-                                    what: "mission".into(),
-                                    id: slug.clone(),
-                                    node: Some(parvi_core::NodeId(node.clone())),
-                                    part: None,
-                                    beside: false,
-                                },
-                                cx,
-                            );
-                        })),
+                            )))
+                            .tooltip(kit::tip("Show it in Missions"))
+                            .on_click(cx.listener(move |s, _, _, cx| {
+                                let _ = s.host.ask(
+                                    parvi_app_kit::Ask::Reveal {
+                                        what: "mission".into(),
+                                        id: slug.clone(),
+                                        node: Some(parvi_core::NodeId(node.clone())),
+                                        part: None,
+                                        beside: false,
+                                    },
+                                    cx,
+                                );
+                            })),
                     );
                 }
                 for u in &usage.unreadable {
-                    detail = detail.child(kit::note(
-                        &t,
-                        format!("{}: {}", u.name, u.reason),
-                        Some(t.error),
-                    ));
+                    uses = uses.child(
+                        div()
+                            .text_color(t.error)
+                            .child(format!("{}: {}", u.name, u.reason)),
+                    );
                 }
-                detail = detail.child(kit::note(&t, "Retiring removes this role from staffing; existing slots need restaffing or restoration. Deletion is allowed only when no slot uses it.", Some(t.dim)));
-                let retired = role.status == "retired";
-                detail = detail.child(
-                    div().flex().gap(px(tokens::P8)).child(
-                        kit::button(
-                            &t,
-                            "role-retire",
-                            if retired { "Restore" } else { "Retire" },
-                            Kind::Plain,
-                        )
-                        .on_click(cx.listener(move |s, _, _, cx| s.role_status(!retired, cx))),
-                    ),
-                );
-                if role_library::may_delete(Some(usage)) {
-                    if l.confirming_delete {
-                        let (node, id, etag) = (l.node.clone(), role.id.clone(), role.etag.clone());
-                        detail = detail
-                            .child(kit::note(
-                                &t,
-                                "Delete this role card? This cannot be undone.",
-                                Some(t.error),
-                            ))
-                            .child(
-                                kit::button(&t, "role-delete-confirm", "Delete role", Kind::Plain)
-                                    .on_click(cx.listener(move |s, _, _, cx| {
-                                        s.role_write(
-                                            node.clone(),
-                                            id.clone(),
-                                            "DELETE",
-                                            role_path(&id),
-                                            None,
-                                            Some(etag.clone()),
-                                            cx,
-                                        );
-                                    })),
-                            )
-                            .child(
-                                kit::button(&t, "role-delete-cancel", "Cancel", Kind::Quiet)
-                                    .on_click(cx.listener(|s, _, _, cx| {
-                                        s.library.confirming_delete = false;
-                                        cx.notify();
-                                    })),
-                            );
-                    } else {
-                        detail = detail.child(
-                            kit::button(&t, "role-delete", "Delete…", Kind::Plain).on_click(
-                                cx.listener(|s, _, _, cx| {
-                                    s.library.confirming_delete = true;
-                                    cx.notify();
-                                }),
-                            ),
-                        );
-                    }
-                }
+                body = body.child(uses);
             }
+            let mut said = pane::section(&t, "Notes");
+            for note in &role.notes {
+                said = said.child(
+                    div()
+                        .pb(px(tokens::P8))
+                        .child(
+                            div()
+                                .text_size(px(size::SMALL))
+                                .text_color(t.dim)
+                                .child(format!("{} · {}", note.actor, note.ts)),
+                        )
+                        .child(div().whitespace_normal().child(note.text.clone())),
+                );
+            }
+            if let Some(note) = &l.note {
+                said = said.child(
+                    div()
+                        .flex()
+                        .items_start()
+                        .gap(px(size::HEAD_GAP))
+                        .child(div().flex_1().min_w_0().child(note.clone()))
+                        .child(
+                            kit::button(&t, "role-add-note", "Add", Kind::Plain)
+                                .on_click(cx.listener(|s, _, _, cx| s.add_role_note(cx))),
+                        ),
+                );
+            }
+            (head, body.child(said))
         } else {
-            detail = detail.child(kit::note(&t, "Choose a role or create one.", Some(t.dim)));
-        }
-        div()
-            .size_full()
-            .flex()
-            .bg(t.bg)
-            .child(rail)
-            .child(detail)
+            let words = if l.busy {
+                "Reading the roles…"
+            } else if l.roles.is_empty() {
+                "No roles yet."
+            } else {
+                "Choose a role."
+            };
+            (
+                pane::head(&t),
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(size::SECTION_GAP))
+                    .when(!quiet, |d| d.child(notes))
+                    .child(pane::empty(&t, words, None).p_0()),
+            )
+        };
+        pane::page(&t, list, pane::detail("roles-detail", head, body))
+            .text_color(t.text)
             .into_any_element()
     }
 }

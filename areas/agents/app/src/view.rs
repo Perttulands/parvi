@@ -1,11 +1,21 @@
-use crate::state::{self as agents, Checkout, Chosen, Drift, Report, Skill, Tone, Tool};
+//! Agent setup on the kit's skeleton. The first screen says whether the
+//! agents can run with their skills current: one line when they can, and
+//! otherwise only what is off, each with its fix. The list reaches every
+//! harness, tool and skills checkout for a closer look or a sync.
+
+use crate::state::{self as agents, Checkout, Chosen, Fix, Off, Report, Tone, Tool};
 use crate::{AgentsPage, tokens};
-use gpui::{
-    AnyElement, ClickEvent, Context, Div, FontWeight, Hsla, SharedString, Window, div, prelude::*,
-    px,
-};
-use parvi_app_kit::theme::{Theme, alpha, board, rgb, size, theme};
+use gpui::{AnyElement, Context, Div, Hsla, SharedString, Window, div, prelude::*, px};
+use parvi_app_kit::theme::{Theme, rgb, size, theme};
 use parvi_app_kit::widgets::kit::{self, Kind};
+use parvi_app_kit::widgets::pane::{self, Col};
+
+/// An off line: what, what is wrong, its fix.
+const OFF: [Col; 3] = [
+    Col::fixed("", tokens::SUBJECT_W),
+    Col::fill(""),
+    Col::fixed("", tokens::FIX_W),
+];
 
 impl AgentsPage {
     pub(crate) fn render_agents(
@@ -13,36 +23,12 @@ impl AgentsPage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let t = theme(cx).clone();
         if self.library.open {
             return self.render_role_library(window, cx);
         }
-        let filter = self.agents_filter(window, cx);
+        let t = theme(cx).clone();
         let reports = self.agents_reports();
-        if reports.is_empty() {
-            let places: Vec<String> = self.places.keys().map(|n| self.place_name(n)).collect();
-            let words = if places.is_empty() {
-                "No place answers; the agents are read once one does.".to_string()
-            } else {
-                format!("Reading the agents on {}…", places.join(", "))
-            };
-            return div()
-                .size_full()
-                .bg(t.bg)
-                .p(px(board::PAD))
-                .child(kit::note(&t, words, Some(t.dim)))
-                .child(
-                    kit::button(&t, "agents-library-empty", "Roles library", Kind::Plain).on_click(
-                        cx.listener(|s, _, _, cx| {
-                            s.library.open = true;
-                            s.load_role_library(cx);
-                        }),
-                    ),
-                )
-                .into_any_element();
-        }
-        let words = filter.read(cx).text.trim().to_lowercase();
-        let shown = |s: &str| s.to_lowercase().contains(&words);
+        let several = reports.len() > 1;
         // Every tool and checkout any place reports, once, by id and name.
         let mut tools: Vec<&Tool> = vec![];
         let mut checkouts: Vec<&Checkout> = vec![];
@@ -58,313 +44,292 @@ impl AgentsPage {
                 }
             }
         }
-        let harnesses = tools.iter().filter(|x| x.skills.is_some()).count();
-        let mut rail = div()
-            .id("agents-rail")
-            .w(px(tokens::RAIL_W))
-            .flex_none()
-            .h_full()
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .bg(t.surface)
-            .border_r_1()
-            .border_color(t.divider)
+        let off: Vec<(&str, Off)> = reports
+            .iter()
+            .flat_map(|(n, r)| agents::off(r).into_iter().map(move |o| (*n, o)))
+            .collect();
+
+        let list_head = pane::head(&t)
+            .child(div().flex_1())
             .child(
-                div()
-                    .h(px(size::TAB_BAR))
-                    .px(px(tokens::P12))
-                    .flex()
-                    .items_center()
-                    .border_b_1()
-                    .border_color(t.divider)
-                    .child(kit::page_title(&t, "Agents"))
-                    .child(div().flex_1())
-                    .child(kit::note(&t, format!("{harnesses} harnesses"), Some(t.dim))),
+                pane::act(&t, "agents-refresh", "Check again")
+                    .debug_selector(|| "agents-refresh".into())
+                    .tooltip(kit::tip("Read the tools and checkouts again"))
+                    .on_click(cx.listener(|s, _, _, cx| s.agents_refresh(cx))),
             )
-            .child(div().p(px(tokens::P8)).child(filter))
             .child(
-                kit::button(&t, "agents-library", "Roles library", Kind::Plain)
+                pane::act(&t, "agents-library", "Roles")
                     .debug_selector(|| "agents-library".into())
                     .on_click(cx.listener(|s, _, _, cx| {
                         s.library.open = true;
                         s.load_role_library(cx);
                     })),
             );
-        let groups: [(&str, Vec<&Tool>); 2] = [
-            (
-                "Harnesses",
-                tools
-                    .iter()
-                    .copied()
-                    .filter(|x| x.skills.is_some())
-                    .collect(),
-            ),
-            (
-                "Tools",
-                tools
-                    .iter()
-                    .copied()
-                    .filter(|x| x.skills.is_none())
-                    .collect(),
-            ),
-        ];
-        for (label, list) in groups {
-            let list: Vec<&Tool> = list
-                .into_iter()
-                .filter(|x| shown(&x.name) || shown(&x.command))
+        let mut rows = div().flex().flex_col();
+        if !reports.is_empty() {
+            let (meta, colour) = if off.is_empty() {
+                ("ready".to_string(), None)
+            } else {
+                (
+                    format!("{} to fix", off.len()),
+                    Some(tone_colour(&t, worst_tone(off.iter().map(|(_, o)| o.tone)))),
+                )
+            };
+            rows = rows.child(self.row(
+                &t,
+                "agents-overview",
+                "Overview",
+                None,
+                Some((meta, colour)),
+                Chosen::Overview,
+                cx,
+            ));
+        }
+        for (label, harness) in [("Harnesses", true), ("Tools", false)] {
+            let group: Vec<&&Tool> = tools
+                .iter()
+                .filter(|x| x.skills.is_some() == harness)
                 .collect();
-            if list.is_empty() {
+            if group.is_empty() {
                 continue;
             }
-            rail = rail.child(group_label(&t, label));
-            for tool in list {
-                let (word, tone) = worst(reports.iter().filter_map(|(_, r)| {
-                    let mine = r.tools.iter().find(|x| x.id == tool.id)?;
-                    Some(agents::tool_state(r, mine))
-                }));
-                let chosen = self.state.chosen == Chosen::Tool(tool.id.clone());
-                let sub = div()
-                    .flex()
-                    .gap(px(tokens::P4))
-                    .child(tool.command.clone())
-                    .child("·")
-                    .child(
-                        div()
-                            .debug_selector({
-                                let id = tool.id.clone();
-                                let word = word.clone();
-                                move || format!("agents-tool-state-{id}-{word}")
-                            })
-                            .text_color(tone_colour(&t, tone))
-                            .child(word),
-                    );
-                let pick = Chosen::Tool(tool.id.clone());
-                rail = rail.child(self.rail_row(
-                    &t,
-                    &format!("tool-{}", tool.id),
-                    &tool.name,
-                    sub,
-                    chosen,
-                    pick,
-                    cx,
-                ));
-            }
-        }
-        let list: Vec<&Checkout> = checkouts.into_iter().filter(|c| shown(&c.name)).collect();
-        if !list.is_empty() {
-            rail = rail.child(group_label(&t, "Skills from"));
-            for c in list {
-                let mut count = 0;
-                // Commits behind upstream, as the drift list words it, and
-                // each skill not linked or broken once, wherever it is.
-                let mut behind = 0;
-                let mut unlinked = std::collections::BTreeSet::new();
-                let mut broken = std::collections::BTreeSet::new();
-                for (_, r) in &reports {
-                    if let Some(mine) = r.checkouts.iter().find(|x| x.name == c.name) {
-                        count = count.max(agents::checkout_skills(r, mine).len());
-                        behind = behind.max(mine.behind);
-                        for drift in agents::checkout_drift(r, mine) {
-                            match drift.tone {
-                                Tone::Unlinked => {
-                                    unlinked.insert(drift.path);
-                                }
-                                Tone::Error => {
-                                    broken.insert(drift.path);
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-                let (unlinked, broken) = (unlinked.len(), broken.len());
-                let chosen = self.state.chosen == Chosen::Checkout(c.name.clone());
-                let sub = div()
-                    .flex()
-                    .gap(px(tokens::P4))
-                    .child(agents::skills(count))
-                    .when(behind > 0, |d| {
-                        d.child("·").child(
-                            div()
-                                .text_color(tone_colour(&t, Tone::Behind))
-                                .child(format!("{behind} behind")),
-                        )
-                    })
-                    .when(unlinked > 0, |d| {
-                        d.child("·").child(
-                            div()
-                                .text_color(tone_colour(&t, Tone::Unlinked))
-                                .child(format!("{unlinked} not linked")),
-                        )
-                    })
-                    .when(broken > 0, |d| {
-                        d.child("·")
-                            .child(div().text_color(t.error).child(format!("{broken} broken")))
-                    });
-                let pick = Chosen::Checkout(c.name.clone());
-                rail = rail.child(self.rail_row(
-                    &t,
-                    &format!("checkout-{}", c.name),
-                    &c.name,
-                    sub,
-                    chosen,
-                    pick,
-                    cx,
-                ));
-            }
-        }
-        let detail = match self.state.chosen.clone() {
-            Chosen::Tool(id) if tools.iter().any(|x| x.id == id) => {
-                self.tool_detail(&t, &reports, &id, cx)
-            }
-            Chosen::Checkout(name)
-                if reports
+            rows = rows.child(pane::label(&t, label));
+            for tool in group {
+                let states: Vec<(String, Tone)> = reports
                     .iter()
-                    .any(|(_, r)| r.checkouts.iter().any(|c| c.name == name)) =>
-            {
-                self.checkout_detail(&t, &reports, &name, cx)
-            }
-            _ => kit::note(&t, "Choose a harness, a tool or a checkout.", Some(t.dim)),
-        };
-        let mut failures = Vec::new();
-        for (node, report) in &reports {
-            for checkout in &report.checkouts {
-                if let Some(message) = agents::sync_failure(checkout) {
-                    failures.push((
-                        self.place_name(node),
-                        (*node).to_owned(),
-                        checkout.name.clone(),
-                        message,
-                    ));
-                }
-            }
-        }
-        let mut sync_failures = div().flex().flex_col().gap(px(tokens::P8));
-        if !failures.is_empty() {
-            let count = failures.len();
-            let selector = format!("agents-sync-failures-{count}");
-            sync_failures = sync_failures.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(tokens::P8))
-                    .child(
-                        div()
-                            .debug_selector(move || selector.clone())
-                            .text_color(t.error)
-                            .child(format!(
-                                "{count} checkout{} failed to sync",
-                                if count == 1 { "" } else { "s" }
-                            )),
-                    )
-                    .child(
-                        kit::button(
-                            &t,
-                            "agents-sync-details",
-                            if self.show_sync_failures {
-                                "Hide details"
-                            } else {
-                                "Show details"
-                            },
-                            Kind::Quiet,
-                        )
-                        .debug_selector(|| "agents-sync-details".into())
-                        .on_click(cx.listener(|page, _, _, cx| {
-                            page.show_sync_failures = !page.show_sync_failures;
-                            cx.notify();
-                        })),
-                    ),
-            );
-            if self.show_sync_failures {
-                for (place, node, name, message) in failures {
-                    let selector = format!("agents-sync-failure-{node}-{name}");
-                    let message_selector = format!("agents-sync-message-{message}");
-                    sync_failures = sync_failures.child(
-                        div()
-                            .debug_selector(move || selector.clone())
-                            .text_color(t.error)
-                            .child(format!("{place} · {name} · "))
-                            .child(
-                                div()
-                                    .debug_selector(move || message_selector.clone())
-                                    .child(message),
-                            ),
-                    );
-                }
+                    .filter_map(|(_, r)| {
+                        let mine = r.tools.iter().find(|x| x.id == tool.id)?;
+                        Some(agents::tool_state(r, mine))
+                    })
+                    .collect();
+                let (word, _) = worst(states.into_iter());
+                let signed_out = reports.iter().any(|(_, r)| {
+                    r.tools
+                        .iter()
+                        .any(|x| x.id == tool.id && x.path.is_some() && x.signed_in == Some(false))
+                });
+                let meta = if signed_out {
+                    Some((
+                        "not signed in".to_string(),
+                        Some(tone_colour(&t, Tone::Behind)),
+                    ))
+                } else if word != "available" {
+                    Some((word.clone(), None))
+                } else {
+                    None
+                };
+                rows = rows.child(self.row(
+                    &t,
+                    &format!("agents-tool-{}", tool.id),
+                    &tool.name,
+                    Some(format!("agents-tool-state-{}-{word}", tool.id)),
+                    meta,
+                    Chosen::Tool(tool.id.clone()),
+                    cx,
+                ));
             }
         }
-        div()
-            .size_full()
-            .flex()
-            .bg(t.bg)
-            .child(rail)
-            .child(
-                div()
-                    .id("agents-detail")
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .overflow_y_scroll()
-                    .child(
-                        div()
-                            .p(px(board::PAD))
-                            .max_w(px(tokens::DETAIL_MAX))
-                            .child(sync_failures)
-                            .child(detail),
-                    ),
+        if !checkouts.is_empty() {
+            rows = rows.child(pane::label(&t, "Skills from"));
+            for c in &checkouts {
+                let word = worst_word(reports.iter().filter_map(|(_, r)| {
+                    let mine = r.checkouts.iter().find(|x| x.name == c.name)?;
+                    agents::checkout_word(r, mine)
+                }));
+                let meta = word.map(|(w, tone)| (w, Some(tone_colour(&t, tone))));
+                rows = rows.child(self.row(
+                    &t,
+                    &format!("agents-checkout-{}", c.name),
+                    &c.name,
+                    None,
+                    meta,
+                    Chosen::Checkout(c.name.clone()),
+                    cx,
+                ));
+            }
+        }
+        let list = pane::list(&t, "agents-list", list_head, rows);
+
+        let detail = if reports.is_empty() {
+            let places: Vec<String> = self.places.keys().map(|n| self.place_name(n)).collect();
+            let words = if places.is_empty() {
+                "No device answers yet.".to_string()
+            } else {
+                format!("Reading the agents on {}…", places.join(", "))
+            };
+            pane::detail(
+                "agents-detail",
+                pane::head(&t),
+                pane::empty(&t, words, None).p_0(),
             )
+        } else {
+            match self.state.chosen.clone() {
+                Chosen::Tool(id) if tools.iter().any(|x| x.id == id) => {
+                    self.tool_detail(&t, &reports, &id, several, cx)
+                }
+                Chosen::Checkout(name) if checkouts.iter().any(|c| c.name == name) => {
+                    self.checkout_detail(&t, &reports, &name, several, cx)
+                }
+                _ => self.overview(&t, &tools, &off, several, cx),
+            }
+        };
+        pane::page(&t, list, detail)
+            .text_color(t.text)
             .into_any_element()
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn rail_row(
+    fn row(
         &self,
         t: &Theme,
         id: &str,
         name: &str,
-        sub: Div,
-        chosen: bool,
+        // What the name tells tests, beside what it shows.
+        name_selector: Option<String>,
+        meta: Option<(String, Option<Hsla>)>,
         pick: Chosen,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
-        div()
-            .id(SharedString::from(format!("agents-{id}")))
-            .debug_selector({
-                let id = format!("agents-{id}");
-                move || id.clone()
-            })
-            .flex()
-            .items_center()
-            .gap(px(tokens::P10))
-            .px(px(tokens::P12))
-            .py(px(tokens::P6))
-            .cursor_pointer()
-            .when(chosen, |d| d.bg(alpha(t.accent, tokens::SELECTED)))
-            .hover(|d| d.bg(alpha(t.text, tokens::HOVER)))
-            .on_click(cx.listener(move |s, _: &ClickEvent, _, cx| {
+    ) -> gpui::Stateful<Div> {
+        let chosen = self.state.chosen == pick;
+        let selector = id.to_string();
+        pane::row(t, SharedString::from(id.to_string()), chosen)
+            .debug_selector(move || selector)
+            .child(
+                pane::cell(name.to_string())
+                    .when_some(name_selector, |d, sel| d.debug_selector(move || sel)),
+            )
+            .children(meta.map(|(m, c)| pane::meta(t, m, c)))
+            .on_click(cx.listener(move |s, _, _, cx| {
                 s.state.chosen = pick.clone();
                 cx.notify();
             }))
-            .child(avatar(t, name))
-            .child(
+    }
+
+    /// The first screen: one line when all is in order; otherwise each
+    /// thing that is off with its fix.
+    fn overview(
+        &self,
+        t: &Theme,
+        tools: &[&Tool],
+        off: &[(&str, Off)],
+        several: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let head = pane::head(t).child(pane::title(t, "Overview"));
+        let body = if off.is_empty() {
+            let running: Vec<String> = tools
+                .iter()
+                .filter(|x| x.skills.is_some() && x.path.is_some())
+                .map(|x| match &x.version {
+                    Some(v) => format!("{} {v}", x.name),
+                    None => x.name.clone(),
+                })
+                .collect();
+            div()
+                .debug_selector(|| "agents-ready".into())
+                .child(format!(
+                    "Ready: {}. Every skill is linked and level with its checkout.",
+                    running.join(", ")
+                ))
+        } else {
+            let count = off.len();
+            let mut rows = div()
+                .debug_selector(move || format!("agents-off-{count}"))
+                .flex()
+                .flex_col();
+            for (node, o) in off {
+                rows = rows.child(self.off_row(t, node, o, several, cx));
+            }
+            rows
+        };
+        pane::detail("agents-detail", head, body)
+    }
+
+    /// One thing that is off: its name, what is wrong, and its fix (a
+    /// Sync, or the words of what to do by hand).
+    fn off_row(
+        &self,
+        t: &Theme,
+        node: &str,
+        o: &Off,
+        several: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let subject = if several {
+            format!("{} on {}", o.subject, self.place_name(node))
+        } else {
+            o.subject.clone()
+        };
+        let mut words = div()
+            .text_color(tone_colour(t, o.tone))
+            .child(o.what.clone());
+        if let Some(f) = &o.failure {
+            let selector = format!("agents-sync-message-{f}");
+            words = words.debug_selector(move || selector);
+        }
+        let fix: AnyElement = match &o.fix {
+            Fix::Sync { path, setup } => {
+                let name = o.checkout.clone().unwrap_or_default();
                 div()
                     .flex()
-                    .flex_col()
-                    .min_w_0()
-                    .child(
-                        div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(name.to_string()),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(size::SMALL))
-                            .text_color(t.dim)
-                            .child(sub),
-                    ),
-            )
-            .into_any_element()
+                    .child(self.sync_button(t, node, &name, path, *setup, cx))
+                    .into_any_element()
+            }
+            Fix::Words(w) => div()
+                .text_color(t.text2)
+                .child(w.clone())
+                .into_any_element(),
+        };
+        let row = pane::table_row(
+            t,
+            &OFF,
+            vec![
+                pane::cell(subject).into_any_element(),
+                words.into_any_element(),
+                fix,
+            ],
+        )
+        .py(px(tokens::OFF_PAD))
+        .px_0();
+        match (&o.failure, &o.checkout) {
+            (Some(_), Some(name)) => {
+                let selector = format!("agents-sync-failure-{node}-{name}");
+                row.debug_selector(move || selector)
+            }
+            _ => row,
+        }
+    }
+
+    fn sync_button(
+        &self,
+        t: &Theme,
+        node: &str,
+        name: &str,
+        path: &str,
+        setup: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        let busy = self.state.starting(node, path);
+        let why = if setup {
+            "Fetch, fast-forward to its upstream and run its setup, in a new session"
+        } else {
+            "Fetch and fast-forward to its upstream, in a new session"
+        };
+        let (n, p) = (node.to_string(), path.to_string());
+        let selector = format!("agents-sync-{node}-{name}");
+        let b = kit::button(
+            t,
+            SharedString::from(format!("sync-{node}-{name}")),
+            if busy { "Syncing…" } else { "Sync" },
+            Kind::Plain,
+        )
+        .debug_selector(move || selector)
+        .tooltip(kit::tip(why));
+        if busy {
+            b.opacity(tokens::DIMMED)
+        } else {
+            b.on_click(cx.listener(move |s, _, _, cx| s.agents_sync(&n, &p, cx)))
+        }
     }
 
     fn tool_detail(
@@ -372,104 +337,115 @@ impl AgentsPage {
         t: &Theme,
         reports: &[(&str, &Report)],
         id: &str,
+        several: bool,
         cx: &mut Context<Self>,
     ) -> Div {
         let at: Vec<(&str, &Report, &Tool)> = reports
             .iter()
             .filter_map(|(n, r)| Some((*n, *r, r.tools.iter().find(|x| x.id == id)?)))
             .collect();
-        let (_, first_r, tool) = at[0];
-        let mut d = head(t, &tool.name, &tool.command);
-        // Versions: one row per place.
-        let mut versions = table_head(
-            t,
-            &[
-                "Place",
-                "CLI",
-                "Signed in",
-                "Credentials",
-                "Skills",
-                "State",
-            ],
-        );
+        let head = pane::head(t).child(pane::title(t, at[0].2.name.clone()));
+        let mut body = div().flex().flex_col().gap(px(size::SECTION_GAP));
         for (node, r, tl) in &at {
-            let (word, tone) = agents::tool_state(r, tl);
-            let skills = match &tl.skills {
-                Some(f) => agents::tool_skills(r, tl)
-                    .iter()
-                    .filter(|s| s.links.get(f).is_some_and(|l| l != "missing"))
-                    .count()
-                    .to_string(),
-                None => "—".into(),
-            };
-            let signed = match (&tl.path, tl.signed_in) {
-                (None, _) => text(t, "—", None),
-                (_, None) => text(t, "unknown", None),
-                (_, Some(true)) => text(t, "yes", None),
-                (_, Some(false)) => text(t, "no", Some(tone_colour(t, Tone::Behind))),
-            };
-            versions = versions.child(row(
+            let mut lines = div().flex().flex_col();
+            lines = lines.child(pane::line(
                 t,
-                vec![
-                    self.place_tag(t, node).into_any_element(),
-                    text(t, tl.version.as_deref().unwrap_or("—"), None),
-                    signed,
-                    text(
+                "Command",
+                match &tl.path {
+                    Some(p) => div().child(p.clone()),
+                    None => div()
+                        .text_color(t.dim)
+                        .child(format!("{} is not installed", tl.command)),
+                },
+            ));
+            if tl.path.is_some() {
+                lines = lines
+                    .child(pane::line(
                         t,
-                        if tl.credentials_present {
-                            "present"
-                        } else {
-                            "not detected"
+                        "Version",
+                        div().child(tl.version.clone().unwrap_or_else(|| "unknown".into())),
+                    ))
+                    .child(pane::line(
+                        t,
+                        "Signed in",
+                        match tl.signed_in {
+                            Some(true) => div().child("yes"),
+                            Some(false) => div()
+                                .text_color(tone_colour(t, Tone::Behind))
+                                .child(format!("no: run {} and sign in", tl.command)),
+                            None => div().text_color(t.text2).child("unknown"),
                         },
-                        None,
-                    ),
-                    text(t, &skills, None),
-                    text(t, &word, Some(tone_colour(t, tone))),
-                ],
-            ));
-        }
-        d = d.child(section(t, "Versions").child(versions));
-        for (node, r, tl) in &at {
-            let place = self.place_name(node);
-            let mut s = section(t, &format!("Drift on {place}")).child(drift_list(
-                t,
-                &place,
-                &agents::tool_drift(r, tl),
-            ));
-            let checkouts = agents::tool_checkouts(r, tl);
-            if !checkouts.is_empty() {
-                s = s.child(self.sync_controls(t, node, &place, &checkouts, cx));
+                    ))
+                    .child(pane::line(
+                        t,
+                        "Credentials",
+                        div().child(if tl.credentials_present {
+                            "on this device"
+                        } else {
+                            "not found"
+                        }),
+                    ));
             }
-            d = d.child(s);
-        }
-        let mut settings = table_head(t, &["File", "Place", "State"]);
-        for (node, _, tl) in &at {
-            for st in &tl.settings {
-                settings = settings.child(row(
+            if let Some(folder) = &tl.skills {
+                let linked = agents::tool_skills(r, tl)
+                    .iter()
+                    .filter(|s| s.links.get(folder).is_some_and(|l| l != "missing"))
+                    .count();
+                let path = r
+                    .folders
+                    .iter()
+                    .find(|f| &f.id == folder)
+                    .map_or(folder.clone(), |f| f.path.clone());
+                lines = lines.child(pane::line(
                     t,
-                    vec![
-                        text(t, &st.path, None),
-                        self.place_tag(t, node).into_any_element(),
-                        if st.present {
-                            text(t, "present", None)
-                        } else {
-                            text(t, "missing", Some(t.dim))
-                        },
-                    ],
+                    "Skills",
+                    div().child(format!("{} in {path}", agents::skills(linked))),
                 ));
             }
+            if !tl.settings.is_empty() {
+                let mut files = div().flex().flex_col();
+                for st in &tl.settings {
+                    files = files.child(div().when(!st.present, |d| d.text_color(t.dim)).child(
+                        if st.present {
+                            st.path.clone()
+                        } else {
+                            format!("{} (none)", st.path)
+                        },
+                    ));
+                }
+                lines = lines.child(pane::line(t, "Settings", files));
+            }
+            // What is off in the checkouts its skills come from.
+            let feeds: Vec<String> = agents::tool_checkouts(r, tl)
+                .iter()
+                .map(|c| c.name.clone())
+                .collect();
+            let mine: Vec<Off> = agents::off(r)
+                .into_iter()
+                .filter(|o| {
+                    o.subject == tl.name || o.checkout.as_ref().is_some_and(|c| feeds.contains(c))
+                })
+                .collect();
+            let mut part = if several {
+                pane::section(t, self.place_name(node))
+            } else {
+                div().flex().flex_col()
+            };
+            part = part.child(lines);
+            if !mine.is_empty() {
+                let mut rows = div().flex().flex_col();
+                for o in &mine {
+                    rows = rows.child(self.off_row(t, node, o, false, cx));
+                }
+                part = part.child(
+                    pane::section(t, "To fix")
+                        .pt(px(size::SECTION_GAP))
+                        .child(rows),
+                );
+            }
+            body = body.child(part);
         }
-        d = d.child(section(t, "Settings").child(settings));
-        if let Some(folder) = &tool.skills {
-            let folders: Vec<&agents::Folder> =
-                first_r.folders.iter().filter(|f| &f.id == folder).collect();
-            let skills = agents::tool_skills(first_r, tool);
-            d = d.child(
-                section(t, &format!("Skills on {}", self.place_name(at[0].0)))
-                    .child(skills_table(t, &skills, &folders)),
-            );
-        }
-        d
+        pane::detail("agents-detail", head, body)
     }
 
     fn checkout_detail(
@@ -477,150 +453,88 @@ impl AgentsPage {
         t: &Theme,
         reports: &[(&str, &Report)],
         name: &str,
+        several: bool,
         cx: &mut Context<Self>,
     ) -> Div {
         let at: Vec<(&str, &Report, &Checkout)> = reports
             .iter()
             .filter_map(|(n, r)| Some((*n, *r, r.checkouts.iter().find(|c| c.name == name)?)))
             .collect();
-        let (first_node, first_r, first) = at[0];
-        let mut d = head(t, &first.name, &first.path);
+        let mut head = pane::head(t).child(pane::title(t, name.to_string()));
+        for (node, _, c) in &at {
+            head = head.child(self.sync_button(t, node, &c.name, &c.path, c.setup.is_some(), cx));
+        }
+        let mut body = div().flex().flex_col().gap(px(size::SECTION_GAP));
         for (node, r, c) in &at {
-            let place = self.place_name(node);
-            let tone = if c.behind > 0 {
-                Tone::Behind
-            } else {
-                Tone::Plain
-            };
-            let summary = div()
+            let mut lines = div()
                 .flex()
                 .flex_col()
-                .gap(px(tokens::P4))
-                .child(
+                .child(pane::line(t, "Path", div().child(c.path.clone())))
+                .child(pane::line(
+                    t,
+                    "At",
                     div()
                         .flex()
-                        .gap(px(tokens::P8))
-                        .items_center()
-                        .child(self.place_tag(t, node))
+                        .gap(px(size::HEAD_GAP))
                         .child(format!(
-                            "{} at {}",
+                            "{} {}",
                             c.branch.as_deref().unwrap_or("detached"),
-                            c.commit.as_deref().unwrap_or("—")
+                            c.commit.as_deref().unwrap_or("")
                         ))
-                        .when_some(c.subject.clone(), |d, s| {
-                            d.child(div().text_color(t.dim).child(s))
-                        }),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(tokens::P4))
-                        .child(
-                            div()
-                                .text_color(tone_colour(t, tone))
-                                .child(agents::upstream_words(c)),
-                        )
-                        .when(c.dirty, |d| d.child(" · local changes"))
-                        .child(format!(
-                            " · {}",
-                            agents::skills(agents::checkout_skills(r, c).len())
-                        ))
-                        .when_some(c.setup.clone(), |d, s| d.child(format!(" · setup ./{s}"))),
-                );
-            d = d.child(
-                section(t, &format!("Drift on {place}"))
-                    .child(summary)
-                    .child(drift_list(t, &place, &agents::checkout_drift(r, c)))
-                    .child(self.sync_controls(t, node, &place, &[c], cx)),
-            );
-        }
-        let skills = agents::checkout_skills(first_r, first);
-        let folders: Vec<&agents::Folder> = first_r.folders.iter().collect();
-        d.child(
-            section(t, &format!("Skills on {}", self.place_name(first_node)))
-                .child(skills_table(t, &skills, &folders)),
-        )
-    }
-
-    fn sync_controls(
-        &self,
-        t: &Theme,
-        node: &str,
-        place: &str,
-        checkouts: &[&Checkout],
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let mut buttons = div().flex().flex_wrap().gap(px(tokens::P8)).items_center();
-        for (i, c) in checkouts.iter().enumerate() {
-            let label = if checkouts.len() == 1 {
-                if c.setup.is_some() {
-                    format!("Sync and run setup on {place}")
-                } else {
-                    format!("Sync {place}")
-                }
-            } else {
-                format!("Sync {}", c.name)
-            };
-            let busy = self.state.starting(node, &c.path);
-            let why = format!(
-                "Fetch {}, then fast-forward to its upstream{} in a new session",
-                c.path,
-                c.setup
-                    .as_deref()
-                    .map(|s| format!(" and ./{s}"))
-                    .unwrap_or_default(),
-            );
-            let (n, path) = (node.to_string(), c.path.clone());
-            let b = kit::button(
+                        .children(c.subject.clone().map(|s| pane::cell(s).text_color(t.text2))),
+                ))
+                .child(pane::line(
+                    t,
+                    "Upstream",
+                    div().child(agents::upstream_words(c)),
+                ));
+            if c.dirty {
+                lines = lines.child(pane::line(t, "Local changes", div().child("yes")));
+            }
+            if let Some(s) = &c.setup {
+                lines = lines.child(pane::line(t, "Setup", div().child(format!("./{s}"))));
+            }
+            lines = lines.child(pane::line(
                 t,
-                SharedString::from(format!("sync-{node}-{}", c.name)),
-                label,
-                if i == 0 { Kind::Primary } else { Kind::Plain },
-            )
-            .debug_selector({
-                let node = node.to_owned();
-                let name = c.name.clone();
-                move || format!("agents-sync-{node}-{name}")
-            })
-            .tooltip(kit::tip(why));
-            buttons = buttons.child(if busy {
-                b.opacity(tokens::DIMMED)
+                "Skills",
+                div().child(agents::skills(agents::checkout_skills(r, c).len())),
+            ));
+            let mine: Vec<Off> = agents::off(r)
+                .into_iter()
+                .filter(|o| o.checkout.as_deref() == Some(name))
+                .collect();
+            // What is off, first; its Sync is in the head.
+            for o in &mine {
+                let mut fix = div()
+                    .text_color(tone_colour(t, o.tone))
+                    .child(o.what.clone());
+                if let Some(f) = &o.failure {
+                    let selector = format!("agents-sync-message-{f}");
+                    fix = fix.debug_selector(move || selector);
+                }
+                let mut value = div().flex().flex_col().child(fix);
+                if let Fix::Words(w) = &o.fix {
+                    value = value.child(div().text_color(t.text2).child(w.clone()));
+                }
+                let mut line = pane::line(t, "To fix", value);
+                if o.failure.is_some() {
+                    let selector = format!("agents-sync-failure-{node}-{name}");
+                    line = line.debug_selector(move || selector);
+                }
+                lines = div().flex().flex_col().child(line).child(lines);
+            }
+            body = body.child(if several {
+                pane::section(t, self.place_name(node)).child(lines)
             } else {
-                b.on_click(
-                    cx.listener(move |s, _: &ClickEvent, _, cx| s.agents_sync(&n, &path, cx)),
-                )
+                lines
             });
         }
-        buttons = buttons.child(
-            kit::button(
-                t,
-                SharedString::from(format!("agents-refresh-{node}")),
-                "Refresh",
-                Kind::Plain,
-            )
-            .debug_selector({
-                let node = node.to_owned();
-                move || format!("agents-refresh-{node}")
-            })
-            .tooltip(kit::tip("Read local tools and checkouts again"))
-            .on_click(cx.listener(|s, _: &ClickEvent, _, cx| s.agents_refresh(cx))),
-        );
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(tokens::P6))
-            .pt(px(tokens::P4))
-            .child(buttons)
-            .child(kit::note(
-                t,
-                "Secrets stay on each machine; Parvi only sees whether they are there.",
-                Some(t.dim),
-            ))
+        pane::detail("agents-detail", head, body)
     }
 }
 
-/// Gold needs the operator (`--window-orange`, ANSI yellow), error is
-/// broken, plain is dim.
+/// Needs the operator in the theme's warm colour (ANSI yellow), broken in
+/// its error colour, the rest quiet.
 fn tone_colour(t: &Theme, tone: Tone) -> Hsla {
     match tone {
         Tone::Behind | Tone::Unlinked => rgb(t.ansi[3]),
@@ -630,167 +544,26 @@ fn tone_colour(t: &Theme, tone: Tone) -> Hsla {
     }
 }
 
-/// The word of the place that most needs the operator.
-fn worst(states: impl Iterator<Item = (String, Tone)>) -> (String, Tone) {
-    let rank = |t: Tone| match t {
+fn rank(t: Tone) -> u8 {
+    match t {
         Tone::Error => 0,
         Tone::Behind | Tone::Unlinked => 1,
         Tone::Plain => 2,
         Tone::Ok => 3,
-    };
+    }
+}
+
+fn worst_tone(tones: impl Iterator<Item = Tone>) -> Tone {
+    tones.min_by_key(|t| rank(*t)).unwrap_or(Tone::Ok)
+}
+
+/// The word of the place that most needs the operator.
+fn worst(states: impl Iterator<Item = (String, Tone)>) -> (String, Tone) {
     states
         .min_by_key(|(_, t)| rank(*t))
         .unwrap_or(("—".into(), Tone::Plain))
 }
 
-fn avatar(t: &Theme, name: &str) -> Div {
-    div()
-        .flex_none()
-        .size(px(tokens::AVATAR))
-        .rounded(px(size::RADIUS))
-        .border_1()
-        .border_color(t.divider)
-        .bg(t.raised)
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_size(px(size::SMALL))
-        .font_weight(FontWeight::BOLD)
-        .text_color(t.text2)
-        .child(agents::initials(name))
-}
-
-fn group_label(t: &Theme, label: &str) -> Div {
-    div()
-        .px(px(tokens::P12))
-        .pt(px(tokens::P12))
-        .pb(px(tokens::P4))
-        .child(kit::label(t, label.to_string()))
-}
-
-fn head(t: &Theme, name: &str, sub: &str) -> Div {
-    div().flex().flex_col().gap(px(tokens::P20)).child(
-        div()
-            .flex()
-            .items_center()
-            .gap(px(tokens::P12))
-            .child(avatar(t, name).size(px(tokens::LARGE_AVATAR)))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .text_size(px(tokens::TITLE))
-                            .font_weight(FontWeight::BOLD)
-                            .child(name.to_string()),
-                    )
-                    .child(kit::note(t, sub.to_string(), Some(t.dim))),
-            ),
-    )
-}
-
-fn section(t: &Theme, label: &str) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(tokens::P8))
-        .child(kit::label(t, label.to_string()))
-}
-
-fn text(t: &Theme, s: &str, colour: Option<Hsla>) -> AnyElement {
-    div()
-        .text_color(colour.unwrap_or(t.text))
-        .overflow_hidden()
-        .whitespace_nowrap()
-        .text_ellipsis()
-        .child(s.to_string())
-        .into_any_element()
-}
-
-fn table_head(t: &Theme, labels: &[&str]) -> Div {
-    let head = row(
-        t,
-        labels
-            .iter()
-            .map(|l| kit::label(t, l.to_string()).into_any_element())
-            .collect(),
-    );
-    div()
-        .flex()
-        .flex_col()
-        .border_1()
-        .border_color(t.divider)
-        .rounded(px(size::RADIUS))
-        .child(head.bg(t.surface))
-}
-
-fn row(t: &Theme, cells: Vec<AnyElement>) -> Div {
-    let mut r = div()
-        .flex()
-        .items_center()
-        .gap(px(tokens::P12))
-        .min_h(px(tokens::TABLE_ROW))
-        .px(px(tokens::P10))
-        .border_b_1()
-        .border_color(alpha(t.divider, tokens::LINE));
-    for c in cells {
-        r = r.child(div().flex_1().min_w_0().overflow_hidden().child(c));
-    }
-    r
-}
-
-fn drift_list(t: &Theme, place: &str, drift: &[Drift]) -> Div {
-    if drift.is_empty() {
-        return kit::note(t, format!("Nothing out of date on {place}."), Some(t.dim));
-    }
-    let mut list = div().flex().flex_col().gap(px(tokens::P2));
-    for d in drift {
-        let mut at = vec![place.to_string()];
-        at.extend(d.path.iter().cloned());
-        list = list.child(
-            div()
-                .flex()
-                .gap(px(tokens::P6))
-                .child(div().text_color(t.text2).child(at.join(" › ")))
-                .child(
-                    div()
-                        .text_color(tone_colour(t, d.tone))
-                        .child(d.what.clone()),
-                ),
-        );
-    }
-    if drift.iter().any(|d| d.tone == Tone::Unlinked) {
-        list = list.child(kit::note(
-            t,
-            "To add missing links, run the checkout's setup if it provides one, or link the skill into the folder.",
-            Some(t.dim),
-        ));
-    }
-    list
-}
-
-fn skills_table(t: &Theme, skills: &[&Skill], folders: &[&agents::Folder]) -> Div {
-    let mut labels = vec!["Name", "Description"];
-    labels.extend(folders.iter().map(|f| f.path.as_str()));
-    let mut tbl = table_head(t, &labels);
-    if skills.is_empty() {
-        return tbl.child(
-            div()
-                .p(px(tokens::P10))
-                .child(kit::note(t, "No skills.", Some(t.dim))),
-        );
-    }
-    for s in skills {
-        let mut cells = vec![
-            text(t, &s.name, None),
-            text(t, s.description.as_deref().unwrap_or(""), Some(t.text2)),
-        ];
-        for f in folders {
-            let (word, tone) = agents::skill_cell(s, &f.id);
-            cells.push(text(t, word, Some(tone_colour(t, tone))));
-        }
-        tbl = tbl.child(row(t, cells));
-    }
-    tbl
+fn worst_word(states: impl Iterator<Item = (String, Tone)>) -> Option<(String, Tone)> {
+    states.min_by_key(|(_, t)| rank(*t))
 }

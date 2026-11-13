@@ -77,17 +77,6 @@ pub fn tool_checkouts<'a>(r: &'a Report, t: &Tool) -> Vec<&'a Checkout> {
         .collect()
 }
 
-/// One skill in one folder, as a table cell says it.
-pub fn skill_cell(s: &Skill, folder: &str) -> (&'static str, Tone) {
-    match link(s, folder) {
-        Some("linked") if location_behind(s, folder) > 0 => ("behind", Tone::Behind),
-        Some("linked") => ("✓", Tone::Ok),
-        Some("broken") => ("broken", Tone::Error),
-        Some("copy") => ("copy", Tone::Plain),
-        _ => ("—", Tone::Plain),
-    }
-}
-
 fn upstream_drift(c: &Checkout) -> Vec<Drift> {
     let mut out = vec![];
     let at = vec![c.name.clone()];
@@ -259,23 +248,182 @@ pub fn upstream_words(c: &Checkout) -> String {
     format!("{at} {up} · {when}")
 }
 
-/// Two capitals, as Archon's rail draws agents.
-pub fn initials(name: &str) -> String {
-    let words: Vec<&str> = name
-        .split(|c: char| c.is_whitespace() || c == '-')
-        .filter(|w| !w.is_empty())
-        .collect();
-    let letters: String = if words.len() > 1 {
-        words[..2].iter().filter_map(|w| w.chars().next()).collect()
-    } else {
-        name.chars().take(2).collect()
-    };
-    letters.to_uppercase()
+/// How one thing that needs the operator is put right.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Fix {
+    /// Sync the checkout (fetch, fast-forward, run its setup if it has
+    /// one) in a new session.
+    Sync { path: String, setup: bool },
+    /// Done by hand, as these words say.
+    Words(String),
 }
 
-/// What the rail has chosen.
+/// One thing that needs the operator: a harness, or a checkout and the
+/// skills it gives, with what is wrong and its fix.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Off {
+    /// The harness's or the checkout's name.
+    pub subject: String,
+    /// The checkout's name, for a checkout.
+    pub checkout: Option<String>,
+    pub what: String,
+    /// The sync failure's words, when a sync failed.
+    pub failure: Option<String>,
+    pub tone: Tone,
+    pub fix: Fix,
+}
+
+fn names(list: &std::collections::BTreeSet<String>) -> String {
+    list.iter().cloned().collect::<Vec<_>>().join(", ")
+}
+
+/// Everything in a report that needs the operator, one line per harness
+/// or checkout, worst first. Nothing when all is in order.
+pub fn off(r: &Report) -> Vec<Off> {
+    let mut out = vec![];
+    for t in &r.tools {
+        if t.path.is_some() && t.signed_in == Some(false) {
+            out.push(Off {
+                subject: t.name.clone(),
+                checkout: None,
+                what: "not signed in".into(),
+                failure: None,
+                tone: Tone::Behind,
+                fix: Fix::Words(format!("Run {} and sign in", t.command)),
+            });
+        }
+    }
+    for c in &r.checkouts {
+        let mut parts = vec![];
+        let mut tone = Tone::Plain;
+        let mut sync = false;
+        let failure = sync_failure(c);
+        if let Some(f) = &failure {
+            parts.push(f.clone());
+            tone = Tone::Error;
+            sync = true;
+        } else if c.behind > 0 {
+            parts.push(format!(
+                "{} behind {}",
+                commits(c.behind),
+                c.upstream.as_deref().unwrap_or("upstream")
+            ));
+            tone = Tone::Behind;
+            sync = true;
+        }
+        let mut unlinked = std::collections::BTreeSet::new();
+        let mut broken = std::collections::BTreeSet::new();
+        // The folders the skills are missing from.
+        let mut wanting = std::collections::BTreeSet::new();
+        for d in checkout_drift(r, c) {
+            let Some(skill) = d.path.get(1).cloned() else {
+                continue;
+            };
+            match d.tone {
+                Tone::Unlinked => {
+                    unlinked.insert(skill);
+                    wanting.insert(d.path[0].clone());
+                }
+                Tone::Error => {
+                    broken.insert(skill);
+                }
+                _ => {}
+            }
+        }
+        let mut by_hand: Vec<String> = vec![];
+        if !unlinked.is_empty() {
+            parts.push(format!(
+                "{} not linked: {}",
+                skills(unlinked.len()),
+                names(&unlinked)
+            ));
+            if tone == Tone::Plain {
+                tone = Tone::Unlinked;
+            }
+            if c.setup.is_some() {
+                sync = true;
+            } else {
+                by_hand.push(format!(
+                    "link {} into {}",
+                    if unlinked.len() == 1 { "it" } else { "them" },
+                    names(&wanting)
+                ));
+            }
+        }
+        if !broken.is_empty() {
+            parts.push(format!(
+                "{} link{} nowhere: {}",
+                broken.len(),
+                if broken.len() == 1 {
+                    " leads"
+                } else {
+                    "s lead"
+                },
+                names(&broken)
+            ));
+            tone = Tone::Error;
+            by_hand.push("remove or relink the broken links".into());
+        }
+        if parts.is_empty() {
+            continue;
+        }
+        let fix = if sync {
+            Fix::Sync {
+                path: c.path.clone(),
+                setup: c.setup.is_some(),
+            }
+        } else {
+            let words = by_hand.join(", then ");
+            let mut first = words.chars();
+            Fix::Words(match first.next() {
+                Some(c) => c.to_uppercase().chain(first).collect(),
+                None => words,
+            })
+        };
+        out.push(Off {
+            subject: c.name.clone(),
+            checkout: Some(c.name.clone()),
+            what: parts.join("; "),
+            failure,
+            tone,
+            fix,
+        });
+    }
+    let rank = |t: Tone| match t {
+        Tone::Error => 0,
+        Tone::Behind | Tone::Unlinked => 1,
+        Tone::Plain => 2,
+        Tone::Ok => 3,
+    };
+    out.sort_by_key(|o| rank(o.tone));
+    out
+}
+
+/// A checkout's state in a word or two for the list, when it is off.
+pub fn checkout_word(r: &Report, c: &Checkout) -> Option<(String, Tone)> {
+    if sync_failure(c).is_some() {
+        return Some(("sync failed".into(), Tone::Error));
+    }
+    let drift = checkout_drift(r, c);
+    if drift.iter().any(|d| d.tone == Tone::Error) {
+        return Some(("broken link".into(), Tone::Error));
+    }
+    if c.behind > 0 {
+        return Some((format!("{} behind", c.behind), Tone::Behind));
+    }
+    let unlinked: std::collections::BTreeSet<&String> = drift
+        .iter()
+        .filter(|d| d.tone == Tone::Unlinked)
+        .filter_map(|d| d.path.get(1))
+        .collect();
+    (!unlinked.is_empty()).then(|| (format!("{} not linked", unlinked.len()), Tone::Unlinked))
+}
+
+/// What the list has chosen.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Chosen {
+    /// What is off across the agents, with its fixes.
+    Overview,
     Tool(String),
     /// A checkout by name: the same checkout on every device.
     Checkout(String),
@@ -308,7 +456,7 @@ impl Default for Agents {
     fn default() -> Self {
         Self {
             reports: BTreeMap::new(),
-            chosen: Chosen::Tool("claude".into()),
+            chosen: Chosen::Overview,
             syncs: HashMap::new(),
             next: 1,
         }
@@ -446,8 +594,52 @@ mod tests {
             upstream_words(&r.checkouts[0]),
             "2 behind origin/main · just fetched"
         );
-        assert_eq!(skill_cell(&r.skills[0], "claude"), ("behind", Tone::Behind));
-        assert_eq!(initials("Claude Code"), "CC");
+    }
+
+    #[test]
+    fn what_is_off_is_one_line_per_checkout_with_its_fix() {
+        let mut r = report();
+        let off = off(&r);
+        assert_eq!(off.len(), 1, "{off:?}");
+        let kit = &off[0];
+        assert_eq!(kit.subject, "agent-kit");
+        assert_eq!(
+            kit.what,
+            "2 commits behind origin/main; 2 skills not linked: handoff, lost; 1 link leads nowhere: lost"
+        );
+        assert_eq!(kit.tone, Tone::Error);
+        assert_eq!(
+            kit.fix,
+            Fix::Sync {
+                path: "~/agent-kit".into(),
+                setup: true
+            }
+        );
+        assert_eq!(
+            checkout_word(&r, &r.checkouts[0]),
+            Some(("broken link".into(), Tone::Error))
+        );
+
+        // Level, no setup, links only missing: fixed by hand.
+        r.checkouts[0].behind = 0;
+        r.checkouts[0].setup = None;
+        r.skills.truncate(1);
+        r.skills[0].links.insert("claude".into(), "linked".into());
+        r.skills[0].locations.get_mut("claude").unwrap().behind = 0;
+        let off = super::off(&r);
+        assert_eq!(off[0].what, "1 skill not linked: handoff");
+        assert_eq!(
+            off[0].fix,
+            Fix::Words("Link it into ~/.agents/skills".into())
+        );
+
+        // A harness that is not signed in says how to sign in.
+        r.tools[0].signed_in = Some(false);
+        r.skills[0].links.insert("agents".into(), "linked".into());
+        let off = super::off(&r);
+        assert_eq!(off.len(), 1, "{off:?}");
+        assert_eq!(off[0].subject, "Claude Code");
+        assert_eq!(off[0].fix, Fix::Words("Run claude and sign in".into()));
     }
 
     #[test]

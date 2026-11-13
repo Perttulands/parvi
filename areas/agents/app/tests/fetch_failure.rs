@@ -131,7 +131,6 @@ fn failed_fetch_is_reported_once_without_marking_available_harnesses_broken(
         !running.home.join("fetch.log").exists(),
         "opening the page must not fetch"
     );
-    assert!(cx.debug_bounds("agents-sync-failures-1").is_none());
     let click = |cx: &mut VisualTestContext, selector: &str| {
         let at = cx
             .debug_bounds(Box::leak(selector.to_owned().into_boxed_str()))
@@ -139,6 +138,13 @@ fn failed_fetch_is_reported_once_without_marking_available_harnesses_broken(
             .center();
         cx.simulate_click(at, Modifiers::none());
     };
+    let failure = |name: &str| -> &'static str {
+        Box::leak(format!("agents-sync-failure-{}-{name}", running.node).into_boxed_str())
+    };
+    let message = "agents-sync-message-Sync failed: fatal: could not read Username: terminal prompts disabled";
+    assert!(cx.debug_bounds(failure("kit")).is_none());
+
+    // A checkout offers its Sync; a failed one says so in its detail.
     click(cx, "agents-checkout-kit");
     let sync_kit = format!("agents-sync-{}-kit", running.node);
     until(cx, "sync kit", |cx| {
@@ -146,13 +152,10 @@ fn failed_fetch_is_reported_once_without_marking_available_harnesses_broken(
             .is_some()
     });
     click(cx, &sync_kit);
-    until(cx, "one failed checkout", |cx| {
-        cx.debug_bounds("agents-sync-failures-1").is_some()
+    until(cx, "kit's failure", |cx| {
+        cx.debug_bounds(failure("kit")).is_some()
     });
-    let failure = Box::leak(format!("agents-sync-failure-{}-kit", running.node).into_boxed_str());
-    let message = "agents-sync-message-Sync failed: fatal: could not read Username: terminal prompts disabled";
-    assert!(cx.debug_bounds(failure).is_none());
-    assert!(cx.debug_bounds(message).is_none());
+    assert!(cx.debug_bounds(message).is_some(), "the failure in words");
     for name in ["claude", "codex", "pi"] {
         let available = Box::leak(format!("agents-tool-state-{name}-available").into_boxed_str());
         let broken = Box::leak(format!("agents-tool-state-{name}-broken").into_boxed_str());
@@ -169,9 +172,20 @@ fn failed_fetch_is_reported_once_without_marking_available_harnesses_broken(
             .is_some()
     });
     click(cx, &sync_extras);
-    until(cx, "two failed checkouts", |cx| {
-        cx.debug_bounds("agents-sync-failures-2").is_some()
+    until(cx, "extras' failure", |cx| {
+        cx.debug_bounds(failure("extras")).is_some()
     });
+
+    // The overview has each failed checkout once, with its fix.
+    click(cx, "agents-overview");
+    until(cx, "both failures in the overview", |cx| {
+        cx.debug_bounds(failure("kit")).is_some() && cx.debug_bounds(failure("extras")).is_some()
+    });
+    assert!(cx.debug_bounds("agents-ready").is_none());
+    assert!(
+        cx.debug_bounds(Box::leak(sync_kit.clone().into_boxed_str()))
+            .is_some()
+    );
     cx.run_until_parked();
     assert!(
         shell.read_with(cx, |shell, cx| shell
@@ -189,30 +203,17 @@ fn failed_fetch_is_reported_once_without_marking_available_harnesses_broken(
             .count(),
         2
     );
-    assert!(cx.debug_bounds(failure).is_none());
-    click(cx, "agents-sync-details");
-    until(cx, "expanded failures", |cx| {
-        cx.debug_bounds(failure).is_some()
-    });
-    let other = Box::leak(format!("agents-sync-failure-{}-extras", running.node).into_boxed_str());
-    assert!(cx.debug_bounds(other).is_some());
-    assert!(cx.debug_bounds(message).is_some());
-    click(cx, "agents-sync-details");
-    until(cx, "collapsed failures", |cx| {
-        cx.debug_bounds(failure).is_none()
-    });
     let old_reads = std::fs::read_to_string(running.home.join("status.log"))
         .unwrap()
         .lines()
         .count();
-    let refresh = format!("agents-refresh-{}", running.node);
-    click(cx, &refresh);
+    click(cx, "agents-refresh");
     until(cx, "local refresh completes", |_| {
         std::fs::read_to_string(running.home.join("status.log"))
             .is_ok_and(|text| text.lines().count() > old_reads)
     });
     until(cx, "failures persist through local refresh", |cx| {
-        cx.debug_bounds("agents-sync-failures-2").is_some()
+        cx.debug_bounds(failure("kit")).is_some() && cx.debug_bounds(failure("extras")).is_some()
     });
     assert_eq!(
         std::fs::read_to_string(running.home.join("fetch.log"))
