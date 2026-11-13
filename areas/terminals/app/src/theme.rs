@@ -17,6 +17,9 @@ pub mod size {
     pub const RAIL: f32 = 260.;
     /// Name budget in the standard rail, leaving room for age and actions.
     pub const RAIL_NAME_COLUMNS: usize = 22;
+    /// A rail row's room before its news dot, from the list's side, so
+    /// the names stand under their group's name.
+    pub const RAIL_ROW_LEAD: f32 = 10.;
     /// The room a rail row keeps for its news dot.
     pub const DOT_SLOT: f32 = 12.;
     /// A session that waits for an answer: its mark, filling the dot slot.
@@ -100,8 +103,6 @@ pub mod place {
     /// Plate colours, picked per device name.
     pub const DEVICES: [u32; 6] = [0x3d5a80, 0x7a4f2e, 0x3f6b4a, 0x6a4a7d, 0x7d4a55, 0x2f6b6b];
     pub const PLATE_H: f32 = 18.;
-    /// The device's colour along the left of each of its rows.
-    pub const EDGE: f32 = 3.;
     pub const STRIP_H: f32 = 18.;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]

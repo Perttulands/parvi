@@ -24,6 +24,13 @@ pub mod size {
     /// The keys panel and a menu: their widths.
     pub const KEYS: f32 = 520.;
     pub const MENU: f32 = 220.;
+    /// A tab card's gap above it, and a pill's above and below.
+    pub const TAB_CARD_TOP: f32 = 6.;
+    pub const TAB_PILL_Y: f32 = 8.;
+    /// The underline of an active tab or toggle in the line chrome.
+    pub const TAB_LINE: f32 = 2.;
+    /// A list row's inset from its list's sides, where rows are inset.
+    pub const ROW_INSET: f32 = 6.;
 }
 
 /// Measures the pages that list things share (a rail of rows beside a
@@ -60,6 +67,42 @@ pub mod motion {
 }
 
 pub const FAMILY: &str = "JetBrains Mono";
+
+/// How the chrome draws its tabs and lists: the tab bar, a page's own
+/// toggles, a list of rows. One is the app's; the others stay a word away
+/// (`PARVI_CHROME=line|pills`) while the operator compares them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Chrome {
+    /// Tabs as cards: the active one is the page's own surface, joined to
+    /// it; rows are inset, their state a quiet fill.
+    #[default]
+    Tabs,
+    /// Words on one line: the active one underlined; rows run edge to edge.
+    Line,
+    /// Words in rounded fills: the active one washed in the accent.
+    Pills,
+}
+
+impl Global for Chrome {}
+
+impl Chrome {
+    /// The one `PARVI_CHROME` names, else the app's.
+    pub fn from_env() -> Self {
+        Self::named(&std::env::var("PARVI_CHROME").unwrap_or_default())
+    }
+
+    fn named(word: &str) -> Self {
+        match word.trim().to_ascii_lowercase().as_str() {
+            "line" => Self::Line,
+            "pills" => Self::Pills,
+            _ => Self::Tabs,
+        }
+    }
+}
+
+pub fn chrome(cx: &App) -> Chrome {
+    cx.try_global::<Chrome>().copied().unwrap_or_default()
+}
 
 #[derive(Clone, Debug)]
 pub struct Theme {
@@ -262,6 +305,14 @@ impl Theme {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_chrome_is_named_by_a_word_and_defaults_to_tabs() {
+        assert_eq!(Chrome::named("Line"), Chrome::Line);
+        assert_eq!(Chrome::named(" pills"), Chrome::Pills);
+        assert_eq!(Chrome::named(""), Chrome::Tabs);
+        assert_eq!(Chrome::named("neon"), Chrome::Tabs);
+    }
 
     #[test]
     fn hex_forms() {

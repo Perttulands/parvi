@@ -43,7 +43,7 @@ impl Shell {
             .filter(|p| !p.meta.area.is_some_and(|a| off.contains(&a)))
             .map(|p| p.meta.title)
             .collect();
-        let spaced: usize = titles.iter().map(|t| kit::tab_text(t, false).len()).sum();
+        let spaced: usize = titles.iter().map(|t| t.chars().count()).sum();
         let tabs = titles.len() + 1;
         let need = cell * (spaced + KEYS_CHARS + EXTRA_TAB_CHARS) as f32
             + px(kit::TAB_PAD * 2. * tabs as f32 + KEYS_PAD * 2.);
@@ -59,14 +59,7 @@ impl Shell {
         if cx.try_global::<kit::TabStyle>() != Some(&style) {
             cx.set_global(style);
         }
-        let mut bar = div()
-            .flex_none()
-            .h(px(size::TAB_BAR))
-            .flex()
-            .items_stretch()
-            .bg(t.surface)
-            .border_b_1()
-            .border_color(t.divider);
+        let mut bar = kit::tab_bar(&t, cx).flex_none().h(px(size::TAB_BAR));
         for (i, page) in self.pages.iter().enumerate() {
             if page.meta.area.is_some_and(|a| off.iter().any(|o| o == a)) {
                 continue;
@@ -79,22 +72,17 @@ impl Shell {
             bar = bar.child(
                 kit::tab(&t, ("tab", i), active, cx)
                     .debug_selector(|| format!("tab-{}", page.meta.id))
-                    .child(kit::tab_label(page.meta.title, cx))
+                    .child(kit::tab_label(page.meta.title))
                     .on_click(cx.listener(move |s, _, window, cx| s.show(i, window, cx))),
             );
         }
         let on = self.hub.read(cx).settings.keys;
         bar.child(
-            div()
-                .id("keys-toggle")
-                .flex_none()
+            // A tab that is never chosen, so its words stand on the tabs' line.
+            kit::tab(&t, "keys-toggle", false, cx)
                 .ml_auto()
                 .px(px(KEYS_PAD))
-                .flex()
-                .items_center()
-                .cursor_pointer()
                 .text_color(if on { t.text2 } else { t.dim })
-                .hover(|d| d.text_color(t.text))
                 .child(if on { "Keys on" } else { "Keys off" })
                 .on_click(cx.listener(|s, _, _, cx| s.set_keys(None, cx)))
                 .on_mouse_down(

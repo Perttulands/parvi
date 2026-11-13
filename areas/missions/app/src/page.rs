@@ -1418,7 +1418,7 @@ impl Page for MissionsPage {
             .count();
         let mut tab = kit::tab(&t, "missions-tab", shown, cx)
             .debug_selector(|| "tab-missions".into())
-            .child(kit::tab_label(Self::TITLE, cx));
+            .child(kit::tab_label(Self::TITLE));
         if count > 0 {
             tab = tab.child(
                 div()

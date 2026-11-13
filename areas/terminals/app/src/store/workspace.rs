@@ -94,7 +94,7 @@ fn windows() -> Vec<Window> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tab {
-    /// The operator's name for it; unnamed tabs read TERMINAL, TERMINAL 2…
+    /// The operator's name for it; unnamed tabs read Terminal, Terminal 2…
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Always four; the first `count` are shown.
@@ -430,12 +430,12 @@ pub(super) fn mend(t: &mut Tab) {
     t.windows.resize_with(MAX_WINDOWS, Window::default);
 }
 
-/// The label a tab carries: its name, or TERMINAL, TERMINAL 2…
+/// The label a tab carries: its name as given, or Terminal, Terminal 2…
 pub fn tab_label(tab: &Tab, index: usize) -> String {
     match &tab.name {
-        Some(n) => n.to_uppercase(),
-        None if index == 0 => "TERMINAL".into(),
-        None => format!("TERMINAL {}", index + 1),
+        Some(n) => n.clone(),
+        None if index == 0 => "Terminal".into(),
+        None => format!("Terminal {}", index + 1),
     }
 }
 
@@ -587,7 +587,7 @@ mod tests {
         let mut ws = Workspace::default();
         while ws.add_tab() {}
         assert_eq!(ws.shown_tabs().len(), MAX_TABS);
-        assert_eq!(tab_label(&ws.tabs[2], 2), "TERMINAL 3");
+        assert_eq!(tab_label(&ws.tabs[2], 2), "Terminal 3");
         ws.show_tab(1);
         ws.rename_tab(1, "ops");
         ws.bind(0, key("a"), None);
@@ -724,7 +724,7 @@ mod tests {
         assert_eq!(ws.tabs[0].count, 1);
         assert_eq!(ws.tabs[1].count, 4);
         assert_eq!((ws.active, ws.focus), (1, 3));
-        assert_eq!(tab_label(&ws.tabs[1], 1), "OPS");
+        assert_eq!(tab_label(&ws.tabs[1], 1), "ops");
         assert_eq!(ws.shown(0).unwrap().key, key("a"));
         assert!(Workspace::parse(serde_json::json!({"tabs":[]})).is_none());
 

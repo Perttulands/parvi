@@ -12,7 +12,7 @@ use crate::store::devices;
 use crate::store::sessions::{self, Key};
 use crate::store::workspace::LinkState;
 use crate::term::paint::{self, Look};
-use crate::theme::{Theme, size, theme};
+use crate::theme::{Chrome, Theme, chrome, size, theme};
 use gpui::{
     AnyElement, ContentMask, Context, FontWeight, MouseButton, MouseDownEvent, Window, canvas, div,
     prelude::*, px,
@@ -35,9 +35,8 @@ impl Terminals {
             .child(
                 div()
                     .mr_auto()
-                    .text_size(px(12.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("SESSIONS"),
+                    .child("Sessions"),
             )
             .child(
                 kit::button(&t, "rail-new", "New", Kind::Quiet).on_click(cx.listener(
@@ -154,7 +153,7 @@ impl Terminals {
                     if !self.settings.collapsed_groups.contains(&group) {
                         self.rail_shown.extend(members.iter().map(|s| Key::of(s)));
                     }
-                    block = block.child(self.group(&t, &group, &members, &d.device, n.live, cx));
+                    block = block.child(self.group(&t, &group, &members, n.live, cx));
                 }
             }
             list = list.child(block.when(!d.live, |b| b.opacity(crate::theme::fade::DIMMED)));
@@ -191,7 +190,8 @@ impl Terminals {
             .flex()
             .items_center()
             .gap(px(8.))
-            .child(div().flex_1().child(place::plate(device)))
+            .child(place::plate(device))
+            .child(div().flex_1())
             .child(waiting_word(t, !live))
             .into_any_element()
     }
@@ -205,7 +205,8 @@ impl Terminals {
             .flex()
             .items_center()
             .gap(px(8.))
-            .child(div().flex_1().child(place::strip(t, environment, 60.)))
+            .child(place::strip(t, environment, 60.))
+            .child(div().flex_1())
             .child(waiting_word(t, !quiet))
             .into_any_element()
     }
@@ -215,7 +216,6 @@ impl Terminals {
         t: &Theme,
         name: &str,
         members: &[&Session],
-        device: &str,
         live: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -243,7 +243,7 @@ impl Terminals {
             .child(
                 div()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(name.to_uppercase()),
+                    .child(name.to_string()),
             )
             .child(
                 div()
@@ -261,10 +261,10 @@ impl Terminals {
                 s.save(cx);
                 cx.notify();
             }));
-        let mut items = div().pl(px(12.)).flex().flex_col();
+        let mut items = div().flex().flex_col();
         if !collapsed {
             for s in members {
-                items = items.child(self.row(t, s, device, live, cx));
+                items = items.child(self.row(t, s, live, cx));
             }
         }
         div()
@@ -274,14 +274,7 @@ impl Terminals {
             .into_any_element()
     }
 
-    fn row(
-        &self,
-        t: &Theme,
-        s: &Session,
-        device: &str,
-        live: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn row(&self, t: &Theme, s: &Session, live: bool, cx: &mut Context<Self>) -> AnyElement {
         let key = Key::of(s);
         let shown = self.settings.workspace.bound(&key);
         let in_focused = shown.is_some_and(|(tab, w)| {
@@ -307,156 +300,154 @@ impl Terminals {
         let id = gpui::SharedString::from(format!("row-{}", key.text()));
         let selector = id.to_string();
         let group = id.clone();
-        place::edge(
-            div()
-                .id(id.clone())
-                .group(group.clone())
-                .debug_selector(move || selector),
-            device,
-        )
-        .min_h(px(size::ROW))
-        .pl(px(2.))
-        .pr(px(4.))
-        .flex()
-        .items_center()
-        .gap(px(6.))
-        .cursor_pointer()
-        .text_color(if shown.is_some() { t.text } else { t.text2 })
-        // CHROTE: the focused tile's row on the raised surface, a picked
-        // row on the accent wash; both carry the accent bar, inside the
-        // device edge and over the row, so nothing in it moves.
-        .relative()
-        .when(in_focused || picked, |d| {
-            d.child(
+        let inset = match chrome(cx) {
+            Chrome::Line => 0.,
+            Chrome::Tabs | Chrome::Pills => size::ROW_INSET,
+        };
+        div()
+            .id(id.clone())
+            .group(group.clone())
+            .debug_selector(move || selector)
+            .min_h(px(size::ROW))
+            .mx(px(inset))
+            // The names stand under their group's name.
+            .pl(px(size::RAIL_ROW_LEAD - inset))
+            .pr(px(4.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .cursor_pointer()
+            .text_color(if shown.is_some() { t.text } else { t.text2 })
+            .relative()
+            .map(|d| match chrome(cx) {
+                Chrome::Line => d,
+                Chrome::Tabs => d.rounded(px(size::RADIUS)),
+                Chrome::Pills => d.rounded(px(size::ROW / 2.)),
+            })
+            // The focused window's session on a quiet fill, its name in
+            // weight; picked rows on the accent wash. No bars.
+            .when(in_focused, |d| {
+                d.bg(t.raised).font_weight(FontWeight::SEMIBOLD)
+            })
+            .when(picked, |d| d.bg(t.accent_light()))
+            .hover(|d| d.bg(t.accent_soft()))
+            // The news dot keeps its room on every row, so the names stand
+            // in one column; what a session runs is said on the right.
+            .child(
                 div()
-                    .absolute()
-                    .left_0()
-                    .top_0()
-                    .bottom_0()
-                    .w(px(2.))
-                    .bg(t.accent),
-            )
-        })
-        .when(in_focused, |d| d.bg(t.raised))
-        .when(picked, |d| d.bg(t.accent_soft()))
-        .hover(|d| d.bg(t.accent_light()))
-        // The news dot keeps its room on every row, so the names stand
-        // in one column; what a session runs is said on the right.
-        .child(
-            div()
-                .flex_none()
-                .w(px(size::DOT_SLOT))
-                .flex()
-                .justify_center()
-                .map(|d| match (&asks, &mark) {
-                    (Some(_), _) => d.child(ask_mark(t, &key)),
-                    (None, Some(e)) => d.child(event_dot(t, &key, e)),
-                    (None, None) => d,
-                }),
-        )
-        .when_some(s.user.clone(), |d, u| d.child(kit::user_square(t, &u)))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .py(px(3.))
-                .flex()
-                .flex_col()
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .child(
-                    name_label(&s.name)
-                        .id(gpui::SharedString::from(format!("name-{}", key.text())))
-                        .tooltip(kit::tip(name.clone())),
-                )
-                .children(asks.as_ref().map(|question| {
-                    let question = question.lines().find(|l| !l.trim().is_empty());
-                    div()
-                        .debug_selector(|| "row-asks".into())
-                        .text_size(px(11.))
-                        .text_color(t.accent)
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .child(match question {
-                            Some(q) => format!("Asks: {}", q.trim()),
-                            None => "Asks for your answer".to_string(),
-                        })
-                }))
-                .children(mark.as_ref().filter(|e| !e.summary.is_empty()).map(|e| {
-                    div()
-                        .text_size(px(11.))
-                        .text_color(t.dim)
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .child(e.summary.clone())
-                })),
-        )
-        .children(running_mark(t, s, cx).filter(
-            |_| !matches!(sessions::running(s), sessions::Running::Command(c) if c == s.name),
-        ))
-        .children(
-            glyphs(s)
-                .into_iter()
-                .enumerate()
-                .map(|(n, (mark, why))| glyph(t, format!("{}-{n}", key.text()), mark, why)),
-        )
-        .child(
-            div()
-                .flex_none()
-                .text_size(px(10.))
-                .text_color(if activity == "active" {
-                    t.accent
-                } else {
-                    t.dim
-                })
-                .child(activity),
-        )
-        // The menu shows over the row's end on hover, so its room goes
-        // to the name; a right click opens it too.
-        .child(
-            div()
-                .id(gpui::SharedString::from(format!("rowmenu-{}", key.text())))
-                .absolute()
-                .right(px(4.))
-                .w(px(size::ROW_MENU))
-                .h(px(size::ROW_MENU))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(3.))
-                .bg(t.raised)
-                .text_color(t.dim)
-                .opacity(0.)
-                .group_hover(group.clone(), |d| d.opacity(1.))
-                .hover(|d| d.text_color(t.text))
-                .child("…")
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |sh, e: &MouseDownEvent, window, cx| {
-                        cx.stop_propagation();
-                        let items = sh.menu_for(&k1);
-                        sh.menu(items, e.position, window, cx);
+                    .flex_none()
+                    .w(px(size::DOT_SLOT))
+                    .flex()
+                    .justify_center()
+                    .map(|d| match (&asks, &mark) {
+                        (Some(_), _) => d.child(ask_mark(t, &key)),
+                        (None, Some(e)) => d.child(event_dot(t, &key, e)),
+                        (None, None) => d,
                     }),
-                ),
-        )
-        .on_click(cx.listener(move |sh, e: &gpui::ClickEvent, window, cx| {
-            sh.rail_click(&k2, Gesture::of(&e.modifiers()), window, cx)
-        }))
-        .on_mouse_down(
-            MouseButton::Right,
-            cx.listener(move |sh, e: &MouseDownEvent, window, cx| {
-                let items = sh.menu_for(&k3);
-                sh.menu(items, e.position, window, cx);
-            }),
-        )
-        .on_drag(
-            Dragged {
-                key: key.clone(),
-                from: None,
-            },
-            move |_, _, _, cx| cx.new(|_| DragPreview::named(name.clone())),
-        )
-        .into_any_element()
+            )
+            .when_some(s.user.clone(), |d, u| d.child(kit::user_square(t, &u)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .py(px(3.))
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .child(
+                        name_label(&s.name)
+                            .id(gpui::SharedString::from(format!("name-{}", key.text())))
+                            .tooltip(kit::tip(name.clone())),
+                    )
+                    .children(asks.as_ref().map(|question| {
+                        let question = question.lines().find(|l| !l.trim().is_empty());
+                        div()
+                            .debug_selector(|| "row-asks".into())
+                            .text_size(px(11.))
+                            .text_color(t.accent)
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(match question {
+                                Some(q) => format!("Asks: {}", q.trim()),
+                                None => "Asks for your answer".to_string(),
+                            })
+                    }))
+                    .children(mark.as_ref().filter(|e| !e.summary.is_empty()).map(|e| {
+                        div()
+                            .text_size(px(11.))
+                            .text_color(t.dim)
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(e.summary.clone())
+                    })),
+            )
+            .children(running_mark(t, s, cx).filter(
+                |_| !matches!(sessions::running(s), sessions::Running::Command(c) if c == s.name),
+            ))
+            .children(
+                glyphs(s)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(n, (mark, why))| glyph(t, format!("{}-{n}", key.text()), mark, why)),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(10.))
+                    .text_color(if activity == "active" {
+                        t.accent
+                    } else {
+                        t.dim
+                    })
+                    .child(activity),
+            )
+            // The menu shows over the row's end on hover, so its room goes
+            // to the name; a right click opens it too.
+            .child(
+                div()
+                    .id(gpui::SharedString::from(format!("rowmenu-{}", key.text())))
+                    .absolute()
+                    .right(px(4.))
+                    .w(px(size::ROW_MENU))
+                    .h(px(size::ROW_MENU))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(3.))
+                    .bg(t.raised)
+                    .text_color(t.dim)
+                    .opacity(0.)
+                    .group_hover(group.clone(), |d| d.opacity(1.))
+                    .hover(|d| d.text_color(t.text))
+                    .child("…")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |sh, e: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            let items = sh.menu_for(&k1);
+                            sh.menu(items, e.position, window, cx);
+                        }),
+                    ),
+            )
+            .on_click(cx.listener(move |sh, e: &gpui::ClickEvent, window, cx| {
+                sh.rail_click(&k2, Gesture::of(&e.modifiers()), window, cx)
+            }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |sh, e: &MouseDownEvent, window, cx| {
+                    let items = sh.menu_for(&k3);
+                    sh.menu(items, e.position, window, cx);
+                }),
+            )
+            .on_drag(
+                Dragged {
+                    key: key.clone(),
+                    from: None,
+                },
+                move |_, _, _, cx| cx.new(|_| DragPreview::named(name.clone())),
+            )
+            .into_any_element()
     }
 
     /// A picked row's menu is the pick's, as in CHROTE; any other row's

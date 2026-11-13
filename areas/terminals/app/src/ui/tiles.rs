@@ -188,16 +188,7 @@ impl Terminals {
         let n = self.fleet.all.len();
         let open = self.settings.sessions_open;
         let windows = self.settings.workspace.windows().len();
-        let tab = div()
-            .id("sessions-toggle")
-            .h_full()
-            .px(px(10.))
-            .flex()
-            .items_center()
-            .gap(px(6.))
-            .cursor_pointer()
-            .text_color(if open { t.text } else { t.text2 })
-            .when(open, |d| d.border_b_2().border_color(t.accent))
+        let tab = kit::opener(&t, "sessions-toggle", open, cx)
             .child("Sessions")
             .child(
                 div()
@@ -209,18 +200,8 @@ impl Terminals {
                 s.run(super::chords::Action::Sessions, window, cx);
             }));
         let finding = self.is_open(super::surface::FIND);
-        let search = div()
-            .id("search-scrollback")
+        let search = kit::opener(&t, "search-scrollback", finding, cx)
             .debug_selector(|| "search-scrollback".into())
-            .h_full()
-            .px(px(10.))
-            .flex()
-            .items_center()
-            .gap(px(6.))
-            .cursor_pointer()
-            .text_color(if finding { t.text } else { t.text2 })
-            .when(finding, |d| d.border_b_2().border_color(t.accent))
-            .hover(|d| d.text_color(t.text))
             .child("Search scrollback")
             .child(
                 div()
@@ -233,28 +214,24 @@ impl Terminals {
             }));
         let layout = div()
             .ml_auto()
+            .pr(px(4.))
             .flex()
             .items_baseline()
             .gap(px(8.))
-            .child(
-                div()
-                    .text_size(px(size::SMALL))
-                    .text_color(t.dim)
-                    .child("LAYOUT"),
-            )
-            .child(div().text_color(t.text).child(windows.to_string()))
-            .child(
-                div()
-                    .text_size(px(size::SMALL))
-                    .text_color(t.dim)
-                    .child("Alt+= add window · Alt+- remove empty"),
-            );
+            .text_size(px(size::SMALL))
+            .text_color(t.dim)
+            .child(div().text_color(t.text2).child(format!(
+                "{windows} {}",
+                if windows == 1 { "window" } else { "windows" }
+            )))
+            .child("Alt+= adds one · Alt+- takes an empty one away");
         div()
             .flex_none()
             .h(px(size::STRIP))
             .px(px(8.))
             .flex()
             .items_center()
+            .gap(px(4.))
             .bg(t.surface)
             .border_b_1()
             .border_color(t.divider)
@@ -791,16 +768,23 @@ impl Terminals {
             .flex()
             .items_center()
             .gap(px(6.))
-            .rounded_t(px(6.))
+            .rounded_t(px(size::RADIUS))
             .cursor_pointer()
-            .bg(if active && focused {
-                t.surface
-            } else if active {
-                t.raised
+            // The one on screen is a card of the terminal's own ground,
+            // joined to it over the head's rule; the others are words.
+            .border_1()
+            .border_b_0()
+            .border_color(if active {
+                t.divider
             } else {
                 gpui::transparent_black()
             })
-            .when(active, |d| d.border_t_2().border_color(t.accent))
+            .when(active, |d| d.bg(t.term_bg))
+            .font_weight(if active && focused {
+                gpui::FontWeight::SEMIBOLD
+            } else {
+                gpui::FontWeight::NORMAL
+            })
             .text_color(if active { t.text } else { t.text2 })
             .hover(|d| d.text_color(t.text))
             .when_some(session.as_ref().and_then(|s| s.user.clone()), |d, u| {
@@ -846,7 +830,7 @@ impl Terminals {
                     .flex_none()
                     .text_size(px(10.))
                     .text_color(t.dim)
-                    .child(w.to_uppercase())
+                    .child(w)
             }))
             .when(history, |d| {
                 d.child(
@@ -854,7 +838,7 @@ impl Terminals {
                         .flex_none()
                         .text_size(px(10.))
                         .text_color(t.accent)
-                        .child("HISTORY"),
+                        .child("history"),
                 )
             })
             .child(
@@ -907,12 +891,21 @@ impl Terminals {
             .h(px(size::TILE_HEAD))
             .px(px(8.))
             .pt(px(4.))
+            .relative()
             .flex()
             .items_end()
             .gap(px(8.))
             .bg(t.raised)
-            .border_b_1()
-            .border_color(t.divider)
+            // The rule under the tags, first so the tag on screen covers it.
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .h(px(1.))
+                    .bg(t.divider),
+            )
     }
 
     /// The menu of a session bound in window `i`: the full set while it is on

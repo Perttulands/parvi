@@ -5,9 +5,7 @@
 
 use crate::theme::place::{self, Texture};
 use crate::theme::{Theme, alpha, rgb};
-use gpui::{
-    Bounds, Div, FontWeight, Hsla, PathBuilder, Stateful, canvas, div, point, prelude::*, px,
-};
+use gpui::{Bounds, Div, FontWeight, Hsla, PathBuilder, canvas, div, point, prelude::*, px};
 
 /// The device plate: its name in capitals on its colour.
 pub fn plate(device: &str) -> Div {
@@ -23,13 +21,6 @@ pub fn plate(device: &str) -> Div {
         .text_size(px(11.))
         .font_weight(FontWeight::BOLD)
         .child(device.to_uppercase())
-}
-
-/// A row of the device's: its colour along the left edge, under the plate
-/// that names the device at the head of its group.
-pub fn edge(row: Stateful<Div>, device: &str) -> Stateful<Div> {
-    row.border_l(px(place::EDGE))
-        .border_color(rgb(place::device_colour(device)))
 }
 
 /// The environment strip: its word, then its texture.

@@ -1,7 +1,7 @@
 //! The shared kit: every control is drawn from here, at CHROTE's measures,
 //! never improvised in a view.
 
-use crate::theme::{Theme, size};
+use crate::theme::{Chrome, Theme, chrome, size};
 use gpui::{App, Div, ElementId, FontWeight, Hsla, SharedString, Stateful, div, prelude::*, px};
 
 /// A section label: small, upper case, dim.
@@ -75,9 +75,9 @@ pub enum Kind {
     Quiet,
 }
 
-/// How the tab bar draws its tabs: letters spaced out where the window has
-/// room for every page's tab, close together where it has not. The shell
-/// sets it as it draws the bar; every tab on the bar reads it.
+/// How the tab bar draws its tabs: spaced out where the window has room
+/// for every page's tab, close together where it has not. The shell sets
+/// it as it draws the bar; every tab on the bar reads it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TabStyle {
     pub compact: bool,
@@ -86,37 +86,27 @@ pub struct TabStyle {
 impl gpui::Global for TabStyle {}
 
 /// A tab's padding either side, spaced out and compact.
-pub const TAB_PAD: f32 = 20.;
+pub const TAB_PAD: f32 = 16.;
 pub const TAB_PAD_COMPACT: f32 = 10.;
 
 fn compact(cx: &App) -> bool {
     cx.try_global::<TabStyle>().is_some_and(|s| s.compact)
 }
 
-/// A tab's words as the bar shows them: upper case, letters spaced out
-/// unless compact.
-pub fn tab_text(title: &str, compact: bool) -> String {
-    let upper = title.to_uppercase();
-    if compact {
-        return upper;
-    }
-    upper
-        .chars()
-        .map(|c| c.to_string())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// A tab's label, as the bar's style says.
-pub fn tab_label(title: &str, cx: &App) -> Div {
-    let text = tab_text(title, compact(cx));
-    let selector = format!("tab-label-{}", tab_text(title, false));
-    div().debug_selector(move || selector).child(text)
-}
-
-/// One tab on the tab bar; `active` underlines it. It never shrinks.
-pub fn tab(t: &Theme, id: impl Into<ElementId>, active: bool, cx: &App) -> Stateful<Div> {
+/// A tab's label: its words as written.
+pub fn tab_label(title: &str) -> Div {
+    let selector = format!("tab-label-{title}");
     div()
+        .debug_selector(move || selector)
+        .child(title.to_string())
+}
+
+/// One tab on the tab bar, drawn as the chrome draws tabs. It never
+/// shrinks. The bar it sits on draws its own bottom rule first, so the
+/// active card covers it and joins the page below.
+pub fn tab(t: &Theme, id: impl Into<ElementId>, active: bool, cx: &App) -> Stateful<Div> {
+    let chrome = chrome(cx);
+    let d = div()
         .id(id)
         .flex_none()
         .px(px(if compact(cx) {
@@ -135,8 +125,98 @@ pub fn tab(t: &Theme, id: impl Into<ElementId>, active: bool, cx: &App) -> State
             FontWeight::NORMAL
         })
         .text_color(if active { t.text } else { t.text2 })
-        .when(active, |d| d.border_b_2().border_color(t.accent))
-        .hover(|d| d.text_color(t.text))
+        .hover(hovered(t, chrome == Chrome::Pills && !active));
+    match chrome {
+        Chrome::Tabs => d
+            .rounded_t(px(size::RADIUS))
+            .border_1()
+            .border_b_0()
+            .border_color(if active {
+                t.divider
+            } else {
+                gpui::transparent_black()
+            })
+            .when(active, |d| d.bg(t.surface)),
+        // Every tab keeps the underline's room, so none moves when chosen.
+        Chrome::Line => d.border_b(px(size::TAB_LINE)).border_color(if active {
+            t.accent
+        } else {
+            gpui::transparent_black()
+        }),
+        Chrome::Pills => d
+            .my(px(size::TAB_PILL_Y))
+            .rounded(px(size::RADIUS))
+            .when(active, |d| d.bg(t.accent_light())),
+    }
+}
+
+/// What the pointer over a tab or an opener does: brightens its words,
+/// and fills it where the chrome's are filled.
+fn hovered(t: &Theme, fill: bool) -> impl FnOnce(gpui::StyleRefinement) -> gpui::StyleRefinement {
+    let (text, raised) = (t.text, t.raised);
+    move |d| {
+        let d = d.text_color(text);
+        if fill { d.bg(raised) } else { d }
+    }
+}
+
+/// A word on a page's bar that opens a panel and shows it is open: a
+/// smaller cousin of the tab.
+pub fn opener(t: &Theme, id: impl Into<ElementId>, open: bool, cx: &App) -> Stateful<Div> {
+    let chrome = chrome(cx);
+    let d = div()
+        .id(id)
+        .flex_none()
+        .px(px(10.))
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .cursor_pointer()
+        .text_color(if open { t.text } else { t.text2 })
+        .hover(hovered(t, chrome != Chrome::Line && !open));
+    match chrome {
+        Chrome::Line => d
+            .h_full()
+            .border_b(px(size::TAB_LINE))
+            .border_color(if open {
+                t.accent
+            } else {
+                gpui::transparent_black()
+            }),
+        Chrome::Tabs => d
+            .h(px(size::CONTROL))
+            .rounded(px(size::RADIUS))
+            .when(open, |d| d.bg(t.raised)),
+        Chrome::Pills => d
+            .h(px(size::CONTROL))
+            .rounded(px(size::RADIUS))
+            .when(open, |d| d.bg(t.accent_light())),
+    }
+}
+
+/// The bar tabs sit on: its rule along the bottom, drawn first so an
+/// active card covers it.
+pub fn tab_bar(t: &Theme, cx: &App) -> Div {
+    div()
+        .relative()
+        .flex()
+        .items_stretch()
+        .bg(match chrome(cx) {
+            Chrome::Tabs => t.bg,
+            Chrome::Line | Chrome::Pills => t.surface,
+        })
+        // Cards stand on the rule; whatever else is on the bar stands with
+        // them, on one line.
+        .when(chrome(cx) == Chrome::Tabs, |d| d.pt(px(size::TAB_CARD_TOP)))
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .h(px(1.))
+                .bg(t.divider),
+        )
 }
 
 pub fn button(

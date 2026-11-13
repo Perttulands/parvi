@@ -490,8 +490,9 @@ impl Terminals {
                     .px(px(8.))
                     .py(px(4.))
                     .bg(t.raised)
-                    .border_l_2()
-                    .border_color(t.accent)
+                    .rounded(px(size::RADIUS))
+                    .border_1()
+                    .border_color(t.divider)
                     .text_size(px(size::SMALL))
                     .text_color(t.text2)
                     .overflow_hidden()
@@ -707,9 +708,8 @@ impl Terminals {
             .child(
                 div()
                     .flex_1()
-                    .text_size(px(12.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("SEND TO SESSION"),
+                    .child("Send to session"),
             )
             .child(
                 kit::button(t, "send-close", "Close  Esc", Kind::Quiet)
@@ -738,9 +738,10 @@ impl Terminals {
                 .gap(px(6.))
                 .cursor_pointer()
                 .when(chosen, |d| {
-                    d.bg(t.accent_soft()).border_l_2().border_color(t.accent)
+                    d.bg(t.accent_light())
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
                 })
-                .hover(|d| d.bg(t.accent_light()))
+                .hover(|d| d.bg(t.accent_soft()))
         };
         let mut targets = div()
             .id("send-targets")

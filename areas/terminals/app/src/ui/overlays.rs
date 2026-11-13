@@ -85,7 +85,7 @@ impl Terminals {
             bar = bar.child(
                 kit::tab(&t, ("terminal-tab", i), active, cx)
                     .debug_selector(|| format!("tab-terminals-{i}"))
-                    .child(kit::tab_label(&tab_label(tb, i), cx))
+                    .child(kit::tab_label(&tab_label(tb, i)))
                     .when(marked, |d| d.child(kit::waiting_dot(&t)))
                     .on_click(
                         cx.listener(move |s, _, window, cx| s.run(Action::Tab(i), window, cx)),
@@ -150,6 +150,7 @@ impl Terminals {
                     .text_color(t.dim)
                     .hover(|d| d.text_color(t.text))
                     .child("+")
+                    .tooltip(kit::tip("New terminal tab"))
                     .on_click(cx.listener(|s, _, window, cx| s.act(Act::NewTab, window, cx))),
             );
         }
@@ -615,9 +616,8 @@ impl Terminals {
                     .child(
                         div()
                             .flex_1()
-                            .text_size(px(12.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("SEARCH SCROLLBACK"),
+                            .child("Search scrollback"),
                     )
                     .child(
                         kit::button(&t, "find-close", "Close  Esc", Kind::Quiet)

@@ -21,6 +21,7 @@ use std::path::PathBuf;
 /// What every window of the app needs before it opens.
 pub fn prepare(cx: &mut App) {
     cx.set_global(Theme::violet());
+    cx.set_global(parvi_app_kit::theme::Chrome::from_env());
     field::bind_keys(cx);
 }
 
