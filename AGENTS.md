@@ -2,7 +2,8 @@
 
 Parvi is the operator's agent workspace: terminals, files, work, brain, host and
 missions in one Rust binary, used through a native app and the `parvi` CLI.
-`VISION.md` says what it is for and `ARCHITECTURE.md` how it is built.
+`VISION.md` says what it is for, `DESIGN.md` what good looks like in the app and
+`ARCHITECTURE.md` how it is built.
 
 ## The operator works on this machine while you do
 
