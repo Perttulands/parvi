@@ -3,7 +3,6 @@ pub mod code;
 pub mod field;
 pub mod kit;
 pub mod markdown;
-pub mod pages;
 pub mod pane;
 pub mod path_picker;
 pub mod select;

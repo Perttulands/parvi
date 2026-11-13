@@ -1,23 +1,26 @@
-//! The Settings page: the shell's own settings (the node, the keys), then
-//! the settings each registered page declares ([`Page::SETTINGS`]), under
-//! the page's title. Settings is not an area: what is listed comes from the
-//! pages, and a change goes into the declaring page's section, which then
-//! hears [`Page::settings_changed`]. Below them, read-only, is the connected
-//! node's `config.toml` as the node loaded it (`/api/config`), read each time
-//! the page comes forward or the node's link opens while it shows.
+//! The Settings page: the shell's own settings (the node, the shortcuts),
+//! then the settings each registered page declares ([`Page::SETTINGS`]),
+//! one group each in the list, and the connected node's configuration.
+//! Settings is not an area: what is listed comes from the pages, and a
+//! change goes into the declaring page's section, which then hears
+//! [`Page::settings_changed`]. The node's configuration (`/api/config`) is
+//! read each time the page comes forward or the node's link opens while it
+//! shows, and shown as named settings; it changes by editing its file.
+//! Typing in the search shows every setting that matches, from every group.
 
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, SharedString, Subscription, Window, div,
     prelude::*, px,
 };
-use parvi_app_kit::host::Request;
+use parvi_app_kit::ask::Ask;
+use parvi_app_kit::host::{Request, Status};
 use parvi_app_kit::link::client::LinkState;
 use parvi_app_kit::page::Meta;
 use parvi_app_kit::settings::DEFAULT_NODE;
 use parvi_app_kit::theme::{Theme, size, theme};
 use parvi_app_kit::widgets::field::{FieldEvent, TextField};
 use parvi_app_kit::widgets::kit::{self, Kind};
-use parvi_app_kit::widgets::pages::{line, page, section};
+use parvi_app_kit::widgets::pane;
 use parvi_app_kit::{Control, Host, Hub, Page, Setting};
 use parvi_core::NodeId;
 use serde_json::Value;
@@ -30,8 +33,8 @@ pub const ID: &str = "settings";
 const APP: &[Setting] = &[
     Setting::text("node", "Node", DEFAULT_NODE)
         .note("The node this app talks to, as http://host:port. Enter connects."),
-    Setting::toggle("keys", "Keys", true)
-        .note("Chords and the leader take keys from the keyboard."),
+    Setting::toggle("keys", "Shortcuts", true)
+        .note("Parvi's shortcuts take their keys before the terminal does."),
 ];
 
 /// Whose a setting is: the shell's, or a page's.
@@ -50,10 +53,20 @@ impl Owner {
     }
 }
 
+/// A group in the list: the shell's own, a page's, or the node's.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Group {
+    App,
+    Page(&'static str),
+    Node,
+}
+
 pub struct SettingsPage {
     hub: Entity<Hub>,
     host: Host,
     shown: bool,
+    chosen: Group,
+    search: Entity<TextField>,
     /// The connected node's config as it last answered, or why it did not.
     node_config: Option<Result<Value, String>>,
     /// The pages that declare settings, in the app's order.
@@ -133,10 +146,18 @@ impl SettingsPage {
             ));
             fields.insert((owner, key), field);
         }
+        let search = cx.new(|cx| TextField::new(cx, "Search settings"));
+        subscriptions.push(cx.subscribe(&search, |_, _, ev: &FieldEvent, cx| {
+            if let FieldEvent::Changed = ev {
+                cx.notify();
+            }
+        }));
         Self {
             hub,
             host,
             shown: false,
+            chosen: Group::App,
+            search,
             node_config: None,
             pages,
             fields,
@@ -163,51 +184,111 @@ impl SettingsPage {
         .detach();
     }
 
-    /// The connected node's config file and each of its sections, read-only.
-    fn node_rows(&self, t: &Theme) -> AnyElement {
-        // Each named for tests by where it is and what it says.
-        let text = |at: &str, text: String| {
-            let selector = format!("node-config:{at}:{text}");
-            div()
-                .debug_selector(move || selector)
-                .w_full()
-                .min_w_0()
-                .whitespace_normal()
-                .text_color(t.text)
-                .child(text)
+    /// The connected node's configuration, a part for each section it
+    /// loaded, each key a named line; `matches` keeps the lines a search
+    /// asks for. Then where it lives, and how it changes.
+    fn node_parts(
+        &self,
+        t: &Theme,
+        within: Option<&str>,
+        matches: &dyn Fn(&str) -> bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let named = |part: &str| match within {
+            Some(group) => format!("{group} · {part}"),
+            None => part.to_string(),
         };
-        let mut part = section(t, "Node");
-        match &self.node_config {
-            None => part = part.child(kit::note(t, "Reading the node's config…", None)),
-            Some(Err(why)) => {
-                let why = format!("The node's config did not read: {why}");
-                part = part.child(kit::note(t, why, Some(t.dim)));
+        let mut parts = vec![];
+        let config = match &self.node_config {
+            None => {
+                return vec![
+                    pane::empty(t, "Reading the node's configuration…", None).into_any_element(),
+                ];
             }
-            Some(Ok(config)) => {
-                let path = config["path"].as_str().unwrap_or_default().to_string();
-                part = part.child(
-                    line(
+            Some(Err(why)) => {
+                return vec![
+                    pane::empty(
                         t,
-                        "File",
-                        div().flex_1().min_w_0().child(text("path", path)),
+                        format!("The node's configuration did not read: {why}"),
+                        None,
                     )
-                    .items_start(),
-                );
-                for (name, keys) in config["sections"].as_object().into_iter().flatten() {
-                    let mut lines = div().flex_1().min_w_0().flex().flex_col();
-                    for (key, value) in keys.as_object().into_iter().flatten() {
-                        lines = lines.child(text(name, format!("{key} = {value}")));
-                    }
-                    part = part.child(line(t, &format!("[{name}]"), lines).items_start());
+                    .into_any_element(),
+                ];
+            }
+            Some(Ok(config)) => config,
+        };
+        for (name, keys) in config["sections"].as_object().into_iter().flatten() {
+            let mut part = pane::section(t, named(&words(name, true)));
+            let mut any = false;
+            for (key, value) in keys.as_object().into_iter().flatten() {
+                let label = config_label(name, key);
+                if !matches(&label) && !matches(name) {
+                    continue;
                 }
+                any = true;
+                let mut lines = div().flex().flex_col();
+                for v in plain(value) {
+                    // Each named for tests by where it is and what it says.
+                    let selector = format!("node-config:{name}:{key}:{v}");
+                    lines = lines.child(
+                        div()
+                            .debug_selector(move || selector)
+                            .w_full()
+                            .min_w_0()
+                            .whitespace_normal()
+                            .text_color(t.text)
+                            .child(v),
+                    );
+                }
+                part = part.child(pane::line(t, label, lines).items_start());
+            }
+            if any {
+                parts.push(part.into_any_element());
             }
         }
-        part.child(kit::note(
-            t,
-            "An agent edits this file; restarting the node applies it, and sessions survive.",
-            Some(t.dim),
-        ))
-        .into_any_element()
+        let path = config["path"].as_str().unwrap_or_default().to_string();
+        if matches("file") || matches(&path) {
+            let selector = format!("node-config:path:{path}");
+            let open = path.clone();
+            parts.push(
+                pane::section(t, named("File"))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(size::HEAD_GAP))
+                            .child(
+                                div()
+                                    .debug_selector(move || selector)
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_color(t.text)
+                                    .child(path),
+                            )
+                            .child(
+                                pane::act(t, "node-config-open", "Open")
+                                    .tooltip(kit::tip("Edit it in Files"))
+                                    .on_click(cx.listener(move |p, _, _, cx| {
+                                        let ask = Ask::OpenPath {
+                                            node: NodeId::default(),
+                                            path: open.clone(),
+                                            beside: false,
+                                        };
+                                        if let Err(e) = p.host.ask(ask, cx) {
+                                            p.host.report(Status::failure(e.message), cx);
+                                        }
+                                    })),
+                            ),
+                    )
+                    .child(kit::note(
+                        t,
+                        "A change applies when the node restarts; sessions stay.",
+                        Some(t.dim),
+                    ))
+                    .into_any_element(),
+            );
+        }
+        parts
     }
 
     /// Each field shows what is kept now.
@@ -320,7 +401,10 @@ impl SettingsPage {
                             .flex()
                             .justify_center()
                             .text_color(t.text)
-                            .child(value.to_string()),
+                            .child(match value.as_f64() {
+                                Some(n) if n.fract() == 0. => format!("{n:.0}"),
+                                _ => value.to_string(),
+                            }),
                     )
                     .child(step(1., "+", cx))
                     .into_any_element()
@@ -338,46 +422,210 @@ impl SettingsPage {
         }
     }
 
-    fn rows(
+    /// The lines of `settings` that `matches` keeps.
+    fn lines(
         &self,
         owner: Owner,
-        title: &str,
         settings: &[Setting],
+        matches: &dyn Fn(&str) -> bool,
         t: &Theme,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let mut part = section(t, title);
+    ) -> Vec<AnyElement> {
+        let mut out = vec![];
         for setting in settings {
-            let mut value = div()
-                .flex_1()
-                .min_w_0()
+            if !matches(setting.label) && !matches(setting.note) {
+                continue;
+            }
+            let value = div()
                 .flex()
                 .flex_col()
-                .gap(px(size::RADIUS));
-            value = value.child(self.control(owner, setting, t, cx));
-            if !setting.note.is_empty() {
-                value = value.child(kit::note(t, setting.note, Some(t.dim)));
-            }
-            let row = line(t, setting.label, value).items_start();
-            part = part.child(row);
+                .items_start()
+                .gap(px(size::RADIUS))
+                .child(self.control(owner, setting, t, cx))
+                .when(!setting.note.is_empty(), |d| {
+                    d.child(kit::note(t, setting.note, Some(t.dim)))
+                });
+            out.push(
+                pane::line(t, setting.label, value)
+                    .items_start()
+                    .into_any_element(),
+            );
         }
-        part.into_any_element()
+        out
+    }
+
+    /// The groups in the list's order, each with its name.
+    fn groups(&self) -> Vec<(Group, String)> {
+        let mut all = vec![(Group::App, "App".to_string())];
+        all.extend(
+            self.pages
+                .iter()
+                .map(|m| (Group::Page(m.id), m.title.to_string())),
+        );
+        all.push((Group::Node, "Node".to_string()));
+        all
+    }
+
+    /// The parts of one group, or of every group a search matches.
+    /// `within` when they stand under the group's own name, as a search
+    /// shows them.
+    fn parts(
+        &self,
+        group: Group,
+        within: bool,
+        matches: &dyn Fn(&str) -> bool,
+        t: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        match group {
+            Group::App => {
+                let mut lines = self.lines(Owner::App, APP, matches, t, cx);
+                let hub = self.hub.read(cx);
+                if let Some(h) = &hub.fleet.here().hello
+                    && matches("version")
+                {
+                    let words = format!("Parvi {} on {} · {}", h.version, h.device, h.environment);
+                    lines.push(pane::line(t, "Version", words).into_any_element());
+                }
+                lines
+            }
+            Group::Page(id) => {
+                let settings = self
+                    .pages
+                    .iter()
+                    .find(|m| m.id == id)
+                    .map(|m| m.settings)
+                    .unwrap_or_default();
+                self.lines(Owner::Page(id), settings, matches, t, cx)
+            }
+            Group::Node => self.node_parts(t, within.then_some("Node"), matches, cx),
+        }
+    }
+}
+
+/// What a node's config key is called here: the few every node has by
+/// their meaning, any other as its words.
+fn config_label(section: &str, key: &str) -> String {
+    match (section, key) {
+        ("node", "listen") => "Address".into(),
+        ("terminals", "socket") => "tmux socket".into(),
+        ("files", "roots") => "Folders".into(),
+        (_, "enabled") => "On".into(),
+        _ => words(key, true),
+    }
+}
+
+/// A config key or section as words: `copy_on_select` reads "Copy on
+/// select"; `first` capitalises it.
+fn words(key: &str, first: bool) -> String {
+    let spaced = key.replace(['_', '-'], " ");
+    let mut c = spaced.chars();
+    match c.next() {
+        Some(f) if first => f.to_uppercase().chain(c).collect(),
+        _ => spaced,
+    }
+}
+
+/// A config value as plain lines: a string as written, a list one item a
+/// line, on and off for a switch.
+fn plain(value: &Value) -> Vec<String> {
+    match value {
+        Value::String(s) => vec![s.clone()],
+        Value::Bool(true) => vec!["on".into()],
+        Value::Bool(false) => vec!["off".into()],
+        Value::Array(items) if items.is_empty() => vec!["none".into()],
+        Value::Array(items) => items.iter().flat_map(plain).collect(),
+        Value::Object(map) => map
+            .iter()
+            .map(|(k, v)| format!("{}: {}", words(k, false), plain(v).join(", ")))
+            .collect(),
+        other => vec![other.to_string()],
     }
 }
 
 impl Render for SettingsPage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
-        let mut all = page(&t, "settings-page").child(self.rows(Owner::App, "App", APP, &t, cx));
-        for meta in self.pages.clone() {
-            all = all.child(self.rows(Owner::Page(meta.id), meta.title, meta.settings, &t, cx));
+        let query = self.search.read(cx).text.trim().to_lowercase();
+        let groups = self.groups();
+        let mut rows = div().flex().flex_col();
+        for (group, name) in &groups {
+            let group = *group;
+            let chosen = query.is_empty() && self.chosen == group;
+            let id = match group {
+                Group::App => "app".to_string(),
+                Group::Page(p) => p.to_string(),
+                Group::Node => "node".to_string(),
+            };
+            let selector = format!("settings-group-{id}");
+            rows = rows.child(
+                pane::row(&t, SharedString::from(selector.clone()), chosen)
+                    .debug_selector(move || selector)
+                    .child(pane::cell(name.clone()))
+                    .on_click(cx.listener(move |p, _, window, cx| {
+                        p.chosen = group;
+                        p.search.update(cx, |f, cx| f.set("", false, cx));
+                        let _ = window;
+                        cx.notify();
+                    })),
+            );
         }
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .bg(t.bg)
-            .child(kit::page_bar(&t).child(kit::page_title(&t, "Settings")))
-            .child(all.child(self.node_rows(&t)).flex_1().min_h_0())
+        let list = pane::list(
+            &t,
+            "settings-groups",
+            pane::head(&t).child(div().flex_1().child(self.search.clone())),
+            rows,
+        );
+        let matches = |words: &str| query.is_empty() || words.to_lowercase().contains(&query);
+        let (title, body) = if query.is_empty() {
+            let name = groups
+                .iter()
+                .find(|(g, _)| *g == self.chosen)
+                .map(|(_, n)| n.clone())
+                .unwrap_or_default();
+            let title = match self.chosen {
+                Group::Node => match &self.hub.read(cx).fleet.here().hello {
+                    Some(h) => format!("Node on {} · {}", h.device, h.environment),
+                    None => name,
+                },
+                _ => name,
+            };
+            (title, self.parts(self.chosen, false, &matches, &t, cx))
+        } else {
+            let mut all = vec![];
+            for (group, name) in &groups {
+                let parts = self.parts(*group, true, &matches, &t, cx);
+                if parts.is_empty() {
+                    continue;
+                }
+                // The node's parts carry their group's name themselves.
+                if *group == Group::Node {
+                    all.extend(parts);
+                } else {
+                    all.push(
+                        pane::section(&t, name.clone())
+                            .children(parts)
+                            .into_any_element(),
+                    );
+                }
+            }
+            if all.is_empty() {
+                all.push(pane::empty(&t, "No setting matches.", None).into_any_element());
+            }
+            (format!("Settings matching “{query}”"), all)
+        };
+        pane::page(
+            &t,
+            list,
+            pane::detail(
+                "settings-page",
+                pane::head(&t).child(pane::title(&t, title)),
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(size::HEAD_GAP))
+                    .children(body),
+            ),
+        )
     }
 }

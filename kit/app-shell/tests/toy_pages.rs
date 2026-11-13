@@ -609,6 +609,8 @@ fn two_toy_pages_plug_in_through_their_host(cx: &mut TestAppContext) {
             format!("setting-app-node:{address}").into_boxed_str(),
         ))
         .unwrap();
+    // Alpha's settings are its own group in the list.
+    click(cx, "settings-group-toy-a");
     let folder_field = cx.debug_bounds("setting-toy-a-folder:").unwrap();
     assert!(node_field.size.width >= gpui::px(300.));
     assert_eq!(node_field.size.width, folder_field.size.width);
@@ -618,6 +620,7 @@ fn two_toy_pages_plug_in_through_their_host(cx: &mut TestAppContext) {
         a.read_with(cx, |a, _| a.settings.clone()),
         Some(serde_json::json!({"loud": true, "size": 2.0}))
     );
+    click(cx, "settings-group-app");
     click(cx, "setting-app-keys");
     assert!(!shell.read_with(cx, |s, cx| s.hub().read(cx).settings.keys));
 
@@ -761,6 +764,7 @@ fn an_agents_edit_to_app_json_reaches_the_page_and_the_apps_own_writes_do_not(
 
     // Turned off on the Settings page: one write, and Alpha hears it once.
     click(cx, "tab-settings");
+    click(cx, "settings-group-toy-a");
     click(cx, "setting-toy-a-loud");
     assert_eq!(a.read_with(cx, |a, _| a.changed), 2);
     cx.executor().advance_clock(SAVED);

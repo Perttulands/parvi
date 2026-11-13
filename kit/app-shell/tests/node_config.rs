@@ -47,18 +47,30 @@ fn the_settings_page_shows_the_nodes_config_file(cx: &mut TestAppContext) {
     });
     assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("settings"));
 
-    let path = format!("node-config:path:{}", file.display());
-    let roots = format!("node-config:files:roots = [\"/srv/notes\",{long:?}]");
+    // The app's own settings show first; the node's are a group of their
+    // own, each key a named line and each root a line of its own.
     let deadline = Instant::now() + Duration::from_secs(10);
+    while !drawn(cx, field.clone()) {
+        assert!(Instant::now() < deadline, "the node field is not shown");
+        cx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let field_bounds = cx.debug_bounds(Box::leak(field.into_boxed_str())).unwrap();
+    let group = cx
+        .debug_bounds("settings-group-node")
+        .expect("the node's group");
+    cx.simulate_click(group.center(), gpui::Modifiers::none());
+    let path = format!("node-config:path:{}", file.display());
+    let short = "node-config:files:roots:/srv/notes".to_string();
+    let roots = format!("node-config:files:roots:{long}");
     loop {
         cx.run_until_parked();
-        if drawn(cx, path.clone()) && drawn(cx, roots.clone()) && drawn(cx, field.clone()) {
+        if drawn(cx, path.clone()) && drawn(cx, roots.clone()) && drawn(cx, short.clone()) {
             break;
         }
         assert!(Instant::now() < deadline, "the node's config is not shown");
         std::thread::sleep(Duration::from_millis(20));
     }
-    let field_bounds = cx.debug_bounds(Box::leak(field.into_boxed_str())).unwrap();
     let roots_bounds = cx.debug_bounds(Box::leak(roots.into_boxed_str())).unwrap();
     assert!(
         field_bounds.size.width >= gpui::px(300.),

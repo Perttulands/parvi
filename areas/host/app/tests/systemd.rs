@@ -260,7 +260,8 @@ fn disposable_systemd_service_and_host_health_journey(cx: &mut TestAppContext) {
     assert_eq!(config["sections"]["host"]["enabled"], true);
     assert_eq!(config["path"], node.config.to_string_lossy().as_ref());
     click(cx, "tab-settings");
-    let config_row = selector("node-config:host:enabled = true".to_owned());
+    click(cx, "settings-group-node");
+    let config_row = selector("node-config:host:enabled:on".to_owned());
     until(cx, "host config on Settings", |cx| {
         cx.debug_bounds(config_row).is_some()
     });
@@ -271,6 +272,7 @@ fn disposable_systemd_service_and_host_health_journey(cx: &mut TestAppContext) {
     until(cx, "external settings edit", |cx| {
         shell.read_with(cx, |s, cx| !s.hub().read(cx).settings.keys)
     });
+    click(cx, "settings-group-app");
     let toggle = "setting-app-keys";
     until(cx, "settings toggle", |cx| {
         cx.debug_bounds(toggle).is_some()
