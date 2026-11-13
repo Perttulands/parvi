@@ -33,25 +33,41 @@ pub fn page(t: &Theme, list: impl IntoElement, detail: impl IntoElement) -> Div 
 /// The list column: [`size::LIST`] wide, its head on top, its rows under
 /// it scrolling. `id` names its scroll.
 pub fn list(t: &Theme, id: impl Into<ElementId>, head: Div, rows: impl IntoElement) -> Div {
-    list_frame(
-        t,
-        head,
-        div()
-            .id(id)
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .child(rows),
-    )
+    list_frame(t, head, scrolling(id, rows))
+}
+
+/// A list whose rows are sentences rather than names (work items, search
+/// results): [`size::LIST_WIDE`] wide, never more than half the page.
+pub fn list_wide(t: &Theme, id: impl Into<ElementId>, head: Div, rows: impl IntoElement) -> Div {
+    list_wide_frame(t, head, scrolling(id, rows))
 }
 
 /// The list column around a body that scrolls itself, such as a uniform
 /// list of many rows.
 pub fn list_frame(t: &Theme, head: Div, body: impl IntoElement) -> Div {
+    frame(t, size::LIST, head, body)
+}
+
+/// The wide list around a body that scrolls itself, such as one that keeps
+/// the row the keys reached in view.
+pub fn list_wide_frame(t: &Theme, head: Div, body: impl IntoElement) -> Div {
+    frame(t, size::LIST_WIDE, head, body).max_w(relative(0.5))
+}
+
+fn scrolling(id: impl Into<ElementId>, rows: impl IntoElement) -> Stateful<Div> {
     div()
-        .w(px(size::LIST))
+        .id(id)
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .child(rows)
+}
+
+fn frame(t: &Theme, width: f32, head: Div, body: impl IntoElement) -> Div {
+    div()
+        .w(px(width))
         .flex_none()
         .h_full()
         .flex()

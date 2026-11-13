@@ -31,6 +31,9 @@ pub mod size {
     /// terminals' session rail; the detail's padding, its widest reading
     /// width and the gap between its sections.
     pub const LIST: f32 = 260.;
+    /// A list whose rows are sentences (work items, search results with
+    /// their words), which a name's width would cut to a few words.
+    pub const LIST_WIDE: f32 = 420.;
     pub const PAD: f32 = 24.;
     pub const READING: f32 = 960.;
     pub const SECTION_GAP: f32 = 24.;
