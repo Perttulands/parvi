@@ -1,12 +1,18 @@
-//! Pictures a session's output names, read once from the session's device
-//! and kept small for the terminal to draw at the line that names them.
-//! Only the latest few are kept; what falls out is handed back to be freed.
+//! Pictures a session's output names, read once from the session's device,
+//! and the mermaid diagrams it prints, drawn once here; kept small for the
+//! terminal to draw at the line that names them. Only the latest few are
+//! kept; what falls out is handed back to be freed.
 
 use gpui::ImageFormat;
 use std::collections::{HashMap, VecDeque};
 
-/// A picture by its device and its path there.
-pub type Key = (String, String);
+/// A picture: a file by its device and its path there, or a diagram by
+/// its source.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Key {
+    File { node: String, path: String },
+    Diagram(String),
+}
 
 /// The most pictures kept at once.
 pub const KEEP: usize = 24;
@@ -97,7 +103,10 @@ mod tests {
     use super::*;
 
     fn key(n: usize) -> Key {
-        ("node".into(), format!("/p/{n}.png"))
+        Key::File {
+            node: "node".into(),
+            path: format!("/p/{n}.png"),
+        }
     }
 
     #[test]

@@ -5,6 +5,7 @@ mod clusters;
 pub mod drag;
 pub mod keys;
 pub mod links;
+mod mermaid;
 pub mod mouse;
 pub mod paint;
 pub mod screen;

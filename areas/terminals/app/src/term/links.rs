@@ -19,6 +19,8 @@ pub enum Target {
     Url(String),
     Path(String),
     WorkItem(String),
+    /// A mermaid diagram's source, drawn on its header.
+    Diagram(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,9 +63,11 @@ pub fn resolve(cwd: Option<&str>, path: &str) -> String {
 
 /// The links with a cell on grid lines `first..=last`.
 pub fn in_lines<T>(term: &Term<T>, first: Line, last: Line) -> Vec<Link> {
-    // A path an agent broke over a few rows may begin above the first.
+    // A path an agent broke over a few rows may begin above the first; a
+    // diagram's header in view has its lines below it.
     const ABOVE: i32 = 4;
-    let mut links: Vec<Link> = Text::read(term, first - ABOVE, last)
+    const BELOW: i32 = 64;
+    let mut links: Vec<Link> = Text::read(term, first - ABOVE, last + BELOW)
         .links()
         .into_iter()
         .filter(|l| l.cells.iter().any(|c| c.line >= first && c.line <= last))
@@ -165,6 +169,14 @@ impl Text {
                 cells: self.cells(i, n),
             })
             .collect();
+        links.extend(
+            super::mermaid::blocks(&self.chars)
+                .into_iter()
+                .map(|b| Link {
+                    target: Target::Diagram(b.source),
+                    cells: self.cells(b.at, b.len),
+                }),
+        );
         let joined = self.enclosed();
         let end = self.chars.len();
         for (i, n) in paths(&self.chars) {
@@ -584,7 +596,7 @@ mod tests {
         assert_eq!(link(&s, 0, 10).unwrap().target, want);
         let l = link(&s, 1, 4).unwrap();
         assert_eq!(l.target, want);
-        assert_eq!(l.cells.len(), want_len(&want));
+        assert_eq!(l.cells.len(), "/srv/parvi/crates/app/x.rs".chars().count());
         // The indentation is not part of it.
         assert_eq!(link(&s, 1, 0), None);
     }
@@ -631,11 +643,5 @@ mod tests {
         let want = Target::WorkItem("parvi-pnu.7.3".into());
         assert_eq!(link(&s, 0, 4).unwrap().target, want);
         assert_eq!(link(&s, 1, 1).unwrap().target, want);
-    }
-
-    fn want_len(t: &Target) -> usize {
-        match t {
-            Target::Path(p) | Target::Url(p) | Target::WorkItem(p) => p.chars().count(),
-        }
     }
 }

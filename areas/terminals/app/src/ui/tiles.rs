@@ -1758,11 +1758,19 @@ impl Terminals {
     }
 
     /// A link was clicked: an address opens in the browser, a path in the
-    /// file viewer beside, on the device of the window's session.
+    /// file viewer beside, on the device of the window's session, and a
+    /// diagram drawn beside.
     fn open_link(&mut self, i: usize, target: links::Target, cx: &mut Context<Self>) {
-        if let links::Target::Url(url) = target {
-            cx.open_url(&url);
-            return;
+        match target {
+            links::Target::Url(url) => {
+                cx.open_url(&url);
+                return;
+            }
+            links::Target::Diagram(source) => {
+                self.open_diagram(source, cx);
+                return;
+            }
+            _ => {}
         }
         let node = match self.histories.get(&i) {
             Some(h) => Some(h.pane.node.clone()),
@@ -1787,7 +1795,7 @@ impl Terminals {
                 part: None,
                 beside: true,
             },
-            links::Target::Url(_) => unreachable!(),
+            links::Target::Url(_) | links::Target::Diagram(_) => unreachable!(),
         };
         if let Err(e) = self.host.ask(ask, cx) {
             self.report(&e.message, true, None);

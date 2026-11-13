@@ -1975,6 +1975,28 @@ fn a_picture_named_in_a_session_shows_small_and_opens_beside(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+fn a_mermaid_diagram_a_session_prints_draws_small_and_opens_beside(cx: &mut TestAppContext) {
+    let Some(running) = start("terminals-diagram") else {
+        return;
+    };
+    let (_shell, cx, settings) = open_with_alpha(&running, "diagram", cx);
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    // As Claude Code shows a mermaid block: no fences, the body indented.
+    let command = "printf '\\033[2J\\033[Hflowchart LR\\n    A[Build] --> B[Test]\\n\\ndone\\n'";
+    tmux(&running, &["send-keys", "-t", "alpha", command, "Enter"]);
+    until(cx, "the diagram drawn small at its header", |cx| {
+        page.read_with(cx, |p, _| !p.chips.borrow()[0].is_empty())
+    });
+    let chip = page.read_with(cx, |p, _| p.chips.borrow()[0][0].bounds);
+    assert!(cx.debug_bounds("diagram-beside").is_none());
+    cx.simulate_click(chip.center(), Modifiers::none());
+    until(cx, "the diagram drawn beside", |cx| {
+        cx.debug_bounds("diagram-beside").is_some()
+    });
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+#[gpui::test]
 fn selection_copies_when_mouse_releases_outside_the_tile(cx: &mut TestAppContext) {
     let Some(running) = start("terminals-selection-journey") else {
         return;

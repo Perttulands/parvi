@@ -19,6 +19,9 @@ alacritty_terminal = "0.26"
 async-channel = "2"
 image = { version = "0.25", default-features = false }
 log = "0.4"
+# Mermaid diagrams a session prints, drawn here: the common kinds only,
+# each kind adds to the binary.
+merman = { version = "0.10.0", default-features = false, features = ["svg", "diagram-flowchart", "diagram-sequence", "diagram-state", "diagram-class", "diagram-er", "diagram-gantt", "diagram-pie", "diagram-mindmap", "diagram-git-graph", "diagram-journey", "diagram-timeline"] }
 parking_lot = "0.13"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -5,6 +5,7 @@
 //! It answers Send to Session for every page, and asks the page that opens
 //! paths to open one clicked in a terminal.
 
+mod diagram;
 mod harness;
 mod http;
 mod remote;

@@ -74,6 +74,8 @@ pub mod size {
     pub const PICTURE_PREVIEW_W: f32 = 320.;
     pub const PICTURE_PREVIEW_H: f32 = 240.;
     pub const PICTURE_PAD: f32 = 4.;
+    /// Round a diagram drawn whole beside the terminals.
+    pub const DIAGRAM_PAD: f32 = 16.;
     /// Send's target list shows at most this many whole rows, then scrolls.
     pub const SEND_TARGET_ROWS: f32 = 9.;
     /// Terminal font: Settings may pick 12..=20; the fit never goes below

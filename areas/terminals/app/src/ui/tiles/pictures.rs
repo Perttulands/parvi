@@ -1,20 +1,25 @@
-//! Pictures a session's output names: a small one at the right end of the
-//! row that names it, where the row has room; a bigger one while the
-//! pointer rests on the name or the small one; the whole picture in Files
-//! beside on a click, as any path opens. The grid's text never moves.
+//! Pictures a session's output names, and mermaid diagrams it prints: a
+//! small one at the right end of the row that names it (a diagram's header),
+//! where the row has room; a bigger one while the pointer rests on the name
+//! or the small one; on a click the whole picture in Files beside, as any
+//! path opens, or the diagram drawn beside. The grid's text never moves.
 
+use super::super::diagram::DiagramView;
 use super::super::page::Terminals;
+use crate::diagram;
 use crate::http;
 use crate::store::pictures::{self, Key};
 use crate::term::links::{self, Link, Target};
 use crate::term::paint::Metrics;
 use crate::term::screen::Screen;
+use crate::theme::theme;
 use crate::theme::{Theme, size};
 use alacritty_terminal::index::{Column, Line, Point as GridPoint};
 use gpui::{
     App, BorderStyle, Bounds, Context, Entity, Pixels, RenderImage, Window, point, px, quad,
 };
-use parvi_app_kit::host::Request;
+use gpui::{AppContext, ImageFormat, Task};
+use parvi_app_kit::host::{Answer, Request};
 use parvi_core::NodeId;
 use std::sync::Arc;
 
@@ -36,8 +41,15 @@ pub struct Place {
 }
 
 impl Place {
-    fn key(&self, path: &str) -> Key {
-        (self.node.clone(), links::resolve(self.cwd.as_deref(), path))
+    fn key(&self, target: &Target) -> Option<Key> {
+        match target {
+            Target::Path(p) if pictures::format(p).is_some() => Some(Key::File {
+                node: self.node.clone(),
+                path: links::resolve(self.cwd.as_deref(), p),
+            }),
+            Target::Diagram(source) => Some(Key::Diagram(source.clone())),
+            _ => None,
+        }
     }
 }
 
@@ -72,10 +84,7 @@ pub fn paint(
     }
     let named = links::in_lines(&s.term, Line(first - offset), Line(last - offset))
         .into_iter()
-        .filter_map(|l| match &l.target {
-            Target::Path(p) if pictures::format(p).is_some() => Some((place.key(p), l)),
-            _ => None,
-        })
+        .filter_map(|l| Some((place.key(&l.target)?, l)))
         .take(MOST);
     let mut chips: Vec<Chip> = Vec::new();
     let mut preview = None;
@@ -228,7 +237,38 @@ fn small(
     Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
 }
 
+/// How a picture's bytes come: read from its device, or drawn here.
+enum Read {
+    File(Task<Result<Answer, parvi_core::Error>>),
+    Drawn(Task<Option<String>>),
+}
+
 impl Terminals {
+    fn diagram_colours(&self, cx: &App) -> diagram::Colours {
+        let t = theme(cx);
+        diagram::Colours {
+            bg: t.term_bg_rgb,
+            fg: t.term_fg_rgb,
+        }
+    }
+
+    /// A diagram drawn whole beside the terminals.
+    pub(in crate::ui) fn open_diagram(&mut self, source: String, cx: &mut Context<Self>) {
+        let colours = self.diagram_colours(cx);
+        let task = cx
+            .background_executor()
+            .spawn(async move { diagram::svg(&source, colours) });
+        cx.spawn(async move |this, cx| {
+            let svg = task.await;
+            let _ = this.update(cx, |p, cx| {
+                let host = p.host.clone();
+                let view = cx.new(|_| DiagramView::new(host.clone(), svg));
+                host.show_beside(crate::NAME, view.into(), cx);
+            });
+        })
+        .detach();
+    }
+
     /// The picture at `key` if it has been read; asks for it the first time.
     fn picture(&mut self, key: &Key, cx: &mut Context<Self>) -> Option<Arc<RenderImage>> {
         if self.pictures.want(key) {
@@ -241,18 +281,33 @@ impl Terminals {
     }
 
     fn read_picture(&mut self, key: Key, cx: &mut Context<Self>) {
-        let Some(format) = pictures::format(&key.1) else {
-            return;
-        };
-        let path = format!("/api/files/file?path={}", http::enc(&key.1));
-        let task = self
-            .host
-            .request(Request::get(NodeId(key.0.clone()), path), cx);
         let svg = cx.svg_renderer();
+        let (format, read) = match &key {
+            Key::File { node, path } => {
+                let Some(format) = pictures::format(path) else {
+                    return;
+                };
+                let uri = format!("/api/files/file?path={}", http::enc(path));
+                let task = self
+                    .host
+                    .request(Request::get(NodeId(node.clone()), uri), cx);
+                (format, Read::File(task))
+            }
+            Key::Diagram(source) => {
+                let (source, colours) = (source.clone(), self.diagram_colours(cx));
+                let task = cx
+                    .background_executor()
+                    .spawn(async move { diagram::svg(&source, colours).ok() });
+                (ImageFormat::Svg, Read::Drawn(task))
+            }
+        };
         cx.spawn(async move |this, cx| {
-            let bytes = match task.await {
-                Ok(a) if a.ok() => Some(a.body),
-                _ => None,
+            let bytes = match read {
+                Read::File(task) => match task.await {
+                    Ok(a) if a.ok() => Some(a.body),
+                    _ => None,
+                },
+                Read::Drawn(task) => task.await.map(String::into_bytes),
             };
             let image = match bytes {
                 Some(b) => {

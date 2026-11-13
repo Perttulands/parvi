@@ -1,6 +1,7 @@
 //! The page and what it draws.
 
 mod chords;
+mod diagram;
 mod events;
 mod folder_field;
 mod launcher;
