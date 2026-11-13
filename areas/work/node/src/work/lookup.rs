@@ -114,9 +114,11 @@ impl Work {
                 }
             }
         }
+        let mut learnt = false;
         while let Some(asked) = asks.join_next().await {
             let (folder, prefix) = asked.expect("a prefix ask does not panic");
             if let Ok(prefix) = &prefix {
+                learnt = true;
                 self.0
                     .prefixes
                     .lock()
@@ -125,7 +127,40 @@ impl Work {
             }
             known.push((folder, prefix));
         }
+        if learnt {
+            self.0.keep_prefixes();
+        }
         known
+    }
+
+    /// The items `item`'s family names, as their stores were last read and
+    /// without their text: enough to name and place each. Nothing is read
+    /// for it; a store not read yet leaves its items out.
+    pub fn family(&self, item: &Item) -> Vec<Item> {
+        let f = &item.family;
+        let wanted: Vec<&String> = f
+            .parent
+            .iter()
+            .chain(&f.children)
+            .chain(&f.blockers)
+            .chain(&f.blocking)
+            .collect();
+        let stores = self.0.read_stores();
+        let mut out: Vec<Item> = Vec::new();
+        for reference in wanted {
+            let found = stores.iter().flat_map(|items| items.iter()).find(|i| {
+                i.reference == *reference || (!reference.contains(':') && i.id == *reference)
+            });
+            if let Some(found) = found
+                && !out.iter().any(|o| o.reference == found.reference)
+            {
+                out.push(Item {
+                    body: String::new(),
+                    ..found.clone()
+                });
+            }
+        }
+        out
     }
 }
 
@@ -181,6 +216,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_node_started_again_asks_bd_for_no_prefix_it_was_told() {
+        let fake = Fake::new("kept-prefixes", "exit 1", &bd());
+        let projects = stores(&fake, &["tst", "ctx"]);
+        let kept = fake.dir.join("kept");
+        let start = || {
+            Work::keeping(
+                super::super::config::Config {
+                    projects: projects.clone(),
+                },
+                "n1",
+                super::super::github::Gh::new(fake.dir.join("gh").display().to_string()),
+                super::super::beads::Bd::new(fake.dir.join("bd").display().to_string()),
+                Some(kept.clone()),
+            )
+        };
+        start().resolve("tst-1").await.unwrap();
+        assert_eq!(fake.runs("bd").len(), 2, "each store asked once");
+        let again = start();
+        assert!(again.resolve("ctx-1").await.is_ok());
+        assert_eq!(
+            fake.runs("bd").len(),
+            2,
+            "the node started again asked none"
+        );
+    }
+
+    #[tokio::test]
     async fn a_store_whose_prefix_cannot_be_read_stops_resolution() {
         let fake = Fake::new("unreadable", "exit 1", &bd());
         let mut projects = stores(&fake, &["tst"]);
@@ -214,6 +276,19 @@ mod tests {
             .unwrap();
         assert_eq!(bead.title, "Show a failed store as failed");
         assert_eq!(bead.family.blockers.len(), 2);
+        let family: Vec<(String, bool)> = work
+            .family(&bead)
+            .into_iter()
+            .map(|i| (i.id, i.body.is_empty()))
+            .collect();
+        assert_eq!(
+            family,
+            vec![
+                ("tst-qq9".to_string(), true),
+                ("tst-qq9.1".to_string(), true)
+            ],
+            "the parent and the blocker read, without their text; ctx-5t7 is in no store read"
+        );
         assert_eq!(
             work.reference_line(&bead).await,
             format!(

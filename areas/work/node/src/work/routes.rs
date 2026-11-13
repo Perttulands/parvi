@@ -20,8 +20,9 @@ pub fn routes<S: Clone + Send + Sync + 'static>(work: Work) -> Router<S> {
         .with_state(work)
 }
 
-/// `GET /api/work/item?ref=<reference>`: `{"item": …, "line": …}`, where
-/// `line` names the item to an agent; 400 for a reference that does not
+/// `GET /api/work/item?ref=<reference>`: `{"item": …, "line": …,
+/// "family": […]}`, where `line` names the item to an agent and `family`
+/// holds the items its family names as last read, without their text; 400 for a reference that does not
 /// resolve, 404 for a missing item, 502 for a tracker that failed to answer.
 async fn item(State(work): State<Work>, Query(params): Query<HashMap<String, String>>) -> Response {
     let written = params.get("ref").map(String::as_str).unwrap_or("");
@@ -38,7 +39,8 @@ async fn item(State(work): State<Work>, Query(params): Query<HashMap<String, Str
     match work.item(&reference).await {
         Ok(item) => {
             let line = work.reference_line(&item).await;
-            Json(json!({ "item": item, "line": line })).into_response()
+            let family = work.family(&item);
+            Json(json!({ "item": item, "line": line, "family": family })).into_response()
         }
         Err(error) => {
             let (status, code) = if error.downcast_ref::<super::MissingItem>().is_some() {

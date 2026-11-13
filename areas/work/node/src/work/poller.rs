@@ -54,7 +54,8 @@ pub(super) struct Inner {
     /// Where each store's last read is kept across restarts, with its
     /// marker, so a node that starts again reads only what changed.
     kept: Option<std::path::PathBuf>,
-    /// Each store's id prefix, once asked: it does not change.
+    /// Each store's id prefix, once asked: it does not change, so it is
+    /// kept beside the reads and a node that starts again asks bd for none.
     pub(super) prefixes: Mutex<HashMap<String, String>>,
     /// A watcher asked to read everything again now.
     refresh: tokio::sync::Notify,
@@ -124,8 +125,8 @@ impl Work {
             snapshot: watch::Sender::new(Arc::new(snapshot)),
             poll: Mutex::default(),
             stores: Mutex::default(),
+            prefixes: Mutex::new(kept_prefixes(kept.as_deref())),
             kept,
-            prefixes: Mutex::default(),
             refresh: tokio::sync::Notify::new(),
             refreshed: watch::Sender::new(0),
         }))
@@ -276,6 +277,45 @@ impl Inner {
         std::fs::rename(&partial, &file)?;
         Ok(())
     }
+}
+
+impl Inner {
+    /// Every store's Beads as last read, in no order.
+    pub(super) fn read_stores(&self) -> Vec<Arc<Vec<Item>>> {
+        self.stores
+            .lock()
+            .unwrap()
+            .values()
+            .map(|r| r.items.clone())
+            .collect()
+    }
+
+    /// Keeps the prefixes known, beside the kept reads. A prefix not kept is
+    /// asked again next time, so failing to keep it only costs time.
+    pub(super) fn keep_prefixes(&self) {
+        let Some(dir) = &self.kept else {
+            return;
+        };
+        let json = serde_json::to_string(&*self.prefixes.lock().unwrap())
+            .expect("a map of strings is JSON");
+        let file = dir.join(PREFIXES);
+        let partial = file.with_extension("partial");
+        let kept = std::fs::create_dir_all(dir)
+            .and_then(|_| std::fs::write(&partial, json))
+            .and_then(|_| std::fs::rename(&partial, &file));
+        if let Err(e) = kept {
+            eprintln!("work: keeping store prefixes in {}: {e}", file.display());
+        }
+    }
+}
+
+/// The file the stores' prefixes are kept in, beside their reads.
+const PREFIXES: &str = "prefixes.json";
+
+fn kept_prefixes(kept: Option<&std::path::Path>) -> HashMap<String, String> {
+    kept.and_then(|dir| std::fs::read_to_string(dir.join(PREFIXES)).ok())
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default()
 }
 
 fn hex(bytes: &[u8]) -> String {
