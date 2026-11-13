@@ -5,7 +5,7 @@ description: Drive Parvi, the operator's agent workspace, from the command line.
 
 # Parvi
 
-Parvi runs a node in each machine environment. Use `parvi help` for the running local node's commands, `parvi <noun>` for its verbs and `parvi <noun> <verb> --help` for arguments. Commands depend on the areas enabled on that node. Start the node with `parvi serve` if needed. `parvi mcp` exposes the same tools over stdio.
+Parvi runs a node in each machine environment. Use `parvi help` for the running local node's commands, `parvi <noun>` for its verbs and `parvi <noun> <verb> --help` for arguments. Commands depend on the areas enabled on that node. `parvi version` says whether the local node answers; where `parvi install` put it in place it runs as the systemd user unit `parvi`. `parvi mcp` exposes the same tools over stdio.
 
 Commands use `parvi <noun> <verb>`. Required arguments can be positional or named flags; object arguments are JSON. Add `--json` for structured output. Add `--node <id>` to act on a node through the local node, or `--node <url>` to contact a node directly. Without it, commands address the local node. Use the command's help for current arguments and defaults.
 

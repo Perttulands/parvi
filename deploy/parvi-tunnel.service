@@ -1,0 +1,26 @@
+[Unit]
+Description=Parvi Secure MCP Tunnel client (ChatGPT)
+Documentation=file:///srv/parvi/README.md
+After=network-online.target parvi.service
+Wants=network-online.target
+BindsTo=parvi.service
+# Until the tunnel is provisioned the client exits at once; keep retrying.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=PATH=%h/.codex/packages/app-server-daemon/current/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# chmod 600, outside the repository: CONTROL_PLANE_TUNNEL_ID and
+# CONTROL_PLANE_API_KEY.
+EnvironmentFile=-%h/.config/parvi/tunnel.env
+ExecStart=%h/.local/bin/tunnel-client run --profile parvi --profile-dir %h/.config/parvi/tunnel
+Restart=always
+RestartSec=30
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+
+[Install]
+WantedBy=default.target

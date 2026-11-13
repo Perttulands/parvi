@@ -44,7 +44,7 @@ These are the commands advertised by the enabled areas. Run `parvi <noun> <verb>
 
 ## mission
 
-`parvi mission arrange`, `parvi mission create`, `parvi mission delete`, `parvi mission edit`, `parvi mission input`, `parvi mission inspect`, `parvi mission list`, `parvi mission move`, `parvi mission new`, `parvi mission note`, `parvi mission notes`, `parvi mission output`, `parvi mission rename`, `parvi mission run`, `parvi mission update`, `parvi mission validate`, `parvi mission wire`.
+`parvi mission archives`, `parvi mission arrange`, `parvi mission create`, `parvi mission delete`, `parvi mission edit`, `parvi mission input`, `parvi mission inspect`, `parvi mission list`, `parvi mission move`, `parvi mission new`, `parvi mission note`, `parvi mission notes`, `parvi mission output`, `parvi mission purge-archive`, `parvi mission rename`, `parvi mission run`, `parvi mission update`, `parvi mission validate`, `parvi mission wire`.
 
 ## role
 
@@ -52,7 +52,7 @@ These are the commands advertised by the enabled areas. Run `parvi <noun> <verb>
 
 ## run
 
-`parvi run abort`, `parvi run attempts`, `parvi run evidence`, `parvi run gates`, `parvi run land`, `parvi run list`, `parvi run logs`, `parvi run resume`, `parvi run seats`, `parvi run status`, `parvi run wait`.
+`parvi run abort`, `parvi run attempts`, `parvi run delete`, `parvi run evidence`, `parvi run gates`, `parvi run land`, `parvi run list`, `parvi run logs`, `parvi run resume`, `parvi run seats`, `parvi run status`, `parvi run wait`.
 
 ## scheduled
 

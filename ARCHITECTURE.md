@@ -211,6 +211,15 @@ restart signals only the node and a tmux server it started lives on.
   A unit without `KillMode=process` is refused before anything changes.
 - **Version.** A build's version is the package version and its commit
   (`0.0.1+8cdb58b`), in `parvi --version`, `parvi version` and the health.
+- **The address.** A node records the address it bound in its config folder
+  (`listen`), so `parvi` commands on the same machine reach it with no
+  `--node`.
+
+`deploy/` is the operator's own machine: `parvi.service` as
+`parvi install --root ~/.local/share/parvi` wrote it there (listening on
+127.0.0.1:7310, which Windows Tailscale serves as tailnet port 7300), linked
+into `~/.config/systemd/user`, and the ChatGPT tunnel's unit and profile,
+which reach the node's `/mcp`. The `change-parvi` skill has the steps.
 
 `bin/parvi/tests/install.rs` runs both against a stand-in `systemctl` on
 `PATH`, with a node, a tmux server and a session of the test's own.

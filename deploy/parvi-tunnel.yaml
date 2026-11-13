@@ -1,0 +1,21 @@
+# Parvi Secure MCP Tunnel profile, no secrets. CONTROL_PLANE_TUNNEL_ID and
+# CONTROL_PLANE_API_KEY come from ~/.config/parvi/tunnel.env (chmod 600) and
+# override the placeholders. Install:
+#   install -D -m 0644 deploy/parvi-tunnel.yaml ~/.config/parvi/tunnel/parvi.yaml
+config_version: 1
+control_plane:
+  base_url: "https://api.openai.com"
+  tunnel_id: "tunnel_00000000000000000000000000000000"
+  api_key: "env:CONTROL_PLANE_API_KEY"
+health:
+  # Citadel's tunnel has 8791.
+  listen_addr: "127.0.0.1:8792"
+admin_ui:
+  open_browser: false
+log:
+  level: info
+  format: json
+mcp:
+  server_urls:
+    - channel: main
+      url: "http://127.0.0.1:7310/mcp"

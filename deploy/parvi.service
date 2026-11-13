@@ -1,0 +1,20 @@
+# Written by parvi install; parvi upgrade reads ExecStart.
+[Unit]
+Description=Parvi node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+Environment=PATH=/home/perttu/.local/bin:/home/perttu/.npm-global/bin:/home/perttu/.bun/bin:/home/perttu/.local/share/pnpm:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/home/perttu/.cargo/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:/home/perttu/go/bin
+ExecStart=/home/perttu/.local/share/parvi/bin/parvi serve --listen 127.0.0.1:7310
+# Terminal sessions belong to tmux, not to the node. Stopping or restarting
+# the unit signals only the node, so a tmux server it started lives on with
+# every session.
+KillMode=process
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
