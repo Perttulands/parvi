@@ -392,6 +392,12 @@ impl Host {
         self.read(cx, |h| h.beside(self.page)).flatten()
     }
 
+    /// The view beside page `page`, if one is open there: a view shown
+    /// beside another page learns from it whether it still shows.
+    pub fn beside_of(&self, page: &str, cx: &App) -> Option<AnyView> {
+        self.read(cx, |h| h.beside(page)).flatten()
+    }
+
     /// Answers a beside ask ([`Ask::beside`]): `view` opens beside page
     /// `asker`, which draws it where its layout has room, and stays shown.
     pub fn show_beside(&self, asker: &'static str, view: AnyView, cx: &mut App) {

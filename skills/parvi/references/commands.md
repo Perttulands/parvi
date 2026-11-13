@@ -20,7 +20,7 @@ These are the commands advertised by the enabled areas. Run `parvi <noun> <verb>
 
 ## file
 
-`parvi file copy`, `parvi file delete`, `parvi file diff`, `parvi file download`, `parvi file find`, `parvi file list`, `parvi file mkdir`, `parvi file move`, `parvi file projects`, `parvi file read`, `parvi file resume`, `parvi file search`, `parvi file transfer`, `parvi file upload`, `parvi file write`.
+`parvi file copy`, `parvi file delete`, `parvi file diff`, `parvi file download`, `parvi file find`, `parvi file list`, `parvi file locate`, `parvi file mkdir`, `parvi file move`, `parvi file read`, `parvi file recent`, `parvi file resume`, `parvi file search`, `parvi file transfer`, `parvi file upload`, `parvi file write`.
 
 ## formation
 

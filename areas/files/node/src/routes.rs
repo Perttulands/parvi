@@ -23,7 +23,8 @@ pub const MAX_BYTES: u64 = 64 << 20;
 pub fn routes(files: Arc<Files>, drops: Arc<Drops>) -> Router {
     Router::new()
         .route("/api/files/roots", get(roots))
-        .route("/api/files/projects", get(projects))
+        .route("/api/files/recent", get(recent))
+        .route("/api/files/stat", post(stat))
         .route("/api/files/find", get(find))
         .route("/api/files/diff", get(diff))
         .route("/api/files/search", get(search))
@@ -57,12 +58,20 @@ struct NodeQuery {
     node: String,
 }
 
-async fn projects(
+async fn recent(
     State(files): Shared,
     Query(at): Query<NodeQuery>,
-) -> Result<Json<parvi_files_contract::Projects>, FilesError> {
+) -> Result<Json<parvi_files_contract::Recent>, FilesError> {
+    Ok(Json(blocking(&files, &at.node, |f| Ok(f.recent())).await?))
+}
+
+async fn stat(
+    State(files): Shared,
+    Query(at): Query<NodeQuery>,
+    Json(asked): Json<parvi_files_contract::Stat>,
+) -> Result<Json<Vec<Option<u64>>>, FilesError> {
     Ok(Json(
-        blocking(&files, &at.node, |f| disk::projects(&f.roots)).await?,
+        blocking(&files, &at.node, move |f| Ok(f.stat(&asked.paths))).await?,
     ))
 }
 
@@ -125,10 +134,7 @@ async fn find(
     State(files): Shared,
     Query(at): Query<Search>,
 ) -> Result<Json<super::find::Matches>, FilesError> {
-    let result = blocking(&files, &at.node, move |f| {
-        super::find::search(&f.roots, &at.path, &at.q, false)
-    })
-    .await?;
+    let result = blocking(&files, &at.node, move |f| f.find(&at.path, &at.q, false)).await?;
     Ok(Json(result))
 }
 

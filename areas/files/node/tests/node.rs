@@ -231,7 +231,7 @@ async fn exact_commands_are_exposed_to_mcp_and_cli_and_operate_on_files() {
         "file_list",
         "file_read",
         "file_diff",
-        "file_projects",
+        "file_recent",
         "file_download",
         "file_upload",
         "file_write",
@@ -239,6 +239,7 @@ async fn exact_commands_are_exposed_to_mcp_and_cli_and_operate_on_files() {
         "file_move",
         "file_delete",
         "file_find",
+        "file_locate",
         "file_search",
         "file_copy",
         "file_resume",
@@ -438,7 +439,7 @@ async fn files_cli_browses_finds_edits_and_deletes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn files_cli_lists_projects_and_round_trips_binary() {
+async fn files_cli_finds_recent_changes_and_names_and_round_trips_binary() {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     let root = parvi_testkit::fresh_dir("files-cli-binary");
     let project = root.join("repo");
@@ -454,7 +455,7 @@ async fn files_cli_lists_projects_and_round_trips_binary() {
         cli::run(
             "file",
             &[
-                "projects".into(),
+                "recent".into(),
                 "--json".into(),
                 "--node".into(),
                 node.url()
@@ -465,8 +466,34 @@ async fn files_cli_lists_projects_and_round_trips_binary() {
         .unwrap(),
         0
     );
-    let projects: Value = serde_json::from_slice(&out).unwrap();
-    assert_eq!(projects["groups"][0]["projects"][0]["name"], "repo");
+    let recent: Value = serde_json::from_slice(&out).unwrap();
+    assert!(
+        recent["files"][0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("repo/README.md"),
+        "{recent}"
+    );
+    out.clear();
+    assert_eq!(
+        cli::run(
+            "file",
+            &[
+                "locate".into(),
+                "read".into(),
+                "--json".into(),
+                "--node".into(),
+                node.url()
+            ],
+            &mut out
+        )
+        .await
+        .unwrap(),
+        0
+    );
+    let found: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(found["matches"][0]["name"], "README.md", "{found}");
+    out.clear();
     let dest = project.join("data.bin");
     let bytes = [0, 0xff, 0x80, 42];
     let data = STANDARD.encode(bytes);

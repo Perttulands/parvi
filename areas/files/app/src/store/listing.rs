@@ -1,41 +1,9 @@
-//! What a pane shows of a folder: folders first, then files, each with the
-//! hidden (dot) ones after the rest, by the chosen column in natural order
-//! (`file2` before `file10`), filtered by name.
+//! What the tree shows of a folder: folders first, then files, each with
+//! the hidden (dot) ones after the rest, in natural order (`file2` before
+//! `file10`).
 
 use parvi_files_contract::Entry;
 use std::cmp::Ordering;
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum Column {
-    #[default]
-    Name,
-    Size,
-    Modified,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct Sort {
-    pub by: Column,
-    pub descending: bool,
-}
-
-impl Sort {
-    /// A header click: the same column turns, another starts ascending
-    /// (newest and largest first for those).
-    pub fn toggled(self, by: Column) -> Self {
-        if self.by == by {
-            Self {
-                by,
-                descending: !self.descending,
-            }
-        } else {
-            Self {
-                by,
-                descending: by != Column::Name,
-            }
-        }
-    }
-}
 
 /// Compares names as people count: digit runs by value, the rest without case.
 pub fn natural(a: &str, b: &str) -> Ordering {
@@ -66,32 +34,22 @@ pub fn natural(a: &str, b: &str) -> Ordering {
     }
 }
 
-/// The entries a pane lists, in order.
 /// A copy's staging folder (docs/files.md, Bridge): the node keeps it
 /// beside the copy, but it is the node's bookkeeping, not the operator's.
 pub const STAGING: &str = ".parvi-transfer-";
 
-pub fn shown<'a>(entries: &'a [Entry], filter: &str, sort: Sort) -> Vec<&'a Entry> {
-    let q = filter.trim().to_lowercase();
+/// The entries a folder shows, in order.
+pub fn shown(entries: &[Entry]) -> Vec<&Entry> {
     let mut out: Vec<&Entry> = entries
         .iter()
         .filter(|e| !(e.folder && e.name.starts_with(STAGING)))
-        .filter(|e| q.is_empty() || e.name.to_lowercase().contains(&q))
         .collect();
     out.sort_by(|a, b| {
         let hidden = |e: &Entry| e.name.starts_with('.');
         b.folder
             .cmp(&a.folder)
             .then(hidden(a).cmp(&hidden(b)))
-            .then_with(|| {
-                let o = match sort.by {
-                    Column::Name => Ordering::Equal,
-                    Column::Size => a.size.cmp(&b.size),
-                    Column::Modified => a.modified.cmp(&b.modified),
-                }
-                .then_with(|| natural(&a.name, &b.name));
-                if sort.descending { o.reverse() } else { o }
-            })
+            .then_with(|| natural(&a.name, &b.name))
     });
     out
 }
@@ -100,12 +58,12 @@ pub fn shown<'a>(entries: &'a [Entry], filter: &str, sort: Sort) -> Vec<&'a Entr
 mod tests {
     use super::*;
 
-    fn e(name: &str, folder: bool, size: u64, modified: u64) -> Entry {
+    fn e(name: &str, folder: bool) -> Entry {
         Entry {
             name: name.into(),
             folder,
-            size,
-            modified,
+            size: 1,
+            modified: 1,
         }
     }
 
@@ -117,38 +75,17 @@ mod tests {
     }
 
     #[test]
-    fn folders_first_then_the_column() {
+    fn folders_first_then_hidden_last_by_name() {
         let list = [
-            e("b.txt", false, 5, 3),
-            e("z", true, 0, 1),
-            e("a.txt", false, 50, 2),
-            e("c", true, 0, 9),
-            e(".cache", true, 0, 9),
-            e(".bashrc", false, 1, 1),
-            e(
-                ".parvi-transfer-0123456789abcdef0123456789abcdef",
-                true,
-                0,
-                9,
-            ),
+            e("b10.txt", false),
+            e("z", true),
+            e("b9.txt", false),
+            e("c", true),
+            e(".cache", true),
+            e(".bashrc", false),
+            e(".parvi-transfer-0123456789abcdef0123456789abcdef", true),
         ];
-        let names = |s: Sort, f: &str| -> Vec<String> {
-            shown(&list, f, s).iter().map(|e| e.name.clone()).collect()
-        };
-        assert_eq!(
-            names(Sort::default(), ""),
-            ["c", "z", ".cache", "a.txt", "b.txt", ".bashrc"]
-        );
-        let by_size = Sort::default().toggled(Column::Size);
-        assert!(by_size.descending);
-        assert_eq!(
-            names(by_size, ""),
-            ["z", "c", ".cache", "a.txt", "b.txt", ".bashrc"]
-        );
-        assert_eq!(
-            names(by_size.toggled(Column::Size), ""),
-            ["c", "z", ".cache", "b.txt", "a.txt", ".bashrc"]
-        );
-        assert_eq!(names(Sort::default(), "TXT"), ["a.txt", "b.txt"]);
+        let names: Vec<&str> = shown(&list).iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["c", "z", ".cache", "b9.txt", "b10.txt", ".bashrc"]);
     }
 }

@@ -45,8 +45,8 @@ pub fn commands(files: Arc<Files>, home: Option<PathBuf>) -> Vec<Command> {
             &["path"],
         ),
         (
-            "file_projects",
-            "List repositories beneath configured roots.",
+            "file_recent",
+            "List the files changed most recently under the roots.",
             &[],
             &[],
         ),
@@ -86,6 +86,12 @@ pub fn commands(files: Arc<Files>, home: Option<PathBuf>) -> Vec<Command> {
             "Find names under a folder.",
             &["path", "query"],
             &["path", "query"],
+        ),
+        (
+            "file_locate",
+            "Find files under every root by words in their path, names first.",
+            &["query"],
+            &["query"],
         ),
         (
             "file_search",
@@ -206,8 +212,12 @@ fn work(name: &str, files: &Files, home: Option<&Path>, args: &Value) -> Result<
     if name == "file_list" && maybe_text(args, "path").map_err(bad)?.is_none() {
         return Ok(json!({"node":node,"roots":files.roots()}));
     }
-    if name == "file_projects" {
-        return serde_json::to_value(crate::disk::projects(&files.roots)?).map_err(bad);
+    if name == "file_recent" {
+        return serde_json::to_value(files.recent()).map_err(bad);
+    }
+    if name == "file_locate" {
+        let query = text(args, "query").map_err(bad)?;
+        return serde_json::to_value(files.find("", query, false)?).map_err(bad);
     }
     let at = path(args, "path", home)?;
     match name {

@@ -55,22 +55,25 @@ pub struct NodeRoots {
     pub roots: Vec<Root>,
 }
 
+/// A file and when it last changed, in milliseconds since the Unix epoch.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct Projects {
-    pub groups: Vec<ProjectGroup>,
-}
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct ProjectGroup {
-    pub parent: String,
-    pub projects: Vec<Project>,
-}
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct Project {
-    pub name: String,
+pub struct Changed {
     pub path: String,
-    pub documents: Vec<String>,
+    pub modified: u64,
+}
+
+/// The files changed most recently under the roots, newest first.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct Recent {
+    pub files: Vec<Changed>,
+}
+
+/// When each of some paths last changed: what a view that shows them asks
+/// to learn whether to read them again. A path that is gone (or outside
+/// the roots) has none.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct Stat {
+    pub paths: Vec<String>,
 }
 
 /// A copy started on this node.
@@ -114,6 +117,8 @@ pub struct SaveAt {
 pub struct Search {
     #[serde(default)]
     pub node: String,
+    /// The folder searched; a name find without one looks under every root.
+    #[serde(default)]
     pub path: String,
     pub q: String,
 }

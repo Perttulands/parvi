@@ -448,7 +448,10 @@ impl Shell {
                 } else {
                     ""
                 }))
-                .child(div().flex_1().child(label))
+                .child({
+                    let name = format!("menu-label-{}", row.label);
+                    div().flex_1().debug_selector(move || name).child(label)
+                })
                 .children(
                     row.chord
                         .clone()

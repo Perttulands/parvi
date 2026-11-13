@@ -53,6 +53,22 @@ pub fn modified(ms: u64) -> String {
     modified_at(ms, parvi_app_kit::hub::now_ms(), offset())
 }
 
+/// How long ago, in a few letters: `now`, `4m`, `3h`, `2d`, then the date.
+pub fn ago_at(ms: u64, now: u64, offset: UtcOffset) -> String {
+    let s = now.saturating_sub(ms) / 1000;
+    match s {
+        0..60 => "now".into(),
+        60..3600 => format!("{}m", s / 60),
+        3600..86_400 => format!("{}h", s / 3600),
+        86_400..604_800 => format!("{}d", s / 86_400),
+        _ => modified_at(ms, now, offset),
+    }
+}
+
+pub fn ago(ms: u64) -> String {
+    ago_at(ms, parvi_app_kit::hub::now_ms(), offset())
+}
+
 /// `9 s left`, `4 min left`, `2 h left`.
 pub fn left(seconds: f64) -> String {
     let s = seconds.max(0.).round() as u64;
@@ -75,6 +91,17 @@ mod tests {
         assert_eq!(size(2048), "2 KB");
         assert_eq!(size(763 << 20), "763 MB");
         assert_eq!(size(1_267_000_000), "1.18 GB");
+    }
+
+    #[test]
+    fn ages() {
+        let now = 1_800_000_000_000;
+        let o = UtcOffset::UTC;
+        assert_eq!(ago_at(now - 5_000, now, o), "now");
+        assert_eq!(ago_at(now - 4 * 60_000, now, o), "4m");
+        assert_eq!(ago_at(now - 3 * 3_600_000, now, o), "3h");
+        assert_eq!(ago_at(now - 2 * 86_400_000, now, o), "2d");
+        assert_eq!(ago_at(now - 30 * 86_400_000, now, o), "Dec 16 2026");
     }
 
     #[test]

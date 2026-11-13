@@ -55,6 +55,8 @@ pub struct Code {
     redo: Vec<(String, Range<usize>)>,
     last_edit: Option<Instant>,
     selecting: bool,
+    /// Show the last lines once the view knows how many it holds.
+    end_pending: bool,
     /// Where the text (after the gutter) was last drawn, and its metrics.
     area: Option<Bounds<Pixels>>,
     char_w: Pixels,
@@ -123,6 +125,7 @@ impl Code {
             redo: vec![],
             last_edit: None,
             selecting: false,
+            end_pending: false,
             area: None,
             char_w: px(8.),
         }
@@ -169,9 +172,39 @@ impl Code {
         self.marked = None;
         self.top = 0.;
         self.left = px(0.);
+        self.end_pending = false;
         self.undo.clear();
         self.redo.clear();
         cx.notify();
+    }
+
+    /// Shows new text where the reader was: the same first line, or still
+    /// the end while the end was in view, so a log being written follows.
+    pub fn reload(&mut self, text: &str, cx: &mut Context<Self>) {
+        let (follow, top, left) = (self.at_end(), self.top, self.left);
+        self.set(text, cx);
+        if follow {
+            self.show_end(cx);
+        } else {
+            self.top = top.min(self.starts.len().saturating_sub(1) as f32);
+            self.left = left;
+        }
+    }
+
+    /// Whether the last line is in view.
+    pub fn at_end(&self) -> bool {
+        self.top_line() + self.rows_in_view() >= self.starts.len()
+    }
+
+    /// Scrolls so the last lines fill the view.
+    pub fn show_end(&mut self, cx: &mut Context<Self>) {
+        self.top = self.end_top();
+        self.end_pending = self.area.is_none();
+        cx.notify();
+    }
+
+    fn end_top(&self) -> f32 {
+        self.starts.len().saturating_sub(self.rows_in_view()) as f32
     }
 
     /// Gives the view the keyboard.
@@ -1016,10 +1049,18 @@ impl Element for CodeElement {
             });
         });
         let (area, char_w) = (p.area, p.char_w);
-        self.code.update(cx, |c, _| {
+        let moved = self.code.update(cx, |c, _| {
             c.area = Some(area);
             c.char_w = char_w;
+            // The end was asked for before the view knew its height.
+            std::mem::take(&mut c.end_pending) && {
+                c.top = c.end_top();
+                true
+            }
         });
+        if moved {
+            window.refresh();
+        }
     }
 }
 

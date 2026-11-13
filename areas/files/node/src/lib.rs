@@ -7,6 +7,7 @@ pub mod drops;
 pub mod error;
 pub mod find;
 mod identity;
+mod index;
 mod receive;
 pub mod roots;
 #[cfg(test)]
@@ -27,6 +28,7 @@ pub struct Files {
     roots: roots::Roots,
     jobs: bridge::Jobs,
     receiving: Mutex<()>,
+    index: Arc<index::Index>,
 }
 
 impl Files {
@@ -37,6 +39,7 @@ impl Files {
             roots: roots::Roots::new(roots, home)?,
             jobs: Mutex::default(),
             receiving: Mutex::default(),
+            index: Arc::default(),
         })
     }
 
@@ -71,8 +74,22 @@ impl Files {
     pub fn delete(&self, path: &str) -> Result<(), FilesError> {
         disk::delete(&self.roots, path)
     }
+    /// Names (or, with `content`, text) under `path`; a name find with no
+    /// path looks under every root.
     pub fn find(&self, path: &str, query: &str, content: bool) -> Result<Matches, FilesError> {
+        if path.is_empty() && !content {
+            return Ok(self.index.find(&self.roots, query));
+        }
         find::search(&self.roots, path, query, content)
+    }
+    /// The files changed most recently under the roots.
+    pub fn recent(&self) -> parvi_files_contract::Recent {
+        parvi_files_contract::Recent {
+            files: self.index.recent(&self.roots),
+        }
+    }
+    pub fn stat(&self, paths: &[String]) -> Vec<Option<u64>> {
+        disk::stat(&self.roots, paths)
     }
     pub fn diff(&self, path: &str) -> Result<parvi_files_contract::Diff, FilesError> {
         diff::read(&self.roots, path)
@@ -119,7 +136,7 @@ pub const LISTING: AreaListing = AreaListing {
         "file_list",
         "file_read",
         "file_diff",
-        "file_projects",
+        "file_recent",
         "file_download",
         "file_upload",
         "file_write",
@@ -127,6 +144,7 @@ pub const LISTING: AreaListing = AreaListing {
         "file_move",
         "file_delete",
         "file_find",
+        "file_locate",
         "file_search",
         "file_copy",
         "file_resume",

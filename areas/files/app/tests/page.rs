@@ -68,90 +68,6 @@ fn toy(
     parvi_app_kit::mount(host, window, cx, |_, _, _| Toy)
 }
 
-#[gpui::test]
-fn files_dock_browses_sends_and_remembers_beside_a_page(cx: &mut TestAppContext) {
-    let root = parvi_testkit::fresh_dir("files-dock");
-    std::fs::create_dir(root.join("folder")).unwrap();
-    let file = root.join("folder/note.txt");
-    std::fs::write(&file, "hello").unwrap();
-    let running = start(root.clone());
-    cx.executor().allow_parking();
-    cx.update(parvi_app_shell::prepare);
-    let url = running.url.clone();
-    let settings = root.join("settings.json");
-    let (shell, cx) = cx.add_window_view(move |w, cx| {
-        parvi_app_shell::start(
-            &[toy, parvi_files_app::build],
-            Some(url),
-            Some(settings),
-            w,
-            cx,
-        )
-    });
-    until(cx, "node connected", |cx| {
-        shell.read_with(cx, |s, cx| {
-            !parvi_app_kit::Host::new(s.hub()).nodes(cx).is_empty()
-        })
-    });
-    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy"));
-    assert!(shell.update(cx, |s, cx| {
-        parvi_app_kit::chords::rows(&s.chords(cx))
-            .iter()
-            .any(|row| row.label == "Files panel")
-    }));
-    cx.simulate_keystrokes("alt-o");
-    until(cx, "dock folder", |cx| {
-        cx.debug_bounds("file-row-folder").is_some()
-    });
-    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy"));
-    click(cx, "file-row-folder");
-    until(cx, "dock file", |cx| {
-        cx.debug_bounds("file-row-note.txt").is_some()
-    });
-    let modified = std::fs::metadata(&file)
-        .unwrap()
-        .modified()
-        .unwrap()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64;
-    let date = parvi_files_app::store::format::modified(modified);
-    let name = cx.debug_bounds("file-name-note.txt").expect("name drawn");
-    let size = cx
-        .debug_bounds("file-size-note.txt-5 B")
-        .expect("size drawn");
-    let date_selector: &'static str =
-        Box::leak(format!("file-modified-note.txt-{date}").into_boxed_str());
-    let modified = cx.debug_bounds(date_selector).expect("modified time drawn");
-    assert!(name.right() <= size.left() && size.right() <= modified.left());
-    click(cx, "file-row-note.txt");
-    until(cx, "dock viewer", |cx| {
-        cx.debug_bounds("files-send").is_some()
-    });
-    SENT.with(|sent| *sent.borrow_mut() = None);
-    click(cx, "files-send");
-    until(cx, "sent reference", |_| {
-        SENT.with(|sent| sent.borrow().is_some())
-    });
-    assert_eq!(
-        SENT.with(|sent| sent.borrow().clone()),
-        Some(format!("path {}", file.display()))
-    );
-    cx.simulate_keystrokes("alt-o");
-    assert!(cx.debug_bounds("dock-files").is_none());
-    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy"));
-    cx.simulate_keystrokes("alt-o");
-    until(cx, "remembered file", |cx| {
-        cx.debug_bounds("file-view-note.txt").is_some() && cx.debug_bounds("files-send").is_some()
-    });
-    click(cx, "files-back");
-    until(cx, "back to the folder", |cx| {
-        cx.debug_bounds("file-row-note.txt").is_some() && cx.debug_bounds("files-send").is_none()
-    });
-    drop(running);
-    std::fs::remove_dir_all(root).unwrap();
-}
-
 struct Running {
     url: String,
     node: String,
@@ -202,7 +118,161 @@ fn start_with_terminal(root: std::path::PathBuf, socket: Option<std::path::PathB
     }
 }
 
-/// Browse, find, edit and send the saved file to a real scratch session.
+fn until(
+    cx: &mut VisualTestContext,
+    what: &str,
+    mut ok: impl FnMut(&mut VisualTestContext) -> bool,
+) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        cx.run_until_parked();
+        if ok(cx) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+fn click(cx: &mut VisualTestContext, id: &'static str) {
+    let point = cx
+        .debug_bounds(id)
+        .unwrap_or_else(|| panic!("missing {id}"))
+        .center();
+    cx.simulate_click(point, Modifiers::none());
+}
+fn leak(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+/// The menu on a row, from a right click.
+fn menu_on(cx: &mut VisualTestContext, row: &'static str) {
+    let at = cx.debug_bounds(row).expect("row").center();
+    cx.simulate_mouse_down(at, gpui::MouseButton::Right, Modifiers::none());
+    until(cx, "row menu", |cx| {
+        cx.debug_bounds("menu-label-Copy path").is_some()
+    });
+}
+/// Clicks a row of the open menu by its words.
+fn menu(cx: &mut VisualTestContext, label: &str) {
+    click(cx, leak(format!("menu-label-{label}")));
+}
+fn drop_files(cx: &mut VisualTestContext, row: &'static str, files: Vec<std::path::PathBuf>) {
+    let position = cx.debug_bounds(row).expect("drop target").center();
+    cx.simulate_event(gpui::FileDropEvent::Entered {
+        position,
+        paths: gpui::ExternalPaths(files.into_iter().collect()),
+    });
+    cx.simulate_event(gpui::FileDropEvent::Submit { position });
+}
+/// What the window's status says now.
+fn status(shell: &gpui::Entity<parvi_app_shell::Shell>, cx: &mut VisualTestContext) -> String {
+    shell.read_with(cx, |s, cx| {
+        s.hub()
+            .read(cx)
+            .status
+            .as_ref()
+            .map(|s| s.text.clone())
+            .unwrap_or_default()
+    })
+}
+/// The page's tree, read: its first root open.
+fn tree(cx: &mut VisualTestContext, row: &'static str) {
+    until(cx, "the tree", |cx| cx.debug_bounds(row).is_some());
+}
+/// Lets the page's watch look once.
+fn watch_once(cx: &mut VisualTestContext) {
+    cx.executor().advance_clock(Duration::from_secs(3));
+    cx.run_until_parked();
+}
+fn kept(
+    shell: &gpui::Entity<parvi_app_shell::Shell>,
+    cx: &mut VisualTestContext,
+) -> parvi_files_app::store::Kept {
+    shell.read_with(cx, |s, cx| {
+        s.hub()
+            .read(cx)
+            .settings
+            .section::<parvi_files_app::store::Kept>("files")
+            .unwrap_or_default()
+    })
+}
+fn modified(path: &std::path::Path, seconds_ago: u64) {
+    let file = std::fs::File::options().write(true).open(path).unwrap();
+    file.set_modified(std::time::SystemTime::now() - Duration::from_secs(seconds_ago))
+        .unwrap();
+}
+
+#[gpui::test]
+fn files_dock_browses_sends_and_remembers_beside_a_page(cx: &mut TestAppContext) {
+    let root = parvi_testkit::fresh_dir("files-dock");
+    std::fs::create_dir(root.join("folder")).unwrap();
+    let file = root.join("folder/note.txt");
+    std::fs::write(&file, "hello").unwrap();
+    let running = start(root.clone());
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let url = running.url.clone();
+    let settings = root.join("settings.json");
+    let (shell, cx) = cx.add_window_view(move |w, cx| {
+        parvi_app_shell::start(
+            &[toy, parvi_files_app::build],
+            Some(url),
+            Some(settings),
+            w,
+            cx,
+        )
+    });
+    until(cx, "node connected", |cx| {
+        shell.read_with(cx, |s, cx| {
+            !parvi_app_kit::Host::new(s.hub()).nodes(cx).is_empty()
+        })
+    });
+    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy"));
+    assert!(shell.update(cx, |s, cx| {
+        parvi_app_kit::chords::rows(&s.chords(cx))
+            .iter()
+            .any(|row| row.label == "Files panel")
+    }));
+    cx.simulate_keystrokes("alt-o");
+    tree(cx, "file-row-folder");
+    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy"));
+    click(cx, "file-row-folder");
+    tree(cx, "file-row-note.txt");
+    let dock = cx.debug_bounds("dock-files").expect("dock drawn");
+    let row = cx.debug_bounds("file-row-note.txt").unwrap();
+    assert!(
+        row.left() >= dock.left() && row.right() <= dock.right(),
+        "the folder's rows stay inside the dock"
+    );
+    click(cx, "file-row-note.txt");
+    until(cx, "dock viewer, its file read", |cx| {
+        cx.debug_bounds("files-edit").is_some()
+    });
+    SENT.with(|sent| *sent.borrow_mut() = None);
+    click(cx, "files-send");
+    until(cx, "sent reference", |_| {
+        SENT.with(|sent| sent.borrow().is_some())
+    });
+    assert_eq!(
+        SENT.with(|sent| sent.borrow().clone()),
+        Some(format!("path {}", file.display()))
+    );
+    cx.simulate_keystrokes("alt-o");
+    assert!(cx.debug_bounds("dock-files").is_none());
+    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy"));
+    cx.simulate_keystrokes("alt-o");
+    until(cx, "remembered file", |cx| {
+        cx.debug_bounds("file-view-note.txt").is_some() && cx.debug_bounds("files-send").is_some()
+    });
+    click(cx, "files-back");
+    until(cx, "back to the tree", |cx| {
+        cx.debug_bounds("file-row-note.txt").is_some() && cx.debug_bounds("files-send").is_none()
+    });
+    drop(running);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// The dock opens at the focused session's folder; a find there reaches
+/// names and text; a path the session prints opens beside it.
 #[cfg(unix)]
 #[gpui::test]
 fn terminal_dock_search_and_printed_path_open_beside(cx: &mut TestAppContext) {
@@ -212,6 +282,7 @@ fn terminal_dock_search_and_printed_path_open_beside(cx: &mut TestAppContext) {
     };
     let root = parvi_testkit::fresh_dir("files-finish-terminal-root");
     std::fs::create_dir(root.join("sub")).unwrap();
+    std::fs::create_dir(root.join("other")).unwrap();
     let file = root.join("sub/note.txt");
     std::fs::write(
         &file,
@@ -249,7 +320,7 @@ fn terminal_dock_search_and_printed_path_open_beside(cx: &mut TestAppContext) {
             cx,
         )
     });
-    let row: &'static str = Box::leak(format!("row-{}::alpha", running.node).into_boxed_str());
+    let row = leak(format!("row-{}::alpha", running.node));
     until(cx, "terminal session", |cx| cx.debug_bounds(row).is_some());
     click(cx, row);
     until(cx, "attach", |cx| cx.debug_bounds("peek-attach").is_some());
@@ -258,34 +329,38 @@ fn terminal_dock_search_and_printed_path_open_beside(cx: &mut TestAppContext) {
     until(cx, "terminal painted", |cx| {
         terminal.read_with(cx, |p, _| p.geo.borrow()[0].origin.is_some())
     });
-    // The dock opens at the session's folder.
+    // The dock opens at the session's folder, picked.
     cx.simulate_keystrokes("alt-o");
     until(cx, "dock at the session's folder", |cx| {
-        cx.debug_bounds("file-row-note.txt").is_some()
+        cx.debug_bounds("file-row-note.txt").is_some() && cx.debug_bounds("picked-sub").is_some()
     });
     assert_eq!(
         shell.read_with(cx, |s, _| s.shown_page()),
         Some("terminals")
     );
-    click(cx, "files-up");
-    until(cx, "back at root", |cx| {
-        cx.debug_bounds("file-row-sub").is_some()
-    });
+    assert!(
+        cx.debug_bounds("file-row-other").is_some(),
+        "the root shows"
+    );
     click(cx, "files-search");
     cx.simulate_input("note");
     cx.run_until_parked();
     cx.executor().advance_clock(Duration::from_millis(300));
     until(cx, "name hit", |cx| {
-        cx.debug_bounds("find-label-sub/note.txt").is_some()
+        cx.debug_bounds("hit-note.txt").is_some()
     });
     click(cx, "files-search");
     cx.simulate_keystrokes("ctrl-a");
     cx.simulate_input("find marker");
-    click(cx, "search-mode");
-    until(cx, "content hit", |cx| {
-        cx.debug_bounds("find-label-sub/note.txt:12").is_some()
+    cx.executor().advance_clock(Duration::from_millis(300));
+    until(cx, "a find in the text offered", |cx| {
+        cx.debug_bounds("files-in-text").is_some()
     });
-    click(cx, "find-result-note.txt");
+    click(cx, "files-in-text");
+    until(cx, "content hit", |cx| {
+        cx.debug_bounds("hit-note.txt:12").is_some()
+    });
+    click(cx, "hit-note.txt:12");
     until(cx, "dock file", |cx| {
         cx.debug_bounds("file-view-note.txt").is_some()
             && cx.debug_bounds("files-code-top-9").is_some()
@@ -337,6 +412,7 @@ fn terminal_dock_search_and_printed_path_open_beside(cx: &mut TestAppContext) {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// The whole job: find a file by name, edit it, save it, send it.
 #[cfg(unix)]
 #[gpui::test]
 fn browse_find_edit_save_and_send_to_a_session(cx: &mut TestAppContext) {
@@ -370,7 +446,7 @@ fn browse_find_edit_save_and_send_to_a_session(cx: &mut TestAppContext) {
             cx,
         )
     });
-    let row: &'static str = Box::leak(format!("row-{}::alpha", running.node).into_boxed_str());
+    let row = leak(format!("row-{}::alpha", running.node));
     until(cx, "session in rail", |cx| cx.debug_bounds(row).is_some());
     click(cx, row);
     until(cx, "attach session", |cx| {
@@ -378,22 +454,18 @@ fn browse_find_edit_save_and_send_to_a_session(cx: &mut TestAppContext) {
     });
     click(cx, "peek-attach");
     click(cx, "tab-files");
-    browse_root(cx);
-    until(cx, "folder", |cx| {
-        cx.debug_bounds("file-row-folder").is_some()
-    });
-    click(cx, "file-row-folder");
-    until(cx, "folder listing", |cx| {
-        cx.debug_bounds("file-row-needle.txt").is_some()
-    });
+    tree(cx, "file-row-folder");
+    // Part of its name and Enter open it.
     cx.simulate_keystrokes("/");
     cx.simulate_input("needle");
-    cx.simulate_keystrokes("enter");
+    cx.executor().advance_clock(Duration::from_millis(300));
     until(cx, "search result", |cx| {
-        cx.debug_bounds("find-result-needle.txt").is_some()
+        cx.debug_bounds("hit-needle.txt").is_some()
     });
-    click(cx, "find-result-needle.txt");
-    until(cx, "viewer", |cx| cx.debug_bounds("files-edit").is_some());
+    cx.simulate_keystrokes("enter");
+    until(cx, "viewer", |cx| {
+        cx.debug_bounds("file-view-needle.txt").is_some() && cx.debug_bounds("files-edit").is_some()
+    });
     click(cx, "files-edit");
     until(cx, "editor", |cx| cx.debug_bounds("files-save").is_some());
     cx.simulate_keystrokes("ctrl-a");
@@ -401,6 +473,10 @@ fn browse_find_edit_save_and_send_to_a_session(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("ctrl-s");
     until(cx, "saved file", |_| {
         std::fs::read(&file).ok().as_deref() == Some(b"after")
+    });
+    cx.simulate_keystrokes("escape");
+    until(cx, "reading again", |cx| {
+        cx.debug_bounds("files-send").is_some()
     });
     click(cx, "files-send");
     until(cx, "send drawer", |cx| cx.debug_bounds("send-go").is_some());
@@ -416,57 +492,23 @@ fn browse_find_edit_save_and_send_to_a_session(cx: &mut TestAppContext) {
     drop(running);
     std::fs::remove_dir_all(root).unwrap();
 }
-fn until(
-    cx: &mut VisualTestContext,
-    what: &str,
-    mut ok: impl FnMut(&mut VisualTestContext) -> bool,
-) {
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        cx.run_until_parked();
-        if ok(cx) {
-            return;
-        }
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-fn click(cx: &mut VisualTestContext, id: &'static str) {
-    let point = cx
-        .debug_bounds(id)
-        .unwrap_or_else(|| panic!("missing {id}"))
-        .center();
-    cx.simulate_click(point, Modifiers::none());
-}
 
-fn browse_root(cx: &mut VisualTestContext) {
-    until(cx, "root browser", |cx| {
-        cx.debug_bounds("files-browse-root-0").is_some()
-            || cx.debug_bounds("files-search").is_some()
-    });
-    if cx.debug_bounds("files-browse-root-0").is_some() {
-        click(cx, "files-browse-root-0");
-    }
-}
-
+/// What changed most recently comes first, newest at the top, and opens
+/// in one click; the files it names show where they are only when asked.
 #[gpui::test]
-fn projects_landing_groups_repositories_sessions_and_scopes_find(cx: &mut TestAppContext) {
-    let root = parvi_testkit::fresh_dir("files-projects-landing");
-    for dir in [
-        "one", "two", "plain", "three", "four", "five", "six", "seven", "eight",
+fn recent_changes_come_first_and_open_in_one_click(cx: &mut TestAppContext) {
+    let root = parvi_testkit::fresh_dir("files-recent");
+    std::fs::create_dir_all(root.join("deep/down")).unwrap();
+    std::fs::create_dir(root.join(".hidden")).unwrap();
+    for (name, ago) in [
+        ("old.txt", 3000),
+        ("deep/down/report.md", 10),
+        ("middle.txt", 100),
+        (".hidden/secret.txt", 1),
     ] {
-        std::fs::create_dir(root.join(dir)).unwrap();
+        std::fs::write(root.join(name), name).unwrap();
+        modified(&root.join(name), ago);
     }
-    for dir in ["three", "four", "five", "six", "seven", "eight"] {
-        std::fs::create_dir(root.join(dir).join(".git")).unwrap();
-    }
-    std::fs::create_dir(root.join("one/.git")).unwrap();
-    std::fs::write(root.join("two/.git"), "gitdir: elsewhere").unwrap();
-    std::fs::write(root.join("one/README.md"), "readme").unwrap();
-    std::fs::write(root.join("one/AGENTS.md"), "agents").unwrap();
-    std::fs::write(root.join("one/VISION.md"), "vision").unwrap();
-    std::fs::write(root.join("one/needle-inside.txt"), "inside").unwrap();
-    std::fs::write(root.join("two/needle-outside.txt"), "outside").unwrap();
     let running = start(root.clone());
     cx.executor().allow_parking();
     cx.update(parvi_app_shell::prepare);
@@ -474,97 +516,125 @@ fn projects_landing_groups_repositories_sessions_and_scopes_find(cx: &mut TestAp
     let (shell, cx) = cx.add_window_view(move |w, cx| {
         parvi_app_shell::start(&[parvi_files_app::build], Some(url), None, w, cx)
     });
-    let host = shell.read_with(cx, |s, _| {
-        parvi_app_kit::Host::new(s.hub()).for_page("test-sessions", &[])
+    until(cx, "recent changes", |cx| {
+        cx.debug_bounds("recent-report.md").is_some()
+            && cx.debug_bounds("recent-middle.txt").is_some()
+            && cx.debug_bounds("recent-old.txt").is_some()
     });
-    let session = parvi_terminals_contract::Session {
-        node: running.node.clone(),
-        name: "working".into(),
-        cwd: Some(root.join("one/src").to_string_lossy().into_owned()),
-        ..Default::default()
-    };
-    cx.update(|_, cx| {
-        host.publish(
-            parvi_terminals_contract::SessionList {
-                sessions: vec![session],
-                ..Default::default()
-            },
-            cx,
-        )
-        .unwrap()
+    let report = cx.debug_bounds("recent-report.md").unwrap();
+    let middle = cx.debug_bounds("recent-middle.txt").unwrap();
+    let old = cx.debug_bounds("recent-old.txt").unwrap();
+    assert!(report.top() < middle.top() && middle.top() < old.top());
+    assert!(
+        cx.debug_bounds("recent-secret.txt").is_none(),
+        "hidden folders stay out"
+    );
+    tree(cx, "file-row-deep");
+    let folders = cx.debug_bounds("file-row-deep").unwrap();
+    assert!(old.bottom() <= folders.top());
+    click(cx, "recent-report.md");
+    until(cx, "opened from recent", |cx| {
+        cx.debug_bounds("file-view-report.md").is_some()
     });
-    until(cx, "project cards", |cx| {
-        cx.debug_bounds("files-project-one").is_some()
-            && cx.debug_bounds("files-project-two").is_some()
-            && cx
-                .debug_bounds("files-project-session-one-working")
-                .is_some()
+    assert!(
+        cx.debug_bounds("file-row-report.md").is_none(),
+        "opening from Recent leaves the tree as it was"
+    );
+    menu_on(cx, "recent-report.md");
+    menu(cx, "Show in tree");
+    until(cx, "shown in the tree", |cx| {
+        cx.debug_bounds("picked-report.md").is_some()
     });
-    assert!(cx.debug_bounds("files-project-plain").is_none());
-    let list = cx.debug_bounds("files-projects-list").unwrap();
-    for id in [
-        "files-browse-root-0",
-        "files-project-one",
-        "files-project-two",
-        "files-project-three",
-        "files-project-four",
-        "files-project-five",
-        "files-project-six",
-        "files-project-seven",
-        "files-project-eight",
-    ] {
-        let item = cx.debug_bounds(id).expect("project or browse drawn");
-        assert!(
-            item.top() >= list.top() && item.bottom() <= list.bottom(),
-            "{id} is visible without scrolling"
-        );
-    }
-    for doc in [
-        "files-project-doc-one-README.md",
-        "files-project-doc-one-AGENTS.md",
-        "files-project-doc-one-VISION.md",
-    ] {
-        assert!(cx.debug_bounds(doc).is_some());
-    }
-    click(cx, "files-project-doc-one-README.md");
-    until(cx, "document opened", |cx| {
-        cx.debug_bounds("file-view-README.md").is_some()
-    });
-    click(cx, "files-projects");
-    until(cx, "projects again", |cx| {
-        cx.debug_bounds("files-project-one").is_some()
-    });
-    click(cx, "files-project-one");
-    until(cx, "project browser", |cx| {
-        cx.debug_bounds("file-row-needle-inside.txt").is_some()
-    });
-    cx.simulate_keystrokes("/");
-    cx.simulate_input("needle");
-    cx.run_until_parked();
-    cx.executor().advance_clock(Duration::from_millis(300));
-    until(cx, "scoped find", |cx| {
-        cx.debug_bounds("find-result-needle-inside.txt").is_some()
-    });
-    assert!(cx.debug_bounds("find-result-needle-outside.txt").is_none());
+    assert_eq!(
+        kept(&shell, cx).file.as_deref(),
+        root.join("deep/down/report.md").to_str()
+    );
     drop(running);
     std::fs::remove_dir_all(root).unwrap();
 }
 
-fn menu_on(cx: &mut VisualTestContext, row: &'static str) {
-    let at = cx.debug_bounds(row).expect("file row").center();
-    cx.simulate_mouse_down(at, gpui::MouseButton::Right, Modifiers::none());
-    until(cx, "file menu", |cx| {
-        cx.debug_bounds("file-menu-open").is_some()
+/// What the page shows follows the disk while it is seen: a folder gains
+/// a file, an open file reads again in place, an edit is never replaced.
+#[gpui::test]
+fn changes_on_disk_show_without_asking_and_never_replace_an_edit(cx: &mut TestAppContext) {
+    let root = parvi_testkit::fresh_dir("files-live");
+    std::fs::write(root.join("note.txt"), "first").unwrap();
+    let running = start(root.clone());
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let url = running.url.clone();
+    let (_, cx) = cx.add_window_view(move |w, cx| {
+        parvi_app_shell::start(&[observed_files], Some(url), None, w, cx)
     });
+    tree(cx, "file-row-note.txt");
+    // The page looks only while its window is the one in use.
+    cx.update(|window, _| window.activate_window());
+    let page = SEARCH_PAGE.with(|p| p.borrow().as_ref().unwrap().clone());
+    click(cx, "file-row-note.txt");
+    until(cx, "read", |cx| {
+        page.read_with(cx, |p, cx| p.code.read(cx).text() == "first")
+    });
+    watch_once(cx);
+    std::fs::write(root.join("arrived.txt"), "new").unwrap();
+    std::fs::write(root.join("note.txt"), "second").unwrap();
+    modified(&root.join("note.txt"), 0);
+    until(cx, "the new file and the new text", |cx| {
+        watch_once(cx);
+        cx.debug_bounds("file-row-arrived.txt").is_some()
+            && page.read_with(cx, |p, cx| p.code.read(cx).text() == "second")
+    });
+    click(cx, "files-edit");
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("mine");
+    std::fs::write(root.join("note.txt"), "third").unwrap();
+    modified(&root.join("note.txt"), 0);
+    until(cx, "told it changed under the edit", |cx| {
+        watch_once(cx);
+        cx.debug_bounds("files-changed-on-disk").is_some()
+    });
+    assert_eq!(
+        page.read_with(cx, |p, cx| p.code.read(cx).text().to_owned()),
+        "mine"
+    );
+    cx.simulate_keystrokes("ctrl-s");
+    until(cx, "the save asks", |cx| {
+        cx.debug_bounds("conflict-copy").is_some()
+    });
+    assert_eq!(std::fs::read(root.join("note.txt")).unwrap(), b"third");
+    drop(running);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
-fn drop_files(cx: &mut VisualTestContext, row: &'static str, files: Vec<std::path::PathBuf>) {
-    let position = cx.debug_bounds(row).expect("drop target").center();
-    cx.simulate_event(gpui::FileDropEvent::Entered {
-        position,
-        paths: gpui::ExternalPaths(files.into_iter().collect()),
+/// A long log reads whole and opens at its end; it is too large to edit
+/// here, and says so.
+#[gpui::test]
+fn a_long_log_opens_at_its_end(cx: &mut TestAppContext) {
+    let root = parvi_testkit::fresh_dir("files-log");
+    let log: String = (1..=60_000)
+        .map(|n| format!("line {n} of the build\n"))
+        .collect();
+    assert!(log.len() > parvi_files_app::open::MAX_EDIT);
+    std::fs::write(root.join("build.log"), &log).unwrap();
+    let running = start(root.clone());
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let url = running.url.clone();
+    let (_, cx) = cx.add_window_view(move |w, cx| {
+        parvi_app_shell::start(&[observed_files], Some(url), None, w, cx)
     });
-    cx.simulate_event(gpui::FileDropEvent::Submit { position });
+    tree(cx, "file-row-build.log");
+    let page = SEARCH_PAGE.with(|p| p.borrow().as_ref().unwrap().clone());
+    click(cx, "file-row-build.log");
+    until(cx, "the end in view", |cx| {
+        page.read_with(cx, |p, cx| {
+            let code = p.code.read(cx);
+            code.text().len() == log.len() && code.top_line() > 59_000 && code.at_end()
+        })
+    });
+    assert!(cx.debug_bounds("files-edit").is_none());
+    assert!(cx.debug_bounds("files-send").is_some());
+    drop(running);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[cfg(unix)]
@@ -584,10 +654,9 @@ fn upload_drop_conflicts_picker_and_node_error(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     cx.update(parvi_app_shell::prepare);
     let url = running.url.clone();
-    let (_, cx) = cx.add_window_view(move |w, cx| {
+    let (shell, cx) = cx.add_window_view(move |w, cx| {
         parvi_app_shell::start(&[parvi_files_app::build], Some(url), None, w, cx)
     });
-    browse_root(cx);
     until(cx, "folder rows", |cx| {
         cx.debug_bounds("file-row-target").is_some() && cx.debug_bounds("file-row-locked").is_some()
     });
@@ -622,10 +691,10 @@ fn upload_drop_conflicts_picker_and_node_error(cx: &mut TestAppContext) {
     });
     drop_files(cx, "file-row-locked", vec![first.clone()]);
     until(cx, "node permission error", |cx| {
-        cx.debug_bounds("files-error-Permission denied").is_some()
+        status(&shell, cx).contains("Permission denied")
     });
     menu_on(cx, "file-row-target");
-    click(cx, "file-menu-upload");
+    menu(cx, "Upload…");
     assert!(cx.did_prompt_for_paths());
     let third = sources.join("picked.txt");
     std::fs::write(&third, b"picked").unwrap();
@@ -645,13 +714,16 @@ fn upload_drop_conflicts_picker_and_node_error(cx: &mut TestAppContext) {
     std::fs::remove_dir_all(sources).unwrap();
 }
 
+/// The menu on a row copies its path and downloads it; the tree and the
+/// file open are kept across a restart.
 #[gpui::test]
-fn file_menu_paths_pins_download_and_refresh(cx: &mut TestAppContext) {
+fn file_menu_copies_and_downloads_and_the_tree_is_kept(cx: &mut TestAppContext) {
     let root = parvi_testkit::fresh_dir("files-menu-journey");
     let downloads = parvi_testkit::fresh_dir("files-menu-downloads");
     std::fs::create_dir(root.join("folder")).unwrap();
     let bytes = b"\x00\xffdownload\n";
     std::fs::write(root.join("folder/note.bin"), bytes).unwrap();
+    std::fs::write(root.join("folder/read.txt"), "read").unwrap();
     let running = start(root.clone());
     let settings = root.join("app.json");
     std::fs::write(
@@ -664,95 +736,45 @@ fn file_menu_paths_pins_download_and_refresh(cx: &mut TestAppContext) {
     let url = running.url.clone();
     let saved = settings.clone();
     let test_cx = cx;
-    let (_, cx) = test_cx.add_window_view(move |w, cx| {
+    let (shell, cx) = test_cx.add_window_view(move |w, cx| {
         parvi_app_shell::start(&[parvi_files_app::build], Some(url), Some(saved), w, cx)
     });
-    browse_root(cx);
-    until(cx, "folder", |cx| {
-        cx.debug_bounds("file-row-folder").is_some()
-    });
+    tree(cx, "file-row-folder");
     click(cx, "file-row-folder");
-    until(cx, "file", |cx| {
-        cx.debug_bounds("file-row-note.bin").is_some()
-    });
+    tree(cx, "file-row-note.bin");
     menu_on(cx, "file-row-note.bin");
-    click(cx, "file-menu-copy-path");
+    menu(cx, "Copy path");
     assert_eq!(
         cx.read_from_clipboard().and_then(|x| x.text()),
         Some(root.join("folder/note.bin").to_string_lossy().into_owned())
     );
     menu_on(cx, "file-row-note.bin");
-    click(cx, "file-menu-copy-relative");
-    assert_eq!(
-        cx.read_from_clipboard().and_then(|x| x.text()).as_deref(),
-        Some("folder/note.bin")
-    );
-    menu_on(cx, "file-row-note.bin");
-    click(cx, "file-menu-copy-folder");
-    assert_eq!(
-        cx.read_from_clipboard().and_then(|x| x.text()),
-        Some(root.join("folder").to_string_lossy().into_owned())
-    );
-    menu_on(cx, "file-row-note.bin");
-    click(cx, "file-menu-parent");
-    until(cx, "selected file", |cx| {
-        cx.debug_bounds("selected-note.bin").is_some()
+    menu(cx, "Download");
+    let destination = downloads.join("note.bin");
+    let notice = format!("Downloaded to {}", destination.display());
+    until(cx, "download and destination notice", |cx| {
+        std::fs::read(&destination).ok().as_deref() == Some(bytes) && status(&shell, cx) == notice
     });
-    menu_on(cx, "file-row-note.bin");
-    click(cx, "file-menu-pin");
-    until(cx, "pin shown", |cx| {
-        cx.debug_bounds("files-pin-0").is_some()
+    click(cx, "file-row-read.txt");
+    until(cx, "opened", |cx| {
+        cx.debug_bounds("file-view-read.txt").is_some()
     });
     cx.executor().advance_clock(Duration::from_millis(300));
-    until(cx, "pin saved", |_| {
+    until(cx, "tree saved", |_| {
         std::fs::read(&settings)
             .ok()
             .and_then(|v| serde_json::from_slice::<serde_json::Value>(&v).ok())
-            .is_some_and(|v| {
-                v["files"]["pins"]
-                    .as_array()
-                    .is_some_and(|pins| pins.len() == 1)
-            })
-    });
-    menu_on(cx, "file-row-note.bin");
-    click(cx, "file-menu-download");
-    let destination = downloads.join("note.bin");
-    let notice: &'static str =
-        Box::leak(format!("files-notice-Downloaded to {}", destination.display()).into_boxed_str());
-    until(cx, "download and destination notice", |cx| {
-        std::fs::read(&destination).ok().as_deref() == Some(bytes)
-            && cx.debug_bounds(notice).is_some()
-    });
-    cx.executor().advance_clock(Duration::from_secs(6));
-    until(cx, "download notice expires", |cx| {
-        cx.debug_bounds(notice).is_none()
-    });
-    std::fs::write(root.join("folder/new.txt"), "new").unwrap();
-    menu_on(cx, "file-row-note.bin");
-    click(cx, "file-menu-refresh");
-    until(cx, "new file after refresh", |cx| {
-        cx.debug_bounds("file-row-new.txt").is_some()
+            .is_some_and(|v| v["files"]["file"].as_str() == root.join("folder/read.txt").to_str())
     });
     let url = running.url.clone();
     let saved = settings.clone();
-    let (rebuilt, again) = test_cx.add_window_view(move |w, cx| {
+    let (_, again) = test_cx.add_window_view(move |w, cx| {
         parvi_app_shell::start(&[parvi_files_app::build], Some(url), Some(saved), w, cx)
     });
-    until(again, "pin after rebuild", |cx| {
-        cx.debug_bounds("files-pin-0").is_some()
-            && rebuilt.read_with(cx, |s, cx| {
-                !parvi_app_kit::Host::new(s.hub()).nodes(cx).is_empty()
-            })
-    });
-    click(again, "files-pin-0");
-    until(again, "pinned file opened", |cx| {
-        cx.debug_bounds("file-view-note.bin").is_some()
+    until(again, "the same tree and file after a restart", |cx| {
+        cx.debug_bounds("file-view-read.txt").is_some()
             && cx.debug_bounds("file-row-note.bin").is_some()
-    });
-    menu_on(again, "file-row-note.bin");
-    click(again, "file-menu-pin");
-    until(again, "unpinned", |cx| {
-        cx.debug_bounds("files-pin-0").is_none()
+            && cx.debug_bounds("picked-read.txt").is_some()
     });
     drop(running);
     std::fs::remove_dir_all(root).unwrap();
@@ -780,12 +802,9 @@ fn page_renders_node_data(cx: &mut TestAppContext) {
     until(cx, "Files page", |cx| {
         shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
     });
-    browse_root(cx);
-    until(cx, "node listing", |cx| {
-        cx.debug_bounds("file-row-note.txt").is_some()
-    });
-    let at = cx.debug_bounds("file-row-note.txt").unwrap().center();
-    cx.simulate_click(at, Modifiers::none());
+    tree(cx, "file-row-note.txt");
+    assert!(cx.debug_bounds("empty-No file open").is_some());
+    click(cx, "file-row-note.txt");
     until(cx, "file viewer", |cx| {
         cx.debug_bounds("files-edit").is_some()
     });
@@ -795,12 +814,17 @@ fn page_renders_node_data(cx: &mut TestAppContext) {
         viewer.size.width >= page.size.width / 2.,
         "viewer should use at least half the window"
     );
-    let pane = cx.debug_bounds("files-pane").unwrap();
-    for id in ["files-create-file", "files-create-folder", "files-upload"] {
+    let row = cx.debug_bounds("file-row-note.txt").unwrap();
+    let new = cx.debug_bounds("files-new").expect("New drawn");
+    assert!(
+        new.right() <= viewer.left() && new.bottom() <= row.top(),
+        "New stays in the list's head"
+    );
+    for id in ["files-send", "files-edit"] {
         let action = cx.debug_bounds(id).expect("action drawn");
         assert!(
-            action.right() <= pane.right() && action.bottom() <= pane.bottom(),
-            "{id} stays inside its pane"
+            action.right() <= viewer.right() && action.bottom() <= row.top(),
+            "{id} stays in the viewer's head"
         );
     }
     menu_on(cx, "file-row-note.txt");
@@ -808,7 +832,7 @@ fn page_renders_node_data(cx: &mut TestAppContext) {
         cx.debug_bounds("file-view-note.txt").is_some(),
         "right-click keeps the viewer"
     );
-    click(cx, "file-menu-copy-path");
+    menu(cx, "Copy path");
     let edit = cx.debug_bounds("files-edit").unwrap().center();
     cx.simulate_click(edit, Modifiers::none());
     until(cx, "editing", |cx| cx.debug_bounds("files-save").is_some());
@@ -854,21 +878,21 @@ fn reveal_opens_files_and_lists_folders(cx: &mut TestAppContext) {
         beside: false,
     };
     cx.update(|_, cx| host.ask(reveal(&folder.join("note.txt")), cx).unwrap());
-    until(cx, "revealed file selected and open", |cx| {
-        cx.debug_bounds("selected-note.txt").is_some()
+    until(cx, "revealed file picked and open", |cx| {
+        cx.debug_bounds("picked-note.txt").is_some()
             && cx.debug_bounds("file-view-note.txt").is_some()
             && cx.debug_bounds("files-edit").is_some()
     });
-    assert!(cx.debug_bounds("file-row-outside.txt").is_none());
     cx.update(|_, cx| host.ask(reveal(&root), cx).unwrap());
-    until(cx, "revealed root contents", |cx| {
+    until(cx, "revealed root picked", |cx| {
         cx.debug_bounds("file-row-outside.txt").is_some()
             && cx.debug_bounds("file-row-clips.pdf").is_some()
+            && cx.debug_bounds("picked-note.txt").is_none()
     });
     cx.update(|_, cx| host.ask(reveal(&folder), cx).unwrap());
-    until(cx, "revealed folder contents", |cx| {
-        cx.debug_bounds("file-row-note.txt").is_some()
-            && cx.debug_bounds("file-row-outside.txt").is_none()
+    until(cx, "revealed folder picked, its contents shown", |cx| {
+        cx.debug_bounds("picked-clips.pdf").is_some()
+            && cx.debug_bounds("file-row-note.txt").is_some()
     });
     assert!(cx.debug_bounds("file-view-clips.pdf").is_none());
     drop(running);
@@ -884,21 +908,18 @@ fn editing_by_keyboard_keeps_the_work_and_discard_restores_it(cx: &mut TestAppCo
     cx.executor().allow_parking();
     cx.update(parvi_app_shell::prepare);
     let url = running.url.clone();
-    let (shell, cx) = cx.add_window_view(move |window, cx| {
+    let (_, cx) = cx.add_window_view(move |window, cx| {
         parvi_app_shell::start(&[parvi_files_app::build], Some(url), None, window, cx)
     });
-    until(cx, "Files", |cx| {
-        shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
-    });
-    browse_root(cx);
-    until(cx, "listing", |cx| {
-        cx.debug_bounds("file-row-draft.txt").is_some()
-    });
+    tree(cx, "file-row-draft.txt");
     click(cx, "file-row-draft.txt");
     until(cx, "viewer", |cx| cx.debug_bounds("files-edit").is_some());
     click(cx, "files-edit");
     cx.simulate_keystrokes("ctrl-a");
     cx.simulate_input("unsaved");
+    until(cx, "says it is unsaved", |cx| {
+        cx.debug_bounds("files-unsaved").is_some()
+    });
     cx.simulate_keystrokes("escape");
     until(cx, "discard question", |cx| {
         cx.debug_bounds("files-keep-editing").is_some()
@@ -925,38 +946,34 @@ fn editing_by_keyboard_keeps_the_work_and_discard_restores_it(cx: &mut TestAppCo
     std::fs::remove_dir_all(root).unwrap();
 }
 
-/// A file's draft survives opening another folder and returning to it.
+/// A file's draft survives opening another file and folder and coming
+/// back to it.
 #[gpui::test]
-fn opening_a_folder_keeps_the_previous_files_draft(cx: &mut TestAppContext) {
+fn opening_another_file_keeps_the_previous_files_draft(cx: &mut TestAppContext) {
     let root = parvi_testkit::fresh_dir("files-draft-navigation");
     std::fs::write(root.join("draft.txt"), "original").unwrap();
+    std::fs::write(root.join("other.txt"), "other").unwrap();
     std::fs::create_dir(root.join("folder")).unwrap();
     let running = start(root.clone());
     cx.executor().allow_parking();
     cx.update(parvi_app_shell::prepare);
     let url = running.url.clone();
-    let (shell, cx) = cx.add_window_view(move |window, cx| {
+    let (_, cx) = cx.add_window_view(move |window, cx| {
         parvi_app_shell::start(&[parvi_files_app::build], Some(url), None, window, cx)
     });
-    until(cx, "Files", |cx| {
-        shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
-    });
-    browse_root(cx);
-    until(cx, "listing", |cx| {
-        cx.debug_bounds("file-row-draft.txt").is_some()
-    });
+    tree(cx, "file-row-draft.txt");
     click(cx, "file-row-draft.txt");
     until(cx, "viewer", |cx| cx.debug_bounds("files-edit").is_some());
     click(cx, "files-edit");
     cx.simulate_keystrokes("ctrl-a");
     cx.simulate_input("kept draft");
     click(cx, "file-row-folder");
-    until(cx, "folder open", |cx| {
-        cx.debug_bounds("file-row-draft.txt").is_none()
+    until(cx, "the folder read", |cx| {
+        cx.debug_bounds("files-note-Empty").is_some()
     });
-    click(cx, "files-up");
-    until(cx, "back in root", |cx| {
-        cx.debug_bounds("file-row-draft.txt").is_some()
+    click(cx, "file-row-other.txt");
+    until(cx, "the other file", |cx| {
+        cx.debug_bounds("file-view-other.txt").is_some()
     });
     click(cx, "file-row-draft.txt");
     until(cx, "reopened", |cx| cx.debug_bounds("files-edit").is_some());
@@ -980,21 +997,14 @@ fn sound_video_and_pdf_open_to_play_without_reading(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     cx.update(parvi_app_shell::prepare);
     let url = running.url.clone();
-    let (shell, cx) = cx.add_window_view(move |window, cx| {
+    let (_, cx) = cx.add_window_view(move |window, cx| {
         parvi_app_shell::start(&[parvi_files_app::build], Some(url), None, window, cx)
     });
-    until(cx, "Files", |cx| {
-        shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
-    });
-    browse_root(cx);
     for name in ["clip.mp4", "voice.mp3", "paper.pdf"] {
-        let id = format!("file-row-{name}");
-        until(cx, "media row", |cx| {
-            cx.debug_bounds(Box::leak(id.clone().into_boxed_str()))
-                .is_some()
-        });
+        let id = leak(format!("file-row-{name}"));
+        tree(cx, id);
         std::fs::remove_file(root.join(name)).unwrap();
-        click(cx, Box::leak(id.into_boxed_str()));
+        click(cx, id);
         until(cx, "media open action", |cx| {
             cx.debug_bounds("files-play").is_some()
         });
@@ -1003,82 +1013,85 @@ fn sound_video_and_pdf_open_to_play_without_reading(cx: &mut TestAppContext) {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-/// The table's navigation keys select paths, open files and return to the table.
+/// The list's keys pick rows, open and close folders, open files and copy
+/// a path.
 #[gpui::test]
-fn the_table_takes_the_key_map(cx: &mut TestAppContext) {
+fn the_list_takes_the_key_map(cx: &mut TestAppContext) {
     let root = parvi_testkit::fresh_dir("files-keys");
+    std::fs::create_dir(root.join("b")).unwrap();
+    std::fs::write(root.join("b/inner.txt"), "inner").unwrap();
     std::fs::write(root.join("a.txt"), "a").unwrap();
     std::fs::write(root.join("z.txt"), "z").unwrap();
     let running = start(root.clone());
     cx.executor().allow_parking();
     cx.update(parvi_app_shell::prepare);
     let url = running.url.clone();
-    let (shell, cx) = cx.add_window_view(move |w, cx| {
+    let (_, cx) = cx.add_window_view(move |w, cx| {
         parvi_app_shell::start(&[parvi_files_app::build], Some(url), None, w, cx)
     });
-    until(cx, "Files", |cx| {
-        shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
-    });
-    browse_root(cx);
-    until(cx, "rows", |cx| cx.debug_bounds("file-row-z.txt").is_some());
-    cx.simulate_keystrokes("down end ctrl-shift-c");
+    tree(cx, "file-row-z.txt");
+    cx.simulate_keystrokes("end ctrl-shift-c");
     let text = cx.read_from_clipboard().and_then(|item| item.text());
     assert_eq!(text.as_deref(), root.join("z.txt").to_str());
     cx.simulate_keystrokes("enter");
-    until(cx, "viewer", |cx| cx.debug_bounds("files-edit").is_some());
-    cx.simulate_keystrokes("escape");
-    until(cx, "viewer closed", |cx| {
-        cx.debug_bounds("files-edit").is_none()
+    until(cx, "viewer", |cx| {
+        cx.debug_bounds("file-view-z.txt").is_some()
+    });
+    cx.simulate_keystrokes("up enter");
+    until(cx, "the row above", |cx| {
+        cx.debug_bounds("file-view-a.txt").is_some()
+    });
+    cx.simulate_keystrokes("up right");
+    until(cx, "a folder opened by key", |cx| {
+        cx.debug_bounds("file-row-inner.txt").is_some()
+    });
+    cx.simulate_keystrokes("left");
+    until(cx, "and closed", |cx| {
+        cx.debug_bounds("file-row-inner.txt").is_none()
+    });
+    cx.simulate_keystrokes("left left");
+    until(cx, "the root closed", |cx| {
+        cx.debug_bounds("file-row-z.txt").is_none()
     });
     drop(running);
     std::fs::remove_dir_all(root).unwrap();
 }
 
-/// A key that acts closes the menu before acting, as does Escape.
+/// Escape, or a click elsewhere, closes the menu without acting.
 #[gpui::test]
-fn a_key_that_acts_closes_the_menu(cx: &mut TestAppContext) {
+fn escape_or_a_click_elsewhere_closes_the_menu(cx: &mut TestAppContext) {
     let root = parvi_testkit::fresh_dir("files-menu");
     std::fs::write(root.join("note.txt"), "text").unwrap();
     let running = start(root.clone());
     cx.executor().allow_parking();
     cx.update(parvi_app_shell::prepare);
     let url = running.url.clone();
-    let (shell, cx) = cx.add_window_view(move |w, cx| {
+    let (_, cx) = cx.add_window_view(move |w, cx| {
         parvi_app_shell::start(&[parvi_files_app::build], Some(url), None, w, cx)
     });
-    until(cx, "Files", |cx| {
-        shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
-    });
-    browse_root(cx);
-    until(cx, "row", |cx| {
-        cx.debug_bounds("file-row-note.txt").is_some()
-    });
-    let at = cx.debug_bounds("file-row-note.txt").unwrap().center();
-    cx.simulate_mouse_down(at, gpui::MouseButton::Right, Modifiers::none());
-    until(cx, "menu", |cx| cx.debug_bounds("file-menu-open").is_some());
-    cx.simulate_keystrokes("down");
-    until(cx, "menu closed", |cx| {
-        cx.debug_bounds("file-menu-open").is_none()
-    });
-    cx.simulate_mouse_down(at, gpui::MouseButton::Right, Modifiers::none());
-    until(cx, "menu again", |cx| {
-        cx.debug_bounds("file-menu-open").is_some()
-    });
+    tree(cx, "file-row-note.txt");
+    menu_on(cx, "file-row-note.txt");
     cx.simulate_keystrokes("escape");
     until(cx, "menu dismissed", |cx| {
-        cx.debug_bounds("file-menu-open").is_none()
+        cx.debug_bounds("menu-label-Copy path").is_none()
     });
+    menu_on(cx, "file-row-note.txt");
+    click(cx, "empty-No file open");
+    until(cx, "menu closed", |cx| {
+        cx.debug_bounds("menu-label-Copy path").is_none()
+    });
+    assert!(root.join("note.txt").exists());
     drop(running);
     std::fs::remove_dir_all(root).unwrap();
 }
 
 #[gpui::test]
-fn a_reload_keeps_the_pane_on_its_device(cx: &mut TestAppContext) {
+fn a_reload_keeps_the_tree_on_its_device(cx: &mut TestAppContext) {
     let root = parvi_testkit::fresh_dir("files-reload");
     let running = start(root.clone());
     let settings = root.join("settings.json");
-    let saved = serde_json::json!({"files":{"pane":
-        {"node":"away-node","path":"/example/models","selected":"m.glb"}
+    let saved = serde_json::json!({"files":{"tree":
+        {"node":"away-node","open":["/example/models"],"selected":"/example/models/m.glb"}
     }});
     std::fs::write(&settings, serde_json::to_vec(&saved).unwrap()).unwrap();
     cx.executor().allow_parking();
@@ -1090,17 +1103,14 @@ fn a_reload_keeps_the_pane_on_its_device(cx: &mut TestAppContext) {
     until(cx, "Files", |cx| {
         shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
     });
-    until(cx, "away pane", |cx| cx.debug_bounds("pane-away").is_some());
-    let kept = shell.read_with(cx, |s, cx| {
-        s.hub()
-            .read(cx)
-            .settings
-            .section::<parvi_files_app::store::Kept>("files")
-            .unwrap()
+    until(cx, "away device", |cx| {
+        cx.debug_bounds("files-note-The device does not answer")
+            .is_some()
     });
-    assert_eq!(kept.pane.node, "away-node");
-    assert_eq!(kept.pane.path.as_deref(), Some("/example/models"));
-    assert_eq!(kept.pane.selected.as_deref(), Some("m.glb"));
+    let kept = kept(&shell, cx);
+    assert_eq!(kept.tree.node, "away-node");
+    assert_eq!(kept.tree.open, ["/example/models"]);
+    assert_eq!(kept.tree.selected.as_deref(), Some("/example/models/m.glb"));
     drop(running);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -1171,7 +1181,7 @@ fn markdown_beside_terminal_scrolls_inside_its_border(cx: &mut TestAppContext) {
     until(cx, "rendered Markdown", |cx| {
         cx.debug_bounds("files-markdown-rendered").is_some()
     });
-    let viewer = cx.debug_bounds("files-viewer-bounds").unwrap();
+    let viewer = cx.debug_bounds("files-viewer").unwrap();
     let viewport = cx.debug_bounds("files-markdown-rendered").unwrap();
     let before = cx.debug_bounds("files-markdown-content").unwrap();
     assert!(viewport.top() >= viewer.top() && viewport.bottom() <= viewer.bottom());
@@ -1271,7 +1281,8 @@ fn open_path_beside_keeps_the_terminal_and_the_draft(cx: &mut TestAppContext) {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-/// Name search reaches into a folder and opens a result from the node.
+/// A find answers as typed, by names under every root; stale answers are
+/// dropped; a find in the text goes to its line; more than fit says so.
 #[gpui::test]
 fn find_updates_as_typed_shows_paths_lines_and_truncation(cx: &mut TestAppContext) {
     let root = parvi_testkit::fresh_dir("files-find-live");
@@ -1294,27 +1305,24 @@ fn find_updates_as_typed_shows_paths_lines_and_truncation(cx: &mut TestAppContex
     let (_, cx) = cx.add_window_view(move |w, cx| {
         parvi_app_shell::start(&[observed_files], Some(url), None, w, cx)
     });
-    browse_root(cx);
-    until(cx, "folder", |cx| cx.debug_bounds("file-row-sub").is_some());
+    tree(cx, "file-row-sub");
     let page = SEARCH_PAGE.with(|page| page.borrow().as_ref().unwrap().clone());
     cx.simulate_keystrokes("/");
     cx.simulate_input("rea");
     cx.run_until_parked();
     cx.executor().advance_clock(Duration::from_millis(300));
     until(cx, "first results", |cx| {
-        cx.debug_bounds("find-label-sub/readme.md").is_some()
-            && cx.debug_bounds("find-label-sub/realm.txt").is_some()
+        cx.debug_bounds("hit-readme.md").is_some() && cx.debug_bounds("hit-realm.txt").is_some()
     });
-    let old_revision = page.read_with(cx, |p, _| p.side.pane.find_revision);
+    let old_revision = page.read_with(cx, |p, _| p.find.as_ref().unwrap().revision);
     cx.simulate_input("d");
     cx.run_until_parked();
     cx.executor().advance_clock(Duration::from_millis(300));
     until(cx, "new results", |cx| {
-        cx.debug_bounds("find-label-sub/readme.md").is_some()
-            && cx.debug_bounds("find-label-sub/realm.txt").is_none()
+        cx.debug_bounds("hit-readme.md").is_some() && cx.debug_bounds("hit-realm.txt").is_none()
     });
     page.update(cx, |p, cx| {
-        p.side.pane.found(
+        p.find.as_mut().unwrap().answer(
             old_revision,
             Ok(parvi_files_contract::Matches {
                 matches: vec![parvi_files_contract::Match {
@@ -1329,49 +1337,45 @@ fn find_updates_as_typed_shows_paths_lines_and_truncation(cx: &mut TestAppContex
         cx.notify();
     });
     cx.run_until_parked();
-    assert!(cx.debug_bounds("find-label-sub/readme.md").is_some());
-    assert!(cx.debug_bounds("find-result-stale").is_none());
+    assert!(cx.debug_bounds("hit-readme.md").is_some());
+    assert!(cx.debug_bounds("hit-stale").is_none());
     cx.simulate_keystrokes("ctrl-a");
     cx.simulate_input("line marker");
-    click(cx, "search-mode");
-    until(cx, "content result", |cx| {
-        cx.debug_bounds("find-label-sub/a.rs:12").is_some()
+    cx.executor().advance_clock(Duration::from_millis(300));
+    until(cx, "a find in the text offered", |cx| {
+        cx.debug_bounds("files-in-text").is_some()
     });
-    click(cx, "find-result-a.rs");
+    click(cx, "files-in-text");
+    until(cx, "content result", |cx| {
+        cx.debug_bounds("hit-a.rs:12").is_some()
+    });
+    click(cx, "hit-a.rs:12");
     until(cx, "line 12 selected, lines above it in view", |cx| {
         page.read_with(cx, |p, cx| {
-            let code = p.side.code.read(cx);
+            let code = p.code.read(cx);
             code.selected_lines() == Some((12, 12)) && code.top_line() == 8
         })
     });
-    cx.simulate_keystrokes("escape / ctrl-a");
+    click(cx, "files-search");
+    cx.simulate_keystrokes("ctrl-a");
     cx.simulate_input("capword");
-    click(cx, "search-mode");
+    cx.executor().advance_clock(Duration::from_millis(300));
     until(cx, "truncation note", |cx| {
-        cx.debug_bounds("files-find-truncated").is_some()
+        cx.debug_bounds("files-note-Only the first 50; type more of it")
+            .is_some()
     });
     click(cx, "files-search");
-    cx.simulate_keystrokes("ctrl-a backspace");
-    until(cx, "the folder again", |cx| {
+    cx.simulate_keystrokes("escape");
+    until(cx, "the tree again", |cx| {
         cx.debug_bounds("file-row-sub").is_some()
-    });
-    click(cx, "file-row-sub");
-    until(cx, "into sub", |cx| {
-        cx.debug_bounds("file-row-a.rs").is_some()
-    });
-    click(cx, "files-search");
-    cx.simulate_input("rea");
-    click(cx, "files-up");
-    until(cx, "a new folder starts with an empty search", |cx| {
-        page.read_with(cx, |p, cx| p.side.search.read(cx).text.is_empty())
-            && cx.debug_bounds("file-row-sub").is_some()
+            && page.read_with(cx, |p, cx| p.query.read(cx).text.is_empty())
     });
     drop(running);
     std::fs::remove_dir_all(root).unwrap();
 }
 
 #[gpui::test]
-fn find_opens_a_file_below_the_current_folder(cx: &mut TestAppContext) {
+fn find_shows_a_hit_in_the_tree_and_its_text(cx: &mut TestAppContext) {
     let root = parvi_testkit::fresh_dir("files-find");
     std::fs::create_dir(root.join("nested")).unwrap();
     std::fs::write(root.join("nested/needle.txt"), "found").unwrap();
@@ -1379,24 +1383,18 @@ fn find_opens_a_file_below_the_current_folder(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     cx.update(parvi_app_shell::prepare);
     let url = running.url.clone();
-    let (shell, cx) = cx.add_window_view(move |w, cx| {
+    let (_, cx) = cx.add_window_view(move |w, cx| {
         parvi_app_shell::start(&[parvi_files_app::build], Some(url), None, w, cx)
     });
-    until(cx, "Files", |cx| {
-        shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
-    });
-    browse_root(cx);
-    until(cx, "folder", |cx| {
-        cx.debug_bounds("file-row-nested").is_some()
-    });
+    tree(cx, "file-row-nested");
     cx.simulate_keystrokes("/");
     cx.simulate_input("needle");
-    cx.simulate_keystrokes("enter");
+    cx.executor().advance_clock(Duration::from_millis(300));
     until(cx, "search result", |cx| {
-        cx.debug_bounds("find-result-needle.txt").is_some()
+        cx.debug_bounds("hit-needle.txt").is_some()
     });
-    menu_on(cx, "find-result-needle.txt");
-    click(cx, "file-menu-copy-path");
+    menu_on(cx, "hit-needle.txt");
+    menu(cx, "Copy path");
     assert_eq!(
         cx.read_from_clipboard().and_then(|v| v.text()),
         Some(
@@ -1405,16 +1403,22 @@ fn find_opens_a_file_below_the_current_folder(cx: &mut TestAppContext) {
                 .into_owned()
         )
     );
+    menu_on(cx, "hit-needle.txt");
+    menu(cx, "Show in tree");
     until(cx, "matched file in its folder", |cx| {
-        cx.debug_bounds("selected-needle.txt").is_some()
+        cx.debug_bounds("picked-needle.txt").is_some()
     });
     click(cx, "file-row-needle.txt");
     until(cx, "viewer", |cx| cx.debug_bounds("files-edit").is_some());
-    cx.simulate_keystrokes("escape / ctrl-a");
+    cx.simulate_keystrokes("/");
     cx.simulate_input("found");
-    click(cx, "search-mode");
+    cx.executor().advance_clock(Duration::from_millis(300));
+    until(cx, "a find in the text offered", |cx| {
+        cx.debug_bounds("files-in-text").is_some()
+    });
+    cx.simulate_keystrokes("down enter");
     until(cx, "content result", |cx| {
-        cx.debug_bounds("find-result-needle.txt").is_some()
+        cx.debug_bounds("hit-needle.txt:1").is_some()
     });
     drop(running);
     std::fs::remove_dir_all(root).unwrap();
@@ -1429,16 +1433,10 @@ fn conflicting_save_can_write_a_separate_copy(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     cx.update(parvi_app_shell::prepare);
     let url = running.url.clone();
-    let (shell, cx) = cx.add_window_view(move |w, cx| {
+    let (_, cx) = cx.add_window_view(move |w, cx| {
         parvi_app_shell::start(&[parvi_files_app::build], Some(url), None, w, cx)
     });
-    until(cx, "Files", |cx| {
-        shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
-    });
-    browse_root(cx);
-    until(cx, "file", |cx| {
-        cx.debug_bounds("file-row-note.txt").is_some()
-    });
+    tree(cx, "file-row-note.txt");
     click(cx, "file-row-note.txt");
     until(cx, "viewer", |cx| cx.debug_bounds("files-edit").is_some());
     click(cx, "files-edit");
@@ -1470,16 +1468,10 @@ fn unsaved_file_holds_the_window_until_the_operator_decides(cx: &mut TestAppCont
     cx.executor().allow_parking();
     cx.update(parvi_app_shell::prepare);
     let url = running.url.clone();
-    let (shell, cx) = cx.add_window_view(move |w, cx| {
+    let (_, cx) = cx.add_window_view(move |w, cx| {
         parvi_app_shell::start(&[parvi_files_app::build], Some(url), None, w, cx)
     });
-    until(cx, "Files", |cx| {
-        shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
-    });
-    browse_root(cx);
-    until(cx, "row", |cx| {
-        cx.debug_bounds("file-row-note.txt").is_some()
-    });
+    tree(cx, "file-row-note.txt");
     click(cx, "file-row-note.txt");
     until(cx, "viewer", |cx| cx.debug_bounds("files-edit").is_some());
     click(cx, "files-edit");
@@ -1496,7 +1488,8 @@ fn unsaved_file_holds_the_window_until_the_operator_decides(cx: &mut TestAppCont
     std::fs::remove_dir_all(root).unwrap();
 }
 
-/// Picture zoom is shared and kept in the Files settings.
+/// Markdown reads rendered and JSON laid out, while editing either uses
+/// the file's own text; binary offers a download; a refusal says why.
 #[cfg(unix)]
 #[gpui::test]
 fn read_markdown_json_text_binary_and_permission_error(cx: &mut TestAppContext) {
@@ -1524,58 +1517,48 @@ fn read_markdown_json_text_binary_and_permission_error(cx: &mut TestAppContext) 
     cx.executor().allow_parking();
     cx.update(parvi_app_shell::prepare);
     let url = running.url.clone();
-    let (_, cx) = cx.add_window_view(move |w, cx| {
+    let (shell, cx) = cx.add_window_view(move |w, cx| {
         parvi_app_shell::start(&[observed_files], Some(url), Some(settings), w, cx)
     });
-    browse_root(cx);
-    until(cx, "markdown", |cx| {
-        cx.debug_bounds("file-row-README.md").is_some()
-    });
+    tree(cx, "file-row-README.md");
     let page = SEARCH_PAGE.with(|p| p.borrow().as_ref().unwrap().clone());
     click(cx, "file-row-README.md");
     until(cx, "rendered markdown", |cx| {
-        cx.debug_bounds("files-source").is_some()
-            && cx.debug_bounds("files-markdown-rendered").is_some()
+        cx.debug_bounds("files-markdown-rendered").is_some()
             && page.read_with(cx, |p, _| {
-                p.side.opened.as_ref().is_some_and(|o| {
-                    matches!(o.show, Show::Text { markdown: Some(_) }) && !o.source
-                })
+                p.opened
+                    .as_ref()
+                    .is_some_and(|o| matches!(o.show, Show::Text { markdown: Some(_) }))
             })
     });
-    click(cx, "files-source");
-    assert!(page.read_with(cx, |p, _| p.side.opened.as_ref().unwrap().source));
-    assert!(cx.debug_bounds("files-code-top-1").is_some());
-    click(cx, "file-row-data.json");
-    until(cx, "JSON as written", |cx| {
-        cx.debug_bounds("files-json-format").is_some()
+    click(cx, "files-edit");
+    until(cx, "its source to edit", |cx| {
+        cx.debug_bounds("files-markdown-rendered").is_none()
             && cx.debug_bounds("files-code-top-1").is_some()
     });
-    assert_eq!(
-        page.read_with(cx, |p, cx| p.side.code.read(cx).text().to_owned()),
-        "{\"a\":1}"
-    );
-    click(cx, "files-json-format");
-    until(cx, "formatted JSON", |cx| {
+    cx.simulate_keystrokes("escape");
+    click(cx, "file-row-data.json");
+    until(cx, "JSON laid out", |cx| {
         cx.debug_bounds("files-json-formatted").is_some()
     });
     assert_eq!(
-        page.read_with(cx, |p, cx| p.side.pretty_code.read(cx).text().to_owned()),
+        page.read_with(cx, |p, cx| p.pretty_code.read(cx).text().to_owned()),
         "{\n  \"a\": 1\n}"
     );
     click(cx, "files-edit");
     assert_eq!(
-        page.read_with(cx, |p, cx| p.side.code.read(cx).text().to_owned()),
+        page.read_with(cx, |p, cx| p.code.read(cx).text().to_owned()),
         "{\"a\":1}"
     );
+    assert!(cx.debug_bounds("files-json-formatted").is_none());
     cx.simulate_keystrokes("escape");
     click(cx, "file-row-lines.txt");
     until(cx, "text view", |cx| {
         page.read_with(cx, |p, cx| {
-            p.side
-                .opened
+            p.opened
                 .as_ref()
                 .is_some_and(|o| o.name == "lines.txt" && matches!(o.show, Show::Text { .. }))
-                && p.side.code.read(cx).text() == "first\nsecond\n"
+                && p.code.read(cx).text() == "first\nsecond\n"
         })
     });
     click(cx, "file-row-data.bin");
@@ -1584,15 +1567,15 @@ fn read_markdown_json_text_binary_and_permission_error(cx: &mut TestAppContext) 
     });
     click(cx, "viewer-download");
     let destination = downloads.join("data.bin");
-    let notice: &'static str =
-        Box::leak(format!("files-notice-Downloaded to {}", destination.display()).into_boxed_str());
+    let notice = format!("Downloaded to {}", destination.display());
     until(cx, "binary downloaded", |cx| {
         std::fs::read(&destination).ok().as_deref() == Some(&[0, 255, 32])
-            && cx.debug_bounds(notice).is_some()
+            && status(&shell, cx) == notice
     });
     click(cx, "file-row-secret.txt");
     until(cx, "permission denied", |cx| {
-        page.read_with(cx, |p, _| p.side.opened.as_ref().is_some_and(|o| matches!(&o.show, Show::Failed(message) if message.contains("Permission denied"))))
+        cx.debug_bounds("files-failed").is_some()
+            && page.read_with(cx, |p, _| p.opened.as_ref().is_some_and(|o| matches!(&o.show, Show::Failed(message) if message.contains("Permission denied"))))
     });
     drop(running);
     std::fs::set_permissions(
@@ -1604,6 +1587,8 @@ fn read_markdown_json_text_binary_and_permission_error(cx: &mut TestAppContext) 
     std::fs::remove_dir_all(downloads).unwrap();
 }
 
+/// Changes is offered only for a file its repository says changed; new
+/// files, folders, a rename and a delete go through the menus.
 #[gpui::test]
 fn create_rename_delete_and_diff_in_the_files_page(cx: &mut TestAppContext) {
     let root = parvi_testkit::fresh_dir("files-act-finish");
@@ -1640,35 +1625,43 @@ fn create_rename_delete_and_diff_in_the_files_page(cx: &mut TestAppContext) {
     let (_, cx) = cx.add_window_view(move |w, cx| {
         parvi_app_shell::start(&[observed_files], Some(url), None, w, cx)
     });
-    browse_root(cx);
+    tree(cx, "file-row-tracked.txt");
     let page = SEARCH_PAGE.with(|p| p.borrow().as_ref().unwrap().clone());
-    until(cx, "tracked file", |cx| {
-        cx.debug_bounds("file-row-tracked.txt").is_some()
-    });
     click(cx, "file-row-clean.txt");
-    until(cx, "clean diff action", |cx| {
-        cx.debug_bounds("files-diff").is_some()
-    });
-    click(cx, "files-diff");
-    until(cx, "empty diff message", |cx| {
-        cx.debug_bounds("files-diff-empty").is_some()
+    until(cx, "a clean file read", |cx| {
+        cx.debug_bounds("files-edit").is_some()
+            && page.read_with(cx, |p, _| {
+                p.opened.as_ref().is_some_and(|o| o.name == "clean.txt")
+            })
     });
     click(cx, "file-row-tracked.txt");
-    until(cx, "diff action", |cx| {
-        cx.debug_bounds("files-diff").is_some()
+    until(cx, "Changes offered", |cx| {
+        cx.debug_bounds("files-changes").is_some()
     });
-    click(cx, "files-diff");
+    click(cx, "file-row-clean.txt");
+    until(cx, "a clean file read again", |cx| {
+        cx.debug_bounds("file-view-clean.txt").is_some() && cx.debug_bounds("files-edit").is_some()
+    });
+    assert!(
+        cx.debug_bounds("files-changes").is_none(),
+        "nothing to show"
+    );
+    click(cx, "file-row-tracked.txt");
+    until(cx, "Changes offered", |cx| {
+        cx.debug_bounds("files-changes").is_some()
+    });
+    click(cx, "files-changes");
     until(cx, "diff against HEAD", |cx| {
-        page.read_with(cx, |p, _| {
-            p.side
-                .opened
-                .as_ref()
-                .and_then(|o| o.diff.as_ref())
-                .is_some_and(|d| d.as_ref().is_ok_and(|d| d.diff.contains("-before\n+after")))
-        })
+        cx.debug_bounds("files-diff").is_some()
+            && page.read_with(cx, |p, _| {
+                p.opened
+                    .as_ref()
+                    .and_then(|o| o.diff.as_ref())
+                    .is_some_and(|d| d.diff.contains("-before\n+after"))
+            })
     });
     menu_on(cx, "file-row-tracked.txt");
-    click(cx, "file-menu-rename");
+    menu(cx, "Rename");
     cx.simulate_keystrokes("ctrl-a");
     cx.simulate_input("renamed.txt");
     cx.simulate_keystrokes("enter");
@@ -1679,38 +1672,39 @@ fn create_rename_delete_and_diff_in_the_files_page(cx: &mut TestAppContext) {
             && cx.debug_bounds("file-row-tracked.txt").is_none()
             && cx.debug_bounds("files-name").is_none()
     });
-    click(cx, "files-create-file");
+    click(cx, "files-new");
+    menu(cx, "New file");
     cx.simulate_input("new.txt");
     cx.simulate_keystrokes("enter");
-    until(cx, "new file", |cx| {
-        root.join("new.txt").is_file() && cx.debug_bounds("file-row-new.txt").is_some()
+    until(cx, "new file, open to write", |cx| {
+        root.join("new.txt").is_file()
+            && cx.debug_bounds("file-row-new.txt").is_some()
+            && cx.debug_bounds("file-view-new.txt").is_some()
     });
-    click(cx, "files-create-folder");
+    click(cx, "files-new");
+    menu(cx, "New folder");
     cx.simulate_input("new-folder");
     click(cx, "files-name-apply");
     until(cx, "new folder", |cx| {
         root.join("new-folder").is_dir() && cx.debug_bounds("file-row-new-folder").is_some()
     });
-    click(cx, "files-create-file");
+    click(cx, "files-new");
+    menu(cx, "New file");
     cx.simulate_input("abandoned.txt");
     cx.simulate_keystrokes("escape");
     until(cx, "naming cancelled", |cx| {
         cx.debug_bounds("files-name").is_none()
     });
     assert!(!root.join("abandoned.txt").exists());
-    click(cx, "file-row-new.txt");
-    until(cx, "new file opens", |cx| {
-        cx.debug_bounds("file-view-new.txt").is_some()
-    });
     menu_on(cx, "file-row-new.txt");
-    click(cx, "file-menu-delete");
+    menu(cx, "Delete");
     assert!(root.join("new.txt").exists());
-    click(cx, "file-menu-delete");
+    menu(cx, "Delete");
     until(cx, "delete confirmed in the list and viewer", |cx| {
         !root.join("new.txt").exists()
             && cx.debug_bounds("file-row-new.txt").is_none()
             && cx.debug_bounds("file-view-new.txt").is_none()
-            && page.read_with(cx, |p, _| p.side.opened.is_none())
+            && page.read_with(cx, |p, _| p.opened.is_none())
     });
     drop(running);
     std::fs::remove_dir_all(root).unwrap();
@@ -1727,37 +1721,15 @@ fn picture_zoom_can_switch_between_fit_and_actual_size(cx: &mut TestAppContext) 
     let (shell, cx) = cx.add_window_view(move |w, cx| {
         parvi_app_shell::start(&[parvi_files_app::build], Some(url), None, w, cx)
     });
-    until(cx, "Files", |cx| {
-        shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
-    });
-    browse_root(cx);
-    until(cx, "picture", |cx| {
-        cx.debug_bounds("file-row-pixel.png").is_some()
-    });
+    tree(cx, "file-row-pixel.png");
     click(cx, "file-row-pixel.png");
     until(cx, "zoom controls", |cx| {
         cx.debug_bounds("zoom-1").is_some()
     });
     click(cx, "zoom-1");
-    let zoom = shell.read_with(cx, |s, cx| {
-        s.hub()
-            .read(cx)
-            .settings
-            .section::<parvi_files_app::store::Kept>("files")
-            .unwrap()
-            .zoom
-    });
-    assert_eq!(zoom, Some(100));
+    assert_eq!(kept(&shell, cx).zoom, Some(100));
     click(cx, "zoom-fit");
-    let zoom = shell.read_with(cx, |s, cx| {
-        s.hub()
-            .read(cx)
-            .settings
-            .section::<parvi_files_app::store::Kept>("files")
-            .unwrap()
-            .zoom
-    });
-    assert_eq!(zoom, None);
+    assert_eq!(kept(&shell, cx).zoom, None);
     drop(running);
     std::fs::remove_dir_all(root).unwrap();
 }

@@ -33,6 +33,23 @@ pub fn page(t: &Theme, list: impl IntoElement, detail: impl IntoElement) -> Div 
 /// The list column: [`size::LIST`] wide, its head on top, its rows under
 /// it scrolling. `id` names its scroll.
 pub fn list(t: &Theme, id: impl Into<ElementId>, head: Div, rows: impl IntoElement) -> Div {
+    list_frame(
+        t,
+        head,
+        div()
+            .id(id)
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .child(rows),
+    )
+}
+
+/// The list column around a body that scrolls itself, such as a uniform
+/// list of many rows.
+pub fn list_frame(t: &Theme, head: Div, body: impl IntoElement) -> Div {
     div()
         .w(px(size::LIST))
         .flex_none()
@@ -45,14 +62,12 @@ pub fn list(t: &Theme, id: impl Into<ElementId>, head: Div, rows: impl IntoEleme
         .child(head)
         .child(
             div()
-                .id(id)
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
                 .py(px(size::ROW_INSET))
                 .flex()
                 .flex_col()
-                .child(rows),
+                .child(body),
         )
 }
 
@@ -95,6 +110,19 @@ pub fn detail(t: &Theme, id: impl Into<ElementId>, head: Div, body: impl IntoEle
                     .child(body),
             ),
         )
+}
+
+/// The detail column around a body that fills it and scrolls itself, such
+/// as code or a picture: no reading width, no padding.
+pub fn detail_frame(head: Div, body: impl IntoElement) -> Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .flex()
+        .flex_col()
+        .child(head)
+        .child(div().flex_1().min_h_0().relative().child(body))
 }
 
 /// The header line: as high as the tab bar, a rule under it. A list's

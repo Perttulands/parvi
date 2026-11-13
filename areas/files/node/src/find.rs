@@ -78,13 +78,7 @@ fn walk(root: &Path, needle: &str, content: bool) -> Result<(Vec<Match>, bool), 
                 continue;
             };
             if kind.is_dir() {
-                if !name.starts_with('.')
-                    && !mounts.contains(&path)
-                    && !matches!(
-                        name.as_str(),
-                        "node_modules" | "dist" | "build" | "target" | "vendor"
-                    )
-                {
+                if !skipped(&name) && !mounts.contains(&path) {
                     pending.push((path, None));
                 }
             } else if kind.is_file() {
@@ -93,6 +87,15 @@ fn walk(root: &Path, needle: &str, content: bool) -> Result<(Vec<Match>, bool), 
         }
     }
     Ok((found, false))
+}
+
+/// A folder a walk never enters: hidden, or what a build generates.
+pub(super) fn skipped(name: &str) -> bool {
+    name.starts_with('.')
+        || matches!(
+            name,
+            "node_modules" | "dist" | "build" | "target" | "vendor"
+        )
 }
 
 /// Linux exposes bind mounts as well as separate filesystems here. Search never

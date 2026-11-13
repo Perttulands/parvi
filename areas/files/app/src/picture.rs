@@ -37,10 +37,10 @@ impl FilesPage {
 
     /// − and +: the next stop from what side `i`'s picture shows now.
     pub fn step_zoom(&mut self, up: bool, cx: &mut Context<Self>) {
-        let Some(Show::Picture { natural, .. }) = self.side.opened.as_ref().map(|o| &o.show) else {
+        let Some(Show::Picture { natural, .. }) = self.opened.as_ref().map(|o| &o.show) else {
             return;
         };
-        let Some(room) = self.side.room.get() else {
+        let Some(room) = self.room.get() else {
             return;
         };
         let next = zoom::step(self.zoom(cx), *natural, room, up);
@@ -51,7 +51,6 @@ impl FilesPage {
     /// decoded picture until told.
     pub fn release_pictures(&mut self, window: &mut Window) {
         let shown: Vec<Arc<RenderImage>> = self
-            .side
             .opened
             .iter()
             .filter_map(|o| match &o.show {
@@ -73,12 +72,11 @@ impl FilesPage {
     /// `narrow` (0 to 3) leaves out its pixels and 1:1, then the percent,
     /// then − and +.
     pub(super) fn zoom_bar(&self, t: &Theme, narrow: u8, cx: &mut Context<Self>) -> Option<Div> {
-        let Some(Show::Picture { natural, .. }) = self.side.opened.as_ref().map(|o| &o.show) else {
+        let Some(Show::Picture { natural, .. }) = self.opened.as_ref().map(|o| &o.show) else {
             return None;
         };
         let level = self.zoom(cx);
         let percent = self
-            .side
             .room
             .get()
             .map(|room| format!("{}%", zoom::drawn_percent(*natural, room, level)));
@@ -138,7 +136,7 @@ impl FilesPage {
     /// The picture at the level: centred while it fits, scrolling inside
     /// the room when a percentage makes it bigger.
     pub(super) fn picture(&self, image: &Arc<RenderImage>, natural: Px, cx: &App) -> AnyElement {
-        let room = self.side.room.clone();
+        let room = self.room.clone();
         let mut picture = img(image.clone()).flex_none();
         // The stage is the room, or the picture where it is bigger, so a
         // small picture is centred and a big one scrolls from its top left.

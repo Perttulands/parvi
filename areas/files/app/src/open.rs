@@ -9,8 +9,10 @@ pub fn version(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-/// The most of a file shown as text (CHROTE `MAX_TEXT_PREVIEW_BYTES`).
-pub const MAX_TEXT: usize = 1 << 20;
+/// The most of a file shown as text: a long log reads whole.
+pub const MAX_TEXT: usize = 16 << 20;
+/// Text above this is read but not edited, rendered or laid out here.
+pub const MAX_EDIT: usize = 1 << 20;
 
 #[derive(Clone)]
 pub enum Show {
@@ -50,15 +52,43 @@ pub struct Opened {
     pub pretty: Option<String>,
     pub editing: bool,
     pub saving: bool,
-    /// Markdown: its source instead of its rendering.
+    /// Its text instead of its rendering: Markdown or JSON opened at a
+    /// line.
     pub source: bool,
+    /// What its repository says changed in it, when anything did.
+    pub diff: Option<parvi_files_contract::Diff>,
     pub diff_open: bool,
-    pub diff: Option<Result<parvi_files_contract::Diff, String>>,
+    /// The file changed on disk under an unsaved edit.
+    pub changed_on_disk: bool,
 }
 
 impl Opened {
+    pub fn reading(node: String, path: String) -> Self {
+        Self {
+            name: super::store::paths::base_name(&path).to_owned(),
+            node,
+            path,
+            size: None,
+            show: Show::Reading,
+            saved: String::new(),
+            base: String::new(),
+            pretty: None,
+            editing: false,
+            saving: false,
+            source: false,
+            diff: None,
+            diff_open: false,
+            changed_on_disk: false,
+        }
+    }
+
     pub fn key(&self) -> (String, String) {
         (self.node.clone(), self.path.clone())
+    }
+
+    /// Text small enough to edit here.
+    pub fn editable(&self) -> bool {
+        matches!(self.show, Show::Text { .. }) && self.saved.len() <= MAX_EDIT
     }
 }
 
@@ -124,19 +154,20 @@ pub fn show(name: &str, bytes: &[u8]) -> (Show, String, Option<String>) {
     let kind = kinds::kind(name);
     if bytes.len() > MAX_TEXT {
         return (
-            Show::Not(format!("Large file · {size} · too large to show inline")),
+            Show::Not(format!("{size}, too large to show here")),
             String::new(),
             None,
         );
     }
     match kinds::as_text(bytes) {
         Some(text) => {
-            let markdown = (kind == kinds::Kind::Markdown).then(|| markdown::parse(&text));
-            let pretty = pretty(name, &text);
+            let small = text.len() <= MAX_EDIT;
+            let markdown = (small && kind == kinds::Kind::Markdown).then(|| markdown::parse(&text));
+            let pretty = if small { pretty(name, &text) } else { None };
             (Show::Text { markdown }, text, pretty)
         }
         None => (
-            Show::Not(format!("Binary file · {size} · no inline view")),
+            Show::Not(format!("{size} of binary, not shown here")),
             String::new(),
             None,
         ),
@@ -170,7 +201,7 @@ mod tests {
         assert_eq!(pretty.as_deref(), Some("{\n  \"a\": 1\n}"), "read laid out");
         assert_eq!(show("b.json", b"{\n  \"a\": 1\n}").2, None);
         assert!(
-            matches!(show("a.bin", &[0, 1, 2]).0, Show::Not(t) if t.starts_with("Binary file · 3 B"))
+            matches!(show("a.bin", &[0, 1, 2]).0, Show::Not(t) if t == "3 B of binary, not shown here")
         );
         assert!(matches!(show("notes", b"plain words").0, Show::Text { .. }));
     }
