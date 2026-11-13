@@ -603,7 +603,8 @@ impl Terminals {
                 )),
             )
             .child(
-                kit::button(&t, "peek-close", "Close  Esc", Kind::Quiet)
+                kit::button(&t, "peek-close", "Close", Kind::Quiet)
+                    .tooltip(kit::tip("Esc"))
                     .on_click(cx.listener(|s, _, _, cx| s.close(super::surface::PEEK, cx))),
             );
         let body: AnyElement = match (screen, session.is_some(), p.loading) {

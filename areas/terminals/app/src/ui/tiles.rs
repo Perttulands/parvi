@@ -122,7 +122,7 @@ impl Terminals {
                 .relative()
                 .flex()
                 .flex_col()
-                .child(self.render_grid(window, cx))
+                .child(self.render_grid(cx))
                 .children(beside),
         );
         row.relative()
@@ -140,37 +140,7 @@ impl Terminals {
         window.viewport_size().width / px(1.) - rail
     }
 
-    /// How many windows stand side by side: one row of up to three, or two
-    /// rows of two (CHROTE's grid-1..4).
-    fn columns(&self) -> f32 {
-        match self.settings.workspace.windows().len() {
-            4 => 2.,
-            n => n.max(1) as f32,
-        }
-    }
-
-    /// The width an open drawer moves the windows aside by, while each keeps
-    /// a readable width. `None` with a drawer open is a drawer lying over
-    /// them: no session is resized for a drawer that is soon closed.
-    pub(super) fn drawer_room(&self, window: &Window) -> Option<f32> {
-        let find = self.is_open(super::surface::FIND);
-        if !find && !self.is_open(super::surface::SEND) {
-            return None;
-        }
-        let room = self.workspace_room(window);
-        let width = if find {
-            Some(size::FIND_DRAWER)
-        } else {
-            self.settings.send_width
-        };
-        Some(crate::store::send::width(
-            width,
-            window.viewport_size().width / px(1.),
-        ))
-        .filter(|width| room - width >= self.columns() * size::WINDOW_MIN)
-    }
-
-    fn render_grid(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_grid(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
         let n = self.settings.workspace.windows().len();
         // A row or a tag in the air is the only reason a seam exists: a drop
@@ -183,7 +153,6 @@ impl Terminals {
             self.dragging_over = None;
         }
         let tiles: Vec<AnyElement> = (0..n).map(|i| self.render_tile(i, cx)).collect();
-        let drawer_room = self.drawer_room(window);
         let mut grid = div()
             .id("grid")
             .track_focus(&self.term_focus)
@@ -193,9 +162,6 @@ impl Terminals {
             .flex_col()
             .gap(px(size::TILE_GAP))
             .p(px(size::TILE_GAP))
-            .when_some(drawer_room, |grid, width| {
-                grid.pr(px(size::TILE_GAP + width))
-            })
             .bg(t.raised)
             .on_key_down(cx.listener(Self::term_key))
             .on_mouse_move(cx.listener(Self::term_mouse_move))

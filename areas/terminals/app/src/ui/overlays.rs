@@ -428,15 +428,12 @@ impl Terminals {
                     .child(
                         div()
                             .flex_1()
-                            .text_size(px(12.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(format!("OVERVIEW · {} SESSIONS", list.len())),
+                            .child(format!("Overview · {} sessions", list.len())),
                     )
                     .child(
-                        kit::note(&t, "Arrow keys choose · Enter opens", Some(t.dim)).mr(px(12.)),
-                    )
-                    .child(
-                        kit::button(&t, "ov-close", "Close  Esc", Kind::Quiet)
+                        kit::button(&t, "ov-close", "Close", Kind::Quiet)
+                            .tooltip(kit::tip("Esc; arrow keys choose a session, Enter opens it"))
                             .on_click(cx.listener(|s, _, _, cx| s.close(surface::OVERVIEW, cx))),
                     ),
             )
@@ -503,15 +500,9 @@ impl Terminals {
                 ),
             },
         };
-        let summary = match &found {
-            Some((matches, _)) if !matches.is_empty() => {
-                format!("{summary} · Enter opens the next, Shift+Enter the one before")
-            }
-            _ => summary,
-        };
-        // Where the drawer would lie over the window showing a hit, it
-        // keeps only its query and that hit.
-        let compact = self.find_shown.is_some() && self.drawer_room(window).is_none();
+        // It lies over the windows, so once a hit is shown it keeps only
+        // its query and that hit.
+        let compact = self.find_shown.is_some();
         let shown_hit = self.find_shown.and_then(|i| {
             let (matches, _) = found.as_ref()?;
             let m = matches.get(i)?;
@@ -586,8 +577,6 @@ impl Terminals {
             .top_0()
             .when(!compact, |d| d.bottom_0())
             .right_0()
-            // Shift+Enter in the query steps back; the field would take it
-            // for Enter.
             // Shift+Enter steps back; the field would take it as Enter.
             .capture_action(cx.listener(
                 |s, _: &parvi_app_kit::widgets::field::ShiftEnter, window, cx| {
@@ -621,7 +610,8 @@ impl Terminals {
                             .child("Search scrollback"),
                     )
                     .child(
-                        kit::button(&t, "find-close", "Close  Esc", Kind::Quiet)
+                        kit::button(&t, "find-close", "Close", Kind::Quiet)
+                            .tooltip(kit::tip("Esc"))
                             .on_click(cx.listener(|s, _, _, cx| s.close(surface::FIND, cx))),
                     ),
             )

@@ -39,8 +39,8 @@ pub mod size {
     pub const BESIDE_SEAM: f32 = 12.;
     pub const BESIDE_GRIP_W: f32 = 3.;
     pub const BESIDE_GRIP_H: f32 = 32.;
-    /// The width a window keeps readable: under it a drawer lies over the
-    /// windows rather than narrowing them.
+    /// The width a window keeps readable beside a view opened over the
+    /// windows.
     pub const WINDOW_MIN: f32 = 440.;
     pub const TILE_HEAD: f32 = 34.;
     pub const TILE_GAP: f32 = 6.;
@@ -50,7 +50,7 @@ pub mod size {
     /// The widest a session's tag grows in a window's head.
     pub const TAG_MAX: f32 = 320.;
     /// The Send drawer: its width with nothing remembered, the least it may
-    /// be, and what the workspace beside it keeps (CHROTE's SendDrawer).
+    /// be, and how much of the page it leaves uncovered (CHROTE's SendDrawer).
     pub const DRAWER: f32 = 380.;
     pub const DRAWER_MIN: f32 = 320.;
     pub const DRAWER_ROOM: f32 = 480.;

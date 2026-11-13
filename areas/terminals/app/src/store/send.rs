@@ -106,20 +106,22 @@ pub fn first_target(all: &[Session], named: Option<&Key>, focused: Option<&Key>)
     named.filter(live).or(focused.filter(live)).cloned()
 }
 
-/// Whether the drawer, `width` wide in a page `room` wide, opens on the
-/// left so that it covers less of the target's window, which spans `span`
-/// (left and right edge). On the right unless the left covers less.
+/// Whether the drawer, `width` wide over a page `room` wide, opens on the
+/// left, clear of the target's window, which spans `span` (left and right
+/// edge). On the right unless only the left leaves that window uncovered:
+/// a terminal's lines start at its left, so its left edge is the last to
+/// cover.
 pub fn drawer_left(span: Option<(f32, f32)>, width: f32, room: f32) -> bool {
     let Some((l, r)) = span else {
         return false;
     };
     let covered = |from: f32, to: f32| (r.min(to) - l.max(from)).max(0.);
-    covered(0., width) < covered(room - width, room)
+    covered(0., width) == 0. && covered(room - width, room) > 0.
 }
 
 /// The drawer's width: the one remembered on this device, else the
-/// default; never under the least, and never so wide that the workspace
-/// beside it keeps less than its share of `room`.
+/// default; never under the least, and never so wide that it leaves less
+/// of `room` uncovered than its share.
 pub fn width(remembered: Option<f32>, room: f32) -> f32 {
     let wanted = remembered
         .filter(|w| w.is_finite())
@@ -182,8 +184,11 @@ mod tests {
         assert!(drawer_left(Some((1100., 1440.)), 380., 1440.));
         assert!(!drawer_left(Some((260., 620.)), 380., 1440.));
         assert!(!drawer_left(None, 380., 1440.));
-        // One window across the page: the left covers the rail instead.
-        assert!(drawer_left(Some((260., 1440.)), 380., 1440.));
+        // One window across the page: its lines start at the left, so the
+        // drawer covers its right.
+        assert!(!drawer_left(Some((260., 1440.)), 380., 1440.));
+        // The middle of three: the right leaves it clear.
+        assert!(!drawer_left(Some((653., 1047.)), 380., 1440.));
     }
 
     #[test]

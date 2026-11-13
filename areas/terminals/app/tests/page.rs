@@ -419,15 +419,18 @@ fn other_pages_read_the_sessions_and_open_views_beside_them(cx: &mut TestAppCont
     let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
 }
 
-/// A view beside the windows lies over them: opening it, dragging its
-/// edge, giving it the whole area and closing it with Esc leave every
+/// What the operator opens on the page lies over the windows: Send, the
+/// scrollback search and Overview, and a view beside them opened, its edge
+/// dragged, given the whole area and closed with Esc, all leave every
 /// session at the size it had, here and for every other client.
 #[gpui::test]
-fn a_view_beside_never_resizes_a_session(cx: &mut TestAppContext) {
-    let Some(running) = start("terminals-beside-size") else {
+fn nothing_opened_on_the_page_resizes_a_session(cx: &mut TestAppContext) {
+    let Some(running) = start("terminals-opened-size") else {
         return;
     };
-    let (shell, cx, settings) = open_with_alpha(&running, "beside-size", cx);
+    let (shell, cx, settings) = open_with_alpha(&running, "opened-size", cx);
+    // Wide enough that a drawer could have moved the window aside.
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     let toy = shell.read_with(cx, |s, _| Host::new(s.hub()).for_page("toy", &[]));
     let page = PAGE.with(|p| p.borrow().clone()).expect("the page");
     let grid = |cx: &mut VisualTestContext| {
@@ -448,7 +451,9 @@ fn a_view_beside_never_resizes_a_session(cx: &mut TestAppContext) {
             ],
         )
     };
+    // A new grid is sent once it has held a moment, on the test's clock.
     until(cx, "alpha sized to its window", |cx| {
+        cx.executor().advance_clock(Duration::from_millis(100));
         let (cols, rows) = grid(cx);
         page.read_with(cx, |p, _| p.resizing.is_empty()) && size() == format!("{cols}x{rows}")
     });
@@ -462,6 +467,21 @@ fn a_view_beside_never_resizes_a_session(cx: &mut TestAppContext) {
         );
         assert_eq!(size(), was_size, "alpha's size {when}");
     };
+
+    for (keys, drawn, what) in [
+        ("alt-s", "send-drawer", "Send"),
+        ("alt-h", "find-drawer", "the scrollback search"),
+        ("alt-v", "overview-grid", "Overview"),
+    ] {
+        cx.simulate_keystrokes(keys);
+        cx.run_until_parked();
+        assert!(cx.debug_bounds(drawn).is_some(), "{what} drawn");
+        unchanged(cx, &format!("with {what} open"));
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(cx.debug_bounds(drawn).is_none(), "Esc closed {what}");
+        unchanged(cx, &format!("after {what} closed"));
+    }
 
     let note = cx.update(|_, cx| cx.new(|cx| Note(cx.focus_handle())));
     cx.update(|_, cx| toy.show_beside("terminals", note.into(), cx));
@@ -2514,15 +2534,8 @@ fn search_shows_and_marks_a_wrapped_history_match(cx: &mut TestAppContext) {
     });
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     cx.simulate_keystrokes("alt-h");
-    until(cx, "search drawer opened beside the terminal", |cx| {
-        let Some(drawer) = cx.debug_bounds("find-drawer") else {
-            return false;
-        };
-        page.read_with(cx, |p, _| {
-            p.geo.borrow()[0]
-                .body
-                .is_some_and(|body| body.origin.x + body.size.width <= drawer.origin.x)
-        })
+    until(cx, "search drawer opened over the windows", |cx| {
+        cx.debug_bounds("find-drawer").is_some()
     });
     cx.simulate_input("matchneedle");
     until(cx, "search result", |cx| {
@@ -2580,8 +2593,10 @@ fn typing_while_reading_history_reaches_the_program_and_keeps_the_history(cx: &m
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }
 
+/// Send lies over one window across the page on its right, where its lines
+/// end, not over the left where they start.
 #[gpui::test]
-fn send_drawer_keeps_the_terminal_visible_beside_it(cx: &mut TestAppContext) {
+fn send_drawer_lies_over_a_lone_window_on_its_right(cx: &mut TestAppContext) {
     let Some(running) = start("terminals-send-layout") else {
         return;
     };
@@ -2592,14 +2607,14 @@ fn send_drawer_keeps_the_terminal_visible_beside_it(cx: &mut TestAppContext) {
         page.read_with(cx, |p, _| p.geo.borrow()[0].body.is_some())
     });
     cx.simulate_keystrokes("alt-s");
-    until(cx, "drawer beside terminal", |cx| {
+    until(cx, "drawer over the window's right", |cx| {
         let Some(drawer) = cx.debug_bounds("send-drawer") else {
             return false;
         };
         page.read_with(cx, |p, _| {
-            p.geo.borrow()[0]
-                .body
-                .is_some_and(|body| body.origin.x + body.size.width <= drawer.origin.x)
+            p.geo.borrow()[0].body.is_some_and(|body| {
+                body.origin.x < drawer.origin.x && drawer.origin.x < body.origin.x + body.size.width
+            })
         })
     });
     assert!(!shown(cx).trim().is_empty());

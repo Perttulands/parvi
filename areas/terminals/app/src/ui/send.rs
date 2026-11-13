@@ -1,6 +1,7 @@
-//! Send to Session, the one hand-off (CHROTE's `SendDrawer`): a drawer at
-//! the right edge. Every surface opens it through [`Terminals::handoff`] with a
-//! reference to what it was showing; the reference is shown, not edited, and
+//! Send to Session, the one hand-off (CHROTE's `SendDrawer`): a drawer that
+//! lies over the windows, on the side away from its target's window, so no
+//! session changes size for it. Every surface opens it through
+//! [`Terminals::handoff`] with a reference to what it was showing; the reference is shown, not edited, and
 //! the note under it is the operator's. Enter sends (paste and submit),
 //! Shift+Enter breaks the line, Ctrl+Enter or Paste only pastes. Files
 //! dropped on the drawer or attached land on the target's node and their
@@ -56,7 +57,7 @@ pub struct Draft {
     pub sending: Option<(u32, Key, bool, bool)>,
     /// Files being written on the target's node.
     pub uploading: bool,
-    /// The focused tile grid before the drawer made room for itself.
+    /// The focused window's grid as the drawer opened, for its launch.
     pub launch_grid: Option<super::page::Grid>,
     /// The inner edge is being dragged.
     pub resizing: bool,
@@ -137,15 +138,13 @@ impl Terminals {
         self.send_query.update(cx, |f, cx| f.set("", false, cx));
         self.send_note.update(cx, |f, cx| f.set("", false, cx));
         self.open(Surface::Send, window, cx);
-        // Where the windows move aside for the drawer it covers none of
-        // them; otherwise it opens on the side away from the target.
+        // It lies over the windows, on the side away from the target.
         let room = window.viewport_size().width / px(1.);
-        self.send.left = self.drawer_room(window).is_none()
-            && send::drawer_left(
-                self.aimed_span(),
-                send::width(self.settings.send_width, room),
-                room,
-            );
+        self.send.left = send::drawer_left(
+            self.aimed_span(),
+            send::width(self.settings.send_width, room),
+            room,
+        );
     }
 
     /// The drawer closed: the keyboard goes back to the terminal, whichever
@@ -503,12 +502,7 @@ impl Terminals {
         }
         body = body
             .child(self.send_note.clone())
-            .child(self.render_send_files(&t, cx))
-            .child(kit::note(
-                &t,
-                "Enter sends · Shift+Enter new line · Ctrl+Enter pastes · drop or paste files to attach",
-                Some(t.dim),
-            ));
+            .child(self.render_send_files(&t, cx));
         if let Some(why) = &self.send.said {
             body = body.child(kit::note(&t, why.clone(), Some(t.error)));
         }
@@ -536,6 +530,7 @@ impl Terminals {
                 .child(
                     kit::button(&t, "send-attach", "Attach…", Kind::Quiet)
                         .flex_none()
+                        .tooltip(kit::tip("Or drop or paste files on the drawer"))
                         .on_click(
                             cx.listener(|s, _: &ClickEvent, window, cx| s.pick_files(window, cx)),
                         ),
@@ -544,6 +539,7 @@ impl Terminals {
                 .child(
                     kit::button(&t, "send-paste", "Paste only", Kind::Plain)
                         .flex_none()
+                        .tooltip(kit::tip("Ctrl+Enter: paste without pressing Enter"))
                         .when(blocked, |b| b.opacity(0.5))
                         .on_click(cx.listener(|s, _: &ClickEvent, window, cx| {
                             s.send_now(false, window, cx)
@@ -552,6 +548,7 @@ impl Terminals {
                 .child(
                     kit::button(&t, "send-go", go, Kind::Primary)
                         .flex_none()
+                        .tooltip(kit::tip("Enter; Shift+Enter starts a new line"))
                         .debug_selector(|| "send-go".into())
                         .when(blocked, |b| b.opacity(0.5))
                         .on_click(cx.listener(|s, _: &ClickEvent, window, cx| {
@@ -637,9 +634,13 @@ impl Terminals {
     }
 
     /// The left and right edge of the window showing the session Send aims
-    /// at, as last painted.
+    /// at, else the one it sends from, as last painted.
     fn aimed_span(&self) -> Option<(f32, f32)> {
-        let k = self.send_target.as_ref().filter(|_| !self.send.new_agent)?;
+        let k = self
+            .send_target
+            .as_ref()
+            .filter(|_| !self.send.new_agent)
+            .or(self.send.source.as_ref())?;
         let geo = self.geo.borrow();
         let ws = &self.settings.workspace;
         (0..ws.windows().len())
@@ -712,7 +713,8 @@ impl Terminals {
                     .child("Send to session"),
             )
             .child(
-                kit::button(t, "send-close", "Close  Esc", Kind::Quiet)
+                kit::button(t, "send-close", "Close", Kind::Quiet)
+                    .tooltip(kit::tip("Esc"))
                     .on_click(cx.listener(|s, _, _, cx| s.close(surface::SEND, cx))),
             )
     }
