@@ -57,6 +57,7 @@ impl Render for ScheduledPage {
                     .into_any_element()
             });
             pane::detail(
+                &t,
                 "scheduled-detail",
                 pane::head(&t),
                 div()
@@ -390,7 +391,7 @@ impl ScheduledPage {
                 .collect();
             body = body.child(pane::section(t, "Recent runs").child(pane::table(t, &RUNS, rows)));
         }
-        pane::detail("scheduled-detail", head, body)
+        pane::detail(t, "scheduled-detail", head, body)
     }
 
     /// What the head's "…" offers: the actions a task needs now and then.
@@ -491,7 +492,7 @@ impl ScheduledPage {
             .child(pane::section(t, "Send to").child(self.targets(t, form, cx)))
             .child(pane::section(t, "When").child(self.when(t, &form.schedule, cx)))
             .child(pane::section(t, "Name").child(fields.name.clone()));
-        pane::detail("scheduled-form", head, body)
+        pane::detail(t, "scheduled-form", head, body)
     }
 
     /// The sessions a task may send to, each pressed or not; a task's

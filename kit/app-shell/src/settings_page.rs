@@ -618,6 +618,7 @@ impl Render for SettingsPage {
             &t,
             list,
             pane::detail(
+                &t,
                 "settings-page",
                 pane::head(&t).child(pane::title(&t, title)),
                 div()

@@ -651,7 +651,7 @@ impl AgentsPage {
                     .child(pane::empty(&t, words, None).p_0()),
             )
         };
-        pane::page(&t, list, pane::detail("roles-detail", head, body))
+        pane::page(&t, list, pane::detail(&t, "roles-detail", head, body))
             .text_color(t.text)
             .into_any_element()
     }

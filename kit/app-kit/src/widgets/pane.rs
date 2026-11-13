@@ -56,16 +56,33 @@ pub fn list(t: &Theme, id: impl Into<ElementId>, head: Div, rows: impl IntoEleme
         )
 }
 
-/// The detail column: its head on top, its body under it scrolling, at a
-/// reading width. `id` names its scroll.
-pub fn detail(id: impl Into<ElementId>, head: Div, body: impl IntoElement) -> Div {
+/// The detail column: its head on top, its body under it scrolling. Head
+/// and body share one column, [`size::READING`] at most and starting at
+/// the detail's left, so the head's actions stand at the right edge of
+/// what they act on however wide the window; the rule under the head
+/// still spans the detail. `id` names its scroll.
+pub fn detail(t: &Theme, id: impl Into<ElementId>, head: Div, body: impl IntoElement) -> Div {
     div()
         .flex_1()
         .min_w_0()
         .h_full()
         .flex()
         .flex_col()
-        .child(head)
+        .child(
+            div()
+                .flex_none()
+                .w_full()
+                .h(px(size::TAB_BAR))
+                .border_b_1()
+                .border_color(t.divider)
+                .child(
+                    head.border_0()
+                        .h_full()
+                        .w_full()
+                        .max_w(px(size::READING))
+                        .px(px(size::PAD)),
+                ),
+        )
         .child(
             div().id(id).flex_1().min_h_0().overflow_y_scroll().child(
                 div()
@@ -229,14 +246,14 @@ fn sized(d: Div, w: Option<f32>) -> Div {
 }
 
 /// A table: the column labels on a line of their own, then `rows`, each
-/// from [`table_row`]. No frame around it; rules between rows.
+/// from [`table_row`]. No frame around it and no inset of its own, so its
+/// first column lines up under its section's label; rules between rows.
 pub fn table(t: &Theme, cols: &[Col], rows: Vec<AnyElement>) -> Div {
     let mut head = div()
         .flex()
         .items_center()
         .gap(px(size::HEAD_GAP))
         .h(px(size::ROW))
-        .px(px(size::ROW_PAD))
         .border_b_1()
         .border_color(t.divider)
         .text_size(px(size::SMALL))
@@ -255,7 +272,6 @@ pub fn table_row(t: &Theme, cols: &[Col], cells: Vec<AnyElement>) -> Div {
         .items_center()
         .gap(px(size::HEAD_GAP))
         .min_h(px(size::ROW))
-        .px(px(size::ROW_PAD))
         .border_b_1()
         .border_color(t.rule());
     for (c, cell) in cols.iter().zip(cells) {

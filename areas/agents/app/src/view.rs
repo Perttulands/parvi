@@ -151,6 +151,7 @@ impl AgentsPage {
                 format!("Reading the agents on {}…", places.join(", "))
             };
             pane::detail(
+                &t,
                 "agents-detail",
                 pane::head(&t),
                 pane::empty(&t, words, None).p_0(),
@@ -235,7 +236,7 @@ impl AgentsPage {
             }
             rows
         };
-        pane::detail("agents-detail", head, body)
+        pane::detail(t, "agents-detail", head, body)
     }
 
     /// One thing that is off: its name, what is wrong, and its fix (a
@@ -444,7 +445,7 @@ impl AgentsPage {
             }
             body = body.child(part);
         }
-        pane::detail("agents-detail", head, body)
+        pane::detail(t, "agents-detail", head, body)
     }
 
     fn checkout_detail(
@@ -528,7 +529,7 @@ impl AgentsPage {
                 lines
             });
         }
-        pane::detail("agents-detail", head, body)
+        pane::detail(t, "agents-detail", head, body)
     }
 }
 
