@@ -8,14 +8,7 @@ use crate::{AgentsPage, tokens};
 use gpui::{AnyElement, Context, Div, Hsla, SharedString, Window, div, prelude::*, px};
 use parvi_app_kit::theme::{Theme, rgb, size, theme};
 use parvi_app_kit::widgets::kit::{self, Kind};
-use parvi_app_kit::widgets::pane::{self, Col};
-
-/// An off line: what, what is wrong, its fix.
-const OFF: [Col; 3] = [
-    Col::fixed("", tokens::SUBJECT_W),
-    Col::fill(""),
-    Col::fixed("", tokens::FIX_W),
-];
+use parvi_app_kit::widgets::pane;
 
 impl AgentsPage {
     pub(crate) fn render_agents(
@@ -280,17 +273,23 @@ impl AgentsPage {
                 .child(w.clone())
                 .into_any_element(),
         };
-        let row = pane::table_row(
-            t,
-            &OFF,
-            vec![
-                pane::cell(subject).into_any_element(),
-                words.into_any_element(),
-                fix,
-            ],
-        )
-        .py(px(tokens::OFF_PAD))
-        .px_0();
+        let row = div()
+            .flex()
+            .items_start()
+            .gap(px(size::HEAD_GAP))
+            .py(px(tokens::OFF_PAD))
+            .border_b_1()
+            .border_color(t.rule())
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(div().text_color(t.text).child(subject))
+                    .child(words),
+            )
+            .child(div().flex_none().max_w(px(tokens::FIX_W)).child(fix));
         match (&o.failure, &o.checkout) {
             (Some(_), Some(name)) => {
                 let selector = format!("agents-sync-failure-{node}-{name}");

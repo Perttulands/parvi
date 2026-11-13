@@ -174,7 +174,9 @@ impl Shell {
                                     })
                                 })
                                 .collect();
-                            s.host.menu(rows, e.position, cx);
+                            // Under the bar, so the tabs stay in sight.
+                            let at = point(e.position.x, px(size::TAB_BAR));
+                            s.host.menu(rows, at, cx);
                         }),
                     ),
             );

@@ -5,8 +5,7 @@ mod role_state;
 pub mod state;
 mod view;
 mod tokens {
-    /// An off line's name column and its fix's.
-    pub const SUBJECT_W: f32 = 160.;
+    /// The most an off line's fix takes; its words wrap within it.
     pub const FIX_W: f32 = 220.;
     /// Above and below an off line, which may wrap.
     pub const OFF_PAD: f32 = 6.;
