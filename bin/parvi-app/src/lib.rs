@@ -23,10 +23,10 @@ pub const PAGES: &[Build] = &[
 ];
 
 fn fonts() -> Vec<Cow<'static, [u8]>> {
-    vec![
-        Cow::Borrowed(include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf").as_slice()),
-        Cow::Borrowed(include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf").as_slice()),
-    ]
+    parvi_app_kit::theme::FAMILY_FILES
+        .iter()
+        .map(|f| Cow::Borrowed(*f))
+        .collect()
 }
 
 /// `PARVI_APP_BOUNDS=x,y,w,h` places the window exactly (tests on an

@@ -380,6 +380,29 @@ impl Workspace {
             .flat_map(|t| t.shown().iter().filter_map(Window::shown))
     }
 
+    /// What the app opens with: each tab's empty windows put behind the
+    /// ones that hold a session, so a restart shows terminals rather than
+    /// empty frames; a tab keeps one window at least.
+    pub fn fold_empty(&mut self) {
+        let focused = self
+            .windows()
+            .get(self.focus)
+            .filter(|w| !w.is_empty())
+            .map(|_| {
+                self.windows()[..self.focus]
+                    .iter()
+                    .filter(|w| !w.is_empty())
+                    .count()
+            });
+        for t in &mut self.tabs {
+            let shown: Vec<Window> = t.windows.drain(..t.count).collect();
+            let (full, empty): (Vec<_>, Vec<_>) = shown.into_iter().partition(|w| !w.is_empty());
+            t.count = full.len().max(1);
+            t.windows.splice(0..0, full.into_iter().chain(empty));
+        }
+        self.focus = focused.unwrap_or(0);
+    }
+
     /// Reads a stored workspace, mending what is out of range; `None` if it
     /// isn't one. A workspace stored before hidden tabs and windows shows
     /// what it had.
@@ -712,6 +735,25 @@ mod tests {
             TileState::Lost("a"),
             "another device's session waits for that device; it hasn't ended"
         );
+    }
+
+    #[test]
+    fn the_app_opens_with_the_windows_that_hold_a_session() {
+        let mut ws = Workspace::default();
+        ws.set_windows(0, 4);
+        ws.bind(1, key("a"), None);
+        ws.bind(3, key("b"), None);
+        ws.fold_empty();
+        assert_eq!(ws.windows().len(), 2);
+        assert_eq!(ws.shown(0).unwrap().key, key("a"));
+        assert_eq!(ws.shown(1).unwrap().key, key("b"));
+        assert_eq!(ws.focus, 1, "focus stays on the window it was on");
+
+        let mut bare = Workspace::default();
+        bare.set_windows(0, 3);
+        bare.fold_empty();
+        assert_eq!(bare.windows().len(), 1, "one empty window, not three");
+        assert_eq!(bare.tabs[0].windows.len(), MAX_WINDOWS);
     }
 
     #[test]

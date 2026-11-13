@@ -103,9 +103,11 @@ impl Terminals {
             .flex_row()
             .capture_any_mouse_down(cx.listener(|s, _, _, _| s.acted = true))
             .capture_key_down(cx.listener(|s, _, _, _| s.acted = true));
-        if self.settings.sessions_open {
-            row = row.child(self.render_rail(window, cx));
-        }
+        row = row.child(if self.settings.sessions_open {
+            self.render_rail(window, cx)
+        } else {
+            self.render_rail_shut(cx)
+        });
         // What another page opened beside the terminals (a file a link
         // named), between the rail and the windows.
         if let Some(beside) = self.host.beside(cx) {
@@ -127,7 +129,6 @@ impl Terminals {
                 .h_full()
                 .flex()
                 .flex_col()
-                .child(self.render_strip(cx))
                 .child(self.render_grid(window, cx)),
         )
         .into_any_element()
@@ -138,7 +139,7 @@ impl Terminals {
         let rail = if self.settings.sessions_open {
             size::RAIL
         } else {
-            0.
+            size::RAIL_SHUT
         };
         window.viewport_size().width / px(1.) - rail
     }
@@ -181,63 +182,6 @@ impl Terminals {
             window.viewport_size().width / px(1.),
         ))
         .filter(|width| room - width >= self.columns() * size::WINDOW_MIN)
-    }
-
-    fn render_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = theme(cx).clone();
-        let n = self.fleet.all.len();
-        let open = self.settings.sessions_open;
-        let windows = self.settings.workspace.windows().len();
-        let tab = kit::opener(&t, "sessions-toggle", open, cx)
-            .child("Sessions")
-            .child(
-                div()
-                    .text_size(px(size::SMALL))
-                    .text_color(t.dim)
-                    .child(n.to_string()),
-            )
-            .on_click(cx.listener(|s, _, window, cx| {
-                s.run(super::chords::Action::Sessions, window, cx);
-            }));
-        let finding = self.is_open(super::surface::FIND);
-        let search = kit::opener(&t, "search-scrollback", finding, cx)
-            .debug_selector(|| "search-scrollback".into())
-            .child("Search scrollback")
-            .child(
-                div()
-                    .text_size(px(size::SMALL))
-                    .text_color(t.dim)
-                    .child("Alt+H"),
-            )
-            .on_click(cx.listener(|s, _, window, cx| {
-                s.run(super::chords::Action::Find, window, cx);
-            }));
-        let layout = div()
-            .ml_auto()
-            .pr(px(4.))
-            .flex()
-            .items_baseline()
-            .gap(px(8.))
-            .text_size(px(size::SMALL))
-            .text_color(t.dim)
-            .child(div().text_color(t.text2).child(format!(
-                "{windows} {}",
-                if windows == 1 { "window" } else { "windows" }
-            )))
-            .child("Alt+= adds one · Alt+- takes an empty one away");
-        div()
-            .flex_none()
-            .h(px(size::STRIP))
-            .px(px(8.))
-            .flex()
-            .items_center()
-            .gap(px(4.))
-            .bg(t.surface)
-            .border_b_1()
-            .border_color(t.divider)
-            .child(tab)
-            .child(search)
-            .child(layout)
     }
 
     fn render_grid(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -463,6 +407,20 @@ impl Terminals {
                 }
             }));
         let body: AnyElement = match state {
+            // Only the focused empty window offers the launcher; others
+            // say what they are for, and a click there brings it.
+            TileState::Empty if !focused => div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .p(px(12.))
+                .bg(t.term_bg)
+                .text_color(t.dim)
+                .debug_selector(move || format!("empty-window-{i}"))
+                .child("Drag a session here, or click to start one")
+                .into_any_element(),
             TileState::Empty => {
                 let launcher = self.launchers[i].clone();
                 div()
@@ -584,11 +542,14 @@ impl Terminals {
         };
         let grids = self.launch_grids.clone();
         let font = self.settings.font_size;
+        // An empty window has no head yet; the session launched in it will.
+        let tagged = !self.settings.workspace.windows()[i].sessions.is_empty();
+        let head_to_come = if tagged { 0. } else { size::TILE_HEAD };
         let measure = canvas(
             |_, _, _| (),
             move |b, _, window, _| {
                 let pad = px(2. * size::TERM_PAD);
-                let inner = gpui::size(b.size.width - pad, b.size.height - pad);
+                let inner = gpui::size(b.size.width - pad, b.size.height - pad - px(head_to_come));
                 grids.borrow_mut()[i] = Some(paint::grid_for(inner, paint::metrics(window, font)));
             },
         )
@@ -623,7 +584,11 @@ impl Terminals {
             .child(measure)
             .child(body)
             .when(drop_over, |d| d.child(drop_note(&t)));
-        frame.child(head).child(body).into_any_element()
+        // An empty window has no tags, so no strip for them.
+        frame
+            .when(tagged, |f| f.child(head))
+            .child(body)
+            .into_any_element()
     }
 
     fn bound_pane_screen(&self, i: usize) -> Option<SharedScreen> {
@@ -754,6 +719,8 @@ impl Terminals {
             None => None,
         });
         let history = active && self.histories.contains_key(&i);
+        // The one state that changes what the pointer does here.
+        let program_mouse = active && self.mouse_mode(i, false).is_some();
         let id = i * 100 + n;
         let (k_show, k_menu, k_remove) = (key.clone(), key.clone(), key.clone());
         let name = key.name.clone();
@@ -832,6 +799,19 @@ impl Terminals {
                     .text_color(t.dim)
                     .child(w)
             }))
+            .when(program_mouse, |d| {
+                d.child(
+                    kit::badge(
+                        t,
+                        ("program-mouse", id),
+                        "mouse goes to the program",
+                        "The program here reads the mouse: clicks and the wheel go to it. \
+                         Hold Shift to select text or scroll back."
+                            .into(),
+                    )
+                    .debug_selector(move || format!("program-mouse-{i}")),
+                )
+            })
             .when(history, |d| {
                 d.child(
                     div()

@@ -1,10 +1,11 @@
 //! Pictures a session's output names, and mermaid diagrams it prints: a
-//! small one at the right end of the row that names it (a diagram's header),
-//! where the row has room; a bigger one while the pointer rests on the name
-//! or the small one; on a click the whole picture in Files beside, as any
-//! path opens, or the diagram drawn beside. The grid's text never moves.
+//! chip saying what it is ("image" with a thumbnail, or "diagram") just
+//! after the text of the row that names it (a diagram's header), where the
+//! row has room; the picture while the pointer rests on the name or the
+//! chip; on a click the whole picture in Files beside, as any path opens,
+//! or the diagram drawn beside. The grid's text never moves.
 
-use super::super::diagram::DiagramView;
+use super::super::diagram::{self as panel, DiagramView};
 use super::super::page::Terminals;
 use crate::diagram;
 use crate::http;
@@ -104,32 +105,75 @@ pub fn paint(
             continue;
         }
         let ch = h - px(2. * size::PICTURE_CHIP_INSET);
-        let cw = ch * size::PICTURE_CHIP_RATIO;
-        // Pictures named on one row line up leftward from its end.
-        let edge = origin.x + m.cell.width * s.cols as f32;
-        let right = chips
+        let word = match key {
+            Key::Diagram(_) => "diagram",
+            Key::File { .. } => "image",
+        };
+        let label = chip_label(word, ch, t, window);
+        let thumb = matches!(key, Key::File { .. });
+        let pad = px(size::PICTURE_CHIP_PAD);
+        let cw = pad * 2.
+            + label.width
+            + if thumb {
+                ch - px(2. * size::PICTURE_CHIP_INSET) + pad
+            } else {
+                px(0.)
+            };
+        // A chip follows the row's text a cell after it, and the next one
+        // named on the row follows that: beside what names it, however
+        // wide the window.
+        let grid = s.term.grid();
+        let text_end = (0..s.cols)
+            .rev()
+            .find(|&c| !matches!(grid[GridPoint::new(end.line, Column(c))].c, ' ' | '\0'))
+            .map_or(0, |c| c + 1);
+        let after_text = origin.x + m.cell.width * (text_end + 1) as f32;
+        let left = chips
             .iter()
             .filter(|c: &&Chip| c.bounds.top() == top(row))
-            .map(|c| c.bounds.left())
-            .fold(edge, Pixels::min)
-            - px(size::PICTURE_CHIP_INSET);
-        let left = right - cw;
-        // Only over blank cells: the text stays readable.
-        let from = ((left - origin.x) / m.cell.width).floor().max(0.) as usize;
-        let grid = s.term.grid();
-        let blank = (from..s.cols)
-            .all(|c| matches!(grid[GridPoint::new(end.line, Column(c))].c, ' ' | '\0'));
-        if !blank || end.column.0 >= from {
+            .map(|c| c.bounds.right() + px(size::PICTURE_CHIP_GAP))
+            .fold(after_text, Pixels::max);
+        // Only over blank cells, within the row: the text stays readable.
+        let edge = origin.x + m.cell.width * s.cols as f32;
+        if left + cw > edge - px(size::PICTURE_CHIP_INSET) {
             continue;
         }
         let bounds = Bounds::new(point(left, top(row)), gpui::size(cw, ch));
-        let _ = window.paint_image(
+        window.paint_quad(quad(
             bounds,
-            cover(&image, bounds),
-            px(size::PICTURE_CHIP_RADIUS).into(),
-            image,
-            0,
-            false,
+            px(size::PICTURE_CHIP_RADIUS),
+            t.raised,
+            px(1.),
+            t.divider,
+            BorderStyle::Solid,
+        ));
+        let mut x = left + pad;
+        if thumb {
+            let inset = px(size::PICTURE_CHIP_INSET);
+            let side = ch - inset * 2.;
+            let square = Bounds::new(
+                point(x - pad + inset * 2., top(row) + inset),
+                gpui::size(side, side),
+            );
+            let _ = window.with_content_mask(Some(gpui::ContentMask { bounds: square }), |w| {
+                w.paint_image(
+                    square,
+                    cover(&image, square),
+                    px(size::PICTURE_CHIP_RADIUS).into(),
+                    image,
+                    0,
+                    false,
+                )
+            });
+            x = square.right() + pad;
+        }
+        let _ = label.paint(
+            point(x, top(row)),
+            ch,
+            gpui::TextAlign::Left,
+            None,
+            window,
+            cx,
         );
         chips.push(Chip { bounds, link });
     }
@@ -137,6 +181,24 @@ pub fn paint(
         paint_preview(&image, &link, &at, offset, t, window);
     }
     chips
+}
+
+/// A chip's word, in the app's font, a little smaller than the row.
+fn chip_label(word: &'static str, row: Pixels, t: &Theme, window: &mut Window) -> gpui::ShapedLine {
+    let run = gpui::TextRun {
+        len: word.len(),
+        font: gpui::font(parvi_app_kit::theme::FAMILY),
+        color: t.text2,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    window.text_system().shape_line(
+        word.into(),
+        px(size::SMALL).min(row * size::PICTURE_CHIP_TEXT),
+        &[run],
+        None,
+    )
 }
 
 /// The bigger picture, under the name (over it when there is no room
@@ -222,9 +284,18 @@ fn small(
         .ok()?;
     let n = full.size(0);
     let (w, h) = (n.width.0 as u32, n.height.0 as u32);
+    Some(shrunk(image::RgbaImage::from_raw(
+        w,
+        h,
+        full.as_bytes(0)?.to_vec(),
+    )?))
+}
+
+/// Pixels made no bigger than the preview needs, as a picture to draw.
+fn shrunk(buffer: image::RgbaImage) -> Arc<RenderImage> {
+    let (w, h) = buffer.dimensions();
     let most = (size::PICTURE_PREVIEW_W.max(size::PICTURE_PREVIEW_H) * 2.) as u32;
     let scale = (most as f32 / w.max(h).max(1) as f32).min(1.);
-    let buffer = image::RgbaImage::from_raw(w, h, full.as_bytes(0)?.to_vec())?;
     let (sw, sh) = (
         ((w as f32 * scale).round() as u32).max(1),
         ((h as f32 * scale).round() as u32).max(1),
@@ -234,13 +305,13 @@ fn small(
     } else {
         image::imageops::thumbnail(&buffer, sw, sh)
     };
-    Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
+    Arc::new(RenderImage::new(vec![image::Frame::new(buffer)]))
 }
 
 /// How a picture's bytes come: read from its device, or drawn here.
 enum Read {
     File(Task<Result<Answer, parvi_core::Error>>),
-    Drawn(Task<Option<String>>),
+    Drawn(Task<Option<Arc<RenderImage>>>),
 }
 
 impl Terminals {
@@ -255,14 +326,21 @@ impl Terminals {
     /// A diagram drawn whole beside the terminals.
     pub(in crate::ui) fn open_diagram(&mut self, source: String, cx: &mut Context<Self>) {
         let colours = self.diagram_colours(cx);
-        let task = cx
-            .background_executor()
-            .spawn(async move { diagram::svg(&source, colours) });
+        let density = size::DIAGRAM_START;
+        let task = cx.background_executor().spawn(async move {
+            let svg = diagram::svg(&source, colours)?;
+            let drawn = diagram::paint(&svg, density)?;
+            Ok::<_, String>((svg, drawn))
+        });
         cx.spawn(async move |this, cx| {
-            let svg = task.await;
+            let made = task.await;
             let _ = this.update(cx, |p, cx| {
                 let host = p.host.clone();
-                let view = cx.new(|_| DiagramView::new(host.clone(), svg));
+                let (svg, drawn) = match made {
+                    Ok((svg, d)) => (Arc::from(svg), Ok(panel::Painted::of(d, density))),
+                    Err(why) => (Arc::from(""), Err(why)),
+                };
+                let view = cx.new(|cx| DiagramView::new(host.clone(), svg, drawn, cx));
                 host.show_beside(crate::NAME, view.into(), cx);
             });
         })
@@ -295,27 +373,26 @@ impl Terminals {
             }
             Key::Diagram(source) => {
                 let (source, colours) = (source.clone(), self.diagram_colours(cx));
-                let task = cx
-                    .background_executor()
-                    .spawn(async move { diagram::svg(&source, colours).ok() });
+                let task = cx.background_executor().spawn(async move {
+                    let svg = diagram::svg(&source, colours).ok()?;
+                    let d = diagram::paint(&svg, 1.).ok()?;
+                    Some(shrunk(d.pixels))
+                });
                 (ImageFormat::Svg, Read::Drawn(task))
             }
         };
         cx.spawn(async move |this, cx| {
-            let bytes = match read {
+            let image = match read {
                 Read::File(task) => match task.await {
-                    Ok(a) if a.ok() => Some(a.body),
+                    Ok(a) if a.ok() => {
+                        let b = a.body;
+                        cx.background_executor()
+                            .spawn(async move { small(format, b, svg) })
+                            .await
+                    }
                     _ => None,
                 },
-                Read::Drawn(task) => task.await.map(String::into_bytes),
-            };
-            let image = match bytes {
-                Some(b) => {
-                    cx.background_executor()
-                        .spawn(async move { small(format, b, svg) })
-                        .await
-                }
-                None => None,
+                Read::Drawn(task) => task.await,
             };
             let _ = this.update(cx, |p, cx| {
                 p.pictures.arrived(&key, image);

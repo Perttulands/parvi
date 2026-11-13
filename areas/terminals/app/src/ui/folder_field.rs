@@ -332,12 +332,7 @@ impl Render for FolderField {
             .flex_col()
             .gap(px(4.))
             .child(self.field.clone())
-            .child(
-                div()
-                    .text_size(px(10.))
-                    .text_color(t.dim)
-                    .child(label.to_uppercase()),
-            )
+            .child(kit::label(&t, label))
             .child(body)
     }
 }

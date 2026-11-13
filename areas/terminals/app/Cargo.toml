@@ -22,6 +22,10 @@ log = "0.4"
 # Mermaid diagrams a session prints, drawn here: the common kinds only,
 # each kind adds to the binary.
 merman = { version = "0.10.0", default-features = false, features = ["svg", "diagram-flowchart", "diagram-sequence", "diagram-state", "diagram-class", "diagram-er", "diagram-gantt", "diagram-pie", "diagram-mindmap", "diagram-git-graph", "diagram-journey", "diagram-timeline"] }
+# Its measuring hook, so labels are sized as the app's font sets them.
+merman-render = { version = "=0.10.0", default-features = false }
+# Paints a diagram with the app's own font files, not the system's.
+resvg = { version = "0.46", default-features = false, features = ["text"] }
 parking_lot = "0.13"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

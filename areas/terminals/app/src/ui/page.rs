@@ -339,7 +339,11 @@ impl Terminals {
     pub fn new(host: Host, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut said = vec![];
         let settings = match host.setting::<Settings>(cx) {
-            Ok(s) => s.mend(),
+            Ok(s) => {
+                let mut s = s.mend();
+                s.workspace.fold_empty();
+                s
+            }
             Err(e) => {
                 said.push(Status::failure(format!(
                     "The terminals' settings did not read ({}): {}",

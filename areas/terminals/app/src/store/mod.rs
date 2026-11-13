@@ -14,3 +14,4 @@ pub mod sessions;
 pub mod settings;
 pub mod tones;
 pub mod workspace;
+pub mod zoom;

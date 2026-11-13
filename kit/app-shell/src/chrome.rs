@@ -59,7 +59,15 @@ impl Shell {
         if cx.try_global::<kit::TabStyle>() != Some(&style) {
             cx.set_global(style);
         }
-        let mut bar = kit::tab_bar(&t, cx).flex_none().h(px(size::TAB_BAR));
+        // The tabs scroll sideways when the window is too narrow even for
+        // compact ones; the rule under them stays the bar's.
+        let mut bar = div()
+            .id("page-tabs")
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .items_stretch()
+            .overflow_x_scroll();
         for (i, page) in self.pages.iter().enumerate() {
             if page.meta.area.is_some_and(|a| off.iter().any(|o| o == a)) {
                 continue;
@@ -77,7 +85,7 @@ impl Shell {
             );
         }
         let on = self.hub.read(cx).settings.keys;
-        bar.child(
+        let bar = bar.child(
             // A tab that is never chosen, so its words stand on the tabs' line.
             kit::tab(&t, "keys-toggle", false, cx)
                 .ml_auto()
@@ -104,7 +112,8 @@ impl Shell {
                         s.host.menu(rows, e.position, cx);
                     }),
                 ),
-        )
+        );
+        kit::tab_bar(&t).flex_none().h(px(size::TAB_BAR)).child(bar)
     }
 
     /// Turns the keys on or off; `None` flips them.

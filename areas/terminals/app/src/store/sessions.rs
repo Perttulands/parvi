@@ -240,13 +240,6 @@ pub fn badges(s: &Session) -> Vec<Badge> {
             "window-size is manual: the window keeps its size whoever views it.".into(),
         );
     }
-    if s.mouse == Some(false) {
-        add(
-            "⊗",
-            "mouse off".into(),
-            "tmux mouse mode is off: the wheel and clicks go to the program.".into(),
-        );
-    }
     list
 }
 
@@ -568,7 +561,11 @@ mod tests {
         x.mouse = Some(false);
         x.windows = Some(2);
         let b: Vec<String> = badges(&x).into_iter().map(|b| b.text).collect();
-        assert_eq!(b, ["2 windows", "attached", "mouse off"]);
+        assert_eq!(
+            b,
+            ["2 windows", "attached"],
+            "tmux's mouse is other clients' concern"
+        );
     }
 
     #[test]

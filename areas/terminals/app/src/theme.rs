@@ -11,10 +11,15 @@ pub mod size {
 
     pub const STRIP: f32 = 44.;
     /// A tab's name field while it is renamed in place.
+    /// The least the terminal tabs shrink to on a narrow bar: one tab and
+    /// the `+` beside it.
+    pub const TAB_STRIP_LEAST: f32 = 130.;
     pub const TAB_FIELD: f32 = 180.;
     /// A shell's `>_` mark, as a share of the mark's size.
     pub const SHELL_MARK: f32 = 0.8;
     pub const RAIL: f32 = 260.;
+    /// The rail put away: the edge that brings it back.
+    pub const RAIL_SHUT: f32 = 36.;
     /// Name budget in the standard rail, leaving room for age and actions.
     pub const RAIL_NAME_COLUMNS: usize = 22;
     /// A rail row's room before its news dot, from the list's side, so
@@ -68,17 +73,27 @@ pub mod size {
     pub const DOCK_GAP: f32 = 9.;
     /// The way back to the live end, just above that rule.
     pub const LIVE_PILL_H: f32 = 20.;
-    /// A picture a session names: small at the end of its row (a share of
-    /// the row's height wide, inset from the row's edges), bigger while
+    /// A picture a session names: a chip after its row's text saying what
+    /// it is (a thumbnail and "image", or "diagram"), inset from the row's
+    /// edges, its word a share of the row's height; the picture bigger while
     /// pointed at, with a margin round it.
     pub const PICTURE_CHIP_INSET: f32 = 1.;
-    pub const PICTURE_CHIP_RATIO: f32 = 1.6;
-    pub const PICTURE_CHIP_RADIUS: f32 = 2.;
+    pub const PICTURE_CHIP_PAD: f32 = 6.;
+    pub const PICTURE_CHIP_GAP: f32 = 4.;
+    pub const PICTURE_CHIP_TEXT: f32 = 0.7;
+    pub const PICTURE_CHIP_RADIUS: f32 = 3.;
     pub const PICTURE_PREVIEW_W: f32 = 320.;
     pub const PICTURE_PREVIEW_H: f32 = 240.;
     pub const PICTURE_PAD: f32 = 4.;
     /// Round a diagram drawn whole beside the terminals.
     pub const DIAGRAM_PAD: f32 = 16.;
+    /// The zoom's percent between − and +, wide enough not to jump.
+    pub const ZOOM_LABEL: f32 = 44.;
+    /// The fewest and most pixels a diagram is painted with per pixel at
+    /// 1:1, however far it is zoomed.
+    pub const DIAGRAM_DENSITY: (f32, f32) = (0.5, 6.);
+    /// What a diagram is first painted with, before its zoom is known.
+    pub const DIAGRAM_START: f32 = 2.;
     /// Send's target list shows at most this many whole rows, then scrolls.
     pub const SEND_TARGET_ROWS: f32 = 9.;
     /// Terminal font: Settings may pick 12..=20; the fit never goes below

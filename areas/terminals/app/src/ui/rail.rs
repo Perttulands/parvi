@@ -12,7 +12,7 @@ use crate::store::devices;
 use crate::store::sessions::{self, Key};
 use crate::store::workspace::LinkState;
 use crate::term::paint::{self, Look};
-use crate::theme::{Chrome, Theme, chrome, size, theme};
+use crate::theme::{Theme, size, theme};
 use gpui::{
     AnyElement, ContentMask, Context, FontWeight, MouseButton, MouseDownEvent, Window, canvas, div,
     prelude::*, px,
@@ -23,34 +23,52 @@ use parvi_terminals_contract::{AgentEvent, EventKind, Session};
 impl Terminals {
     pub fn render_rail(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let t = theme(cx).clone();
+        let count = self.fleet.all.len();
         let header = div()
             .flex_none()
             .h(px(size::STRIP))
-            .px(px(8.))
+            .pl(px(12.))
+            .pr(px(6.))
             .flex()
             .items_center()
-            .gap(px(6.))
+            .gap(px(2.))
             .border_b_1()
             .border_color(t.divider)
             .child(
                 div()
                     .mr_auto()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("Sessions"),
+                    .flex()
+                    .items_baseline()
+                    .gap(px(6.))
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Sessions"))
+                    .child(
+                        div()
+                            .text_size(px(size::SMALL))
+                            .text_color(t.dim)
+                            .child(count.to_string()),
+                    ),
             )
             .child(
-                kit::button(&t, "rail-new", "New", Kind::Quiet).on_click(cx.listener(
-                    |s, _, window, cx| {
+                kit::button(&t, "rail-find", "Find", Kind::Quiet)
+                    .debug_selector(|| "search-scrollback".into())
+                    .tooltip(kit::tip("Search what every session printed  Alt+H"))
+                    .on_click(cx.listener(|s, _, window, cx| {
+                        s.run(super::chords::Action::Find, window, cx);
+                    })),
+            )
+            .child(
+                kit::button(&t, "rail-new", "New", Kind::Quiet)
+                    .tooltip(kit::tip("Start a session"))
+                    .on_click(cx.listener(|s, _, window, cx| {
                         s.run(super::chords::Action::Launcher, window, cx);
-                    },
-                )),
+                    })),
             )
             .child(
-                kit::button(&t, "rail-close", "Close", Kind::Quiet).on_click(cx.listener(
-                    |s, _, window, cx| {
+                kit::button(&t, "rail-close", "‹", Kind::Quiet)
+                    .tooltip(kit::tip("Hide the sessions  Alt+A"))
+                    .on_click(cx.listener(|s, _, window, cx| {
                         s.run(super::chords::Action::Sessions, window, cx);
-                    },
-                )),
+                    })),
             );
         let query = self.rail_search.read(cx).text.clone();
         // It matches names; what sessions printed is searched elsewhere,
@@ -182,6 +200,39 @@ impl Terminals {
             .into_any_element()
     }
 
+    /// The rail put away: a narrow edge that brings it back, with the
+    /// count of sessions and the way to search them.
+    pub fn render_rail_shut(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let t = theme(cx).clone();
+        div()
+            .flex_none()
+            .w(px(size::RAIL_SHUT))
+            .h_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .pt(px(8.))
+            .gap(px(4.))
+            .bg(t.surface)
+            .border_r_1()
+            .border_color(t.divider)
+            .child(
+                kit::button(&t, "rail-open", "›", Kind::Quiet)
+                    .debug_selector(|| "rail-open".into())
+                    .tooltip(kit::tip("Show the sessions  Alt+A"))
+                    .on_click(cx.listener(|s, _, window, cx| {
+                        s.run(super::chords::Action::Sessions, window, cx);
+                    })),
+            )
+            .child(
+                div()
+                    .text_size(px(size::SMALL))
+                    .text_color(t.dim)
+                    .child(self.fleet.all.len().to_string()),
+            )
+            .into_any_element()
+    }
+
     /// A device: its plate, and "waiting" while none of it answers.
     fn device_heading(&self, t: &Theme, device: &str, live: bool) -> AnyElement {
         div()
@@ -300,10 +351,7 @@ impl Terminals {
         let id = gpui::SharedString::from(format!("row-{}", key.text()));
         let selector = id.to_string();
         let group = id.clone();
-        let inset = match chrome(cx) {
-            Chrome::Line => 0.,
-            Chrome::Tabs | Chrome::Pills => size::ROW_INSET,
-        };
+        let inset = size::ROW_INSET;
         div()
             .id(id.clone())
             .group(group.clone())
@@ -319,11 +367,7 @@ impl Terminals {
             .cursor_pointer()
             .text_color(if shown.is_some() { t.text } else { t.text2 })
             .relative()
-            .map(|d| match chrome(cx) {
-                Chrome::Line => d,
-                Chrome::Tabs => d.rounded(px(size::RADIUS)),
-                Chrome::Pills => d.rounded(px(size::ROW / 2.)),
-            })
+            .rounded(px(size::RADIUS))
             // The focused window's session on a quiet fill, its name in
             // weight; picked rows on the accent wash. No bars.
             .when(in_focused, |d| {

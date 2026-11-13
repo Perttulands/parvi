@@ -528,6 +528,11 @@ fn launches_use_each_tile_grid(cx: &mut TestAppContext) {
         let grid = page.read_with(cx, |p, _| p.launch_grids.borrow()[i].unwrap());
         let button = format!("launch-{i}");
         let selector: &'static str = Box::leak(button.clone().into_boxed_str());
+        // Only the focused empty window offers the launcher: a click on
+        // another one brings it there.
+        if i > 0 {
+            click(cx, format!("empty-window-{i}"));
+        }
         until(cx, &format!("launcher ready in tile {i}"), |cx| {
             cx.debug_bounds(selector).is_some()
         });
@@ -2086,13 +2091,14 @@ fn arrange_tabs_preset_drag_and_sizing_on_a_live_node(cx: &mut TestAppContext) {
             .unwrap()
     });
     cx.update(|window, cx| page.update(cx, |p, cx| p.act(two, window, cx)));
+    // The new window is empty and not focused: it says what it is for.
     until(cx, "second window", |cx| {
-        cx.debug_bounds("launcher-scroll-1").is_some()
+        cx.debug_bounds("empty-window-1").is_some()
     });
     let beta: &'static str = Box::leak(format!("row-{}::beta", running.node).into_boxed_str());
     until(cx, "beta row", |cx| cx.debug_bounds(beta).is_some());
     let from = cx.debug_bounds(beta).unwrap().center();
-    let to = cx.debug_bounds("launcher-scroll-1").unwrap().center();
+    let to = cx.debug_bounds("empty-window-1").unwrap().center();
     cx.simulate_mouse_down(from, gpui::MouseButton::Left, Modifiers::none());
     cx.simulate_mouse_move(
         gpui::point(from.x + px(10.), from.y),

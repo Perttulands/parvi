@@ -25,7 +25,8 @@ impl Terminals {
     ) -> AnyElement {
         let t = theme(cx).clone();
         // The tabs shrink and scroll when the bar is short of room, so the
-        // other pages' tabs always show; `+` stays in reach beside them.
+        // other pages' tabs show, but not below one tab; `+` stays in reach
+        // beside them.
         let mut bar = div()
             .id("terminal-tabs")
             .flex()
@@ -129,7 +130,7 @@ impl Terminals {
             .flex()
             .items_stretch()
             .flex_shrink_1()
-            .min_w_0()
+            .min_w(px(size::TAB_STRIP_LEAST))
             .when(!before.is_empty(), |d| {
                 d.child(more("tabs-before", &before, format!("‹{}", before.len())))
             })
