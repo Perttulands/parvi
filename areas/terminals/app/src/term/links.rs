@@ -42,8 +42,34 @@ pub fn at<T>(term: &Term<T>, p: Point) -> Option<Link> {
     if p.column.0 > 0 && grid[p].flags.contains(Flags::WIDE_CHAR_SPACER) {
         p.column -= 1;
     }
-    let text = Text::read(term, p.line);
+    let text = Text::read(term, p.line - RADIUS, p.line + RADIUS);
     text.links().into_iter().find(|l| l.cells.contains(&p))
+}
+
+/// A path as the session's device reads it: one relative to the session's
+/// folder `cwd` is joined to it.
+pub fn resolve(cwd: Option<&str>, path: &str) -> String {
+    match cwd {
+        Some(cwd) if !path.starts_with('/') => format!(
+            "{}/{}",
+            cwd.trim_end_matches('/'),
+            path.trim_start_matches("./")
+        ),
+        _ => path.to_string(),
+    }
+}
+
+/// The links with a cell on grid lines `first..=last`.
+pub fn in_lines<T>(term: &Term<T>, first: Line, last: Line) -> Vec<Link> {
+    // A path an agent broke over a few rows may begin above the first.
+    const ABOVE: i32 = 4;
+    let mut links: Vec<Link> = Text::read(term, first - ABOVE, last)
+        .links()
+        .into_iter()
+        .filter(|l| l.cells.iter().any(|c| c.line >= first && c.line <= last))
+        .collect();
+    links.sort_by_key(|l| l.cells.first().copied());
+    links
 }
 
 /// Rows read as one text, each character with the cell it is drawn in.
@@ -71,11 +97,11 @@ fn wrapped<T>(term: &Term<T>, line: Line) -> bool {
 }
 
 impl Text {
-    fn read<T>(term: &Term<T>, around: Line) -> Self {
+    fn read<T>(term: &Term<T>, first: Line, last: Line) -> Self {
         let grid = term.grid();
         let cols = term.columns();
-        let first = (around - RADIUS).max(grid.topmost_line());
-        let last = (around + RADIUS).min(grid.bottommost_line());
+        let first = first.max(grid.topmost_line());
+        let last = last.min(grid.bottommost_line());
         let mut t = Text {
             chars: Vec::new(),
             cells: Vec::new(),
@@ -467,6 +493,26 @@ mod tests {
         let mut s = Screen::new(cols, rows);
         s.feed(text.replace('\n', "\r\n").as_bytes());
         s
+    }
+
+    #[test]
+    fn the_paths_in_view_are_found_with_their_rows() {
+        let s = screen(
+            40,
+            6,
+            "made out/shot.png\nno path here\nand /tmp/a/b/Plan.SVG then\n/x/y.png",
+        );
+        let paths: Vec<(String, i32)> = in_lines(&s.term, Line(0), Line(2))
+            .into_iter()
+            .filter_map(|l| match l.target {
+                Target::Path(p) => Some((p, l.cells[0].line.0)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            paths,
+            vec![("out/shot.png".into(), 0), ("/tmp/a/b/Plan.SVG".into(), 2)]
+        );
     }
 
     #[test]

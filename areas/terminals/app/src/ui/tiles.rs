@@ -29,6 +29,7 @@ use parvi_core::NodeId;
 use std::ops::Range;
 
 mod drag;
+pub(super) mod pictures;
 
 /// How long a window's new grid must hold before tmux hears it: dragging a
 /// divider or the window resizes the session once, when the drag rests,
@@ -1157,6 +1158,16 @@ impl Terminals {
             live,
         } = src;
         let history = live.is_some() || self.histories.contains_key(&i);
+        let place = self
+            .window_panes()
+            .get(i)
+            .cloned()
+            .flatten()
+            .map(|at| pictures::Place {
+                node: at.node,
+                cwd: self.cwd_of(i),
+            });
+        let chips = self.chips.clone();
         // A window between grids draws at the terminal font, clipped or
         // with room to spare, until tmux has the new grid; one sized by
         // another client shrinks to show its grid whole.
@@ -1276,6 +1287,25 @@ impl Terminals {
                     display_offset: s.term.grid().display_offset(),
                     dock: dock.map(|d| d.0),
                 };
+                let drawn = place.as_ref().map(|place| {
+                    window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                        pictures::paint(
+                            &entity,
+                            place,
+                            &s,
+                            pictures::Painted {
+                                origin: o,
+                                m,
+                                view,
+                                hover: &link,
+                            },
+                            &theme_t,
+                            window,
+                            cx,
+                        )
+                    })
+                });
+                chips.borrow_mut()[i] = drawn.unwrap_or_default();
                 if moved {
                     let entity = entity.clone();
                     cx.defer(move |cx| entity.update(cx, |_, cx| cx.notify()));
@@ -1699,6 +1729,16 @@ impl Terminals {
     /// screen, and the link.
     fn link_at(&self, i: usize, p: gpui::Point<Pixels>) -> Option<(usize, usize, Link)> {
         let g = self.geo.borrow()[i];
+        // A small picture stands for the name it was drawn for.
+        let chip = self.chips.borrow()[i]
+            .iter()
+            .find(|c| c.bounds.contains(&p))
+            .map(|c| c.link.clone());
+        if let Some(link) = chip {
+            let first = *link.cells.first()?;
+            let row = first.line.0 + g.display_offset as i32;
+            return Some((first.column.0, row.max(0) as usize, link));
+        }
         let (o, cell) = (g.origin?, g.cell?);
         let grid = Bounds::new(
             o,
@@ -1737,14 +1777,7 @@ impl Terminals {
         let ask = match target {
             links::Target::Path(path) => Ask::OpenPath {
                 node: NodeId(node),
-                path: match self.cwd_of(i) {
-                    Some(cwd) if !path.starts_with('/') => format!(
-                        "{}/{}",
-                        cwd.trim_end_matches('/'),
-                        path.trim_start_matches("./")
-                    ),
-                    _ => path,
-                },
+                path: links::resolve(self.cwd_of(i).as_deref(), &path),
                 beside: true,
             },
             links::Target::WorkItem(id) => Ask::Reveal {

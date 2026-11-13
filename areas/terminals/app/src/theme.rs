@@ -65,6 +65,15 @@ pub mod size {
     pub const DOCK_GAP: f32 = 9.;
     /// The way back to the live end, just above that rule.
     pub const LIVE_PILL_H: f32 = 20.;
+    /// A picture a session names: small at the end of its row (a share of
+    /// the row's height wide, inset from the row's edges), bigger while
+    /// pointed at, with a margin round it.
+    pub const PICTURE_CHIP_INSET: f32 = 1.;
+    pub const PICTURE_CHIP_RATIO: f32 = 1.6;
+    pub const PICTURE_CHIP_RADIUS: f32 = 2.;
+    pub const PICTURE_PREVIEW_W: f32 = 320.;
+    pub const PICTURE_PREVIEW_H: f32 = 240.;
+    pub const PICTURE_PAD: f32 = 4.;
     /// Send's target list shows at most this many whole rows, then scrolls.
     pub const SEND_TARGET_ROWS: f32 = 9.;
     /// Terminal font: Settings may pick 12..=20; the fit never goes below

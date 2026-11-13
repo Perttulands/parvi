@@ -17,6 +17,7 @@ parvi-work-contract = { path = "../../work/contract" }
 gpui = { package = "gpui-pre", version = "=0.3.12" }
 alacritty_terminal = "0.26"
 async-channel = "2"
+image = { version = "0.25", default-features = false }
 log = "0.4"
 parking_lot = "0.13"
 serde = { version = "1", features = ["derive"] }

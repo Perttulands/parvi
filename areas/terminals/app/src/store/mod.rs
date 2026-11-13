@@ -5,6 +5,7 @@ pub mod devices;
 pub mod find;
 pub mod launch;
 pub mod launch_flags;
+pub mod pictures;
 pub mod presets;
 pub mod selection;
 pub mod send;

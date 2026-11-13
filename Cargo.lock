@@ -4850,6 +4850,7 @@ dependencies = [
  "alacritty_terminal",
  "async-channel",
  "gpui-pre",
+ "image",
  "log",
  "parking_lot 0.13.0",
  "parvi-app-kit",

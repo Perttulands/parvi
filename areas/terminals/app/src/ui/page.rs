@@ -238,6 +238,10 @@ pub struct Terminals {
     /// Status lines said since the page last handed them to the app.
     said: Vec<Status>,
     pub geo: Rc<RefCell<[Geo; 4]>>,
+    /// The small pictures each window last drew, for the pointer.
+    pub chips: Rc<RefCell<[Vec<super::tiles::pictures::Chip>; 4]>>,
+    /// Pictures the sessions named, read from their devices.
+    pub pictures: crate::store::pictures::Pictures<std::sync::Arc<gpui::RenderImage>>,
     /// The grid each window's body would hold at the terminal font,
     /// as last painted: what a launch into it asks the node for (#161).
     pub launch_grids: Rc<RefCell<[Option<Grid>; 4]>>,
@@ -387,6 +391,8 @@ impl Terminals {
             surfaces: vec![],
             said,
             geo: Rc::new(RefCell::new([Geo::default(); 4])),
+            chips: Rc::default(),
+            pictures: Default::default(),
             launch_grids: Rc::default(),
             selecting: None,
             drag_scroll: 0,

@@ -191,7 +191,11 @@ fn start_config(
                 launch
             );
             let areas = if files { AREAS_WITH_FILES } else { AREAS };
-            let config = if files { format!("{config}\n[files]\nroots = []\n") } else { config };
+            let config = if files {
+                format!("{config}\n[files]\nroots = [{:?}]\n", dir.display().to_string())
+            } else {
+                config
+            };
             let node = Node::start(areas, &config).await.expect("a node");
             let _ = ready.send(Some((node.url(), node.id(), tmux.socket_path(), dir.clone())));
             while stopped.try_recv().is_err() {
@@ -1937,6 +1941,34 @@ fn terminal_links_open_url_and_wrapped_quoted_path(cx: &mut TestAppContext) {
     let path_pos = position(cx, "/tmp/");
     cx.simulate_click(path_pos, Modifiers::none());
     until(cx, "wrapped path opened", |_| {
+        ITEM_ASK.with(|slot| matches!(&*slot.borrow(), Some(Ask::OpenPath { path: got, beside: true, .. }) if got == &path))
+    });
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+#[gpui::test]
+fn a_picture_named_in_a_session_shows_small_and_opens_beside(cx: &mut TestAppContext) {
+    let Some(running) = start_config("terminals-pictures", false, false, true, false) else {
+        return;
+    };
+    let picture = running.fixture.join("plan.svg");
+    std::fs::write(
+        &picture,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="#c33"/></svg>"##,
+    )
+    .unwrap();
+    let (_shell, cx, settings) = open_with_alpha(&running, "pictures", cx);
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    let path = picture.display().to_string();
+    let command = format!("printf '\\033[2J\\033[Hmade {path}\\n'");
+    tmux(&running, &["send-keys", "-t", "alpha", &command, "Enter"]);
+    until(cx, "the picture drawn small at its row", |cx| {
+        page.read_with(cx, |p, _| !p.chips.borrow()[0].is_empty())
+    });
+    let chip = page.read_with(cx, |p, _| p.chips.borrow()[0][0].bounds);
+    ITEM_ASK.with(|slot| *slot.borrow_mut() = None);
+    cx.simulate_click(chip.center(), Modifiers::none());
+    until(cx, "the picture opened beside", |_| {
         ITEM_ASK.with(|slot| matches!(&*slot.borrow(), Some(Ask::OpenPath { path: got, beside: true, .. }) if got == &path))
     });
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
