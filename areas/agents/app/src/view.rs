@@ -268,6 +268,13 @@ impl AgentsPage {
                     .child(self.sync_button(t, node, &name, path, *setup, cx))
                     .into_any_element()
             }
+            Fix::Link { path } => {
+                let name = o.checkout.clone().unwrap_or_default();
+                div()
+                    .flex()
+                    .child(self.link_button(t, node, &name, path, cx))
+                    .into_any_element()
+            }
             Fix::Words(w) => div()
                 .text_color(t.text2)
                 .child(w.clone())
@@ -308,7 +315,7 @@ impl AgentsPage {
         setup: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<Div> {
-        let busy = self.state.starting(node, path);
+        let busy = self.state.asked(agents::SYNC, node, path);
         let why = if setup {
             "Fetch, fast-forward to its upstream and run its setup, in a new session"
         } else {
@@ -328,6 +335,35 @@ impl AgentsPage {
             b.opacity(tokens::DIMMED)
         } else {
             b.on_click(cx.listener(move |s, _, _, cx| s.agents_sync(&n, &p, cx)))
+        }
+    }
+
+    /// Links the checkout's skills into the folders missing them.
+    fn link_button(
+        &self,
+        t: &Theme,
+        node: &str,
+        name: &str,
+        path: &str,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        let busy = self.state.asked(agents::LINK, node, path);
+        let (n, p) = (node.to_string(), path.to_string());
+        let selector = format!("agents-link-{node}-{name}");
+        let b = kit::button(
+            t,
+            SharedString::from(format!("link-{node}-{name}")),
+            if busy { "Linking…" } else { "Link" },
+            Kind::Plain,
+        )
+        .debug_selector(move || selector)
+        .tooltip(kit::tip(
+            "Link its skills into every skills folder that lacks them",
+        ));
+        if busy {
+            b.opacity(tokens::DIMMED)
+        } else {
+            b.on_click(cx.listener(move |s, _, _, cx| s.agents_link(&n, &p, cx)))
         }
     }
 
@@ -460,7 +496,13 @@ impl AgentsPage {
             .filter_map(|(n, r)| Some((*n, *r, r.checkouts.iter().find(|c| c.name == name)?)))
             .collect();
         let mut head = pane::head(t).child(pane::title(t, name.to_string()));
-        for (node, _, c) in &at {
+        for (node, r, c) in &at {
+            let unlinked = agents::off(r)
+                .iter()
+                .any(|o| o.checkout.as_deref() == Some(name) && matches!(o.fix, Fix::Link { .. }));
+            if unlinked {
+                head = head.child(self.link_button(t, node, &c.name, &c.path, cx));
+            }
             head = head.child(self.sync_button(t, node, &c.name, &c.path, c.setup.is_some(), cx));
         }
         let mut body = div().flex().flex_col().gap(px(size::SECTION_GAP));
@@ -502,7 +544,7 @@ impl AgentsPage {
                 .into_iter()
                 .filter(|o| o.checkout.as_deref() == Some(name))
                 .collect();
-            // What is off, first; its Sync is in the head.
+            // What is off, first; its Link and Sync are in the head.
             for o in &mine {
                 let mut fix = div()
                     .text_color(tone_colour(t, o.tone))

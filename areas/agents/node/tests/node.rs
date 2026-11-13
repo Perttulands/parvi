@@ -55,6 +55,7 @@ async fn commands_and_channel_work_over_the_node() {
         [
             "agents_show",
             "agents_sync",
+            "agents_link",
             "role_list",
             "role_inspect",
             "role_usage",
@@ -73,7 +74,7 @@ async fn commands_and_channel_work_over_the_node() {
     assert_eq!(cli::run("agents", &args, &mut output).await.unwrap(), 0);
     let output = String::from_utf8(output).unwrap();
     assert!(
-        output.contains("show") && output.contains("sync"),
+        output.contains("show") && output.contains("sync") && output.contains("link"),
         "{output}"
     );
     let report = node.call("agents_show", json!({})).await.unwrap();
@@ -81,6 +82,12 @@ async fn commands_and_channel_work_over_the_node() {
     assert_eq!(report["skills"][0]["name"], "example");
     let error = node
         .call("agents_sync", json!({"checkout":"~/not-a-checkout"}))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, FAILED);
+    assert!(error.message.contains("not a checkout"));
+    let error = node
+        .call("agents_link", json!({"checkout":"~/not-a-checkout"}))
         .await
         .unwrap_err();
     assert_eq!(error.code, FAILED);
@@ -250,7 +257,7 @@ async fn role_routes_and_commands_keep_versions_and_usage() {
         "role_delete",
         "role_characters",
     ];
-    assert_eq!(&parvi_agents::LISTING.commands[2..], names);
+    assert_eq!(&parvi_agents::LISTING.commands[3..], names);
     let role = node
         .call("role_new", json!({"role":"editor","display_name":"Editor"}))
         .await

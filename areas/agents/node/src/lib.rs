@@ -1,6 +1,8 @@
-//! Reports the node's agent tools and skills, and starts checkout syncs.
+//! Reports the node's agent tools and skills, starts checkout syncs and
+//! links a checkout's skills into the folders missing them.
 mod checkout;
 mod home;
+mod link;
 mod report;
 mod roles;
 mod run;
@@ -9,7 +11,7 @@ mod sync;
 mod tools;
 
 use anyhow::{Context, Result};
-use parvi_agents_contract::{FAILED, FETCH_FAILED, REPORT, SYNC, SYNCED, WATCH};
+use parvi_agents_contract::{FAILED, FETCH_FAILED, LINK, LINKED, REPORT, SYNC, SYNCED, WATCH};
 use parvi_core::Error;
 use parvi_node_kit::args::{object, text};
 use parvi_node_kit::{Area, BoxFuture, Built, Channel, Client, Command, Listing, Setup};
@@ -34,6 +36,7 @@ pub const LISTING: Listing = Listing {
     commands: &[
         "agents_show",
         "agents_sync",
+        "agents_link",
         "role_list",
         "role_inspect",
         "role_usage",
@@ -105,6 +108,20 @@ impl SyncState {
         sync::sync_fetched(sessions, &path)
             .await
             .map_err(|e| Error::new(FAILED, format!("{e:#}")))
+    }
+}
+
+impl SyncState {
+    /// Links the checkout's missing skills, then tells the watchers.
+    async fn link(&self, home: &Home, shown: &str) -> Result<Value, Error> {
+        let made = link::link(home, shown).map_err(|e| Error::new(FAILED, format!("{e:#}")));
+        let _ = self.changes.send(());
+        Ok(Value::Array(
+            made?
+                .into_iter()
+                .map(|l| json!({"skill": l.skill, "folder": l.folder}))
+                .collect(),
+        ))
     }
 }
 
@@ -221,7 +238,29 @@ impl Area for AgentsArea {
                 }
             },
         );
-        let mut commands = vec![show, sync];
+        let (home, node, sync_state) = (
+            self.home.clone(),
+            self.node.clone(),
+            self.sync_state.clone(),
+        );
+        let link = Command::new(
+            "agents_link",
+            "Link a skills checkout's skills into the skills folders missing them.",
+            || object(json!({"checkout":{"type":"string"}}), &["checkout"]),
+            move |args| {
+                let (home, node, sync_state) = (home.clone(), node.clone(), sync_state.clone());
+                async move {
+                    let home =
+                        home.ok_or_else(|| Error::new(FAILED, "this node has no home folder"))?;
+                    let checkout = text(&args, "checkout")
+                        .map_err(|e| Error::new(FAILED, e.to_string()))?
+                        .to_owned();
+                    let linked = sync_state.link(&home, &checkout).await?;
+                    Ok(json!({"node":node,"linked":linked}))
+                }
+            },
+        );
+        let mut commands = vec![show, sync, link];
         commands.extend(roles::commands(self.roles.clone(), self.node.clone()));
         commands
     }
@@ -230,12 +269,17 @@ impl Area for AgentsArea {
 enum Request {
     Watch(bool),
     Sync { id: u32, checkout: String },
+    Link { id: u32, checkout: String },
 }
 
 fn decode(frame: &[u8]) -> Option<Request> {
     match frame {
         [WATCH, on] => Some(Request::Watch(*on != 0)),
         [SYNC, rest @ ..] if rest.len() >= 4 => Some(Request::Sync {
+            id: u32::from_le_bytes(rest[..4].try_into().ok()?),
+            checkout: std::str::from_utf8(&rest[4..]).ok()?.to_owned(),
+        }),
+        [LINK, rest @ ..] if rest.len() >= 4 => Some(Request::Link {
             id: u32::from_le_bytes(rest[..4].try_into().ok()?),
             checkout: std::str::from_utf8(&rest[4..]).ok()?.to_owned(),
         }),
@@ -248,13 +292,22 @@ fn report_frame(json: &str) -> Vec<u8> {
 }
 
 fn synced_frame(id: u32, answer: Result<String, Error>) -> Vec<u8> {
+    answer_frame(SYNCED, id, answer)
+}
+
+fn linked_frame(id: u32, answer: Result<Value, Error>) -> Vec<u8> {
+    answer_frame(LINKED, id, answer.map(|v| v.to_string()))
+}
+
+/// An answer to an asked id: kind, id, ok, then the text or the error.
+fn answer_frame(kind: u8, id: u32, answer: Result<String, Error>) -> Vec<u8> {
     let ok = answer.is_ok();
     let text = match answer {
         Ok(session) => session,
         Err(error) => serde_json::to_string(&error).expect("error serializes"),
     };
     [
-        &[SYNCED][..],
+        &[kind][..],
         &id.to_le_bytes(),
         &[u8::from(ok)],
         text.as_bytes(),
@@ -317,6 +370,10 @@ impl Channel for Connection {
                         let _ = out.send(synced_frame(id, answer)).await;
                     });
                 }
+                Some(Request::Link { id, checkout }) => {
+                    let answer = self.sync_state.link(&home, &checkout).await;
+                    let _ = self.out.send(linked_frame(id, answer)).await;
+                }
                 _ => {}
             }
         })
@@ -344,6 +401,14 @@ mod tests {
         assert_eq!(decode(&[WATCH]), None);
         assert_eq!(decode(&[SYNC, 1]), None);
         assert_eq!(decode(&[SYNC, 0, 0, 0, 0, 0xff]), None);
+        assert_eq!(
+            decode(b"\x82\x03\0\0\0~/kit"),
+            Some(Request::Link {
+                id: 3,
+                checkout: "~/kit".into()
+            })
+        );
+        assert_eq!(decode(&[LINK, 1]), None);
         assert_eq!(decode(&[0x8a]), None);
     }
 
@@ -354,6 +419,7 @@ mod tests {
             synced_frame(2, Ok("sync-kit".into())),
             b"\x89\x02\0\0\0\x01sync-kit"
         );
+        assert_eq!(linked_frame(4, Ok(json!([]))), b"\x8a\x04\0\0\0\x01[]");
         let failed = synced_frame(3, Err(Error::new(FAILED, "refused")));
         assert_eq!(&failed[..6], b"\x89\x03\0\0\0\0");
         assert_eq!(

@@ -68,6 +68,19 @@ impl AgentsPage {
         cx.notify();
     }
 }
+impl AgentsPage {
+    fn agents_link(&mut self, node: &str, checkout: &str, cx: &mut Context<Self>) {
+        let frame = self.state.link(node, checkout);
+        if !self.host.send(&NodeId::from(node), frame, cx) {
+            self.state.dropped(node);
+            self.host.report(
+                Status::failure(format!("{checkout} not linked: not connected")),
+                cx,
+            );
+        }
+        cx.notify();
+    }
+}
 impl Page for AgentsPage {
     const ID: &'static str = "agents";
     const TITLE: &'static str = "Agents";
@@ -88,12 +101,18 @@ impl Page for AgentsPage {
                 &format!("Syncing {checkout} in {session}; refresh when done"),
                 cx,
             ),
-            Some(Some(Synced::Refused { code, .. }))
-                if code == parvi_agents_contract::FETCH_FAILED => {}
-            Some(Some(Synced::Refused { checkout, why, .. })) => self.host.report(
-                Status::failure(format!("Sync of {checkout} did not start: {why}")),
+            Some(Some(Synced::Linked { checkout, links })) => self.host.toast(
+                &format!(
+                    "Linked {links} skill{} from {checkout}",
+                    if links == 1 { "" } else { "s" }
+                ),
                 cx,
             ),
+            Some(Some(Synced::Refused { code, .. }))
+                if code == parvi_agents_contract::FETCH_FAILED => {}
+            Some(Some(Synced::Refused { checkout, why, .. })) => self
+                .host
+                .report(Status::failure(format!("{checkout}: {why}")), cx),
             _ => {}
         }
         cx.notify();
@@ -110,7 +129,7 @@ impl Page for AgentsPage {
             if !pending.is_empty() {
                 self.host.report(
                     Status::failure(format!(
-                        "Sync outcome unknown after disconnect: {}",
+                        "Outcome unknown after disconnect: {}",
                         pending.join(", ")
                     )),
                     cx,

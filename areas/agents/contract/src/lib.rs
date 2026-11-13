@@ -11,8 +11,13 @@ pub const FETCH_FAILED: &str = "agents_fetch_failed";
 
 pub const WATCH: u8 = 0x80;
 pub const SYNC: u8 = 0x81;
+/// Link a checkout's skills into the folders missing them: id, checkout.
+pub const LINK: u8 = 0x82;
 pub const REPORT: u8 = 0x88;
 pub const SYNCED: u8 = 0x89;
+/// A link's answer: id, ok, then the links made as JSON
+/// (`[{"skill","folder"}]`) or the error.
+pub const LINKED: u8 = 0x8a;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct Setting {

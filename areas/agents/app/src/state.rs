@@ -254,6 +254,8 @@ pub enum Fix {
     /// Sync the checkout (fetch, fast-forward, run its setup if it has
     /// one) in a new session.
     Sync { path: String, setup: bool },
+    /// Link the checkout's skills into the folders missing them.
+    Link { path: String },
     /// Done by hand, as these words say.
     Words(String),
 }
@@ -313,8 +315,6 @@ pub fn off(r: &Report) -> Vec<Off> {
         }
         let mut unlinked = std::collections::BTreeSet::new();
         let mut broken = std::collections::BTreeSet::new();
-        // The folders the skills are missing from.
-        let mut wanting = std::collections::BTreeSet::new();
         for d in checkout_drift(r, c) {
             let Some(skill) = d.path.get(1).cloned() else {
                 continue;
@@ -322,7 +322,6 @@ pub fn off(r: &Report) -> Vec<Off> {
             match d.tone {
                 Tone::Unlinked => {
                     unlinked.insert(skill);
-                    wanting.insert(d.path[0].clone());
                 }
                 Tone::Error => {
                     broken.insert(skill);
@@ -339,15 +338,6 @@ pub fn off(r: &Report) -> Vec<Off> {
             ));
             if tone == Tone::Plain {
                 tone = Tone::Unlinked;
-            }
-            if c.setup.is_some() {
-                sync = true;
-            } else {
-                by_hand.push(format!(
-                    "link {} into {}",
-                    if unlinked.len() == 1 { "it" } else { "them" },
-                    names(&wanting)
-                ));
             }
         }
         if !broken.is_empty() {
@@ -371,6 +361,10 @@ pub fn off(r: &Report) -> Vec<Off> {
             Fix::Sync {
                 path: c.path.clone(),
                 setup: c.setup.is_some(),
+            }
+        } else if !unlinked.is_empty() {
+            Fix::Link {
+                path: c.path.clone(),
             }
         } else {
             let words = by_hand.join(", then ");
@@ -429,12 +423,17 @@ pub enum Chosen {
     Checkout(String),
 }
 
-/// What a sync frame answered.
+/// What a sync or a link frame answered.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Synced {
     Started {
         checkout: String,
         session: String,
+    },
+    /// The checkout's skills were linked: how many links were made.
+    Linked {
+        checkout: String,
+        links: usize,
     },
     Refused {
         checkout: String,
@@ -447,8 +446,8 @@ pub struct Agents {
     /// Each node's last report; it stays as last known when the node goes.
     pub reports: BTreeMap<String, Report>,
     pub chosen: Chosen,
-    /// Asked syncs by id: (node, checkout path).
-    syncs: HashMap<u32, (String, String)>,
+    /// Asked syncs and links by id: (node, checkout path, SYNC or LINK).
+    syncs: HashMap<u32, (String, String, u8)>,
     next: u32,
 }
 
@@ -472,12 +471,18 @@ impl Agents {
                 self.reports.insert(node.to_string(), r);
                 Some(None)
             }
-            SYNCED if body.len() >= 5 => {
+            SYNCED | LINKED if body.len() >= 5 => {
                 let id = u32::from_le_bytes(body[..4].try_into().ok()?);
                 let ok = body[4] == 1;
                 let text = String::from_utf8_lossy(&body[5..]).to_string();
-                let (_, checkout) = self.syncs.remove(&id)?;
-                Some(Some(if ok {
+                let (_, checkout, _) = self.syncs.remove(&id)?;
+                Some(Some(if ok && kind == LINKED {
+                    let made = serde_json::from_str::<Vec<serde_json::Value>>(&text).ok()?;
+                    Synced::Linked {
+                        checkout,
+                        links: made.len(),
+                    }
+                } else if ok {
                     Synced::Started {
                         checkout,
                         session: text,
@@ -497,19 +502,31 @@ impl Agents {
 
     /// A sync of `checkout` on `node`: the frame to send.
     pub fn sync(&mut self, node: &str, checkout: &str) -> Vec<u8> {
+        self.ask(SYNC, node, checkout)
+    }
+
+    /// A link of `checkout`'s skills on `node`: the frame to send.
+    pub fn link(&mut self, node: &str, checkout: &str) -> Vec<u8> {
+        self.ask(LINK, node, checkout)
+    }
+
+    fn ask(&mut self, kind: u8, node: &str, checkout: &str) -> Vec<u8> {
         let id = self.next;
         self.next += 1;
         self.syncs
-            .insert(id, (node.to_string(), checkout.to_string()));
-        let mut f = vec![SYNC];
+            .insert(id, (node.to_string(), checkout.to_string(), kind));
+        let mut f = vec![kind];
         f.extend_from_slice(&id.to_le_bytes());
         f.extend_from_slice(checkout.as_bytes());
         f
     }
 
-    /// Is a sync of this checkout on this node on its way?
-    pub fn starting(&self, node: &str, checkout: &str) -> bool {
-        self.syncs.values().any(|(n, c)| n == node && c == checkout)
+    /// Is a sync (`SYNC`) or a link (`LINK`) of this checkout on this node
+    /// on its way?
+    pub fn asked(&self, kind: u8, node: &str, checkout: &str) -> bool {
+        self.syncs
+            .values()
+            .any(|(n, c, k)| n == node && c == checkout && *k == kind)
     }
 
     /// A node's link dropped: its asked syncs' outcomes are unknown.
@@ -517,11 +534,11 @@ impl Agents {
         let gone: Vec<u32> = self
             .syncs
             .iter()
-            .filter(|(_, (n, _))| n == node)
+            .filter(|(_, (n, _, _))| n == node)
             .map(|(id, _)| *id)
             .collect();
         gone.into_iter()
-            .filter_map(|id| self.syncs.remove(&id).map(|(_, c)| c))
+            .filter_map(|id| self.syncs.remove(&id).map(|(_, c, _)| c))
             .collect()
     }
 }
@@ -620,18 +637,19 @@ mod tests {
             Some(("broken link".into(), Tone::Error))
         );
 
-        // Level, no setup, links only missing: fixed by hand.
+        // Level, links only missing: Link, with or without a setup.
         r.checkouts[0].behind = 0;
-        r.checkouts[0].setup = None;
         r.skills.truncate(1);
         r.skills[0].links.insert("claude".into(), "linked".into());
         r.skills[0].locations.get_mut("claude").unwrap().behind = 0;
+        let link = Fix::Link {
+            path: "~/agent-kit".into(),
+        };
         let off = super::off(&r);
         assert_eq!(off[0].what, "1 skill not linked: handoff");
-        assert_eq!(
-            off[0].fix,
-            Fix::Words("Link it into ~/.agents/skills".into())
-        );
+        assert_eq!(off[0].fix, link);
+        r.checkouts[0].setup = None;
+        assert_eq!(super::off(&r)[0].fix, link);
 
         // A harness that is not signed in says how to sign in.
         r.tools[0].signed_in = Some(false);
@@ -701,7 +719,8 @@ mod tests {
         let mut a = Agents::default();
         let f = a.sync("n1", "~/agent-kit");
         assert_eq!(f[0], SYNC);
-        assert!(a.starting("n1", "~/agent-kit"));
+        assert!(a.asked(SYNC, "n1", "~/agent-kit"));
+        assert!(!a.asked(LINK, "n1", "~/agent-kit"));
         let mut body = f[1..5].to_vec();
         body.push(1);
         body.extend_from_slice(b"sync-agent-kit");
@@ -712,8 +731,22 @@ mod tests {
                 session: "sync-agent-kit".into()
             }))
         );
+        let f = a.link("n1", "~/agent-kit");
+        assert_eq!(f[0], LINK);
+        assert!(a.asked(LINK, "n1", "~/agent-kit"));
+        let mut body = f[1..5].to_vec();
+        body.push(1);
+        body.extend_from_slice(br#"[{"skill":"handoff","folder":"~/.agents/skills"}]"#);
+        assert_eq!(
+            a.frame("n1", LINKED, &body),
+            Some(Some(Synced::Linked {
+                checkout: "~/agent-kit".into(),
+                links: 1
+            }))
+        );
+        assert!(!a.asked(LINK, "n1", "~/agent-kit"));
         a.sync("n1", "~/x");
         assert_eq!(a.dropped("n1"), vec!["~/x".to_string()]);
-        assert!(!a.starting("n1", "~/x"));
+        assert!(!a.asked(SYNC, "n1", "~/x"));
     }
 }

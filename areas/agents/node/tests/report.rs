@@ -347,6 +347,6 @@ fn commands_match_the_old_agents_tools() {
             .copied()
             .filter(|n| n.starts_with("agents_"))
             .collect::<Vec<_>>(),
-        &["agents_show", "agents_sync"]
+        &["agents_show", "agents_sync", "agents_link"]
     );
 }
