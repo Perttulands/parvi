@@ -498,12 +498,14 @@ async fn upgrade(flags: &Flags) -> Result<Value, Error> {
     };
     let Some(why) = failed else {
         let from_version = old_version.as_deref().unwrap_or("an unknown build");
+        // The new build is healthy, so nothing can need the old one again.
+        for to in &kept {
+            std::fs::remove_file(previous(to)).map_err(|e| io("removing", &previous(to), e))?;
+        }
         return Ok(json!({
             "summary": format!(
-                "Upgraded {service} from {from_version} to {version}; it serves on {}.\n\
-                 The build it replaced is kept as {}.",
-                unit.listen,
-                previous(&binary).display()
+                "Upgraded {service} from {from_version} to {version}; it serves on {}.",
+                unit.listen
             ),
             "version": version,
             "previous": old_version,

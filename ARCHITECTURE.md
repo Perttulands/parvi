@@ -204,9 +204,10 @@ restart signals only the node and a tmux server it started lives on.
   changed, it changes nothing. A running unit with another build is
   refused: that is an upgrade.
 - **Upgrade** reads the binary and address from the unit's `ExecStart`,
-  keeps the installed build as `parvi.previous`, puts the new one in its
-  place and restarts the unit. If the new node is not healthy in time, it
-  puts the previous build back, restarts it and fails with `upgrade_failed`.
+  sets the installed build aside, puts the new one in its place and
+  restarts the unit. If the new node is not healthy in time, it puts the
+  build it set aside back, restarts it and fails with `upgrade_failed`;
+  once the new node is healthy the old build is deleted.
   A unit without `KillMode=process` is refused before anything changes.
 - **Version.** A build's version is the package version and its commit
   (`0.0.1+8cdb58b`), in `parvi --version`, `parvi version` and the health.

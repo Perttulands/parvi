@@ -263,6 +263,8 @@ async fn an_upgrade_keeps_every_session_and_the_new_node_serves_it() {
     let new_node = machine.node_pid().unwrap();
     assert_ne!(old_node, new_node, "the node did not restart");
     assert!(std::fs::read(machine.installed()).unwrap() == std::fs::read(&second).unwrap());
+    let old_build = machine.installed().with_file_name("parvi.previous");
+    assert!(!old_build.exists(), "the replaced build was left behind");
     // The same session, its same process and its screen, through the new node.
     assert_eq!(tmux.display("alpha", "#{pane_pid}"), pane);
     shows(&machine, "alpha", "before-42").await;
