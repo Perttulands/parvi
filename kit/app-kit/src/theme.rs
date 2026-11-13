@@ -10,7 +10,6 @@ use serde::Deserialize;
 /// dashboard as it renders). A page's own measures live with the page.
 pub mod size {
     pub const TAB_BAR: f32 = 44.;
-    pub const STATUS: f32 = 28.;
     pub const ROW: f32 = 28.;
     pub const CONTROL: f32 = 28.;
     pub const RADIUS: f32 = 4.;
@@ -28,6 +27,23 @@ pub mod size {
     pub const TAB_CARD_TOP: f32 = 6.;
     /// A list row's inset from its list's sides.
     pub const ROW_INSET: f32 = 6.;
+    /// The page skeleton (`widgets::pane`): the list's width, as the
+    /// terminals' session rail; the detail's padding, its widest reading
+    /// width and the gap between its sections.
+    pub const LIST: f32 = 260.;
+    pub const PAD: f32 = 24.;
+    pub const READING: f32 = 960.;
+    pub const SECTION_GAP: f32 = 24.;
+    /// A head's padding at its ends and the gap between its parts.
+    pub const HEAD_PAD: f32 = 12.;
+    pub const HEAD_GAP: f32 = 8.;
+    /// Where a row's words start, from its list's side.
+    pub const ROW_PAD: f32 = 12.;
+    /// A label's room above and below it.
+    pub const LABEL_TOP: f32 = 12.;
+    pub const LABEL_BOTTOM: f32 = 4.;
+    /// The name column of a detail's named lines.
+    pub const NAME_COL: f32 = 200.;
 }
 
 /// Measures the pages that list things share (a rail of rows beside a
@@ -255,6 +271,11 @@ impl Theme {
     }
     pub fn accent_soft(&self) -> Hsla {
         alpha(self.accent, 0.07)
+    }
+
+    /// The faint rule between a table's rows.
+    pub fn rule(&self) -> Hsla {
+        alpha(self.divider, 0.5)
     }
 
     /// The colour of a Unix user's square, stable per name.

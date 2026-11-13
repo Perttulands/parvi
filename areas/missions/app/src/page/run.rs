@@ -1350,10 +1350,7 @@ impl MissionsPage {
                     .debug_selector(|| "run-start".into())
                     .on_click(cx.listener(|p, _, _, cx| p.start_run(cx))),
             );
-            let available = (f32::from(window.viewport_size().height)
-                - size::TAB_BAR * 2.
-                - size::STATUS
-                - PAD)
+            let available = (f32::from(window.viewport_size().height) - size::TAB_BAR * 2. - PAD)
                 .clamp(size::CONTROL * 3., START_FORM_MAX);
             return Some(
                 div()

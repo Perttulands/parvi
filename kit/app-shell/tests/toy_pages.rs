@@ -468,6 +468,18 @@ fn status(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> String {
     })
 }
 
+fn hello_device(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> String {
+    shell.read_with(cx, |s, cx| {
+        let hub = s.hub().read(cx);
+        hub.fleet
+            .here()
+            .hello
+            .as_ref()
+            .map(|h| h.device.clone())
+            .unwrap_or_default()
+    })
+}
+
 fn alpha() -> Entity<Alpha> {
     ALPHA.with(|a| a.borrow().clone()).expect("Alpha was made")
 }
@@ -491,7 +503,10 @@ fn two_toy_pages_plug_in_through_their_host(cx: &mut TestAppContext) {
             s.hub().read(cx).fleet.here().state == LinkState::Open
         })
     });
-    assert_eq!(status(&shell, cx), "Connected to rig (test), Parvi 0.0.1");
+    // Connected as asked, the app says nothing; the node it reached is
+    // the one the hello names.
+    assert_eq!(status(&shell, cx), "");
+    assert_eq!(hello_device(&shell, cx), "rig");
 
     // The tab bar: both toy pages, not the one whose area is off.
     cx.run_until_parked();
@@ -684,7 +699,10 @@ fn with_no_pages_the_shell_connects_to_its_node(cx: &mut TestAppContext) {
             s.hub().read(cx).fleet.here().state == LinkState::Open
         })
     });
-    assert_eq!(status(&shell, cx), "Connected to rig (test), Parvi 0.0.1");
+    // Connected as asked, the app says nothing; the node it reached is
+    // the one the hello names.
+    assert_eq!(status(&shell, cx), "");
+    assert_eq!(hello_device(&shell, cx), "rig");
     // Only the shell's own Settings page, from which the node is set.
     assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("settings"));
     assert!(cx.debug_bounds("tab-settings").is_some());

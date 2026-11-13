@@ -379,15 +379,15 @@ impl Shell {
         let shell = cx.entity().downgrade();
         let hub = self.hub.downgrade();
         let mut all = vec![
-            Chord::new("?", "Keybindings", move |window, cx| {
+            Chord::new("?", "Every shortcut", move |window, cx| {
                 let _ = shell.update(cx, |s, cx| s.toggle_keys(window, cx));
             })
             .alt("k", Some(false)),
-            Chord::new("k", "Keys off", move |_, cx| {
+            Chord::new("k", "Shortcuts off", move |_, cx| {
                 let _ = hub.update(cx, |h, cx| {
                     h.settings.keys = false;
                     h.save(cx);
-                    h.toast("Keys off", cx);
+                    h.toast("Shortcuts off", cx);
                 });
             }),
         ];
@@ -487,7 +487,7 @@ impl Shell {
                 if let Some(row) = row {
                     cx.stop_propagation();
                     let key = if row.leader == "tab" {
-                        "TAB".to_string()
+                        "Tab".to_string()
                     } else {
                         row.leader.to_uppercase()
                     };
@@ -497,7 +497,7 @@ impl Shell {
                     }
                     self.run(
                         all[row.chord].run.clone(),
-                        vec!["LEADER".into(), key],
+                        vec![chords::LEADER_LABEL.into(), key],
                         window,
                         cx,
                     );
@@ -531,7 +531,7 @@ impl Shell {
     /// The leader: the keys panel opens, and the next bare key runs a chord.
     fn open_leader(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.leader = Some(Instant::now());
-        self.show_echo(vec!["CTRL+SHIFT".into(), "SPACE".into()], cx);
+        self.show_echo(vec![chords::LEADER_LABEL.into()], cx);
         self.open_keys(window, cx);
         self.keys.update(cx, |k, cx| k.set_leader(true, cx));
         self.leader_task = Some(cx.spawn(async move |this, cx| {

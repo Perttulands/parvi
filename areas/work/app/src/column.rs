@@ -172,7 +172,7 @@ impl Work {
                             .font_weight(FontWeight::SEMIBOLD)
                             .child("Beads"),
                     )
-                    .child(kit::caps(&t, &["ALT".into(), "B".into()]))
+                    .child(kit::caps(&t, &["Alt".into(), "B".into()]))
                     .child(
                         kit::button(&t, "wc-close", "Close", Kind::Quiet)
                             .on_click(cx.listener(|w, _, _, cx| w.toggle_column(cx))),

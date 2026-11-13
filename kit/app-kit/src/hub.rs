@@ -284,7 +284,12 @@ impl Hub {
                         Some(_) => {
                             format!("Connected through {to} while {} is away", self.home_name())
                         }
-                        None => format!("Connected to {to}"),
+                        // Connected as asked: nothing to say, unless it
+                        // follows a failure the operator saw.
+                        None if self.status.as_ref().is_some_and(|s| s.failure) => {
+                            format!("Connected to {to}")
+                        }
+                        None => return,
                     };
                     self.status = Some(Status::new(text));
                 }

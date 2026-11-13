@@ -7,7 +7,6 @@ use gpui::{
     AnyElement, Context, MouseButton, MouseDownEvent, Window, anchored, deferred, div, point,
     prelude::*, px,
 };
-use parvi_app_kit::clock;
 use parvi_app_kit::host::{Cover, Status};
 use parvi_app_kit::hub::{Surface, Toast};
 use parvi_app_kit::link::client::LinkState;
@@ -16,108 +15,230 @@ use parvi_app_kit::theme::{self, Theme, alpha, motion, size, theme};
 use parvi_app_kit::widgets::{boundary, kit};
 use std::time::Duration;
 
-/// The keys toggle's padding, and its widest words ("Keys off").
-const KEYS_PAD: f32 = 12.;
-const KEYS_CHARS: usize = 8;
-/// Room kept on the bar for a page's own tabs past their first, in
-/// characters: the terminals' `+`.
-const EXTRA_TAB_CHARS: usize = 1;
-/// How long words that are not a failure stay in the status line.
-const STATUS_SHOWN_S: u64 = 30;
+/// The padding of the words at the bar's right end (Keys, a link that is
+/// not open).
+const END_PAD: f32 = 12.;
+/// Room kept on the bar for each page that draws its own tabs (the
+/// terminals' workspace tabs and their `+`): they shrink and scroll to it.
+const OWN_TABS_LEAST: f32 = 130.;
+/// The tab that holds the pages the bar has no room for.
+const MORE: &str = "More";
+/// How long words that are not a failure stay up.
+const NOTICE_SHOWN_S: u64 = 8;
 /// What the leader says with keys off.
-pub(crate) const KEYS_OFF_HINT: &str = "Keys are off: the tab bar's Keys button turns them on.";
+pub(crate) const KEYS_OFF_HINT: &str =
+    "Shortcuts are off: Keys off, at the tab bar's right, turns them on.";
+
+/// Which pages' tabs stand on the bar and which wait under More.
+struct Fit {
+    compact: bool,
+    more: Vec<usize>,
+}
 
 impl Shell {
-    /// Whether the tabs must sit close together: the window is narrower
-    /// than every page's tab spaced out, the keys toggle, and one terminal
-    /// tab's room for the tabs a page keeps of its own.
-    fn tabs_compact(&self, off: &[&str], window: &mut Window) -> bool {
+    /// The width of words on the bar, at the bar's text size.
+    fn words_w(window: &mut Window, words: &str) -> f32 {
         let text = window.text_system();
         let font = text.resolve_font(&gpui::font(theme::FAMILY));
         let cell = text
             .advance(font, px(size::TEXT), 'M')
-            .map_or(px(size::TEXT * 0.6), |s| s.width);
-        let titles: Vec<&str> = self
-            .pages
-            .iter()
-            .filter(|p| !p.meta.area.is_some_and(|a| off.contains(&a)))
-            .map(|p| p.meta.title)
-            .collect();
-        let spaced: usize = titles.iter().map(|t| t.chars().count()).sum();
-        let tabs = titles.len() + 1;
-        let need = cell * (spaced + KEYS_CHARS + EXTRA_TAB_CHARS) as f32
-            + px(kit::TAB_PAD * 2. * tabs as f32 + KEYS_PAD * 2.);
-        need > window.viewport_size().width
+            .map_or(size::TEXT * 0.6, |s| f32::from(s.width));
+        cell * words.chars().count() as f32
+    }
+
+    /// Spaced tabs where every page's fits; else close together; else as
+    /// many as fit in order, the shown page's always among them, and the
+    /// rest under More.
+    fn fit_tabs(&self, visible: &[(usize, bool)], end_w: f32, window: &mut Window) -> Fit {
+        let room = f32::from(window.viewport_size().width) - end_w;
+        let own = visible.iter().filter(|(_, own)| *own).count() as f32 * OWN_TABS_LEAST;
+        let width = |i: usize, pad: f32, window: &mut Window| {
+            Self::words_w(window, self.pages[i].meta.title) + pad * 2.
+        };
+        let need = |pad: f32, window: &mut Window| -> f32 {
+            own + visible
+                .iter()
+                .filter(|(_, own)| !own)
+                .map(|(i, _)| width(*i, pad, window))
+                .sum::<f32>()
+        };
+        if need(kit::TAB_PAD, window) <= room {
+            return Fit {
+                compact: false,
+                more: vec![],
+            };
+        }
+        if need(kit::TAB_PAD_COMPACT, window) <= room {
+            return Fit {
+                compact: true,
+                more: vec![],
+            };
+        }
+        let pad = kit::TAB_PAD_COMPACT;
+        let mut left = room - own - (Self::words_w(window, MORE) + pad * 2.);
+        let shown = self
+            .shown
+            .filter(|s| visible.iter().any(|(i, own)| i == s && !own));
+        if let Some(s) = shown {
+            left -= width(s, pad, window);
+        }
+        let mut more = vec![];
+        for &(i, own) in visible {
+            if own || Some(i) == shown {
+                continue;
+            }
+            let w = width(i, pad, window);
+            if more.is_empty() && w <= left {
+                left -= w;
+            } else {
+                more.push(i);
+            }
+        }
+        Fit {
+            compact: true,
+            more,
+        }
     }
 
     fn render_tab_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
         let off = self.hub.read(cx).areas_off();
+        let hub = self.hub.read(cx);
+        let keys_on = hub.settings.keys;
+        let here = hub.fleet.here();
+        let link = match here.state {
+            LinkState::Open => None,
+            LinkState::Connecting => Some(("Connecting…", t.dim)),
+            LinkState::Lost => Some(("Offline, retrying", t.error)),
+            LinkState::Refused => Some(("Refused by the node", t.error)),
+        };
+        let address = hub.fleet.base().to_string();
+        let keys_words = if keys_on { "Keys" } else { "Keys off" };
+        let end_w = Self::words_w(window, keys_words)
+            + END_PAD * 2.
+            + link.map_or(0., |(w, _)| Self::words_w(window, w) + END_PAD * 2.);
+        // The pages with a tab, and whether each draws its own.
+        let mut drawn: Vec<(usize, Option<gpui::AnyElement>)> = vec![];
+        for (i, page) in self.pages.iter().enumerate() {
+            if page.meta.area.is_some_and(|a| off.iter().any(|o| o == a)) {
+                continue;
+            }
+            drawn.push((i, page.tabs(self.shown == Some(i), window, cx)));
+        }
+        let visible: Vec<(usize, bool)> = drawn.iter().map(|(i, e)| (*i, e.is_some())).collect();
+        let fit = self.fit_tabs(&visible, end_w, window);
         let style = kit::TabStyle {
-            compact: self.tabs_compact(&off.iter().map(|s| s.as_ref()).collect::<Vec<_>>(), window),
+            compact: fit.compact,
         };
         if cx.try_global::<kit::TabStyle>() != Some(&style) {
             cx.set_global(style);
         }
-        // The tabs scroll sideways when the window is too narrow even for
-        // compact ones; the rule under them stays the bar's.
         let mut bar = div()
             .id("page-tabs")
             .flex_1()
             .min_w_0()
             .flex()
-            .items_stretch()
-            .overflow_x_scroll();
-        for (i, page) in self.pages.iter().enumerate() {
-            if page.meta.area.is_some_and(|a| off.iter().any(|o| o == a)) {
-                continue;
-            }
-            let active = self.shown == Some(i);
-            if let Some(tabs) = page.tabs(active, window, cx) {
+            .items_stretch();
+        for (i, own) in drawn {
+            if let Some(tabs) = own {
                 bar = bar.child(tabs);
                 continue;
             }
+            if fit.more.contains(&i) {
+                continue;
+            }
+            let page = &self.pages[i];
             bar = bar.child(
-                kit::tab(&t, ("tab", i), active, cx)
+                kit::tab(&t, ("tab", i), self.shown == Some(i), cx)
                     .debug_selector(|| format!("tab-{}", page.meta.id))
                     .child(kit::tab_label(page.meta.title))
                     .on_click(cx.listener(move |s, _, window, cx| s.show(i, window, cx))),
             );
         }
-        let on = self.hub.read(cx).settings.keys;
-        let bar = bar.child(
-            // A tab that is never chosen, so its words stand on the tabs' line.
-            kit::tab(&t, "keys-toggle", false, cx)
-                .ml_auto()
-                .px(px(KEYS_PAD))
-                .text_color(if on { t.text2 } else { t.dim })
-                .child(if on { "Keys on" } else { "Keys off" })
-                .on_click(cx.listener(|s, _, _, cx| s.set_keys(None, cx)))
-                .on_mouse_down(
-                    MouseButton::Right,
-                    cx.listener(|s, e: &MouseDownEvent, _, cx| {
-                        let shell = cx.entity().downgrade();
-                        let shell2 = shell.clone();
-                        let on = s.hub.read(cx).settings.keys;
-                        let rows = vec![
-                            MenuRow::new("Keybindings", move |window, cx| {
-                                let _ = shell.update(cx, |s, cx| s.toggle_keys(window, cx));
-                            })
-                            .chord("Alt+K"),
-                            MenuRow::rule(),
-                            MenuRow::new(if on { "Keys off" } else { "Keys on" }, move |_, cx| {
-                                let _ = shell2.update(cx, |s, cx| s.set_keys(Some(!on), cx));
-                            }),
-                        ];
-                        s.host.menu(rows, e.position, cx);
-                    }),
-                ),
-        );
+        if !fit.more.is_empty() {
+            let more = fit.more.clone();
+            bar = bar.child(
+                kit::tab(&t, "more-pages", false, cx)
+                    .debug_selector(|| "tab-more".into())
+                    .child(kit::tab_label(MORE))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |s, e: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            let rows = more
+                                .iter()
+                                .map(|&i| {
+                                    let shell = cx.entity().downgrade();
+                                    MenuRow::new(s.pages[i].meta.title, move |window, cx| {
+                                        let _ = shell.update(cx, |s, cx| s.show(i, window, cx));
+                                    })
+                                })
+                                .collect();
+                            s.host.menu(rows, e.position, cx);
+                        }),
+                    ),
+            );
+        }
+        let bar = bar
+            .child(div().flex_1())
+            .children(link.map(|(words, colour)| {
+                // Said only while the link is not open: what the app shows
+                // is then old.
+                kit::tab(&t, "connection", false, cx)
+                    .debug_selector(|| "connection".into())
+                    .flex_none()
+                    .px(px(END_PAD))
+                    .text_color(colour)
+                    .tooltip(kit::tip(format!(
+                        "{address}: what this window shows may be out of date"
+                    )))
+                    .child(words)
+            }))
+            .child(
+                kit::tab(&t, "keys-toggle", false, cx)
+                    .debug_selector(|| "keys-toggle".into())
+                    .flex_none()
+                    .px(px(END_PAD))
+                    .text_color(if keys_on { t.text2 } else { t.accent })
+                    .tooltip(kit::tip(if keys_on {
+                        "Every shortcut  Alt+K"
+                    } else {
+                        "Parvi's shortcuts are off: every key goes to the terminal. Click to turn them on."
+                    }))
+                    .child(keys_words)
+                    .on_click(cx.listener(move |s, _, window, cx| {
+                        if keys_on {
+                            s.toggle_keys(window, cx);
+                        } else {
+                            s.set_keys(Some(true), cx);
+                        }
+                    }))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(|s, e: &MouseDownEvent, _, cx| {
+                            let shell = cx.entity().downgrade();
+                            let shell2 = shell.clone();
+                            let on = s.hub.read(cx).settings.keys;
+                            let rows = vec![
+                                MenuRow::new("Every shortcut", move |window, cx| {
+                                    let _ = shell.update(cx, |s, cx| s.toggle_keys(window, cx));
+                                })
+                                .chord("Alt+K"),
+                                MenuRow::rule(),
+                                MenuRow::new("Shortcuts on", move |_, cx| {
+                                    let _ = shell2.update(cx, |s, cx| s.set_keys(Some(!on), cx));
+                                })
+                                .checked(on),
+                            ];
+                            s.host.menu(rows, e.position, cx);
+                        }),
+                    ),
+            );
         kit::tab_bar(&t).flex_none().h(px(size::TAB_BAR)).child(bar)
     }
 
     /// Turns the keys on or off; `None` flips them.
-    fn set_keys(&mut self, on: Option<bool>, cx: &mut Context<Self>) {
+    pub(crate) fn set_keys(&mut self, on: Option<bool>, cx: &mut Context<Self>) {
         self.hub.update(cx, |h, cx| {
             let on = on.unwrap_or(!h.settings.keys);
             h.settings.keys = on;
@@ -125,38 +246,29 @@ impl Shell {
                 h.status = None;
             }
             h.save(cx);
-            h.toast(if on { "Keys on" } else { "Keys off" }, cx);
+            h.toast(if on { "Shortcuts on" } else { "Shortcuts off" }, cx);
         });
     }
 
-    fn render_status(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// What the app has to say, at the window's bottom right over the
+    /// page: the last report (a failure stays until it is closed or
+    /// replaced, other words go after a while) and a toast. Nothing when
+    /// all is well.
+    fn render_notices(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let t = theme(cx).clone();
         let hub = self.hub.read(cx);
-        let mut line = div()
-            .flex_none()
-            .h(px(size::STATUS))
-            .px(px(10.))
-            .flex()
-            .items_center()
-            .gap(px(10.))
-            .bg(t.surface)
-            .border_t_1()
-            .border_color(t.divider)
-            .text_size(px(12.))
-            .text_color(t.text2);
-        // What the line says goes stale: words that are not a failure go
-        // after a while, failures stay until something replaces them.
         let status = hub.status.clone().filter(|s| {
             s.failure
                 || s.at
                     .elapsed()
-                    .is_ok_and(|age| age < Duration::from_secs(STATUS_SHOWN_S))
+                    .is_ok_and(|age| age < Duration::from_secs(NOTICE_SHOWN_S))
         });
+        let toast = hub.toast.as_ref().map(|toast| render_toast(&t, toast));
         if let Some(s) = &status
             && !s.failure
             && self.status_expiry.as_ref().map(|(at, _)| *at) != Some(s.at)
         {
-            let left = Duration::from_secs(STATUS_SHOWN_S)
+            let left = Duration::from_secs(NOTICE_SHOWN_S)
                 .saturating_sub(s.at.elapsed().unwrap_or_default());
             let task = cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(left).await;
@@ -164,7 +276,18 @@ impl Shell {
             });
             self.status_expiry = Some((s.at, task));
         }
-        let hub = self.hub.read(cx);
+        if status.is_none() && toast.is_none() {
+            return None;
+        }
+        let mut stack = div()
+            .absolute()
+            .right(px(size::HEAD_PAD))
+            .bottom(px(size::HEAD_PAD))
+            .max_w(px(size::NOTICE))
+            .flex()
+            .flex_col()
+            .items_end()
+            .gap(px(size::HEAD_GAP));
         if let Some(Status {
             at,
             text,
@@ -172,64 +295,44 @@ impl Shell {
             action,
         }) = status
         {
-            line = line
-                .child(div().flex_none().text_color(t.dim).child(clock::at(at)))
+            let mut notice = kit::panel(&t)
+                .id("status")
+                .px(px(size::HEAD_PAD))
+                .py(px(size::HEAD_GAP))
+                .flex()
+                .items_center()
+                .gap(px(size::HEAD_GAP))
                 .child(
                     div()
                         .id("status-text")
+                        .debug_selector(|| "status-text".into())
                         .min_w_0()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_color(if failure { t.error } else { t.text2 })
+                        .text_color(if failure { t.error } else { t.text })
                         .child(text),
                 );
             if let Some((label, run)) = action {
-                line = line.child(
-                    div()
-                        .id("status-action")
-                        .flex_none()
-                        .px(px(8.))
-                        .h(px(20.))
-                        .flex()
-                        .items_center()
-                        .rounded(px(3.))
-                        .border_1()
-                        .border_color(t.divider)
-                        .cursor_pointer()
-                        .hover(|d| d.border_color(t.accent))
-                        .child(label)
-                        .on_click(move |_, window, cx| {
+                notice = notice.child(
+                    kit::button(&t, "status-action", label, kit::Kind::Plain).on_click(
+                        move |_, window, cx| {
                             let run = run.clone();
                             window.defer(cx, move |window, cx| run(window, cx));
-                        }),
+                        },
+                    ),
                 );
             }
+            if failure {
+                notice = notice.child(
+                    kit::button(&t, "status-close", "×", kit::Kind::Quiet)
+                        .tooltip(kit::tip("Close"))
+                        .on_click(cx.listener(move |s, _, _, cx| {
+                            s.hub.update(cx, |h, cx| h.withdraw(at, cx));
+                        })),
+                );
+            }
+            stack = stack.child(notice);
         }
-        let here = hub.fleet.here();
-        let (word, colour) = match here.state {
-            LinkState::Open => ("connected", t.text2),
-            LinkState::Connecting => ("connecting…", t.dim),
-            LinkState::Lost => ("offline, retrying", t.error),
-            LinkState::Refused => ("refused", t.error),
-        };
-        let node = here
-            .hello
-            .as_ref()
-            .map(|h| format!("{} · {}", h.device, h.environment))
-            .unwrap_or_else(|| hub.fleet.base().to_string());
-        line.child(div().flex_1())
-            .children(hub.toast.as_ref().map(|toast| render_toast(&t, toast)))
-            .child(
-                div()
-                    .id("connection")
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .child(div().size(px(6.)).rounded_full().bg(colour))
-                    .child(div().text_color(t.dim).child(node))
-                    .child(div().text_color(colour).child(word)),
-            )
+        stack = stack.children(toast);
+        Some(deferred(stack).with_priority(25).into_any_element())
     }
 
     /// The page shown, inside its error boundary: a page that fails to
@@ -422,7 +525,7 @@ impl Shell {
             deferred(
                 div()
                     .absolute()
-                    .bottom(px(size::STATUS + 20.))
+                    .bottom(px(size::PAD))
                     .left_0()
                     .right_0()
                     .flex()
@@ -440,8 +543,7 @@ impl Shell {
     }
 }
 
-/// A toast sits in the status line, left of the connection, where it
-/// covers nothing.
+/// A toast: a word that something happened, fading on its own.
 fn render_toast(t: &Theme, toast: &Toast) -> AnyElement {
     let fade_at = Duration::from_millis(motion::TOAST_IN + motion::TOAST_SHOWN);
     let opacity = if toast.at.elapsed() >= fade_at {
@@ -449,19 +551,12 @@ fn render_toast(t: &Theme, toast: &Toast) -> AnyElement {
     } else {
         1.0
     };
-    div()
+    kit::panel(t)
         .id("toast")
-        .flex_none()
+        .debug_selector(|| "toast".into())
         .opacity(opacity)
-        .px(px(10.))
-        .h(px(20.))
-        .flex()
-        .items_center()
-        .rounded(px(3.))
-        .border_1()
-        .border_color(t.divider)
-        .bg(t.raised)
-        .text_color(t.text)
+        .px(px(size::HEAD_PAD))
+        .py(px(size::HEAD_GAP))
         .child(toast.text.clone())
         .into_any_element()
 }
@@ -502,7 +597,7 @@ impl Render for Shell {
                     )
                     .children(self.render_docks(&t, cx)),
             )
-            .child(self.render_status(cx))
+            .children(self.render_notices(cx))
             .children(self.render_layers(Cover::Window, cx))
             .children(self.render_echo(cx))
     }

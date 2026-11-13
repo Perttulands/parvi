@@ -316,7 +316,7 @@ mod tests {
         );
         assert_eq!(
             direct(&alt("1", "1", false), &all).unwrap().caps,
-            ["ALT", "1"]
+            ["Alt", "1"]
         );
     }
 

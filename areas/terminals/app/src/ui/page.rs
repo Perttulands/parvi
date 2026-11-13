@@ -1742,7 +1742,7 @@ impl Page for Terminals {
 
 impl Render for Terminals {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let page = window.viewport_size().height - px(size::TAB_BAR + size::STATUS);
+        let page = window.viewport_size().height - px(size::TAB_BAR);
         let cell = crate::term::paint::metrics(window, self.settings.font_size)
             .cell
             .height;

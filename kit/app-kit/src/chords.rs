@@ -122,17 +122,17 @@ pub struct Row {
 
 fn cap(key: &str) -> String {
     match key {
-        "+" | "=" => "PLUS".into(),
-        "-" => "MINUS".into(),
-        "tab" => "TAB".into(),
+        "+" | "=" => "Plus".into(),
+        "-" => "Minus".into(),
+        "tab" => "Tab".into(),
         k => k.to_uppercase(),
     }
 }
 
 fn direct_caps(d: &Direct) -> Vec<String> {
-    let mut caps = vec!["ALT".to_string()];
+    let mut caps = vec!["Alt".to_string()];
     if d.shift == Some(true) {
-        caps.push("SHIFT".into());
+        caps.push("Shift".into());
     }
     caps.push(cap(d.key));
     caps
@@ -339,7 +339,7 @@ mod tests {
         );
         assert_eq!(
             direct(&alt("k", "k", false), &t).unwrap().caps,
-            ["ALT", "K"]
+            ["Alt", "K"]
         );
     }
 

@@ -227,11 +227,9 @@ pub fn caps(t: &Theme, list: &[String]) -> Div {
         if i > 0 {
             row = row.child(div().text_color(t.dim).text_size(px(12.)).child("+"));
         }
-        let modifier = matches!(
-            c.as_str(),
-            "ALT" | "SHIFT" | "CTRL" | "LEADER" | "CTRL+SHIFT"
-        );
-        row = row.child(cap(t, c, modifier));
+        // Every cap but the key itself is a modifier (Alt, Shift, the
+        // leader).
+        row = row.child(cap(t, c, i + 1 < list.len()));
     }
     row
 }
