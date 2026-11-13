@@ -32,7 +32,7 @@ impl Render for ScheduledPage {
         let shown = self
             .shown_task()
             .map(|(n, task)| (n.to_string(), task.clone()));
-        let list_head = pane::head(&t).child(div().flex_1()).child(
+        let list_head = pane::list_head(&t, None).child(
             pane::act(&t, "scheduled-new", "New")
                 .debug_selector(|| "scheduled-new".into())
                 .on_click(cx.listener(|page, _, _, cx| page.new_task(cx))),

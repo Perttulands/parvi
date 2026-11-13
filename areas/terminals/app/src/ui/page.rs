@@ -364,7 +364,7 @@ impl Terminals {
             }
         };
         let field = |cx: &mut Context<Self>, p: &str| cx.new(|cx| TextField::new(cx, p));
-        let rail_search = field(cx, "Search sessions…");
+        let rail_search = field(cx, "Sessions…");
         let send_note = cx.new(|cx| {
             TextField::new(cx, "Message to send")
                 .multiline()

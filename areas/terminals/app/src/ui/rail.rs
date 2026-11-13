@@ -18,36 +18,14 @@ use gpui::{
     prelude::*, px,
 };
 use parvi_app_kit::widgets::kit::{self, Kind};
+use parvi_app_kit::widgets::pane;
 use parvi_terminals_contract::{AgentEvent, EventKind, Session};
 
 impl Terminals {
     pub fn render_rail(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let t = theme(cx).clone();
-        let count = self.fleet.all.len();
-        let header = div()
-            .flex_none()
-            .h(px(size::STRIP))
-            .pl(px(12.))
-            .pr(px(6.))
-            .flex()
-            .items_center()
-            .gap(px(2.))
-            .border_b_1()
-            .border_color(t.divider)
-            .child(
-                div()
-                    .mr_auto()
-                    .flex()
-                    .items_baseline()
-                    .gap(px(6.))
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Sessions"))
-                    .child(
-                        div()
-                            .text_size(px(size::SMALL))
-                            .text_color(t.dim)
-                            .child(count.to_string()),
-                    ),
-            )
+        // The list's head as every page has it: the filter, then the acts.
+        let header = pane::list_head(&t, Some(self.rail_search.clone().into_any_element()))
             .child(
                 kit::button(&t, "rail-find", "Find", Kind::Quiet)
                     .debug_selector(|| "search-scrollback".into())
@@ -89,13 +67,15 @@ impl Terminals {
                 ))
                 .on_click(cx.listener(move |s, _, window, cx| s.search_inside(&words, window, cx)))
         });
-        let search = div()
-            .flex_none()
-            .p(px(8.))
-            .border_b_1()
-            .border_color(t.divider)
-            .child(self.rail_search.clone())
-            .children(inside);
+        let search = inside.map(|inside| {
+            div()
+                .flex_none()
+                .px(px(8.))
+                .pb(px(8.))
+                .border_b_1()
+                .border_color(t.divider)
+                .child(inside)
+        });
         let fleet = &self.fleet;
         let devices =
             devices::devices(
@@ -195,7 +175,7 @@ impl Terminals {
             .border_r_1()
             .border_color(t.divider)
             .child(header)
-            .child(search)
+            .children(search)
             .child(list)
             .into_any_element()
     }

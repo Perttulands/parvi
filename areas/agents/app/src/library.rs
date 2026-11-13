@@ -401,14 +401,13 @@ impl AgentsPage {
     ) -> AnyElement {
         let t = theme(cx).clone();
         let l = &self.library;
-        let list_head = pane::head(&t)
+        let list_head = pane::list_head(&t, None)
             .child(
                 pane::act(&t, "library-back", "← Agents").on_click(cx.listener(|s, _, _, cx| {
                     s.library.open = false;
                     cx.notify();
                 })),
             )
-            .child(div().flex_1())
             .child(
                 pane::act(&t, "role-new", "New")
                     .on_click(cx.listener(|s, _, _, cx| s.role_form(true, cx))),

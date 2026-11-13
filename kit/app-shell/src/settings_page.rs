@@ -573,7 +573,7 @@ impl Render for SettingsPage {
         let list = pane::list(
             &t,
             "settings-groups",
-            pane::head(&t).child(div().flex_1().child(self.search.clone())),
+            pane::list_head(&t, Some(self.search.clone().into_any_element())),
             rows,
         );
         let matches = |words: &str| query.is_empty() || words.to_lowercase().contains(&query);

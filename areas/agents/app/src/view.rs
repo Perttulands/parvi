@@ -42,8 +42,7 @@ impl AgentsPage {
             .flat_map(|(n, r)| agents::off(r).into_iter().map(move |o| (*n, o)))
             .collect();
 
-        let list_head = pane::head(&t)
-            .child(div().flex_1())
+        let list_head = pane::list_head(&t, None)
             .child(
                 pane::act(&t, "agents-refresh", "Check again")
                     .debug_selector(|| "agents-refresh".into())

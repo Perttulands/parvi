@@ -6,7 +6,7 @@
 //!
 //! ```text
 //! ┌ list ───────────────────┬ detail ─────────────────────────────┐
-//! │ head: filter   ≤2 acts  │ head: the thing's name   Send  acts │
+//! │ head: filter   ≤3 acts  │ head: the thing's name   Send  acts │
 //! ├─────────────────────────┼─────────────────────────────────────┤
 //! │ label                   │ section label                       │
 //! │ row                     │ table / lines                       │
@@ -97,9 +97,9 @@ pub fn detail(t: &Theme, id: impl Into<ElementId>, head: Div, body: impl IntoEle
         )
 }
 
-/// The header line: as high as the tab bar, a rule under it. Put the
-/// list's filter (flex_1) and at most two [`act`]s in the list's; the
-/// thing's [`title`], then [`send`] and its actions, in the detail's.
+/// The header line: as high as the tab bar, a rule under it. A list's
+/// head comes from [`list_head`]; a detail's holds the thing's [`title`],
+/// then [`send`] and its actions.
 pub fn head(t: &Theme) -> Div {
     div()
         .flex_none()
@@ -110,6 +110,18 @@ pub fn head(t: &Theme) -> Div {
         .gap(px(size::HEAD_GAP))
         .border_b_1()
         .border_color(t.divider)
+}
+
+/// A list's head, the same on every page: the list's filter on the left,
+/// filling, when the list has one, and nothing there when it has not; then
+/// the list's actions (at most three [`act`]s) on the right. The tab names
+/// the page, so the list's head does not name it again.
+pub fn list_head(t: &Theme, filter: Option<AnyElement>) -> Div {
+    let left = div().flex_1().min_w_0();
+    head(t).child(match filter {
+        Some(f) => left.child(f),
+        None => left,
+    })
 }
 
 /// A thing's name in a head: weighted, shortened at its end when it does
