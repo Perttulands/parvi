@@ -358,7 +358,10 @@ impl Render for Tip {
         cx: &mut gpui::Context<Self>,
     ) -> impl IntoElement {
         let t = crate::theme::theme(cx);
+        // A tooltip is drawn outside the page's tree, so it names the
+        // app's face itself.
         panel(t)
+            .font_family(crate::theme::FAMILY)
             .max_w(px(320.))
             .px(px(8.))
             .py(px(4.))

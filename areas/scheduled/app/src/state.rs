@@ -31,8 +31,6 @@ pub struct Scheduled {
     pub dirty: bool,
     /// When a discard was asked for once, Unix ms.
     pub discard_armed: Option<u64>,
-    /// The node and task whose deletion is awaiting confirmation.
-    pub delete_armed: Option<(String, String)>,
     pub notice: Option<String>,
     pub error: Option<String>,
     pub busy: bool,
@@ -131,7 +129,6 @@ impl Scheduled {
             return false;
         }
         self.form = Some(form);
-        self.delete_armed = None;
         self.dirty = false;
         self.notice = None;
         self.error = None;
@@ -151,22 +148,6 @@ impl Scheduled {
             self.dirty = true;
             self.notice = None;
         }
-    }
-
-    /// The visible confirmation remains valid until used or another task is chosen.
-    pub fn press_delete(&mut self, node: &str, id: &str) -> bool {
-        if self.delete_armed(node, id) {
-            self.delete_armed = None;
-            return true;
-        }
-        self.delete_armed = Some((node.into(), id.into()));
-        false
-    }
-
-    pub fn delete_armed(&self, node: &str, id: &str) -> bool {
-        self.delete_armed
-            .as_ref()
-            .is_some_and(|(n, a)| n == node && a == id)
     }
 
     /// The words after a Run now, CHROTE's.

@@ -1,232 +1,206 @@
-//! Drawing the page: the toolbar, the task list in each device's room, a
-//! task's detail and the form.
+//! Drawing the page on the kit's skeleton: the tasks in the list, soonest
+//! first, and beside them the chosen task (when it runs, where it sends,
+//! how its last run went) or the form.
 
 use gpui::{
     AnyElement, ClickEvent, Context, Div, FontWeight, SharedString, Window, div, prelude::*, px,
 };
 use jiff::Timestamp;
+use parvi_app_kit::Ask;
 use parvi_app_kit::hub::now_ms;
-use parvi_app_kit::theme::board::{GAP, LIST_W, WALL};
-use parvi_app_kit::theme::{Theme, alpha, size, theme};
+use parvi_app_kit::menu::MenuRow;
+use parvi_app_kit::theme::{Theme, size, theme};
 use parvi_app_kit::widgets::kit::{self, Kind};
-use parvi_scheduled_contract::{Target, Task};
+use parvi_app_kit::widgets::pane::{self, Col};
+use parvi_core::NodeId;
+use parvi_scheduled_contract::{SUCCESS, Target, Task};
 
 use crate::form::{self, MODES, Mode, ScheduleForm, TaskForm, WEEKDAYS};
-use crate::page::{ScheduledPage, Session};
+use crate::page::ScheduledPage;
 use crate::tokens::*;
 
-#[derive(Clone)]
-struct SessionDrag {
-    node: String,
-    session: Session,
-}
-
-struct SessionPreview(String);
-impl Render for SessionPreview {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = theme(cx);
-        kit::panel(t)
-            .px(px(PAD))
-            .py(px(4.))
-            .text_color(t.text)
-            .child(self.0.clone())
-    }
-}
+/// Recent runs: when, what started it, how it went.
+const RUNS: [Col; 3] = [
+    Col::fixed("When", RUN_WHEN_W),
+    Col::fixed("By", RUN_BY_W),
+    Col::fill("Result"),
+];
 
 impl Render for ScheduledPage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
-        let toolbar = kit::page_bar(&t)
-            .child(kit::page_title(&t, "Scheduled"))
-            .child(kit::note(
-                &t,
-                "Prompts Parvi sends into your sessions on a timer",
-                Some(t.dim),
-            ))
-            .child(div().flex_1())
-            .child(
-                kit::button(&t, "scheduled-refresh", "Refresh", Kind::Quiet)
-                    .tooltip(kit::tip("Read every device's tasks again"))
-                    .on_click(cx.listener(|page, _, _, cx| page.read_all(cx))),
-            )
-            .child(
-                kit::button(&t, "scheduled-new", "New task", Kind::Primary)
-                    .debug_selector(|| "scheduled-new".into())
-                    .on_click(cx.listener(|page, _, _, cx| page.new_task(cx))),
-            );
-        let sc = &self.state;
-        let main = div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .child(toolbar)
-            .when_some(sc.error.clone(), |d, e| d.child(banner(e, t.error)))
-            .when_some(sc.notice.clone(), |d, n| d.child(banner(n, t.text2)));
-        let detail: AnyElement = if sc.form.is_some() {
+        let shown = self
+            .shown_task()
+            .map(|(n, task)| (n.to_string(), task.clone()));
+        let list_head = pane::head(&t).child(div().flex_1()).child(
+            pane::act(&t, "scheduled-new", "New")
+                .debug_selector(|| "scheduled-new".into())
+                .on_click(cx.listener(|page, _, _, cx| page.new_task(cx))),
+        );
+        let chosen = shown
+            .as_ref()
+            .map(|(n, task)| (n.as_str(), task.id.as_str()));
+        let list = pane::list(&t, "scheduled-list", list_head, self.list(&t, chosen, cx));
+        let detail = if self.state.form.is_some() {
             self.form(&t, cx)
-        } else if let Some((node, task)) = sc.selected_task() {
-            let (node, task) = (node.to_string(), task.clone());
-            self.detail(&t, &node, &task, cx)
+        } else if let Some((node, task)) = &shown {
+            self.detail(&t, node, task, cx)
         } else {
-            div()
-                .p(px(24.))
-                .child(kit::note(
-                    &t,
-                    "Select a task, or create one to send a prompt into your sessions on a schedule.",
-                    Some(t.dim),
-                ))
-                .into_any_element()
-        };
-        div().size_full().bg(t.bg).text_color(t.text).child(
-            main.child(
+            let words = if self.reading() {
+                "Reading scheduled tasks…"
+            } else {
+                "Nothing scheduled."
+            };
+            let action = (!self.reading()).then(|| {
+                kit::button(&t, "scheduled-empty-new", "New task", Kind::Primary)
+                    .on_click(cx.listener(|page, _, _, cx| page.new_task(cx)))
+                    .into_any_element()
+            });
+            pane::detail(
+                "scheduled-detail",
+                pane::head(&t),
                 div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .gap(px(12.))
-                    .p(px(12.))
-                    .child(
-                        panel(&t)
-                            .id("scheduled-list")
-                            .w(px(LIST_W))
-                            .flex_none()
-                            .overflow_y_scroll()
-                            .child(self.list(&t, cx)),
-                    )
-                    .child(
-                        panel(&t)
-                            .id("scheduled-detail")
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_y_scroll()
-                            .child(detail),
-                    )
-                    .when(sc.form.is_some(), |d| d.child(self.session_rail(&t, cx))),
-            ),
-        )
+                    .children(self.notices(&t))
+                    .child(pane::empty(&t, words, action).p_0()),
+            )
+        };
+        pane::page(&t, list, detail).text_color(t.text)
     }
 }
 
 impl ScheduledPage {
-    fn list(&self, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    /// Some node's first read is still out and nothing is listed yet.
+    fn reading(&self) -> bool {
+        self.state
+            .nodes
+            .values()
+            .any(|n| n.reading && n.list.is_none())
+    }
+
+    /// Every node's tasks in the list's order: the live ones soonest
+    /// first, then the paused and the disabled by name.
+    fn ordered(&self) -> Vec<(&str, &Task)> {
+        let mut all: Vec<(&str, &Task)> = self
+            .state
+            .nodes
+            .iter()
+            .flat_map(|(n, s)| s.list.iter().flatten().map(move |task| (n.as_str(), task)))
+            .collect();
+        all.sort_by(|(_, a), (_, b)| {
+            (!a.live(), a.live().then_some(a.next_run).flatten(), &a.name).cmp(&(
+                !b.live(),
+                b.live().then_some(b.next_run).flatten(),
+                &b.name,
+            ))
+        });
+        all
+    }
+
+    /// The task the detail shows: the one chosen, or else the first.
+    pub(crate) fn shown_task(&self) -> Option<(&str, &Task)> {
+        self.state
+            .selected_task()
+            .or_else(|| self.ordered().into_iter().next())
+    }
+
+    fn list(&self, t: &Theme, chosen: Option<(&str, &str)>, cx: &mut Context<Self>) -> Div {
         let now = Timestamp::now();
-        let mut list = div().flex().flex_col().gap(px(GAP));
-        let mut any = false;
-        let mut reading = false;
-        for node in self.host.nodes(cx) {
+        let ordered = self.ordered();
+        let nodes = self.host.nodes(cx);
+        // A device's label only where there are tasks on more than one.
+        let several = ordered
+            .iter()
+            .any(|(n, _)| Some(*n) != ordered.first().map(|f| f.0));
+        let mut out = div().flex().flex_col();
+        for node in &nodes {
             let id = node.id.as_str();
             let Some(state) = self.state.nodes.get(id) else {
                 continue;
             };
-            reading |= state.reading && state.list.is_none();
-            let tasks = state.list.as_deref().unwrap_or_default();
-            if tasks.is_empty() && state.error.is_none() {
-                continue;
-            }
-            any = true;
-            let mut room = div()
-                .flex()
-                .flex_col()
-                .border(px(WALL))
-                .border_color(t.identity_of(&node.device))
-                .rounded(px(size::RADIUS))
-                .bg(t.surface)
-                .child(
+            if let Some(e) = &state.error {
+                out = out.child(
                     div()
+                        .px(px(size::ROW_PAD))
+                        .py(px(size::LABEL_BOTTOM))
                         .flex()
-                        .items_center()
-                        .gap(px(8.))
-                        .px(px(10.))
-                        .h(px(size::TAB_BAR))
-                        .border_b_1()
-                        .border_color(t.divider)
+                        .flex_col()
                         .child(kit::device_label(t, &node.device, &node.environment))
-                        .when_some(state.error.clone(), |d, e| {
-                            d.child(kit::note(t, e, Some(t.error)))
-                        }),
+                        .child(pane::meta(t, format!("Not read: {e}"), Some(t.error))),
                 );
-            for task in tasks {
-                room = room.child(self.card(t, id, task, now, cx));
             }
-            list = list.child(room);
         }
-        if !any {
-            let words = if reading {
-                "Loading scheduled tasks…"
-            } else {
-                "No scheduled tasks yet. Create one to keep sessions moving while you are away."
-            };
-            list = list.child(div().p(px(PAD)).child(kit::note(t, words, Some(t.dim))));
+        if several {
+            for node in &nodes {
+                let id = node.id.as_str();
+                let rows: Vec<_> = ordered.iter().filter(|(n, _)| *n == id).collect();
+                if rows.is_empty() {
+                    continue;
+                }
+                out = out.child(
+                    div()
+                        .px(px(size::ROW_PAD))
+                        .pt(px(size::LABEL_TOP))
+                        .pb(px(size::LABEL_BOTTOM))
+                        .child(kit::device_label(t, &node.device, &node.environment)),
+                );
+                for (n, task) in rows {
+                    out = out.child(self.row(t, n, task, chosen, now, cx));
+                }
+            }
+        } else {
+            for (n, task) in &ordered {
+                out = out.child(self.row(t, n, task, chosen, now, cx));
+            }
         }
-        list.into_any_element()
+        out
     }
 
-    fn card(
+    fn row(
         &self,
         t: &Theme,
         node: &str,
         task: &Task,
+        chosen: Option<(&str, &str)>,
         now: Timestamp,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let selected = self.state.selected.as_ref() == Some(&(node.to_string(), task.id.clone()));
-        let muted = !task.live();
+        let on = self.state.form.is_none() && chosen == Some((node, task.id.as_str()));
+        let (meta, colour) = if !task.held.is_empty() {
+            ("held".to_string(), Some(t.error))
+        } else if !task.last_status.is_empty() && task.last_status != SUCCESS {
+            ("failed".to_string(), Some(t.error))
+        } else if task.paused {
+            ("paused".to_string(), None)
+        } else if !task.enabled {
+            ("off".to_string(), None)
+        } else {
+            (form::countdown(task.next_run, now), None)
+        };
         let (pick_node, pick_id) = (node.to_string(), task.id.clone());
-        let mut status = div().flex().flex_wrap().text_size(px(size::SMALL)).child(
-            div()
-                .text_color(if muted { t.dim } else { t.text2 })
-                .child(form::status(task)),
-        );
-        if task.live() && task.next_run.is_some() {
-            status = status.child(
-                div()
-                    .text_color(t.dim)
-                    .child(format!(" · next {}", form::countdown(task.next_run, now))),
-            );
-        }
-        if !task.last_status.is_empty() {
-            status = status.child(
-                div()
-                    .text_color(if task.last_status == "success" {
-                        t.dim
-                    } else {
-                        t.error
-                    })
-                    .child(format!(" · last {}", task.last_status)),
-            );
-        }
         let selector = format!("task-{node}-{}", task.id);
-        div()
-            .id(SharedString::from(selector.clone()))
+        let name = task.name.clone();
+        pane::row(t, SharedString::from(selector.clone()), on)
             .debug_selector(move || selector)
-            .flex()
-            .flex_col()
-            .gap(px(4.))
-            .px(px(PAD))
-            .py(px(10.))
-            .border_b_1()
-            .border_color(alpha(t.divider, RULE))
-            .relative()
-            .when(selected, |d| {
-                d.bg(alpha(t.accent, SELECTED)).child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .top_0()
-                        .bottom_0()
-                        .w(px(2.))
-                        .bg(t.accent),
-                )
-            })
-            .when(muted, |d| d.opacity(MUTED))
-            .hover(|d| d.bg(alpha(t.text, HOVER)))
-            .cursor_pointer()
+            .child(
+                pane::cell(task.name.clone())
+                    .debug_selector(move || format!("scheduled-task-name-{name}")),
+            )
+            .child(pane::meta(t, meta, colour))
             .on_click(cx.listener(move |page, e: &ClickEvent, _, cx| {
-                if page.state.selected.as_ref() != Some(&(pick_node.clone(), pick_id.clone())) {
-                    page.state.delete_armed = None;
-                    page.state.notice = None;
+                let key = (pick_node.clone(), pick_id.clone());
+                if page.state.form.is_some() {
+                    if !page.state.may_leave(now_ms()) {
+                        cx.notify();
+                        return;
+                    }
+                    page.state.form = None;
+                    page.state.dirty = false;
                 }
-                page.state.selected = Some((pick_node.clone(), pick_id.clone()));
+                if page.state.selected.as_ref() != Some(&key) {
+                    page.state.notice = None;
+                    page.state.error = None;
+                }
+                page.state.selected = Some(key);
                 if e.click_count() >= 2
                     && let Some(task) = page.state.task(&pick_node, &pick_id).cloned()
                 {
@@ -234,65 +208,50 @@ impl ScheduledPage {
                 }
                 cx.notify();
             }))
-            .child(
-                div()
-                    .debug_selector({
-                        let name = task.name.clone();
-                        move || format!("scheduled-task-name-{name}")
-                    })
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .child(task.name.clone()),
-            )
-            .child(
-                div()
-                    .flex()
-                    .text_size(px(size::SMALL))
-                    .text_color(t.text2)
-                    .child(form::describe(&task.schedule))
-                    .child(
-                        div()
-                            .text_color(t.dim)
-                            .child(format!(" · {}", zone_label(&task.schedule.timezone))),
-                    ),
-            )
-            .child(chips(t, &task.targets))
-            .child(status)
             .into_any_element()
     }
 
-    fn detail(&self, t: &Theme, node: &str, task: &Task, cx: &mut Context<Self>) -> AnyElement {
+    /// What the last action came to, or why it failed: one line on top of
+    /// the detail until something else is done.
+    fn notices(&self, t: &Theme) -> Vec<Div> {
+        let line = |text: &String, colour| {
+            let selector = format!("scheduled-banner-{text}");
+            div()
+                .debug_selector(move || selector)
+                .text_color(colour)
+                .child(text.clone())
+        };
+        let mut out = vec![];
+        if let Some(e) = &self.state.error {
+            out.push(line(e, t.error));
+        }
+        if let Some(n) = &self.state.notice {
+            out.push(line(n, t.text2));
+        }
+        out
+    }
+
+    fn detail(&self, t: &Theme, node: &str, task: &Task, cx: &mut Context<Self>) -> Div {
         let busy = self.state.busy;
-        let armed = self.state.delete_armed(node, &task.id);
         let at = |n: &str| n.to_string();
         let (edit_node, edit) = (at(node), task.clone());
         let (run_node, run) = (at(node), task.clone());
         let (pause_node, pause) = (at(node), task.clone());
         let paused = task.paused;
-        let (dup_node, dup) = (at(node), task.clone());
-        let (del_node, del) = (at(node), task.id.clone());
-        let delete_label = if armed {
-            format!("Confirm delete {}", task.name)
-        } else {
-            "Delete".into()
-        };
-        let delete_selector = format!("task-delete-label-{delete_label}");
-        let actions = div()
-            .flex()
-            .flex_wrap()
-            .gap(px(8.))
+        let (more_node, more) = (at(node), task.clone());
+        let head = pane::head(t)
+            .child(pane::title(t, task.name.clone()))
             .child(
-                kit::button(t, "task-edit", "Edit", Kind::Quiet)
+                pane::act(t, "task-edit", "Edit")
                     .debug_selector(|| "task-edit".into())
                     .on_click(cx.listener(move |page, _, _, cx| {
                         page.open(TaskForm::edit(&edit_node, &edit), cx)
                     })),
             )
             .child(
-                kit::button(t, "task-run", "Run now", Kind::Quiet)
+                pane::act(t, "task-run", "Run now")
                     .debug_selector(|| "task-run".into())
+                    .tooltip(kit::tip("Send the prompt now"))
                     .when(busy, |b| b.opacity(BUSY))
                     .on_click(cx.listener(move |page, _, _, cx| {
                         if !page.state.busy {
@@ -301,233 +260,212 @@ impl ScheduledPage {
                     })),
             )
             .child(
-                kit::button(
-                    t,
-                    "task-pause",
-                    if task.paused { "Resume" } else { "Pause" },
-                    Kind::Quiet,
-                )
-                .debug_selector(move || format!("task-pause-{paused}"))
-                .when(busy, |b| b.opacity(BUSY))
-                .on_click(cx.listener(move |page, _, _, cx| {
-                    if !page.state.busy {
-                        let verb = if pause.paused { "resume" } else { "pause" };
-                        page.act(&pause_node, &pause, verb, cx)
-                    }
-                })),
-            )
-            .child(
-                kit::button(t, "task-duplicate", "Duplicate", Kind::Quiet)
-                    .debug_selector(|| "task-duplicate".into())
+                pane::act(t, "task-pause", if paused { "Resume" } else { "Pause" })
+                    .debug_selector(move || format!("task-pause-{paused}"))
+                    .when(busy, |b| b.opacity(BUSY))
                     .on_click(cx.listener(move |page, _, _, cx| {
-                        page.open(TaskForm::duplicate(&dup_node, &dup), cx)
+                        if !page.state.busy {
+                            let verb = if pause.paused { "resume" } else { "pause" };
+                            page.act(&pause_node, &pause, verb, cx)
+                        }
                     })),
             )
             .child(
-                kit::button(t, "task-delete", "", Kind::Quiet)
-                    .max_w_full()
-                    .child(
-                        div()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .debug_selector(move || delete_selector.clone())
-                            .child(delete_label),
-                    )
-                    .debug_selector(move || format!("task-delete-{armed}"))
-                    .text_color(t.error)
-                    .when(armed, |b| b.border_color(t.error).bg(alpha(t.error, 0.12)))
-                    .on_click(cx.listener(move |page, _, _, cx| page.delete(&del_node, &del, cx))),
+                pane::act(t, "task-more", "…")
+                    .debug_selector(|| "task-more".into())
+                    .on_click(cx.listener(move |page, e: &ClickEvent, _, cx| {
+                        let rows = page.task_menu(&more_node, &more, cx);
+                        page.host.menu(rows, e.position(), cx);
+                    })),
             );
-        let next = if task.live() {
+
+        let now = Timestamp::now();
+        let mut when = form::describe(&task.schedule);
+        let zone = &task.schedule.timezone;
+        // "Local" is the node's own zone, as CHROTE writes it.
+        if !zone.is_empty() && zone != "Local" && *zone != form::local_zone() {
+            when = format!("{when} · {zone}");
+        }
+        let when = if task.paused {
+            format!("{when} · paused")
+        } else if !task.enabled {
+            format!("{when} · off")
+        } else if task.next_run.is_some() {
             format!(
-                "{} ({})",
+                "{when} · next {} ({})",
                 form::when(task.next_run),
-                form::countdown(task.next_run, Timestamp::now())
+                form::countdown(task.next_run, now)
             )
         } else {
-            "Paused".into()
+            when
         };
+
+        let failed = !task.last_status.is_empty() && task.last_status != SUCCESS;
         let last = match task.last_run {
-            Some(_) => format!(
-                "{} · {}",
-                form::when(task.last_run),
-                if task.last_status.is_empty() {
-                    "unknown"
+            None => div().text_color(t.dim).child("Never run"),
+            Some(_) => {
+                let why = task
+                    .recent_runs
+                    .first()
+                    .filter(|r| r.status != SUCCESS && !r.message.is_empty())
+                    .map(|r| format!(": {}", r.message))
+                    .unwrap_or_default();
+                let status = if task.last_status.is_empty() {
+                    "unknown".to_string()
                 } else {
-                    &task.last_status
-                }
-            ),
-            None => "Never run".into(),
+                    task.last_status.clone()
+                };
+                div()
+                    .when(failed, |d| d.text_color(t.error))
+                    .child(format!("{} · {status}{why}", form::when(task.last_run)))
+            }
         };
-        let meta = div()
-            .flex()
-            .gap(px(GAP))
-            .pt(px(PAD))
-            .border_t_1()
-            .border_color(t.divider)
-            .child(meta_row(t, "Next run", div().child(next)))
-            .child(meta_row(t, "Last run", div().child(last)))
-            .child(meta_row(t, "Sends to", chips(t, &task.targets)))
-            .child(meta_row(t, "Task ID", div().child(task.id.clone())));
-        let held = (!task.held.is_empty()).then(|| {
-            kit::note(
-                t,
-                format!("Held back by its node: {}", task.held),
-                Some(t.error),
-            )
-        });
-        let mut runs = div()
+
+        let mut body = div()
             .flex()
             .flex_col()
-            .p(px(8.))
-            .rounded(px(size::RADIUS))
-            .bg(t.bg)
-            .border_1()
-            .border_color(t.divider);
-        if task.recent_runs.is_empty() {
-            runs = runs.child(kit::note(t, "No runs recorded yet.", Some(t.dim)));
+            .gap(px(size::SECTION_GAP))
+            .children(self.notices(t));
+        let mut lines = div().flex().flex_col();
+        if !task.held.is_empty() {
+            lines = lines.child(pane::line(
+                t,
+                "Held back",
+                div().text_color(t.error).child(task.held.clone()),
+            ));
         }
-        for r in &task.recent_runs {
-            let mut line = div()
-                .flex()
-                .flex_wrap()
-                .py(px(4.))
-                .border_b_1()
-                .border_color(alpha(t.divider, RULE))
-                .text_size(px(size::SMALL))
-                .child(
-                    div()
-                        .text_color(if r.status == "success" {
-                            t.text
-                        } else {
-                            t.error
-                        })
-                        .child(r.status.clone()),
-                )
-                .child(div().text_color(t.dim).child(format!(
-                    " · {} · {}",
-                    form::when(Some(r.started_at)),
-                    if r.trigger.is_empty() {
-                        "scheduled"
-                    } else {
-                        &r.trigger
+        lines = lines
+            .child(pane::line(t, "When", div().child(when)))
+            .child(pane::line(
+                t,
+                "Sends to",
+                self.sends_to(t, node, &task.targets),
+            ))
+            .child(pane::line(t, "Last run", last));
+        body = body.child(lines).child(
+            pane::section(t, "Prompt").child(
+                div()
+                    .whitespace_normal()
+                    .text_color(t.text)
+                    .child(task.prompt.clone()),
+            ),
+        );
+        if task.recent_runs.len() > 1 {
+            let rows = task
+                .recent_runs
+                .iter()
+                .map(|r| {
+                    let ok = r.status == SUCCESS;
+                    let mut result = r.status.clone();
+                    if !r.message.is_empty() {
+                        result = format!("{result}: {}", r.message);
                     }
-                )));
-            if !r.targets.is_empty() {
-                let each: Vec<String> = r
-                    .targets
-                    .iter()
-                    .map(|x| format!("{}: {}", x.session_name, x.status))
-                    .collect();
-                line = line.child(
-                    div()
-                        .text_color(t.dim)
-                        .child(format!(" · {}", each.join(", "))),
-                );
-            }
-            if !r.message.is_empty() {
-                line = line.child(div().text_color(t.error).child(format!(" · {}", r.message)));
-            }
-            runs = runs.child(line);
-        }
-        card(t)
-            .child(
-                div()
-                    .flex()
-                    .items_start()
-                    .gap(px(PAD))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap(px(4.))
-                            .child(div().font_weight(FontWeight::BOLD).child(task.name.clone()))
-                            .child(kit::note(
-                                t,
-                                format!(
-                                    "{} · {} · {} · on {}",
-                                    form::describe(&task.schedule),
-                                    zone_label(&task.schedule.timezone),
-                                    form::status(task),
-                                    self.place_name(node, cx)
-                                ),
-                                Some(t.dim),
-                            )),
+                    let missed: Vec<String> = r
+                        .targets
+                        .iter()
+                        .filter(|x| x.status != SUCCESS)
+                        .map(|x| format!("{}: {}", x.session_name, x.status))
+                        .collect();
+                    if !missed.is_empty() {
+                        result = format!("{result} ({})", missed.join(", "));
+                    }
+                    let by = if r.trigger == "manual" {
+                        "Run now"
+                    } else {
+                        "schedule"
+                    };
+                    pane::table_row(
+                        t,
+                        &RUNS,
+                        vec![
+                            pane::cell(form::when(Some(r.started_at))).into_any_element(),
+                            pane::cell(by).text_color(t.text2).into_any_element(),
+                            pane::cell(result)
+                                .text_color(if ok { t.text2 } else { t.error })
+                                .into_any_element(),
+                        ],
                     )
-                    .child(actions),
-            )
-            .children(held)
-            .child(meta)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.))
-                    .child(section(t, "Prompt"))
-                    .child(
-                        div()
-                            .p(px(10.))
-                            .rounded(px(size::RADIUS))
-                            .bg(t.bg)
-                            .border_1()
-                            .border_color(t.divider)
-                            .text_size(px(size::SMALL))
-                            .whitespace_normal()
-                            .child(task.prompt.clone()),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.))
-                    .child(section(t, "Recent runs"))
-                    .child(runs),
-            )
-            .into_any_element()
+                    .into_any_element()
+                })
+                .collect();
+            body = body.child(pane::section(t, "Recent runs").child(pane::table(t, &RUNS, rows)));
+        }
+        pane::detail("scheduled-detail", head, body)
     }
 
-    fn form(&self, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let Some(form) = self.state.form.as_ref() else {
-            return div().into_any_element();
-        };
+    /// What the head's "…" offers: the actions a task needs now and then.
+    fn task_menu(&self, node: &str, task: &Task, cx: &mut Context<Self>) -> Vec<MenuRow> {
+        let page = cx.entity().downgrade();
+        let (dup_node, dup) = (node.to_string(), task.clone());
+        let duplicate = MenuRow::new("Duplicate", {
+            let page = page.clone();
+            move |_, cx| {
+                let _ = page.update(cx, |p, cx| p.open(TaskForm::duplicate(&dup_node, &dup), cx));
+            }
+        });
+        let (del_node, del) = (node.to_string(), task.id.clone());
+        let delete = MenuRow::new("Delete", move |_, cx| {
+            let _ = page.update(cx, |p, cx| p.delete(&del_node, &del, cx));
+        })
+        .danger();
+        vec![duplicate, delete]
+    }
+
+    /// The task's sessions, each a link that shows it in Terminal.
+    fn sends_to(&self, t: &Theme, node: &str, targets: &[Target]) -> Div {
+        let mut out = div().flex().flex_wrap().gap(px(size::HEAD_GAP));
+        for target in targets {
+            let ask = Ask::Reveal {
+                what: "session".into(),
+                id: target.session_name.clone(),
+                node: Some(NodeId(node.to_string())),
+                part: None,
+                beside: false,
+            };
+            let host = self.host.clone();
+            out = out.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "sends-to-{}",
+                        target_key(target)
+                    )))
+                    .cursor_pointer()
+                    .text_color(t.text)
+                    .hover(|d| d.underline())
+                    .tooltip(kit::tip("Show it in Terminal"))
+                    .child(target_name(target))
+                    .on_click(move |_, _, cx| {
+                        let _ = host.ask(ask.clone(), cx);
+                    }),
+            );
+        }
+        out
+    }
+
+    fn form(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
+        let form = self.state.form.as_ref().expect("the form is open");
         let busy = self.state.busy;
         let fields = &self.fields;
-        let head = div()
-            .flex()
-            .items_center()
-            .gap(px(8.))
+        let head = pane::head(t)
+            .child(pane::title(
+                t,
+                if form.id.is_some() {
+                    "Edit task"
+                } else {
+                    "New task"
+                },
+            ))
             .child(
-                div()
-                    .flex_1()
-                    .font_weight(FontWeight::BOLD)
-                    .child(if form.id.is_some() {
-                        "Edit task"
-                    } else {
-                        "New task"
-                    }),
-            )
-            .child(
-                kit::button(t, "form-cancel", "Cancel", Kind::Quiet).on_click(cx.listener(
-                    |page, _, _, cx| {
-                        page.state.close(now_ms());
-                        cx.notify();
-                    },
-                )),
+                pane::act(t, "form-cancel", "Cancel").on_click(cx.listener(|page, _, _, cx| {
+                    page.state.close(now_ms());
+                    cx.notify();
+                })),
             )
             .child(
                 kit::button(
                     t,
                     "form-save",
-                    if form.id.is_some() {
-                        "Save task"
-                    } else {
-                        "Create task"
-                    },
+                    if form.id.is_some() { "Save" } else { "Create" },
                     Kind::Primary,
                 )
                 .debug_selector(|| "form-save".into())
@@ -538,289 +476,128 @@ impl ScheduledPage {
                     }
                 })),
             );
-        card(t)
-            .child(head)
-            .child(field(
-                t,
-                "Prompt",
-                None,
-                div()
-                    .debug_selector(|| "scheduled-prompt".into())
-                    .child(fields.prompt.clone()),
-            ))
-            .child(self.targets(t, form, cx))
-            .child(self.when(t, &form.schedule, cx))
-            .child(field(
-                t,
-                "Name",
-                Some("(optional)"),
-                div().child(fields.name.clone()),
-            ))
-            .into_any_element()
-    }
-
-    fn session_rail(&self, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let form = self
-            .state
-            .form
-            .as_ref()
-            .expect("rail is shown with the form");
-        let mut rail = div()
+        let body = div()
             .flex()
             .flex_col()
-            .gap(px(8.))
-            .child(section(t, "Sessions"))
-            .child(kit::note(
-                t,
-                "Click or drag a session to Send to",
-                Some(t.dim),
-            ));
-        let mut any = false;
-        for node in self.host.nodes(cx) {
-            let id = node.id.as_str();
-            if form.id.is_some() && id != form.node {
-                continue;
-            }
-            let sessions = self.sessions_on(id, cx);
-            if sessions.is_empty() {
-                continue;
-            }
-            any = true;
-            rail = rail.child(kit::device_label(t, &node.device, &node.environment));
-            for session in sessions {
-                let selected = form.node == id && form.targets.contains(&session.target());
-                let selector = format!("session-rail-{id}-{}", target_key(&session.target()));
-                let drag = SessionDrag {
-                    node: id.to_string(),
-                    session: session.clone(),
-                };
-                let click = drag.clone();
-                let name = session.name.clone();
-                rail = rail.child(
+            .gap(px(size::SECTION_GAP))
+            .children(self.notices(t))
+            .child(
+                pane::section(t, "Prompt").child(
                     div()
-                        .id(SharedString::from(selector.clone()))
-                        .debug_selector(move || selector)
-                        .flex()
-                        .items_center()
-                        .gap(px(4.))
-                        .px(px(8.))
-                        .py(px(6.))
-                        .rounded(px(size::RADIUS))
-                        .cursor_pointer()
-                        .when(selected, |d| d.bg(alpha(t.accent, PICKED)))
-                        .hover(|d| d.bg(alpha(t.accent, HOVER)))
-                        .when_some(session.user.clone(), |d, u| {
-                            d.child(kit::user_square(t, &u))
-                        })
-                        .child(session.name)
-                        .on_click(cx.listener(move |page, _, _, cx| {
-                            page.pick(&click.node, &click.session, cx)
-                        }))
-                        .on_drag(drag, move |_, _, _, cx| {
-                            cx.new(|_| SessionPreview(name.clone()))
-                        }),
-                );
-            }
-        }
-        if !any {
-            rail = rail.child(kit::note(t, "No sessions available", Some(t.dim)));
-        }
-        panel(t)
-            .id("scheduled-session-rail")
-            .w(px(SESSION_RAIL_W))
-            .flex_none()
-            .overflow_y_scroll()
-            .child(rail)
-            .into_any_element()
+                        .debug_selector(|| "scheduled-prompt".into())
+                        .child(fields.prompt.clone()),
+                ),
+            )
+            .child(pane::section(t, "Send to").child(self.targets(t, form, cx)))
+            .child(pane::section(t, "When").child(self.when(t, &form.schedule, cx)))
+            .child(pane::section(t, "Name").child(fields.name.clone()));
+        pane::detail("scheduled-form", head, body)
     }
 
-    fn targets(&self, t: &Theme, form: &TaskForm, cx: &mut Context<Self>) -> AnyElement {
-        let mut chosen = div().flex().flex_wrap().gap(px(6.));
-        if form.targets.is_empty() {
-            chosen = chosen.child(kit::note(t, "No sessions selected", Some(t.dim)));
-        }
-        for target in &form.targets {
-            let gone = target.clone();
-            let selector = format!("chosen-{}", target_key(target));
-            chosen = chosen.child(
-                chip(t, target).debug_selector(move || selector).child(
-                    div()
-                        .id(SharedString::from(format!("unpick-{}", target_key(target))))
-                        .px(px(2.))
-                        .text_color(t.dim)
-                        .hover(|d| d.text_color(t.text))
-                        .cursor_pointer()
-                        .child("×")
-                        .on_click(cx.listener(move |page, _, _, cx| {
-                            page.state.change(|f| f.targets.retain(|x| *x != gone));
-                            cx.notify();
-                        })),
-                ),
-            );
-        }
-        // Each place's sessions; an edited task's own place only.
-        let mut picker = div().flex().flex_col().gap(px(8.));
-        for node in self.host.nodes(cx) {
+    /// The sessions a task may send to, each pressed or not; a task's
+    /// sessions are all on one node, so an edited task offers its own.
+    fn targets(&self, t: &Theme, form: &TaskForm, cx: &mut Context<Self>) -> Div {
+        let nodes: Vec<_> = self
+            .host
+            .nodes(cx)
+            .into_iter()
+            .filter(|n| form.id.is_none() || n.id.as_str() == form.node)
+            .map(|n| {
+                let sessions = self.sessions_on(n.id.as_str(), cx);
+                (n, sessions)
+            })
+            .filter(|(n, s)| !s.is_empty() || n.id.as_str() == form.node)
+            .collect();
+        let several = nodes.len() > 1;
+        let mut out = div().flex().flex_col().gap(px(size::HEAD_GAP));
+        for (node, sessions) in nodes {
             let id = node.id.as_str();
-            let sessions = self.sessions_on(id, cx);
-            if sessions.is_empty() {
-                continue;
+            let mut row = div().flex().flex_wrap().gap(px(TOGGLE_GAP));
+            let mut offered: Vec<Target> = sessions.iter().map(|s| s.target()).collect();
+            // A chosen session that is not running now stays on show.
+            if form.node == id {
+                for chosen in &form.targets {
+                    if !offered.contains(chosen) {
+                        offered.push(chosen.clone());
+                    }
+                }
             }
-            if form.id.is_some() && id != form.node {
-                continue;
+            if offered.is_empty() {
+                row = row.child(div().text_color(t.dim).child("No session is running."));
             }
-            let mut row = div().flex().flex_wrap().gap(px(6.));
-            for s in sessions {
-                let target = s.target();
+            for target in offered {
+                let running = sessions.iter().any(|s| s.target() == target);
                 let on = form.node == id && form.targets.contains(&target);
-                let (session, at) = (s.clone(), id.to_string());
                 let selector = format!("pick-{id}-{}", target_key(&target));
+                let chosen = format!("chosen-{}", target_key(&target));
+                let (at, session) = (id.to_string(), target.clone());
                 row = row.child(
-                    div()
-                        .id(SharedString::from(selector.clone()))
+                    toggle(t, selector.clone(), "", on)
                         .debug_selector(move || selector)
-                        .flex()
-                        .items_center()
-                        .gap(px(4.))
-                        .h(px(size::CONTROL))
-                        .px(px(8.))
-                        .rounded(px(size::RADIUS))
-                        .border_1()
-                        .border_color(if on { t.accent } else { t.divider })
-                        .when(on, |d| d.bg(alpha(t.accent, PICKED)))
-                        .hover(|d| d.border_color(t.accent))
-                        .cursor_pointer()
-                        .text_size(px(size::SMALL))
-                        .when_some(s.user.clone(), |d, u| d.child(kit::user_square(t, &u)))
-                        .child(s.name.clone())
+                        .when(!running, |b| b.tooltip(kit::tip("Not running now")))
+                        .child(
+                            div()
+                                .when(on, |d| d.debug_selector(move || chosen))
+                                .when(!running, |d| d.text_color(t.dim))
+                                .child(target_name(&target)),
+                        )
                         .on_click(cx.listener(move |page, _, _, cx| page.pick(&at, &session, cx))),
                 );
             }
-            picker = picker.child(
+            out = out.child(
                 div()
                     .flex()
-                    .items_start()
-                    .gap(px(8.))
-                    .child(kit::device_label(t, &node.device, &node.environment))
+                    .flex_col()
+                    .gap(px(TOGGLE_GAP))
+                    .when(several, |d| {
+                        d.child(kit::device_label(t, &node.device, &node.environment))
+                    })
                     .child(row),
             );
         }
-        div()
-            .id("scheduled-targets")
-            .debug_selector(|| "scheduled-targets".into())
-            .drag_over::<SessionDrag>(|d, _, _, cx| d.bg(alpha(theme(cx).accent, PICKED)))
-            .on_drop(cx.listener(|page, drag: &SessionDrag, _, cx| {
-                let selected = page.state.form.as_ref().is_some_and(|f| {
-                    f.node == drag.node && f.targets.contains(&drag.session.target())
-                });
-                if !selected {
-                    page.pick(&drag.node, &drag.session, cx);
-                }
-            }))
-            .flex()
-            .flex_col()
-            .gap(px(8.))
-            .p(px(10.))
-            .rounded(px(size::RADIUS))
-            .border_1()
-            .border_dashed()
-            .border_color(t.divider)
-            .child(section(t, "Send to"))
-            .child(chosen)
-            .child(picker)
-            .into_any_element()
+        out
     }
 
-    fn when(&self, t: &Theme, s: &ScheduleForm, cx: &mut Context<Self>) -> AnyElement {
+    fn when(&self, t: &Theme, s: &ScheduleForm, cx: &mut Context<Self>) -> Div {
         let fields = &self.fields;
-        let preview = format!("{} · {}", form::describe(&s.schedule()), s.timezone);
-        let mut modes = div().flex().gap(px(4.));
+        let mut modes = div().flex().flex_wrap().gap(px(TOGGLE_GAP));
         for (mode, label) in MODES {
+            let selector = format!("mode-{label}");
             modes = modes.child(
-                tab(t, format!("mode-{label}"), label, s.mode == mode).on_click(cx.listener(
-                    move |page, _, _, cx| {
+                toggle(t, selector.clone(), label, s.mode == mode)
+                    .debug_selector(move || selector)
+                    .on_click(cx.listener(move |page, _, _, cx| {
                         page.state.change(|f| f.schedule.mode = mode);
                         cx.notify();
-                    },
-                )),
+                    })),
             );
         }
-        let mut row = div().flex().flex_wrap().items_end().gap(px(PAD));
-        match s.mode {
-            Mode::Every => {
-                row = row
-                    .child(compact(
-                        t,
-                        "Run every",
-                        div().w(px(SHORT_FIELD)).child(fields.every.clone()),
-                    ))
-                    .child(compact(
-                        t,
-                        "Unit",
-                        div()
-                            .flex()
-                            .gap(px(4.))
-                            .child(unit(t, "minutes", false, s.every_hours, cx))
-                            .child(unit(t, "hours", true, s.every_hours, cx)),
-                    ));
-            }
-            Mode::Daily | Mode::Weekly => {
-                row = row.child(compact(
-                    t,
-                    "At",
-                    div().w(px(SHORT_FIELD)).child(fields.time.clone()),
-                ));
-            }
-            Mode::Cron => {
-                row = row.child(compact(
-                    t,
-                    "Cron expression",
-                    div()
-                        .debug_selector(|| "scheduled-cron".into())
-                        .w(px(CRON_FIELD))
-                        .child(fields.cron.clone()),
-                ));
-            }
-        }
-        let local = form::local_zone();
-        let mut zones: Vec<String> = vec![local.clone()];
-        for z in [s.timezone.clone(), "UTC".into()] {
-            if !zones.contains(&z) {
-                zones.push(z);
-            }
-        }
-        let mut zone_row = div().flex().flex_wrap().gap(px(4.));
-        for z in zones {
-            let label = if z == local {
-                format!("{z} (yours)")
-            } else {
-                z.clone()
-            };
-            let on = s.timezone == z;
-            zone_row = zone_row.child(toggle(t, format!("zone-{z}"), &label, on).on_click(
-                cx.listener(move |page, _, _, cx| {
-                    page.state.change(|f| f.schedule.timezone = z.clone());
-                    cx.notify();
-                }),
-            ));
-        }
-        row = row.child(compact(t, "Timezone", zone_row));
-        let mut out = div()
-            .flex()
-            .flex_col()
-            .gap(px(10.))
-            .child(
+        let mut out = div().flex().flex_col().gap(px(size::HEAD_GAP)).child(modes);
+        let measure = match s.mode {
+            Mode::Every => div()
+                .flex()
+                .items_center()
+                .gap(px(TOGGLE_GAP))
+                .child("Every")
+                .child(div().w(px(SHORT_FIELD)).child(fields.every.clone()))
+                .child(unit(t, "minutes", false, s.every_hours, cx))
+                .child(unit(t, "hours", true, s.every_hours, cx)),
+            Mode::Daily | Mode::Weekly => div()
+                .flex()
+                .items_center()
+                .gap(px(TOGGLE_GAP))
+                .child("At")
+                .child(div().w(px(SHORT_FIELD)).child(fields.time.clone())),
+            Mode::Cron => div().child(
                 div()
-                    .flex()
-                    .items_baseline()
-                    .gap(px(8.))
-                    .child(section(t, "When"))
-                    .child(kit::note(t, preview, Some(t.dim))),
-            )
-            .child(modes)
-            .child(row);
+                    .debug_selector(|| "scheduled-cron".into())
+                    .w(px(CRON_FIELD))
+                    .child(fields.cron.clone()),
+            ),
+        };
+        out = out.child(measure);
         if s.mode == Mode::Weekly {
-            let mut days = div().flex().gap(px(4.));
+            let mut days = div().flex().flex_wrap().gap(px(TOGGLE_GAP));
             for (value, short, _) in WEEKDAYS {
                 let on = s.weekdays.contains(&value);
                 days = days.child(
@@ -842,10 +619,30 @@ impl ScheduledPage {
             }
             out = out.child(days);
         }
-        if let Some(why) = s.error() {
-            out = out.child(kit::note(t, why, Some(t.error)));
+        // The zone is said only to be changed: this computer's, the task's,
+        // or UTC.
+        let local = form::local_zone();
+        let mut zones: Vec<String> = vec![local.clone()];
+        for z in [s.timezone.clone(), "UTC".into()] {
+            if !z.is_empty() && !zones.contains(&z) {
+                zones.push(z);
+            }
         }
-        out.into_any_element()
+        let mut zone_row = div().flex().flex_wrap().gap(px(TOGGLE_GAP));
+        for z in zones {
+            let on = s.timezone == z;
+            zone_row = zone_row.child(toggle(t, format!("zone-{z}"), &z, on).on_click(
+                cx.listener(move |page, _, _, cx| {
+                    page.state.change(|f| f.schedule.timezone = z.clone());
+                    cx.notify();
+                }),
+            ));
+        }
+        out = out.child(zone_row);
+        match s.error() {
+            Some(why) => out.child(div().text_color(t.error).child(why)),
+            None => out.child(div().text_color(t.dim).child(form::describe(&s.schedule()))),
+        }
     }
 }
 
@@ -853,143 +650,24 @@ fn target_key(t: &Target) -> String {
     format!("{}:{}", t.unix_user, t.session_name)
 }
 
-fn zone_label(zone: &str) -> &str {
-    if zone.is_empty() { "Local" } else { zone }
-}
-
-fn banner(text: String, c: gpui::Hsla) -> Div {
-    let selector = format!("scheduled-banner-{text}");
-    div()
-        .debug_selector(move || selector)
-        .mx(px(PAD))
-        .mt(px(PAD))
-        .px(px(PAD))
-        .py(px(8.))
-        .rounded(px(size::RADIUS))
-        .border_1()
-        .border_color(alpha(c, BANNER_EDGE))
-        .bg(alpha(c, BANNER))
-        .text_color(c)
-        .child(text)
-}
-
-/// A list or detail panel.
-fn panel(t: &Theme) -> Div {
-    div()
-        .h_full()
-        .p(px(8.))
-        .rounded(px(size::RADIUS))
-        .border_1()
-        .border_color(t.divider)
-        .bg(t.surface)
-}
-
-/// The detail or the form inside its panel.
-fn card(_t: &Theme) -> Div {
-    div().flex().flex_col().gap(px(GAP)).p(px(4.))
-}
-
-/// A section's label, CHROTE's: small, upper case, accent.
-fn section(t: &Theme, text: &str) -> Div {
-    div()
-        .text_size(px(size::SMALL))
-        .text_color(t.accent)
-        .child(text.to_uppercase())
-}
-
-fn chip(t: &Theme, target: &Target) -> Div {
-    div()
-        .flex()
-        .flex_none()
-        .items_center()
-        .gap(px(4.))
-        .px(px(6.))
-        .py(px(1.))
-        .rounded(px(size::RADIUS))
-        .bg(alpha(t.text, CHIP))
-        .border_1()
-        .border_color(t.divider)
-        .text_size(px(size::SMALL))
-        .when(!target.unix_user.is_empty(), |d| {
-            d.child(kit::user_square(t, &target.unix_user))
-        })
-        .child(target.session_name.clone())
-}
-
-fn chips(t: &Theme, targets: &[Target]) -> Div {
-    let mut row = div().flex().flex_wrap().gap(px(4.));
-    for target in targets {
-        row = row.child(chip(t, target));
+/// A session's name, with its user's when it is not the node's own.
+fn target_name(t: &Target) -> String {
+    if t.unix_user.is_empty() {
+        t.session_name.clone()
+    } else {
+        format!("{}:{}", t.unix_user, t.session_name)
     }
-    row
 }
 
-/// One of the detail's columns: Next run, Last run, Sends to, Task ID.
-fn meta_row(t: &Theme, label: &str, value: Div) -> Div {
-    div()
-        .flex_1()
-        .min_w_0()
-        .flex()
-        .flex_col()
-        .gap(px(4.))
-        .child(kit::label(t, label.to_string()))
-        .child(value)
-}
-
-fn field(t: &Theme, label: &str, aside: Option<&str>, input: Div) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(6.))
-        .child(
-            div()
-                .flex()
-                .items_baseline()
-                .gap(px(6.))
-                .child(kit::label(t, label.to_string()))
-                .when_some(aside, |d, a| {
-                    d.child(kit::note(t, a.to_string(), Some(t.dim)))
-                }),
-        )
-        .child(input)
-}
-
-fn compact(t: &Theme, label: &str, input: Div) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(4.))
-        .child(kit::label(t, label.to_string()))
-        .child(input)
-}
-
-/// The schedule's mode switch: CHROTE's tabs, underlined when chosen.
-fn tab(t: &Theme, id: String, label: &str, on: bool) -> gpui::Stateful<Div> {
-    let text = t.text;
-    div()
-        .id(SharedString::from(id.clone()))
-        .debug_selector(move || id)
-        .flex()
-        .flex_col()
-        .items_center()
-        .gap(px(4.))
-        .px(px(10.))
-        .pt(px(4.))
-        .cursor_pointer()
-        .text_color(if on { t.text } else { t.text2 })
-        .when(on, |d| d.font_weight(FontWeight::BOLD))
-        .hover(move |d| d.text_color(text))
-        .child(label.to_string())
-        .child(div().h(px(2.)).w_full().when(on, |d| d.bg(t.accent)))
-}
-
-/// A pressed-or-not button: a weekday, a zone, a unit.
+/// A choice pressed or not: a mode, a session, a weekday, a zone, a unit.
+/// Pressed reads on a quiet fill in weight, as a chosen row does.
 fn toggle(t: &Theme, id: String, label: &str, on: bool) -> gpui::Stateful<Div> {
     kit::button(t, SharedString::from(id), label.to_string(), Kind::Plain)
         .when(on, |b| {
-            b.bg(alpha(t.accent, TOGGLED))
-                .border_color(t.accent)
+            b.bg(t.raised)
+                .border_color(t.text2)
                 .text_color(t.text)
+                .font_weight(FontWeight::SEMIBOLD)
         })
         .when(!on, |b| b.text_color(t.text2))
 }

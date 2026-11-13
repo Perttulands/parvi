@@ -513,17 +513,6 @@ impl TaskForm {
     }
 }
 
-/// A task's state as a card says it.
-pub fn status(task: &Task) -> &'static str {
-    if task.paused {
-        "Paused"
-    } else if !task.enabled {
-        "Disabled"
-    } else {
-        "Active"
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

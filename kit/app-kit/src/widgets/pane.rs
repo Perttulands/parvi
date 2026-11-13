@@ -22,6 +22,7 @@ use crate::host::{Host, Status};
 use crate::theme::{Theme, size};
 use gpui::{
     AnyElement, Div, ElementId, FontWeight, Hsla, SharedString, Stateful, div, prelude::*, px,
+    relative,
 };
 
 /// The page: the list beside the detail, filling the page's area.
@@ -264,21 +265,37 @@ pub fn table_row(t: &Theme, cols: &[Col], cells: Vec<AnyElement>) -> Div {
 }
 
 /// A named line in a detail: the name in its column, the value after it.
+/// A value that wraps keeps its name on its first line; the name column
+/// gives way to the value in a narrow detail.
 pub fn line(t: &Theme, name: impl Into<SharedString>, value: impl IntoElement) -> Div {
     div()
         .flex()
-        .items_center()
+        .items_start()
         .gap(px(size::HEAD_GAP))
-        .min_h(px(size::ROW))
         .child(
             div()
-                .w(px(size::NAME_COL))
+                .w(relative(NAME_SHARE))
+                .max_w(px(size::NAME_COL))
                 .flex_none()
+                .min_h(px(size::ROW))
+                .flex()
+                .items_center()
                 .text_color(t.text2)
                 .child(name.into()),
         )
-        .child(div().flex_1().min_w_0().child(value))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .min_h(px(size::ROW))
+                .flex()
+                .items_center()
+                .child(div().w_full().child(value)),
+        )
 }
+
+/// The most of a narrow line its name takes.
+const NAME_SHARE: f32 = 0.3;
 
 /// An empty list or detail, or one still loading: one short line, and the
 /// action that fills it if there is one.

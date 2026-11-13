@@ -176,7 +176,7 @@ fn the_page_lists_a_task_made_through_the_cli(cx: &mut TestAppContext) {
             .is_some()
     });
 
-    // Its card selects the task, and the detail names it.
+    // Its row selects the task, and the detail names it.
     let at = cx
         .debug_bounds(Box::leak(selector.into_boxed_str()))
         .expect("its card")
@@ -227,9 +227,9 @@ fn the_page_lists_a_task_made_through_the_cli(cx: &mut TestAppContext) {
     });
     let new_button = cx.debug_bounds("scheduled-new").unwrap().center();
     cx.simulate_click(new_button, Modifiers::none());
-    let alpha: &'static str = Box::leak(format!("session-rail-{node}-:alpha").into_boxed_str());
-    let beta: &'static str = Box::leak(format!("session-rail-{node}-:beta").into_boxed_str());
-    until(cx, "both sessions beside the form", |cx| {
+    let alpha: &'static str = Box::leak(format!("pick-{node}-:alpha").into_boxed_str());
+    let beta: &'static str = Box::leak(format!("pick-{node}-:beta").into_boxed_str());
+    until(cx, "both sessions offered in the form", |cx| {
         cx.debug_bounds(alpha).is_some() && cx.debug_bounds(beta).is_some()
     });
     let at = cx.debug_bounds(alpha).unwrap().center();
@@ -237,17 +237,18 @@ fn the_page_lists_a_task_made_through_the_cli(cx: &mut TestAppContext) {
     until(cx, "alpha selected", |cx| {
         cx.debug_bounds("chosen-:alpha").is_some()
     });
-    let from = cx.debug_bounds(beta).unwrap().center();
-    let to = cx.debug_bounds("scheduled-targets").unwrap().center();
-    cx.simulate_mouse_down(from, gpui::MouseButton::Left, Modifiers::none());
-    cx.simulate_mouse_move(
-        from + gpui::point(gpui::px(8.), gpui::px(0.)),
-        Some(gpui::MouseButton::Left),
-        Modifiers::none(),
-    );
-    cx.simulate_mouse_move(to, Some(gpui::MouseButton::Left), Modifiers::none());
-    cx.simulate_mouse_up(to, gpui::MouseButton::Left, Modifiers::none());
-    until(cx, "beta dropped", |cx| {
+    let at = cx.debug_bounds(beta).unwrap().center();
+    cx.simulate_click(at, Modifiers::none());
+    until(cx, "beta selected", |cx| {
+        cx.debug_bounds("chosen-:beta").is_some() && cx.debug_bounds("chosen-:alpha").is_some()
+    });
+    // A second press lets a session go again.
+    cx.simulate_click(at, Modifiers::none());
+    until(cx, "beta let go", |cx| {
+        cx.debug_bounds("chosen-:beta").is_none()
+    });
+    cx.simulate_click(at, Modifiers::none());
+    until(cx, "beta chosen again", |cx| {
         cx.debug_bounds("chosen-:beta").is_some()
     });
     let prompt = cx.debug_bounds("scheduled-prompt").unwrap().center();
@@ -317,7 +318,12 @@ fn the_page_lists_a_task_made_through_the_cli(cx: &mut TestAppContext) {
     until(cx, "updated task", |cx| {
         cx.debug_bounds("scheduled-banner-Task updated.").is_some()
     });
-    click(cx, "task-duplicate");
+    // Duplicate and Delete wait in the head's "…" menu.
+    click(cx, "task-more");
+    until(cx, "the task's menu", |cx| {
+        cx.debug_bounds("menu-row-0").is_some()
+    });
+    click(cx, "menu-row-0");
     until(cx, "duplicate form", |cx| {
         cx.debug_bounds("mode-Cron").is_some()
     });
@@ -354,17 +360,23 @@ fn the_page_lists_a_task_made_through_the_cli(cx: &mut TestAppContext) {
     .unwrap();
     assert_eq!(cron["schedule"]["type"], "cron");
     assert_eq!(cron["schedule"]["expression"], "0 9 * * 1");
-    click(cx, "task-delete-false");
-    until(cx, "delete confirmation", |cx| {
-        cx.debug_bounds("task-delete-true").is_some()
-    });
     assert!(
-        cx.debug_bounds("task-delete-label-Confirm delete echo journey-42 copy")
-            .is_some()
+        cx.debug_bounds("pane-title-echo journey-42 copy").is_some(),
+        "the copy is the task shown"
     );
-    // A visible confirmation still works after the old three-second expiry.
-    std::thread::sleep(Duration::from_millis(3200));
-    click(cx, "task-delete-true");
+    click(cx, "task-more");
+    until(cx, "the task's menu", |cx| {
+        cx.debug_bounds("menu-row-1").is_some()
+    });
+    // The first click on Delete only asks; the task stays.
+    click(cx, "menu-row-1");
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("menu-row-1").is_some(),
+        "the menu asks again"
+    );
+    assert!(cx.debug_bounds("scheduled-banner-Task deleted.").is_none());
+    click(cx, "menu-row-1");
     until(cx, "task deleted", |cx| {
         cx.debug_bounds("scheduled-banner-Task deleted.").is_some()
     });

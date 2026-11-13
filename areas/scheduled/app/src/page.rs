@@ -250,7 +250,6 @@ impl ScheduledPage {
                     .map(|(n, t)| (n.to_string(), t.clone()));
                 if before != after && status == 200 {
                     page.state.notice = None;
-                    page.state.delete_armed = None;
                 }
                 cx.notify();
             },
@@ -330,8 +329,8 @@ impl ScheduledPage {
     /// Adds or removes a session as a target. A session of another node
     /// moves a new task there, with its sessions; an edited task stays on
     /// its node.
-    pub(crate) fn pick(&mut self, node: &str, session: &Session, cx: &mut Context<Self>) {
-        let target = session.target();
+    pub(crate) fn pick(&mut self, node: &str, target: &Target, cx: &mut Context<Self>) {
+        let target = target.clone();
         let Some(form) = &self.state.form else {
             return;
         };
@@ -446,12 +445,9 @@ impl ScheduledPage {
         cx.notify();
     }
 
+    /// Deletes the task; the menu that offers it has asked twice.
     pub(crate) fn delete(&mut self, node: &str, id: &str, cx: &mut Context<Self>) {
         if self.state.busy {
-            return;
-        }
-        if !self.state.press_delete(node, id) {
-            cx.notify();
             return;
         }
         self.state.busy = true;
