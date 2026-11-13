@@ -1,29 +1,22 @@
-//! The Work tab's rules (CHROTE's Beads view, `beadsSlice.ts`, applied to
-//! both trackers): one table of every item across the node's projects,
-//! sliced by search, project, status and days, sorted by any column, with
-//! the links between items across stores and the selected item's family as
-//! a graph. Plain data, tested without a window; the snapshot comes from
-//! `proto::work`.
+//! The Work page's rules: every item across the node's projects, the
+//! links between them across stores, and what the page lists of them
+//! ([`outline`]). Plain data, tested without a window; the snapshot comes
+//! from the node's Work channel.
 
-pub mod column;
-pub mod days;
-pub mod graph;
 pub mod links;
+pub mod outline;
 pub mod prose;
-mod slice;
 pub mod when;
 
 #[cfg(test)]
 pub mod tests;
 
-pub use days::Days;
 pub use links::Links;
-pub use slice::{COLUMNS, Column, Slice, Sliced};
 
 use parvi_work_contract::{Family, ProjectView as Project, Snapshot};
 use std::collections::HashMap;
 
-/// The status partition, in the order the rail lists it and a sort ranks it.
+/// The status partition, in the order a sort ranks it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Status {
     Open,
@@ -33,14 +26,6 @@ pub enum Status {
     Closed,
 }
 
-pub const STATUSES: [Status; 5] = [
-    Status::Open,
-    Status::InProgress,
-    Status::Blocked,
-    Status::Deferred,
-    Status::Closed,
-];
-
 impl Status {
     pub fn label(self) -> &'static str {
         match self {
@@ -49,17 +34,6 @@ impl Status {
             Status::Blocked => "blocked",
             Status::Deferred => "deferred",
             Status::Closed => "closed",
-        }
-    }
-
-    /// CHROTE's status glyphs (`beadStatus.ts`).
-    pub fn glyph(self) -> &'static str {
-        match self {
-            Status::Open => "○",
-            Status::InProgress => "◐",
-            Status::Blocked => "●",
-            Status::Deferred => "❄",
-            Status::Closed => "✓",
         }
     }
 
@@ -86,8 +60,8 @@ pub enum Tracker {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectInfo {
     pub tracker: Tracker,
-    /// What the column and the rail show: a store's prefix (with its folder
-    /// when two share it), a repository's `owner/name`.
+    /// What the page calls it: a store's prefix (with its folder when two
+    /// share it), a repository's `owner/name`.
     pub label: String,
     /// A store's folder; a repository's name.
     pub path: String,
@@ -98,7 +72,7 @@ pub struct ProjectInfo {
     pub error: Option<String>,
     /// Why the node cannot see the store change.
     pub unwatched: Option<String>,
-    /// A read has worked: its rows are in the table.
+    /// A read has worked: its rows are on the board.
     pub read: bool,
     pub total: usize,
 }
@@ -114,7 +88,7 @@ pub struct PullFacts {
     pub checks: Option<parvi_work_contract::Checks>,
 }
 
-/// One row of the table: a Bead, an issue or a pull request.
+/// One item: a Bead, an issue or a pull request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {
     pub project: usize,
@@ -138,8 +112,6 @@ pub struct Row {
     pub updated: Option<u64>,
     pub closed: Option<u64>,
     pub body: String,
-    /// Characters of the body: how much there is to read (CHROTE's Size).
-    pub size: usize,
     pub family: Family,
     /// An issue's pull requests, by number.
     pub pulls: Vec<u32>,
@@ -186,8 +158,6 @@ pub struct Board {
     pub rows: Vec<Row>,
     /// The links between rows, across stores.
     pub links: Links,
-    /// Each row's days, for the strip and the range.
-    pub days: Days,
     /// Row index by reference, and by bare Bead id where it is unique.
     by_ref: HashMap<String, usize>,
     /// Bead rows by (project, id), and every Bead row holding an id.
@@ -223,9 +193,8 @@ fn haystack(parts: &[&str]) -> String {
 }
 
 impl Board {
-    /// The board of a snapshot, its days counted at `now` (ms) in the zone
-    /// `offset` gives (seconds east of UTC at an instant).
-    pub fn from_snapshot(s: &Snapshot, now: u64, offset: &dyn Fn(u64) -> i64) -> Board {
+    /// The board of a snapshot.
+    pub fn from_snapshot(s: &Snapshot) -> Board {
         let mut b = Board::default();
         for (pi, p) in s.projects.iter().enumerate() {
             match p {
@@ -248,7 +217,6 @@ impl Board {
                     for i in items {
                         b.rows.push(Row {
                             project: pi,
-                            size: 0,
                             haystack: haystack(&[&i.id, &i.title, &i.body, &i.labels.join(" ")]),
                             reference: i.reference,
                             id: i.id,
@@ -296,7 +264,6 @@ impl Board {
                         let n = i.number;
                         b.rows.push(Row {
                             project: pi,
-                            size: 0,
                             haystack: haystack(&[
                                 &format!("#{n}"),
                                 &i.title,
@@ -338,7 +305,6 @@ impl Board {
                         let n = p.number;
                         b.rows.push(Row {
                             project: pi,
-                            size: 0,
                             haystack: haystack(&[
                                 &format!("#{n}"),
                                 &p.title,
@@ -390,21 +356,16 @@ impl Board {
                 }
             }
         }
-        for r in &mut b.rows {
-            r.size = r.body.chars().count();
-        }
         b.name_shared_prefixes();
         b.index();
         b.links = Links::of(&b);
         b.block();
-        b.days = Days::of(&b, now, offset);
         b
     }
 
-    /// Build a card from the on-demand item and the node's project list.
-    /// The on-demand item wins over a possibly older list, while the list
-    /// supplies the other rows that its family references name.
-    pub fn from_item(item: parvi_work_contract::Item, projects: &[Project], now: u64) -> Board {
+    /// A board for one item read on demand, with the projects that hold
+    /// the rows its family names. The item read wins over an older copy.
+    pub fn from_item(item: parvi_work_contract::Item, projects: &[Project]) -> Board {
         let reference = item.reference.clone();
         let github = reference
             .strip_prefix("gh:")
@@ -424,7 +385,7 @@ impl Board {
                 ..Default::default()
             })],
         };
-        let mut board = Board::from_snapshot(&snapshot, now, &when::local_offset);
+        let mut board = Board::from_snapshot(&snapshot);
         if let Some(repo) = github {
             let project = &mut board.projects[0];
             project.tracker = Tracker::Github;
@@ -440,14 +401,10 @@ impl Board {
             row.kind = "issue".into();
             board.index();
         }
-        let listed = Board::from_snapshot(
-            &Snapshot {
-                refreshed: 0,
-                projects: projects.to_vec(),
-            },
-            now,
-            &when::local_offset,
-        );
+        let listed = Board::from_snapshot(&Snapshot {
+            refreshed: 0,
+            projects: projects.to_vec(),
+        });
         let mut project_map = Vec::with_capacity(listed.projects.len());
         for project in listed.projects {
             if project.tracker == board.projects[0].tracker
@@ -474,7 +431,6 @@ impl Board {
             row.status = Status::of(&row.raw_status);
         }
         board.block();
-        board.days = Days::of(&board, now, &when::local_offset);
         board
     }
 
@@ -571,15 +527,6 @@ impl Board {
         self.rows
             .iter()
             .position(|r| r.reference == key.reference && r.pull.is_some() == key.pull)
-    }
-}
-
-/// A size as the table reads it: `940`, `6.4k`, `12k`.
-pub fn size_label(n: usize) -> String {
-    match n {
-        0..1000 => n.to_string(),
-        1000..9950 => format!("{:.1}k", n as f64 / 1000.),
-        _ => format!("{:.0}k", n as f64 / 1000.),
     }
 }
 

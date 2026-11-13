@@ -1,19 +1,18 @@
-//! The Work page as the operator drives it, against CHROTE's
-//! `BeadsView.test.tsx`: Beads stores and a GitHub repository in one table,
-//! the keys, the graph and text beside a selection, an id in the text, a
-//! view command's item, and a new snapshot keeping what the operator was
-//! doing. The page runs in a test window with no shell; every snapshot it
-//! gets is one a test hands it.
+//! The Work page as the operator drives it: one project's open work as a
+//! tree, the keys, a search across every store, choosing the project, an id
+//! in the text and Back, a view command's item, and a new snapshot keeping
+//! what the operator was doing. The page runs in a test window with no
+//! shell; every snapshot it gets is one a test hands it.
 
-use super::Work;
-use crate::store::work::graph;
+use super::{Entry, Work};
 use crate::store::work::prose::BEAD_LINK;
 use crate::store::work::tests::{Bead, b, repo, store};
-use crate::store::work::{Column, Status};
 use gpui::{AppContext, Entity, TestAppContext, VisualTestContext};
+use parvi_terminals_contract::{FocusedSession, Session, SessionList};
 use parvi_work_contract::{ProjectView as Project, RepoView as Repo, Snapshot, StoreView as Store};
+use std::sync::Arc;
 
-/// BeadsView.test.tsx's stores, a repository, and one that failed.
+/// Two stores linked across, a repository, and one that failed.
 fn snapshot() -> Snapshot {
     Snapshot {
         refreshed: 0,
@@ -65,7 +64,8 @@ fn page(cx: &mut TestAppContext) -> (Entity<Work>, &mut VisualTestContext) {
     });
     cx.update(|window, cx| {
         work.update(cx, |w, cx| {
-            w.snapshots.insert("node".into(), snapshot());
+            w.project = Some("/srv/data/context".into());
+            w.snapshots.insert("node".into(), Arc::new(snapshot()));
             w.rebuild(cx);
             window.focus(&w.focus, cx);
         })
@@ -74,28 +74,22 @@ fn page(cx: &mut TestAppContext) -> (Entity<Work>, &mut VisualTestContext) {
     (work, cx)
 }
 
-/// Lets every status through, closed and deferred too.
-fn every_status(work: &Entity<Work>, cx: &mut VisualTestContext) {
-    work.update(cx, |w, _| {
-        w.slice.statuses = None;
-        w.reslice();
-    });
-}
-
-fn ids(work: &Entity<Work>, cx: &mut VisualTestContext) -> Vec<String> {
+/// The list as (id, depth), labels as their words.
+fn listed(work: &Entity<Work>, cx: &mut VisualTestContext) -> Vec<(String, usize)> {
     work.read_with(cx, |w, _| {
-        w.sliced
-            .rows
+        w.entries
             .iter()
-            .map(|&i| w.board.rows[i].id.clone())
+            .map(|e| match e {
+                Entry::Item { row, depth, .. } => (w.board.rows[*row].id.clone(), *depth),
+                Entry::Label(l) => (l.to_string(), 0),
+                Entry::More(n) => (format!("{n} more"), 0),
+            })
             .collect()
     })
 }
 
-fn selected(work: &Entity<Work>, cx: &mut VisualTestContext) -> Option<String> {
-    work.read_with(cx, |w, _| {
-        w.selected_row().map(|i| w.board.rows[i].id.clone())
-    })
+fn shown(work: &Entity<Work>, cx: &mut VisualTestContext) -> Option<String> {
+    work.read_with(cx, |w, _| w.shown_row().map(|i| w.board.rows[i].id.clone()))
 }
 
 fn select(work: &Entity<Work>, cx: &mut VisualTestContext, id: &str) {
@@ -107,285 +101,119 @@ fn select(work: &Entity<Work>, cx: &mut VisualTestContext, id: &str) {
     });
 }
 
-#[gpui::test]
-fn a_wide_graph_can_be_panned_with_its_buttons(cx: &mut TestAppContext) {
-    let (work, cx) = page(cx);
-    let mut items = vec![b("chain-0").epic()];
-    for i in 1..=14 {
-        items.push(
-            b(&format!("chain-{i}"))
-                .parent("chain-0")
-                .blocked_by(&[&format!("chain-{}", i - 1)]),
-        );
-    }
-    cx.update(|_, cx| {
-        work.update(cx, |w, cx| {
-            w.snapshots.insert(
-                "node".into(),
-                Snapshot {
-                    refreshed: 0,
-                    projects: vec![store("/chain", items)],
-                },
-            );
-            w.rebuild(cx);
-        })
-    });
-    select(&work, cx, "chain-0");
-    cx.run_until_parked();
-    let before = work.read_with(cx, |w, _| w.graph_scroll.offset().x);
-    let right = cx
-        .debug_bounds("work-graph-right")
-        .expect("wide graph has a right pan button")
-        .center();
-    cx.simulate_click(right, gpui::Modifiers::none());
-    cx.run_until_parked();
-    let after = work.read_with(cx, |w, _| w.graph_scroll.offset().x);
-    assert!(after < before, "right button moves the graph");
-    let left = cx.debug_bounds("work-graph-left").unwrap().center();
-    cx.simulate_click(left, gpui::Modifiers::none());
-    cx.run_until_parked();
-    assert_eq!(work.read_with(cx, |w, _| w.graph_scroll.offset().x), before);
+fn tree() -> Vec<(String, usize)> {
+    vec![
+        ("library-zvi".into(), 0),
+        ("library-zvi.1".into(), 1),
+        ("library-zvi.2".into(), 1),
+    ]
 }
 
 #[gpui::test]
-fn draws_every_item_of_every_project_in_one_table_and_says_what_failed(cx: &mut TestAppContext) {
+fn opens_on_the_projects_open_work_as_a_tree_with_the_first_item_shown(cx: &mut TestAppContext) {
     let (work, cx) = page(cx);
-    // The tab opens on what is unfinished: the two closed Beads wait.
-    assert_eq!(ids(&work, cx).len(), 6);
-    every_status(&work, cx);
-    // Five Beads, two issues and a pull request.
-    assert_eq!(ids(&work, cx).len(), 8);
-    work.read_with(cx, |w, _| {
-        let p = &w.board.projects;
-        assert_eq!(p.iter().filter(|p| p.read).count(), 3);
-        assert_eq!(p[3].error.as_deref(), Some("gh: not logged in"));
-        assert!(!p[3].read, "a failed read is not an empty one");
-        // A blocker in another store that is finished does not block.
-        let row = w
-            .board
-            .rows
-            .iter()
-            .find(|r| r.id == "library-zvi.1")
-            .unwrap();
-        assert_eq!(row.status, Status::Open);
-    });
-}
-
-#[gpui::test]
-fn says_it_is_still_reading_while_no_project_has_answered(cx: &mut TestAppContext) {
-    let (work, cx) = page(cx);
-    cx.update(|_, cx| {
-        work.update(cx, |w, cx| {
-            let reading = Snapshot {
-                refreshed: 0,
-                projects: vec![
-                    Project::Beads(Store {
-                        folder: "/srv".into(),
-                        ..Default::default()
-                    }),
-                    Project::Github(Repo {
-                        name: "o/r".into(),
-                        ..Default::default()
-                    }),
-                ],
-            };
-            w.snapshots.insert("node".into(), reading);
-            w.rebuild(cx);
-        })
-    });
-    work.read_with(cx, |w, _| {
-        assert!(w.sliced.rows.is_empty());
-        assert!(
-            w.board
-                .projects
-                .iter()
-                .all(|p| !p.read && p.error.is_none())
-        );
-    });
-    // Drawn, it says so: the page renders without a panic at any state.
+    assert_eq!(listed(&work, cx), tree());
+    assert_eq!(shown(&work, cx).as_deref(), Some("library-zvi"));
+    // Drawn: the item's title heads the detail.
     cx.run_until_parked();
     assert!(
-        cx.debug_bounds("work-loading-Reading projects: 0 of 2 loaded")
+        cx.debug_bounds("work-card-title-Grill brain ownership")
             .is_some()
     );
-    cx.update(|_, cx| {
-        work.update(cx, |w, cx| {
-            w.snapshots.insert(
-                "node".into(),
-                Snapshot {
-                    refreshed: 0,
-                    projects: vec![
-                        store("/one", vec![b("one-1")]),
-                        Project::Beads(Store {
-                            folder: "/two".into(),
-                            ..Store::default()
-                        }),
-                    ],
-                },
-            );
-            w.rebuild(cx);
-        })
-    });
-    cx.run_until_parked();
+    assert!(cx.debug_bounds("work-row-library-zvi.2").is_some());
     assert!(
-        cx.debug_bounds("work-loading-Reading projects: 1 of 2 loaded")
-            .is_some()
-    );
-    cx.update(|_, cx| {
-        work.update(cx, |w, cx| {
-            w.snapshots.insert(
-                "node".into(),
-                Snapshot {
-                    refreshed: 0,
-                    projects: vec![
-                        store("/one", vec![b("one-1")]),
-                        store("/two", vec![b("two-1")]),
-                    ],
-                },
-            );
-            w.rebuild(cx);
-        })
-    });
-    cx.run_until_parked();
-    assert!(
-        cx.debug_bounds("work-loading-Reading projects: 1 of 2 loaded")
-            .is_none()
+        cx.debug_bounds("work-row-ctx-old").is_none(),
+        "another project's work waits for a search"
     );
 }
 
 #[gpui::test]
-fn the_keys_walk_open_and_let_go_and_slash_searches(cx: &mut TestAppContext) {
+fn the_keys_walk_the_tree_and_slash_searches_every_store(cx: &mut TestAppContext) {
     let (work, cx) = page(cx);
-    every_status(&work, cx);
-    cx.update(|_, cx| work.update(cx, |w, cx| w.sort_by(Column::Id, cx)));
-    let first = ids(&work, cx);
-    assert_eq!(selected(&work, cx), None);
     cx.simulate_keystrokes("j");
-    assert_eq!(selected(&work, cx).as_deref(), Some(first[0].as_str()));
-    // A selection brings its graph and card beside the table.
-    assert!(work.read_with(cx, |w, _| w.card));
-    cx.simulate_keystrokes("down j");
-    assert_eq!(selected(&work, cx).as_deref(), Some(first[2].as_str()));
-    cx.simulate_keystrokes("k up");
-    assert_eq!(selected(&work, cx).as_deref(), Some(first[0].as_str()));
-    cx.simulate_keystrokes("enter");
-    assert!(work.read_with(cx, |w, _| w.card));
-    // Escape lets the selection go, and the table has the pane again.
-    cx.simulate_keystrokes("escape");
-    assert_eq!(selected(&work, cx), None);
-    assert!(!work.read_with(cx, |w, _| w.card));
-
-    // `/` puts the keys in the search; ids, titles and text answer.
-    cx.simulate_keystrokes("/");
-    cx.simulate_input("project");
-    assert_eq!(ids(&work, cx), ["library-zvi.2"]);
-    cx.simulate_keystrokes("backspace backspace backspace backspace backspace backspace backspace");
-    cx.simulate_input("evidence");
-    // CHROTE asks its server for the text; the snapshot carries it.
-    assert_eq!(ids(&work, cx), ["ctx-xvl"]);
-    // Down takes the keys back to the table on the first row.
+    assert_eq!(shown(&work, cx).as_deref(), Some("library-zvi.1"));
     cx.simulate_keystrokes("down");
-    assert_eq!(selected(&work, cx).as_deref(), Some("ctx-xvl"));
-    // Escape lets the row go, then clears the search.
+    assert_eq!(shown(&work, cx).as_deref(), Some("library-zvi.2"));
+    cx.simulate_keystrokes("j");
+    assert_eq!(
+        shown(&work, cx).as_deref(),
+        Some("library-zvi.2"),
+        "the walk stops at the end"
+    );
+    cx.simulate_keystrokes("k up");
+    assert_eq!(shown(&work, cx).as_deref(), Some("library-zvi"));
+
+    // `/` puts the keys in the search; it answers as it is typed, this
+    // project's first, finished work too.
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("evidence");
+    assert_eq!(
+        listed(&work, cx),
+        [("Other projects".to_string(), 0), ("ctx-xvl".into(), 0)]
+    );
+    assert_eq!(shown(&work, cx).as_deref(), Some("ctx-xvl"));
+    // Escape clears it, and the tree is back.
     cx.simulate_keystrokes("escape");
-    assert_eq!(selected(&work, cx), None);
+    assert_eq!(listed(&work, cx), tree());
+}
+
+#[gpui::test]
+fn p_chooses_the_project_by_its_name_and_the_choice_stays(cx: &mut TestAppContext) {
+    let (work, cx) = page(cx);
+    cx.simulate_keystrokes("p");
+    assert!(work.read_with(cx, |w, _| w.picking));
+    cx.simulate_input("other");
+    let names = work.read_with(cx, |w, cx| {
+        w.projects_listed(cx)
+            .into_iter()
+            .map(|p| w.board.projects[p].path.clone())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(names, ["/srv/other-store"]);
+    cx.simulate_keystrokes("enter");
+    work.read_with(cx, |w, _| {
+        assert!(!w.picking);
+        assert_eq!(w.project.as_deref(), Some("/srv/other-store"));
+        assert_eq!(w.query, "", "the name typed was not a search");
+    });
+    assert_eq!(listed(&work, cx), [("ctx-old".to_string(), 0)]);
+    // Escape leaves a choice unmade.
+    cx.simulate_keystrokes("p");
+    cx.simulate_input("context");
     cx.simulate_keystrokes("escape");
-    assert_eq!(ids(&work, cx).len(), 8);
+    work.read_with(cx, |w, _| {
+        assert!(!w.picking);
+        assert_eq!(w.project.as_deref(), Some("/srv/other-store"));
+    });
 }
 
 #[gpui::test]
-fn keeps_one_project_by_its_name_and_sorts_by_size(cx: &mut TestAppContext) {
+fn with_no_choice_the_focused_sessions_folder_names_the_project(cx: &mut TestAppContext) {
     let (work, cx) = page(cx);
-    every_status(&work, cx);
-    work.update(cx, |w, _| {
-        w.slice.only_project("/srv/data/context");
-        w.reslice();
-    });
-    let mut kept = ids(&work, cx);
-    kept.sort();
-    assert_eq!(kept, ["library-zvi", "library-zvi.1", "library-zvi.2"]);
-    cx.update(|_, cx| work.update(cx, |w, cx| w.sort_by(Column::Size, cx)));
-    assert_eq!(ids(&work, cx)[0], "library-zvi.1", "the only one with text");
-    work.update(cx, |w, _| {
-        w.slice.only_project("/srv/data/context");
-        w.reslice();
-    });
-    assert_eq!(ids(&work, cx).len(), 8);
-}
-
-#[gpui::test]
-fn the_graph_follows_the_selected_row_and_names_it_to_an_agent(cx: &mut TestAppContext) {
-    let (work, cx) = page(cx);
-    select(&work, cx, "library-zvi.2");
-    work.read_with(cx, |w, _| {
-        let row = w.selected_row().unwrap();
-        let g = graph::build(&w.board, row, (500., 270.));
-        let drawn: Vec<&str> = g
-            .nodes
-            .iter()
-            .map(|n| w.board.rows[n.row].id.as_str())
-            .collect();
-        assert_eq!(w.board.rows[g.head].id, "library-zvi");
-        assert!(drawn.contains(&"library-zvi.2"));
-        assert!(drawn.contains(&"ctx-xvl"), "its blocker from another store");
-        assert_eq!(
-            w.board.rows[row].line(&w.board),
-            "bead library-zvi.2: Project homes for every project"
-        );
-    });
-    // A node selects its row, and the drawing stays the same family.
-    select(&work, cx, "library-zvi.1");
-    work.read_with(cx, |w, _| {
-        let g = graph::build(&w.board, w.selected_row().unwrap(), (500., 270.));
-        assert_eq!(w.board.rows[g.head].id, "library-zvi");
-    });
-    // An issue's graph holds the pull request that closes it.
-    select(&work, cx, "#10");
-    work.read_with(cx, |w, _| {
-        let g = graph::build(&w.board, w.selected_row().unwrap(), (500., 270.));
-        let mut drawn: Vec<&str> = g
-            .nodes
-            .iter()
-            .map(|n| w.board.rows[n.row].id.as_str())
-            .collect();
-        drawn.sort();
-        assert_eq!(drawn, ["#10", "#11"]);
-    });
-    cx.run_until_parked();
-    assert!(cx.debug_bounds("work-graph-drawing").is_some());
-    // An item with no relation gets its card alone, no graph.
-    select(&work, cx, "ctx-old");
-    cx.run_until_parked();
-    assert!(cx.debug_bounds("work-card").is_some());
-    assert!(cx.debug_bounds("work-graph-drawing").is_none());
-}
-
-#[gpui::test]
-fn an_id_in_the_text_selects_that_item(cx: &mut TestAppContext) {
-    let (work, cx) = page(cx);
-    select(&work, cx, "library-zvi.1");
     cx.update(|_, cx| {
         work.update(cx, |w, cx| {
-            let project = w.board.rows[w.selected_row().unwrap()].project;
-            w.follow_link(&format!("{BEAD_LINK}ctx-xvl"), project, cx)
+            w.project = None;
+            w.sessions = Some(cx.new(|_| SessionList {
+                sessions: vec![Session {
+                    node: "node".into(),
+                    name: "shell".into(),
+                    cwd: Some("/srv/other-store/src".into()),
+                    ..Session::default()
+                }],
+                focused: Some(FocusedSession {
+                    node: "node".into(),
+                    user: String::new(),
+                    name: "shell".into(),
+                }),
+            }));
+            w.relist(cx);
         })
     });
-    assert_eq!(selected(&work, cx).as_deref(), Some("ctx-xvl"));
-    // `#10` in an issue's text opens that issue.
-    select(&work, cx, "#11");
-    cx.update(|_, cx| {
-        work.update(cx, |w, cx| {
-            let project = w.board.rows[w.selected_row().unwrap()].project;
-            w.follow_link("#10", project, cx)
-        })
-    });
-    assert_eq!(selected(&work, cx).as_deref(), Some("#10"));
+    assert_eq!(listed(&work, cx), [("ctx-old".to_string(), 0)]);
 }
 
-/// BeadCard.test.tsx "follows an id inside the text and comes back", two
-/// ids deep, with Alt+Left and the Back control.
 #[gpui::test]
-fn back_returns_through_two_followed_ids(cx: &mut TestAppContext) {
+fn an_id_in_the_text_shows_that_item_and_back_returns(cx: &mut TestAppContext) {
     let (work, cx) = page(cx);
     select(&work, cx, "library-zvi.1");
     let trail =
@@ -393,71 +221,58 @@ fn back_returns_through_two_followed_ids(cx: &mut TestAppContext) {
     assert_eq!(
         trail(&work, cx),
         0,
-        "nothing behind a row chosen in the table"
+        "nothing behind a row chosen in the list"
     );
     cx.update(|_, cx| {
         work.update(cx, |w, cx| {
             let project = w.board.rows[w.selected_row().unwrap()].project;
             w.follow_link(&format!("{BEAD_LINK}ctx-xvl"), project, cx);
-            // A family link on the card is followed the same way.
+            // A family row is followed the same way.
             w.follow("bead:n:/srv/data/context#library-zvi.2", cx);
         })
     });
-    assert_eq!(selected(&work, cx).as_deref(), Some("library-zvi.2"));
+    assert_eq!(shown(&work, cx).as_deref(), Some("library-zvi.2"));
     assert_eq!(trail(&work, cx), 2);
     cx.simulate_keystrokes("alt-left");
-    assert_eq!(selected(&work, cx).as_deref(), Some("ctx-xvl"));
+    assert_eq!(shown(&work, cx).as_deref(), Some("ctx-xvl"));
     cx.update(|_, cx| work.update(cx, |w, cx| w.back(cx)));
-    assert_eq!(selected(&work, cx).as_deref(), Some("library-zvi.1"));
-    assert!(work.read_with(cx, |w, _| w.card));
-    // Nothing behind: Back stays.
+    assert_eq!(shown(&work, cx).as_deref(), Some("library-zvi.1"));
     cx.simulate_keystrokes("alt-left");
-    assert_eq!(selected(&work, cx).as_deref(), Some("library-zvi.1"));
-
-    // Following the item in hand adds nothing; a row chosen anew starts again.
+    assert_eq!(
+        shown(&work, cx).as_deref(),
+        Some("library-zvi.1"),
+        "nothing behind"
+    );
+    // `#10` in an issue's text shows that issue.
+    select(&work, cx, "#11");
     cx.update(|_, cx| {
         work.update(cx, |w, cx| {
-            w.follow("bead:n:/srv/data/context#library-zvi.2", cx);
-            w.follow("bead:n:/srv/data/context#library-zvi.2", cx);
+            let project = w.board.rows[w.selected_row().unwrap()].project;
+            w.follow_link("#10", project, cx)
         })
     });
-    assert_eq!(trail(&work, cx), 1);
-    cx.simulate_keystrokes("j");
-    assert_eq!(trail(&work, cx), 0);
+    assert_eq!(shown(&work, cx).as_deref(), Some("#10"));
 }
 
 #[gpui::test]
-fn shows_an_item_a_command_asked_for_clearing_only_a_slice_that_hides_it(cx: &mut TestAppContext) {
+fn an_item_a_command_asks_for_shows_from_any_project(cx: &mut TestAppContext) {
     let (work, cx) = page(cx);
-    work.update(cx, |w, _| {
-        w.slice.query = "grill".into();
-        w.slice.only_status(Status::Open);
-        w.reslice();
-    });
-    assert_eq!(ids(&work, cx), ["library-zvi"]);
     cx.update(|_, cx| {
         work.update(cx, |w, cx| {
             w.wanted = Some(("bead:n:/srv/other-store#ctx-old".into(), None));
             w.open_wanted(cx);
         })
     });
-    assert_eq!(selected(&work, cx).as_deref(), Some("ctx-old"));
-    work.read_with(cx, |w, _| {
-        assert_eq!(w.slice.query, "", "the search hid it");
-        assert!(w.slice.statuses.is_some(), "its status was kept: it stays");
-        assert!(w.card);
-    });
+    assert_eq!(shown(&work, cx).as_deref(), Some("ctx-old"));
+    assert_eq!(listed(&work, cx), tree(), "the project stays");
 }
 
 #[gpui::test]
-fn a_new_snapshot_keeps_the_query_the_selection_the_card_and_the_range(cx: &mut TestAppContext) {
+fn a_new_snapshot_keeps_the_search_and_the_item_shown(cx: &mut TestAppContext) {
     let (work, cx) = page(cx);
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("zvi");
     select(&work, cx, "library-zvi.1");
-    work.update(cx, |w, _| {
-        w.slice.query = "zvi".into();
-        w.slice.range = Some((w.board.days.first, w.board.days.today));
-        w.reslice();
-    });
     let mut next = snapshot();
     if let Project::Beads(s) = &mut next.projects[0] {
         let items = s.items.as_mut().unwrap();
@@ -465,58 +280,57 @@ fn a_new_snapshot_keeps_the_query_the_selection_the_card_and_the_range(cx: &mut 
     }
     cx.update(|_, cx| {
         work.update(cx, |w, cx| {
-            w.snapshots.insert("node".into(), next);
+            w.snapshots.insert("node".into(), Arc::new(next));
             w.rebuild(cx);
         })
     });
-    assert_eq!(selected(&work, cx).as_deref(), Some("library-zvi.1"));
-    work.read_with(cx, |w, _| {
-        assert!(w.card);
-        assert_eq!(w.slice.query, "zvi");
-        assert_eq!(
-            w.slice.range,
-            Some((w.board.days.first, w.board.days.today))
-        );
-        assert_eq!(w.sliced.rows.len(), 4);
-    });
+    assert_eq!(shown(&work, cx).as_deref(), Some("library-zvi.1"));
+    work.read_with(cx, |w, _| assert_eq!(w.query, "zvi"));
+    assert_eq!(listed(&work, cx).len(), 4);
 }
 
 #[gpui::test]
-fn a_drag_across_the_strip_keeps_those_days(cx: &mut TestAppContext) {
+fn a_snapshot_frame_is_read_off_the_window_and_lists_when_it_lands(cx: &mut TestAppContext) {
     let (work, cx) = page(cx);
-    every_status(&work, cx);
-    let (first, today) = work.read_with(cx, |w, _| (w.board.days.first, w.board.days.today));
-    cx.update(|_, cx| {
+    let mut next = snapshot();
+    if let Project::Beads(s) = &mut next.projects[0] {
+        s.items
+            .as_mut()
+            .unwrap()
+            .push(b("library-new").title("Arrived"));
+    }
+    let body = serde_json::to_vec(&next).unwrap();
+    cx.update(|window, cx| {
         work.update(cx, |w, cx| {
-            w.drag_to(today, cx);
-            w.drag_to(today - 3, cx);
+            parvi_app_kit::Page::frame(
+                w,
+                &parvi_core::NodeId("node".into()),
+                parvi_work_contract::SNAPSHOT,
+                &body,
+                window,
+                cx,
+            )
         })
     });
-    work.read_with(cx, |w, _| {
-        assert_eq!(w.slice.range, Some((today - 3, today)));
-        assert!(w.sliced.rows.len() < 8);
-        // The strip stays whole.
-        assert_eq!(w.sliced.open.len(), (today - first + 1) as usize);
-    });
-    cx.update(|_, cx| work.update(cx, |w, cx| w.clear_range(cx)));
-    assert_eq!(ids(&work, cx).len(), 8);
+    cx.run_until_parked();
+    assert!(listed(&work, cx).contains(&("library-new".to_string(), 0)));
 }
 
 #[gpui::test]
-fn a_rows_menu_copies_its_id(cx: &mut TestAppContext) {
+fn the_item_menu_copies_its_id(cx: &mut TestAppContext) {
     let (work, cx) = page(cx);
     cx.update(|window, cx| {
         work.update(cx, |w, cx| {
             let row = w.board.rows.iter().position(|r| r.id == "#10").unwrap();
-            let menu = w.row_menu(row);
+            let menu = w.item_menu(row);
             assert_eq!(
                 menu.iter()
-                    .filter(|r| !r.is_rule())
+                    .take(2)
                     .map(|r| r.label.as_str())
                     .collect::<Vec<_>>(),
-                ["Send…", "Copy id", "Copy id and title"]
+                ["Copy id", "Copy id and title"]
             );
-            (menu[2].run.as_ref().unwrap())(window, cx);
+            (menu[0].run.as_ref().unwrap())(window, cx);
             assert_eq!(
                 cx.read_from_clipboard().unwrap().text().as_deref(),
                 Some("o/r#10")
@@ -526,7 +340,7 @@ fn a_rows_menu_copies_its_id(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn reveal_selects_the_named_nodes_copy(cx: &mut TestAppContext) {
+fn reveal_shows_the_named_nodes_copy(cx: &mut TestAppContext) {
     let (work, cx) = page(cx);
     cx.update(|window, cx| {
         work.update(cx, |w, cx| {
@@ -534,7 +348,7 @@ fn reveal_selects_the_named_nodes_copy(cx: &mut TestAppContext) {
             if let Project::Beads(store) = &mut second.projects[0] {
                 store.items.as_mut().unwrap()[0].title = "Other node".into();
             }
-            w.snapshots.insert("other".into(), second);
+            w.snapshots.insert("other".into(), Arc::new(second));
             w.rebuild(cx);
             <Work as parvi_app_kit::Page>::answer(
                 w,
@@ -557,23 +371,25 @@ fn reveal_selects_the_named_nodes_copy(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn a_column_row_opens_its_item(cx: &mut TestAppContext) {
+fn says_it_is_reading_while_no_project_has_answered(cx: &mut TestAppContext) {
     let (work, cx) = page(cx);
     cx.update(|_, cx| {
         work.update(cx, |w, cx| {
-            w.slice.only_project("/srv/data/context");
-            w.reslice();
-            let moving = crate::store::work::column::moving(&w.board);
-            let group = moving
-                .groups
-                .iter()
-                .find(|g| w.board.projects[g.project].label == "ctx")
-                .unwrap();
-            w.open_from_column(group.ready[0], cx);
+            let reading = Snapshot {
+                refreshed: 0,
+                projects: vec![Project::Beads(Store {
+                    folder: "/srv/data/context".into(),
+                    ..Default::default()
+                })],
+            };
+            w.snapshots.insert("node".into(), Arc::new(reading));
+            w.rebuild(cx);
         })
     });
-    assert_eq!(selected(&work, cx).as_deref(), Some("ctx-old"));
-    assert!(work.read_with(cx, |w, _| w.card));
+    cx.run_until_parked();
+    let label = work.read_with(cx, |w, _| w.board.projects[0].label.clone());
+    let words: &'static str = format!("empty-Reading {label}…").leak();
+    assert!(cx.debug_bounds(words).is_some());
 }
 
 #[test]
@@ -585,18 +401,4 @@ fn session_names() {
         next_name(&super::session_name("o/r", "#1"), &["r-1", "r-1-2"]),
         "r-1-3"
     );
-}
-
-#[gpui::test]
-fn a_search_that_only_finished_work_answers_says_so_and_shows_it(cx: &mut TestAppContext) {
-    let (work, cx) = page(cx);
-    cx.simulate_keystrokes("/");
-    cx.simulate_input("evidence");
-    assert_eq!(ids(&work, cx), Vec::<String>::new());
-    let show = cx
-        .debug_bounds("work-every-status")
-        .expect("the empty table offers every status")
-        .center();
-    cx.simulate_click(show, gpui::Modifiers::none());
-    assert_eq!(ids(&work, cx), ["ctx-xvl"]);
 }

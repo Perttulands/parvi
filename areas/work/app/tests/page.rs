@@ -203,10 +203,13 @@ fn work_column_and_terminal_links_open_cards_and_hand_off(cx: &mut TestAppContex
         cx.debug_bounds("work-card-title-Read the fixture")
             .is_some()
     });
+    // The family has its titles though the Work page never read the
+    // store: the node answers them with the item.
+    // A finished blocker folds into a line that unfolds it.
     for text in [
-        "Parent-○ fixture-0 Parent title",
-        "Children-○ fixture-2 Child title",
-        "Blocked by-✓ fixture-3 Blocker title",
+        "Part of-fixture-0",
+        "Children-fixture-2",
+        "Blocked by-finished",
     ] {
         assert!(
             cx.debug_bounds(Box::leak(format!("work-family-{text}").into_boxed_str()))
@@ -214,7 +217,12 @@ fn work_column_and_terminal_links_open_cards_and_hand_off(cx: &mut TestAppContex
             "missing {text}"
         );
     }
-    click(cx, "work-family-Parent-○ fixture-0 Parent title");
+    click(cx, "work-family-Blocked by-finished");
+    until(cx, "the finished blocker", |cx| {
+        cx.debug_bounds("work-family-Blocked by-fixture-3")
+            .is_some()
+    });
+    click(cx, "work-family-Part of-fixture-0");
     until(cx, "parent card", |cx| {
         cx.debug_bounds("work-card-title-Parent title").is_some()
     });
@@ -225,7 +233,7 @@ fn work_column_and_terminal_links_open_cards_and_hand_off(cx: &mut TestAppContex
     });
     assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy"));
     assert!(cx.debug_bounds("work-send").is_some());
-    assert!(cx.debug_bounds("work-start").is_some());
+    assert!(cx.debug_bounds("work-more").is_some());
     cx.simulate_keystrokes("alt-i");
     until(cx, "beside closed", |cx| {
         cx.debug_bounds("work-beside").is_none()
@@ -252,6 +260,20 @@ fn work_column_and_terminal_links_open_cards_and_hand_off(cx: &mut TestAppContex
     assert!(cx.debug_bounds("work-beside-not-found").is_none());
     std::fs::remove_file(failure).unwrap();
     cx.simulate_keystrokes("alt-i");
+    // The project is chosen by name on the page, and its tree lists.
+    click(cx, "tab-work");
+    until(cx, "Work page", |cx| {
+        cx.debug_bounds("work-project").is_some()
+    });
+    cx.simulate_keystrokes("p");
+    cx.simulate_input("fixture");
+    until(cx, "the store to choose", |cx| {
+        cx.debug_bounds("work-pick-fixture").is_some()
+    });
+    cx.simulate_keystrokes("enter");
+    until(cx, "the store's tree", |cx| {
+        cx.debug_bounds("work-row-fixture-2").is_some()
+    });
     cx.update(|_, cx| toy_host.ask(reveal("fixture-1", false), cx))
         .unwrap();
     until(cx, "Work page card", |cx| {
@@ -325,21 +347,22 @@ fn work_column_and_terminal_links_open_cards_and_hand_off(cx: &mut TestAppContex
         });
     }
     // Alt+B docks Work while Terminals stays open; the dock alone watches
-    // the Work channel and a row opens its card on the Work page.
+    // the Work channel and a row opens its item in the dock.
     cx.simulate_keystrokes("alt-b");
     until(cx, "fixture in dock", |cx| {
         cx.debug_bounds("work-column-row-fixture-1").is_some()
     });
     assert!(cx.debug_bounds("dock-work").is_some());
     click(cx, "work-column-row-fixture-1");
-    until(cx, "item card", |cx| cx.debug_bounds("work-card").is_some());
-    cx.simulate_keystrokes("alt-b");
-    until(cx, "dock closed", |cx| {
-        cx.debug_bounds("dock-work").is_none()
+    until(cx, "item in the dock", |cx| {
+        cx.debug_bounds("work-card-title-Read the fixture")
+            .is_some()
     });
-    until(cx, "send action", |cx| {
-        cx.debug_bounds("work-send").is_some()
-    });
+    assert_eq!(
+        shell.read_with(cx, |s, _| s.shown_page()),
+        Some("terminals")
+    );
+    // Send in the dock hands the item to a session.
     click(cx, "work-send");
     until(cx, "send drawer", |cx| cx.debug_bounds("send-go").is_some());
     click(cx, "send-go");
@@ -349,15 +372,20 @@ fn work_column_and_terminal_links_open_cards_and_hand_off(cx: &mut TestAppContex
     until(cx, "send drawer closed", |cx| {
         cx.debug_bounds("send-go").is_none()
     });
-    click(cx, "tab-work");
-    until(cx, "start action", |cx| {
-        cx.debug_bounds("work-start").is_some()
+    cx.simulate_keystrokes("alt-b");
+    until(cx, "dock closed", |cx| {
+        cx.debug_bounds("dock-work").is_none()
     });
+    click(cx, "tab-work");
+    until(cx, "item menu", |cx| cx.debug_bounds("work-more").is_some());
     let host = shell.read_with(cx, |shell, _| Host::new(shell.hub()));
     let sessions = cx
         .update(|_, cx| host.model::<parvi_terminals_contract::SessionList>(cx))
         .unwrap();
-    click(cx, "work-start");
+    // "…" offers to start a session in the item's checkout, first.
+    click(cx, "work-more");
+    until(cx, "menu", |cx| cx.debug_bounds("menu-row-0").is_some());
+    click(cx, "menu-row-0");
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         cx.run_until_parked();
