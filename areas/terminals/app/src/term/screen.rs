@@ -6,8 +6,10 @@ use super::clusters::Clusters;
 use alacritty_terminal::event::{Event as TermEvent, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point};
+use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::Processor;
+use alacritty_terminal::vte::ansi::{Color, NamedColor};
 
 /// Responses the terminal would write back (device attributes and the
 /// like) are dropped: tmux is the pane's terminal and has answered already.
@@ -137,9 +139,6 @@ impl Screen {
         self.term.grid().display_offset() != 0
     }
 
-    /// How many rows from the top must stay in view when the grid is taller
-    /// than its box: down to the cursor on the live screen, all of them when
-    /// reading back.
     /// The lines on screen, as read, each without its trailing blanks.
     pub fn text(&self) -> String {
         let grid = self.term.grid();
@@ -156,12 +155,57 @@ impl Screen {
             .join("\n")
     }
 
+    /// How many rows from the top must stay in view when the grid is taller
+    /// than its box: down to the cursor on the live screen, all of them when
+    /// reading back.
     pub fn rows_to_show(&self) -> usize {
         if self.scrolled_back() {
             return self.rows;
         }
         let cursor = self.term.grid().cursor.point.line.0.max(0) as usize;
         (cursor + 1).min(self.rows)
+    }
+
+    /// The live screen's rows a program takes input in, kept in view below
+    /// a history: the block the cursor is in, from the blank row above it
+    /// (Claude Code's rule, Codex's shaded composer) down to the last row
+    /// with anything on it. A block with no blank row above it within
+    /// `most` rows (a shell's output) gives the cursor's line alone.
+    pub fn input_rows(&self, most: usize) -> std::ops::Range<usize> {
+        let grid = self.term.grid();
+        let rows = self.rows;
+        let blank = |row: usize| {
+            (0..self.cols).all(|c| {
+                let cell = &grid[Point::new(Line(row as i32), Column(c))];
+                matches!(cell.c, ' ' | '\0') && cell.bg == Color::Named(NamedColor::Background)
+            })
+        };
+        let cursor = (grid.cursor.point.line.0.max(0) as usize).min(rows - 1);
+        let end = (cursor..rows).rev().find(|&r| !blank(r)).unwrap_or(cursor) + 1;
+        let most = most.max(1);
+        let mut top = cursor;
+        loop {
+            if end - top > most {
+                // The cursor's line, with the rows it wraps on from. A shell
+                // breaks its own line at the margin, without the wrap flag,
+                // and a prompt ends in a space: a row written to its last
+                // column but one counts as wrapping.
+                let wraps = |r: usize| {
+                    let at = |c: usize| &grid[Point::new(Line(r as i32), Column(c))];
+                    at(self.cols - 1).flags.contains(Flags::WRAPLINE)
+                        || (self.cols - 2..self.cols).any(|c| !matches!(at(c).c, ' ' | '\0'))
+                };
+                let mut top = cursor;
+                while top > 0 && end - top < most && wraps(top - 1) {
+                    top -= 1;
+                }
+                return top..end;
+            }
+            if top == 0 || blank(top - 1) {
+                return top..end;
+            }
+            top -= 1;
+        }
     }
 }
 
@@ -187,6 +231,56 @@ mod tests {
         s.feed(b"new");
         assert_eq!((s.cols, s.rows), (20, 4));
         assert_eq!(row_text(&s, 0), "new");
+    }
+
+    fn live(lines: &[&str], cols: usize, rows: usize) -> Screen {
+        let mut s = Screen::new(cols, rows);
+        s.feed(lines.join("\r\n").as_bytes());
+        s
+    }
+
+    #[test]
+    fn the_input_kept_in_view_is_the_block_the_cursor_is_in() {
+        // Claude Code: a rule above the prompt, a rule and a hint below it.
+        let mut s = live(
+            &[
+                "output",
+                "more",
+                "",
+                "\u{2500}\u{2500}\u{2500}",
+                "> hi",
+                "\u{2500}\u{2500}\u{2500}",
+                "  ? for shortcuts",
+            ],
+            20,
+            12,
+        );
+        s.feed(b"\x1b[5;5H");
+        assert_eq!(s.input_rows(5), 3..7);
+        // A shell: no blank row near, so the prompt's row alone.
+        let s = live(&["a", "b", "c", "d", "e", "f", "$ "], 20, 12);
+        assert_eq!(s.input_rows(4), 6..7);
+        // ...with the rows a long prompt wraps from.
+        let s = live(
+            &["a", "b", "c", "d", "e", "f", "user@host:~/a/long/path$ x"],
+            20,
+            12,
+        );
+        assert_eq!(s.input_rows(4), 6..8);
+        // ...also when the shell broke the line itself, at its prompt's
+        // last space.
+        let mut s = live(
+            &["a", "b", "c", "d", "e", "f", "user@host:~/a/long$ ", "x"],
+            20,
+            12,
+        );
+        s.feed(b"\x1b[8;2H");
+        assert_eq!(s.input_rows(4), 6..8);
+        // Codex: blank rows inside the shaded composer belong to it.
+        let mut s = live(&["out", "", ""], 20, 12);
+        s.feed(b"\x1b[48;5;236m \x1b[K\r\n> ask\x1b[K\r\n \x1b[K\x1b[0m\r\n\r\n  status");
+        s.feed(b"\x1b[4;6H");
+        assert_eq!(s.input_rows(6), 2..7);
     }
 
     #[test]

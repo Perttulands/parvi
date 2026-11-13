@@ -204,6 +204,8 @@ pub struct Geo {
     pub rows: usize,
     pub cols: usize,
     pub display_offset: usize,
+    /// Below a history: where the live input is docked.
+    pub dock: Option<Bounds<Pixels>>,
 }
 
 /// A launch awaiting its node's answer, including the status it started with.
@@ -244,6 +246,9 @@ pub struct Terminals {
     /// Lines a selection drag held outside its grid scrolls each tick, and
     /// the ticks while it does.
     pub drag_scroll: i32,
+    /// The part of a line the wheel has moved window `.0` and not yet
+    /// scrolled: a touchpad sends fractions.
+    pub scroll_rest: (usize, f32),
     pub drag_scroll_task: Option<Task<()>>,
     pub mouse_down_in: Option<(usize, u8)>,
     /// The cell (window, column, row on screen) the pointer rests on, when
@@ -385,6 +390,7 @@ impl Terminals {
             launch_grids: Rc::default(),
             selecting: None,
             drag_scroll: 0,
+            scroll_rest: (0, 0.),
             drag_scroll_task: None,
             mouse_down_in: None,
             link_hover: None,

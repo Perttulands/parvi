@@ -1,4 +1,5 @@
-//! Mouse reports for programs that asked for them (SGR or the X10 form).
+//! Mouse reports for programs that asked for them (SGR or the X10 form),
+//! and the wheel's whole lines.
 
 use alacritty_terminal::term::TermMode;
 
@@ -65,9 +66,31 @@ pub fn report(
     ]
 }
 
+/// The whole lines a wheel moved, from what it moved now and the part of a
+/// line left from before; and what is left now. A touchpad moves fractions
+/// of a line at a time; turning back drops what was left.
+pub fn whole_lines(rest: f32, lines: f32) -> (i32, f32) {
+    let rest = if rest * lines < 0. { 0. } else { rest };
+    let lines = rest + lines;
+    let n = lines.trunc();
+    (n as i32, lines - n)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_touchpad_scrolls_once_its_fractions_add_up_to_a_line() {
+        let (mut rest, mut moved) = (0., 0);
+        for _ in 0..10 {
+            let (n, r) = whole_lines(rest, 0.25);
+            (rest, moved) = (r, moved + n);
+        }
+        assert_eq!(moved, 2);
+        assert_eq!(whole_lines(0.5, -0.25), (0, -0.25));
+        assert_eq!(whole_lines(0., 3.), (3, 0.));
+    }
 
     #[test]
     fn sgr_reports_press_release_and_wheel() {

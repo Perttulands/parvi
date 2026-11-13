@@ -58,12 +58,17 @@ pub mod size {
     pub const THUMB_LINES: usize = 14;
     pub const THUMB_TEXT: f32 = 9.;
     pub const THUMB_LINE: f32 = 12.;
-    /// Terminal font: Settings may pick 12..=20; the fit never goes below
-    /// the floor, and clips instead.
     /// Space between a window's edge and its terminal grid.
     pub const TERM_PAD: f32 = 4.;
+    /// Between a history and the live input docked below it; the rule
+    /// between them runs through the middle.
+    pub const DOCK_GAP: f32 = 9.;
+    /// The way back to the live end, just above that rule.
+    pub const LIVE_PILL_H: f32 = 20.;
     /// Send's target list shows at most this many whole rows, then scrolls.
     pub const SEND_TARGET_ROWS: f32 = 9.;
+    /// Terminal font: Settings may pick 12..=20; the fit never goes below
+    /// the floor, and clips instead.
     pub const TERM_DEFAULT: f32 = 14.;
     pub const TERM_MIN: f32 = 12.;
     pub const TERM_MAX: f32 = 20.;

@@ -2404,6 +2404,40 @@ fn search_shows_and_marks_a_wrapped_history_match(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn typing_while_reading_history_reaches_the_program_and_keeps_the_history(cx: &mut TestAppContext) {
+    let Some(running) = start("history-dock") else {
+        return;
+    };
+    let (_shell, cx, settings) = open_with_alpha(&running, "history-dock", cx);
+    let page = PAGE.with(|p| p.borrow().clone()).unwrap();
+    cx.simulate_input("seq 1 300");
+    cx.simulate_keystrokes("enter");
+    until(cx, "output reached the terminal", |cx| {
+        shown(cx).contains("300")
+    });
+    cx.simulate_keystrokes("shift-pageup");
+    until(cx, "the history open, the input docked below it", |cx| {
+        page.read_with(cx, |p, _| {
+            p.histories.contains_key(&0) && p.geo.borrow()[0].dock.is_some()
+        })
+    });
+    cx.simulate_input("echo docked-$((6*7))");
+    cx.simulate_keystrokes("enter");
+    until(cx, "the program ran what was typed", |_| {
+        tmux(&running, &["capture-pane", "-p", "-t", "alpha"]).contains("docked-42")
+    });
+    assert!(
+        page.read_with(cx, |p, _| p.histories.contains_key(&0)),
+        "typing left the history"
+    );
+    cx.simulate_keystrokes("shift-end");
+    until(cx, "back at the live screen", |cx| {
+        page.read_with(cx, |p, _| p.histories.is_empty()) && shown(cx).contains("docked-42")
+    });
+    let _ = std::fs::remove_dir_all(settings.parent().unwrap());
+}
+
+#[gpui::test]
 fn send_drawer_keeps_the_terminal_visible_beside_it(cx: &mut TestAppContext) {
     let Some(running) = start("terminals-send-layout") else {
         return;

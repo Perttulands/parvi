@@ -90,7 +90,8 @@ struct Source {
     screen: SharedScreen,
     /// This window sets the pane's grid.
     sizing: Option<PaneAt>,
-    history: bool,
+    /// Reading a history: the live pane, whose input stays in view below.
+    live: Option<SharedScreen>,
 }
 
 impl Terminals {
@@ -418,7 +419,7 @@ impl Terminals {
             return Some(Source {
                 screen: h.screen.clone(),
                 sizing: None,
-                history: true,
+                live: self.fleet.screen(&at.node, pane),
             });
         }
         let screen = self.fleet.screen(&at.node, pane)?;
@@ -433,7 +434,7 @@ impl Terminals {
         Some(Source {
             screen,
             sizing,
-            history: false,
+            live: None,
         })
     }
 
@@ -1153,8 +1154,9 @@ impl Terminals {
         let Source {
             screen,
             sizing,
-            history,
+            live,
         } = src;
+        let history = live.is_some() || self.histories.contains_key(&i);
         // A window between grids draws at the terminal font, clipped or
         // with room to spare, until tmux has the new grid; one sized by
         // another client shrinks to show its grid whole.
@@ -1182,7 +1184,36 @@ impl Terminals {
                 } else {
                     paint::fit(window, bounds.size, s.cols, s.rows, font)
                 };
-                let o = paint::origin(bounds, m, s.rows_to_show());
+                // Reading back, the live screen's input rows stay docked
+                // below the history, at the same cell size. The history's
+                // own copy of them, from when it was read, stays hidden
+                // below its view, so it runs on into the live input.
+                let mut stale = 0;
+                let dock = live.as_ref().map(|l| {
+                    let l = l.lock();
+                    let rows = l.input_rows((s.rows * 2 / 5).max(3));
+                    stale = l.rows.saturating_sub(rows.start).min(s.rows - 1);
+                    let h = (m.cell.height * rows.len() as f32).min(bounds.size.height / 2.);
+                    let top = bounds.bottom() - h;
+                    let b =
+                        Bounds::new(point(bounds.left(), top), gpui::size(bounds.size.width, h));
+                    (
+                        b,
+                        point(bounds.left(), top - m.cell.height * rows.start as f32),
+                    )
+                });
+                let view = match dock {
+                    Some((d, _)) => Bounds::new(
+                        bounds.origin,
+                        gpui::size(
+                            bounds.size.width,
+                            d.top() - bounds.top() - px(size::DOCK_GAP),
+                        ),
+                    ),
+                    None => bounds,
+                };
+                let o = paint::origin(view, m, s.rows_to_show());
+                let o = point(o.x, o.y + m.cell.height * stale as f32);
                 // Found again at each paint, so output that moves the text
                 // under a resting pointer moves the underline with it.
                 let link = hover
@@ -1192,7 +1223,7 @@ impl Terminals {
                     })
                     .map(|l| l.cells)
                     .unwrap_or_default();
-                window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                window.with_content_mask(Some(ContentMask { bounds: view }), |window| {
                     paint::paint(
                         &s,
                         m,
@@ -1207,7 +1238,35 @@ impl Terminals {
                         cx,
                     );
                 });
+                if let (Some((d, at)), Some(l)) = (dock, live.as_ref()) {
+                    let rule = Bounds::new(
+                        point(bounds.left(), d.top() - px(size::DOCK_GAP / 2.)),
+                        gpui::size(bounds.size.width, px(1.)),
+                    );
+                    window.paint_quad(gpui::fill(rule, theme_t.divider));
+                    let mut l = l.lock();
+                    window.with_content_mask(Some(ContentMask { bounds: d }), |window| {
+                        paint::paint(
+                            &l,
+                            m,
+                            at,
+                            Look {
+                                theme: &theme_t,
+                                cursor: true,
+                                focused,
+                                link: &[],
+                            },
+                            window,
+                            cx,
+                        );
+                    });
+                    l.dirty = false;
+                }
                 s.dirty = false;
+                // The way back to live sits above the dock, laid out from
+                // this geometry: a dock that changed height lays it out again.
+                let moved =
+                    geo.borrow()[i].dock.map(|d| d.size.height) != dock.map(|d| d.0.size.height);
                 geo.borrow_mut()[i] = Geo {
                     body: Some(bounds),
                     origin: Some(o),
@@ -1215,24 +1274,46 @@ impl Terminals {
                     rows: s.rows,
                     cols: s.cols,
                     display_offset: s.term.grid().display_offset(),
+                    dock: dock.map(|d| d.0),
                 };
+                if moved {
+                    let entity = entity.clone();
+                    cx.defer(move |cx| entity.update(cx, |_, cx| cx.notify()));
+                }
             },
         )
         .size_full();
+        // Reading back: a way to the live end, just above the docked input.
         let hint = history.then(|| {
+            let g = self.geo.borrow()[i];
+            let above = g
+                .dock
+                .map_or(px(0.), |d| d.size.height + px(size::DOCK_GAP));
             div()
+                .id(("live", i))
                 .absolute()
-                .bottom(px(8.))
+                .bottom(above + px(size::TERM_PAD))
                 .right(px(12.))
+                .h(px(size::LIVE_PILL_H))
+                .flex()
+                .items_center()
                 .px(px(8.))
-                .py(px(2.))
                 .rounded(px(3.))
                 .bg(alpha(t.surface, 0.92))
                 .border_1()
                 .border_color(t.divider)
                 .text_size(px(11.))
                 .text_color(t.text2)
-                .child("History · type or scroll to the bottom to return")
+                .cursor_pointer()
+                .hover(|d| d.text_color(t.text))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |sh, _, _, cx| {
+                        sh.leave_history(i, cx);
+                        cx.stop_propagation();
+                    }),
+                )
+                .child("Back to live \u{2193}")
         });
         div()
             .flex_1()
@@ -1320,12 +1401,9 @@ impl Terminals {
             .flatten()
     }
 
-    /// Bytes for the focused window's program. Leaves history first.
+    /// Bytes for the focused window's program. A history being read stays
+    /// open: the program's input is docked below it.
     pub fn send_input(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
-        let w = self.settings.workspace.focus;
-        if self.histories.remove(&w).is_some() {
-            cx.notify();
-        }
         let Some(pane) = self.focused_pane() else {
             return;
         };
@@ -1412,6 +1490,11 @@ impl Terminals {
                 self.save(cx);
                 cx.notify();
             }
+            cx.stop_propagation();
+            return;
+        }
+        if m.shift && !m.control && k.key == "end" && self.histories.contains_key(&w) {
+            self.leave_history(w, cx);
             cx.stop_propagation();
             return;
         }
@@ -1526,6 +1609,14 @@ impl Terminals {
             cx.stop_propagation();
             return;
         }
+        // The docked input is the program's: a press there only focuses.
+        if self.geo.borrow()[i]
+            .dock
+            .is_some_and(|d| d.contains(&e.position))
+            && e.button == MouseButton::Left
+        {
+            return;
+        }
         match e.button {
             MouseButton::Left => {
                 let Some((p, side)) = self.grid_point(i, e.position) else {
@@ -1613,7 +1704,10 @@ impl Terminals {
             o,
             gpui::size(cell.width * g.cols as f32, cell.height * g.rows as f32),
         );
-        if !g.body.is_some_and(|b| b.contains(&p)) || !grid.contains(&p) {
+        if !g.body.is_some_and(|b| b.contains(&p))
+            || !grid.contains(&p)
+            || g.dock.is_some_and(|d| d.contains(&p))
+        {
             return None;
         }
         let (col, row, _) = self.cell_at(i, p)?;
@@ -1735,7 +1829,12 @@ impl Terminals {
             ScrollDelta::Lines(l) => l.y * 3.,
             ScrollDelta::Pixels(p) => f32::from(p.y) / f32::from(cell_h),
         };
-        let n = lines.round() as i32;
+        let rest = match self.scroll_rest {
+            (w, r) if w == i => r,
+            _ => 0.,
+        };
+        let (n, rest) = mouse::whole_lines(rest, lines);
+        self.scroll_rest = (i, rest);
         if n == 0 {
             return;
         }
@@ -1778,6 +1877,17 @@ impl Terminals {
         self.scroll_window(i, n, cx);
     }
 
+    /// Shows window `i`'s live pane again in place of its history.
+    pub fn leave_history(&mut self, i: usize, cx: &mut Context<Self>) {
+        if self.histories.remove(&i).is_some() {
+            if self.selecting == Some(i) {
+                self.selecting = None;
+                self.end_drag();
+            }
+            cx.notify();
+        }
+    }
+
     /// Scrolls a window's history: opens it on the way up, leaves it at the
     /// bottom on the way down.
     fn scroll_window(&mut self, i: usize, n: i32, cx: &mut Context<Self>) {
@@ -1789,7 +1899,7 @@ impl Terminals {
                     s.term.grid().display_offset() == 0
                 };
                 if at_bottom && n < 0 {
-                    self.histories.remove(&i);
+                    self.leave_history(i, cx);
                 }
                 cx.notify();
             }

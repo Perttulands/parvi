@@ -105,7 +105,8 @@ impl Terminals {
         let g = self.geo.borrow()[i];
         let (body, o, cell) = (g.body?, g.origin?, g.cell?);
         let top = body.top().max(o.y);
-        let bottom = body.bottom().min(o.y + cell.height * g.rows as f32);
+        let end = g.dock.map_or(body.bottom(), |d| d.top());
+        let bottom = end.min(o.y + cell.height * g.rows as f32);
         (bottom > top).then_some((top, bottom))
     }
 
