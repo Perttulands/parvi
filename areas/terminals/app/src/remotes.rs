@@ -189,22 +189,16 @@ impl Remotes {
         }
     }
 
-    /// Claims even if this app already holds the seat at this grid: the
-    /// node is asked again, and the seat stays where it is meanwhile.
-    pub fn claim_anew(&mut self, node: &str, pane: u32, cols: u16, rows: u16) {
-        if let Some(c) = self.get_mut(node) {
-            c.claim_anew(pane, cols, rows);
-        }
+    /// The grid this app last claimed for the pane, and when.
+    pub fn claimed(&self, node: &str, pane: u32) -> Option<crate::remote::Claimed> {
+        self.get(node)?.claimed(pane)
     }
 
-    pub fn give_back(&mut self, node: &str, pane: u32) {
+    /// Claims the pane again if another client sizes it now.
+    pub fn retake(&mut self, node: &str, pane: u32) {
         if let Some(c) = self.get_mut(node) {
-            c.give_back(pane);
+            c.retake(pane);
         }
-    }
-
-    pub fn given_back(&self, node: &str, pane: u32) -> bool {
-        self.get(node).is_some_and(|c| c.given_back(pane))
     }
 
     pub fn history(&mut self, node: &str, pane: u32) -> Option<u32> {

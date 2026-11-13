@@ -14,7 +14,7 @@ impl Terminals {
     /// in flight. Moves with no press are the grid's own (links, motion).
     pub fn term_drag(&mut self, e: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
         if let Some((i, b)) = self.mouse_down_in {
-            self.drag_report(i, b, e);
+            self.drag_report(i, b, e, cx);
             return;
         }
         let Some(i) = self.selecting else {
@@ -112,7 +112,7 @@ impl Terminals {
     /// A drag where the program has the mouse goes on being reported, at
     /// the cell nearest the pointer (`cell_at` holds it to the grid), while
     /// the program wants motion.
-    fn drag_report(&mut self, i: usize, b: u8, e: &MouseMoveEvent) {
+    fn drag_report(&mut self, i: usize, b: u8, e: &MouseMoveEvent, cx: &mut Context<Self>) {
         let Some((mode, pane)) = self.mouse_mode(i, false) else {
             return;
         };
@@ -133,5 +133,6 @@ impl Terminals {
             pane.pane,
             &mouse::report(mode, button, true, true, col, row, mods),
         );
+        self.flush(cx);
     }
 }

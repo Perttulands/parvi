@@ -712,11 +712,13 @@ async fn seeded_pane(engine: &Engine) -> u32 {
     .await
 }
 
-/// Issue #15: a claim moves the sizing seat to us without detaching anyone,
-/// holds it against the viewer, follows the browser's grid, passes to another
-/// holder, and goes back to the viewer on release.
+/// A claim sizes the window to the app's grid without detaching anyone or
+/// touching another client's flags; typing in another client hands the
+/// window to it (tmux's `window-size latest`), a claim at the same grid
+/// takes it back, another holder takes the seat, and a release leaves the
+/// window to the one other client at once.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_claim_takes_the_seat_and_a_release_gives_it_back() {
+async fn a_claim_sizes_the_window_until_another_client_is_used() {
     let Some(server) = Server::start() else {
         return;
     };
@@ -729,14 +731,11 @@ async fn a_claim_takes_the_seat_and_a_release_gives_it_back() {
     engine.claim(pane, 1, 90, 30).await.unwrap();
     window_becomes(&server, "alpha", "90x30").await;
     assert_eq!(server.clients().len(), 2, "nobody is detached");
-    assert!(viewer_flags(&server).contains("ignore-size"));
+    assert!(!viewer_flags(&server).contains("ignore-size"));
     assert!(!our_flags(&server).contains("ignore-size"));
     assert_eq!(engine.sessions()[0].seat, Some(1));
 
-    // The viewer no longer sizes the window; the browser's grid does.
-    viewer.resize(130, 45);
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(server.window_size("alpha"), "90x30");
+    // The app's grid follows the app.
     engine.claim(pane, 1, 100, 35).await.unwrap();
     window_becomes(&server, "alpha", "100x35").await;
     eventually("our pane at the claimed grid", || {
@@ -745,7 +744,14 @@ async fn a_claim_takes_the_seat_and_a_release_gives_it_back() {
     })
     .await;
 
-    // Another browser takes the seat; the first can no longer release it.
+    // The operator types in the other client: it sizes the window while he
+    // is there, and the app takes it back when used again.
+    viewer.press("x");
+    window_becomes(&server, "alpha", "120x40").await;
+    engine.claim(pane, 1, 100, 35).await.unwrap();
+    window_becomes(&server, "alpha", "100x35").await;
+
+    // Another app takes the seat; the first can no longer release it.
     engine.claim(pane, 2, 80, 24).await.unwrap();
     window_becomes(&server, "alpha", "80x24").await;
     assert_eq!(engine.sessions()[0].seat, Some(2));
@@ -753,22 +759,44 @@ async fn a_claim_takes_the_seat_and_a_release_gives_it_back() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(server.window_size("alpha"), "80x24");
 
-    // Released: the viewer sizes again, at the size it asked for meanwhile.
+    // Released: the other client sizes again, at once.
     engine.release(pane, 2).await.unwrap();
-    // At once, not at tmux's next resize check seconds later.
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(server.window_size("alpha"), "130x45");
+    window_becomes(&server, "alpha", "120x40").await;
     assert_eq!(engine.sessions()[0].seat, None);
-    assert!(!viewer_flags(&server).contains("ignore-size"));
     assert!(our_flags(&server).contains("ignore-size"));
     assert_eq!(server.clients().len(), 2);
     engine.stop().await;
 }
 
-/// With nobody else sizing, a release leaves the claimed size; and stopping
-/// while holding the seat gives it back before our client leaves.
+/// With several other clients none was used last once the app lets go; the
+/// window goes to the one used most recently, not left at the app's size.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_release_with_nobody_else_keeps_the_size_and_stopping_releases() {
+async fn a_release_hands_the_window_to_the_client_used_most_recently() {
+    let Some(server) = Server::start() else {
+        return;
+    };
+    server.new_session("alpha", 200, 50);
+    let mut early = server.viewer("alpha", 120, 40);
+    let mut late = server.viewer("alpha", 110, 33);
+    let engine = Engine::start(server.socket());
+    let pane = seeded_pane(&engine).await;
+    early.press("x");
+    // tmux keeps client activity in whole seconds.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    late.press("y");
+    window_becomes(&server, "alpha", "110x33").await;
+
+    engine.claim(pane, 1, 90, 30).await.unwrap();
+    window_becomes(&server, "alpha", "90x30").await;
+    engine.release(pane, 1).await.unwrap();
+    window_becomes(&server, "alpha", "110x33").await;
+    engine.stop().await;
+}
+
+/// With nobody else sizing, a release leaves the claimed size; and a node
+/// that stops while holding the seat leaves the window to the other client.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_release_with_nobody_else_keeps_the_size_and_stopping_gives_it_back() {
     let Some(server) = Server::start() else {
         return;
     };
@@ -791,7 +819,6 @@ async fn a_release_with_nobody_else_keeps_the_size_and_stopping_releases() {
         (server.clients().len() == 1).then_some(())
     })
     .await;
-    assert!(!viewer_flags(&server).contains("ignore-size"));
     window_becomes(&server, "alpha", "120x40").await;
     viewer.detach();
 }
@@ -807,7 +834,7 @@ fn client_named(server: &Server, sizing: bool) -> String {
 }
 
 /// A follower that ends without being stopped (tmux let it go) gives the
-/// seat back: the viewer it set aside sizes the window again.
+/// window back: the viewer sizes it again.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_follower_that_goes_without_stopping_gives_the_seat_back() {
     let Some(server) = Server::start() else {
@@ -820,13 +847,8 @@ async fn a_follower_that_goes_without_stopping_gives_the_seat_back() {
     let pane = seeded_pane(&engine).await;
     engine.claim(pane, 1, 90, 30).await.unwrap();
     window_becomes(&server, "alpha", "90x30").await;
-    assert!(viewer_flags(&server).contains("ignore-size"));
 
     server.run(&["detach-client", "-t", &client_named(&server, false)]);
-    eventually("the viewer sizing again", || {
-        (!viewer_flags(&server).contains("ignore-size")).then_some(())
-    })
-    .await;
     window_becomes(&server, "alpha", "120x40").await;
     engine.stop().await;
     viewer.detach();

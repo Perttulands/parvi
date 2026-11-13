@@ -12,7 +12,6 @@ use parvi_app_kit::widgets::field;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     Tab(usize),
-    ClaimAll,
     NextWindow,
     PreviousWindow,
     AddWindow,
@@ -48,7 +47,6 @@ fn chords(page: &WeakEntity<Terminals>, tabs: usize) -> Vec<Chord> {
         })
         .collect();
     all.extend([
-        chord("c", "Fit every window to this screen", Action::ClaimAll).alt("c", Some(false)),
         chord("w", "Next window", Action::NextWindow).alt("w", Some(false)),
         chord("W", "Previous window", Action::PreviousWindow).alt("w", Some(true)),
         chord("=", "Add a window", Action::AddWindow)
@@ -179,10 +177,6 @@ impl Terminals {
                 }
                 return;
             }
-            Action::ClaimAll => {
-                self.act(super::page::Act::ClaimAll, window, cx);
-                return;
-            }
             Action::Overview => {
                 if self.is_open(surface::OVERVIEW) {
                     self.close(surface::OVERVIEW, cx);
@@ -257,7 +251,7 @@ mod tests {
         let direct_map = [
             ("i", false, None),
             ("enter", false, None),
-            ("c", false, Some("Fit every window to this screen")),
+            ("c", false, None),
             ("r", false, None),
             ("w", false, Some("Next window")),
             ("w", true, Some("Previous window")),
@@ -284,7 +278,7 @@ mod tests {
             assert_eq!(got.as_deref(), want, "Alt+{key} shift={shift}");
         }
         let leader_map = [
-            ("c", Some("Fit every window to this screen")),
+            ("c", None),
             ("w", Some("Next window")),
             ("W", Some("Previous window")),
             ("=", Some("Add a window")),

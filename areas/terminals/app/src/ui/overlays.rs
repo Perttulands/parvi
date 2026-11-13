@@ -5,7 +5,6 @@
 use super::chords::Action;
 use super::page::{Act, MenuItem, Terminals};
 use super::surface::{self, Surface};
-use super::tiles::CLAIM_EXPLANATION;
 use crate::store::sessions::{self, Key};
 use crate::store::workspace::{MAX_WINDOWS, Workspace, tab_label};
 use crate::theme::{Theme, size, theme};
@@ -167,14 +166,12 @@ impl Terminals {
     /// Every terminal tab's menu, CHROTE's: the tab, its layout and
     /// presets, then what acts on its windows.
     pub fn tab_menu(&self, i: usize) -> Vec<MenuItem> {
-        let live = self.window_panes().iter().any(Option::is_some);
-        tab_menu(&self.settings.workspace, i, live)
+        tab_menu(&self.settings.workspace, i)
     }
 }
 
-/// Tab `i`'s menu, as CHROTE's tab menu reads: `live` is whether any shown
-/// window of the active tab shows a live session.
-pub(super) fn tab_menu(ws: &Workspace, i: usize, live: bool) -> Vec<MenuItem> {
+/// Tab `i`'s menu, as CHROTE's tab menu reads.
+pub(super) fn tab_menu(ws: &Workspace, i: usize) -> Vec<MenuItem> {
     let tab = &ws.tabs[i];
     let n = tab.count;
     let windows = (1..=MAX_WINDOWS)
@@ -201,14 +198,6 @@ pub(super) fn tab_menu(ws: &Workspace, i: usize, live: bool) -> Vec<MenuItem> {
         items.push(MenuItem::sub("Delete preset", None, delete));
     }
     let bound = tab.shown().iter().any(|w| !w.is_empty());
-    let claim = MenuItem::new("Fit every window to this screen", Act::ClaimAll).chord("Alt+C");
-    let claim = if ws.active != i {
-        claim.refused("Open this tab first.")
-    } else if !live {
-        claim.refused("No window here shows a live session.")
-    } else {
-        claim.hint(CLAIM_EXPLANATION)
-    };
     let clear = MenuItem::new("Clear tab assignments", Act::ClearTab(i)).danger();
     items.extend([
         MenuItem::rule(),
@@ -217,7 +206,6 @@ pub(super) fn tab_menu(ws: &Workspace, i: usize, live: bool) -> Vec<MenuItem> {
         } else {
             clear.refused("No window here holds a session.")
         },
-        claim,
     ]);
     if ws.shown_tabs().len() > 1 {
         items.push(MenuItem::rule());
@@ -722,7 +710,7 @@ mod tests {
     fn the_tab_menu_reads_the_window_count_and_sets_one_from_its_submenu() {
         let mut ws = Workspace::default();
         ws.set_windows(0, 3);
-        let menu = tab_menu(&ws, 0, false);
+        let menu = tab_menu(&ws, 0);
         let windows = row(&menu, "Windows");
         assert_eq!(windows.chord.as_deref(), Some("3 ›"));
         let checked: Vec<_> = windows.sub.iter().filter(|m| m.checked).collect();
@@ -734,7 +722,7 @@ mod tests {
     #[test]
     fn presets_are_saved_from_the_menu_and_restored_from_a_submenu() {
         let mut ws = Workspace::default();
-        let menu = tab_menu(&ws, 0, false);
+        let menu = tab_menu(&ws, 0);
         assert_eq!(
             row(&menu, "Save layout as preset").act,
             Some(Act::SavePreset)
@@ -742,7 +730,7 @@ mod tests {
         assert!(row(&menu, "Restore preset").sub[0].act.is_none());
         assert!(menu.iter().all(|m| m.label != "Delete preset"));
         ws.save_preset("Morning").unwrap();
-        let menu = tab_menu(&ws, 0, false);
+        let menu = tab_menu(&ws, 0);
         let restore = &row(&menu, "Restore preset").sub;
         assert_eq!(restore[0].label, "Morning");
         assert_eq!(restore[0].act, Some(Act::RestorePreset(0)));
@@ -750,44 +738,26 @@ mod tests {
     }
 
     #[test]
-    fn clear_and_fit_say_why_they_are_refused() {
+    fn clear_says_why_it_is_refused() {
         let mut ws = Workspace::default();
         ws.add_tab();
         ws.show_tab(0);
-        let menu = tab_menu(&ws, 0, false);
+        let menu = tab_menu(&ws, 0);
         assert!(row(&menu, "Clear tab assignments").refused);
-        let claim = row(&menu, "Fit every window to this screen");
-        assert!(claim.refused);
-        assert_eq!(
-            claim.hint.as_deref(),
-            Some("No window here shows a live session.")
-        );
         ws.bind(0, key("a"), None);
-        let menu = tab_menu(&ws, 0, true);
+        let menu = tab_menu(&ws, 0);
         assert!(!row(&menu, "Clear tab assignments").refused);
-        let claim = row(&menu, "Fit every window to this screen");
-        assert!(!claim.refused);
-        assert_eq!(claim.hint.as_deref(), Some(CLAIM_EXPLANATION));
-        assert_eq!(claim.chord.as_deref(), Some("Alt+C"));
-        // An inactive tab's menu acts on nothing on screen.
-        let other = tab_menu(&ws, 1, true);
-        let claim = row(&other, "Fit every window to this screen");
-        assert!(claim.refused);
-        assert_eq!(claim.hint.as_deref(), Some("Open this tab first."));
+        let other = tab_menu(&ws, 1);
         assert_eq!(row(&other, "Rename tab").act, Some(Act::RenameTab(1)));
     }
 
     #[test]
     fn the_last_tab_offers_no_close() {
         let mut ws = Workspace::default();
-        assert!(
-            tab_menu(&ws, 0, false)
-                .iter()
-                .all(|m| m.label != "Close tab")
-        );
+        assert!(tab_menu(&ws, 0).iter().all(|m| m.label != "Close tab"));
         ws.add_tab();
         assert_eq!(
-            row(&tab_menu(&ws, 1, false), "Close tab").act,
+            row(&tab_menu(&ws, 1), "Close tab").act,
             Some(Act::CloseTab(1))
         );
     }

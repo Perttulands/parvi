@@ -14,6 +14,7 @@ use parvi_terminals_contract::{
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{Duration, Instant};
 
 /// Requests are numbered across the app, so a notice names one request.
 static REQUESTS: AtomicU32 = AtomicU32::new(0);
@@ -23,6 +24,17 @@ fn next_request() -> u32 {
 }
 
 pub type SharedScreen = Arc<Mutex<Screen>>;
+
+/// How long a claim is given to arrive before typing claims it again.
+pub const RETAKE_EVERY: Duration = Duration::from_secs(1);
+
+/// A grid this app asked the node to size a pane to.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Claimed {
+    pub cols: u16,
+    pub rows: u16,
+    pub at: Instant,
+}
 pub type Screens = Arc<Mutex<HashMap<u32, SharedScreen>>>;
 
 /// What happened that the operator may need to hear about.
@@ -109,11 +121,8 @@ pub struct Remote {
     /// Last watched panes of ended sessions, retained only while bound.
     ended_screens: HashMap<(sessions::Key, u32), SharedScreen>,
     subscribed: HashSet<u32>,
-    /// The grid each pane's seat was last claimed at, by this app.
-    claimed: HashMap<u32, (u16, u16)>,
-    /// Panes whose seat the operator gave back: not claimed on arrival
-    /// again until claimed by hand (#161).
-    given_back: HashSet<u32>,
+    /// The grid each pane's seat was last claimed at by this app, and when.
+    claimed: HashMap<u32, Claimed>,
     pending: HashMap<u32, Request>,
     pub thumbs: HashMap<u32, Thumb>,
     pub search: Option<Search>,
@@ -132,7 +141,6 @@ impl Remote {
             ended_screens: HashMap::new(),
             subscribed: HashSet::new(),
             claimed: HashMap::new(),
-            given_back: HashSet::new(),
             pending: HashMap::new(),
             thumbs: HashMap::new(),
             search: None,
@@ -245,14 +253,6 @@ impl Remote {
                 } else {
                     vec![]
                 };
-                // A seat no longer ours is not ours to resize.
-                for s in &list {
-                    if s.seat != Some(Seat::Mine) {
-                        for p in &s.panes {
-                            self.claimed.remove(&p.id);
-                        }
-                    }
-                }
                 self.sessions = list;
                 self.known = true;
                 let mut notices = vec![];
@@ -333,8 +333,9 @@ impl Remote {
                 }
                 vec![]
             }
-            Down::ClaimRefused { pane, reason } => {
-                self.claimed.remove(&pane);
+            // The claim stays recorded, so the same grid is not asked for
+            // again at every paint.
+            Down::ClaimRefused { reason, .. } => {
                 vec![Notice::ClaimRefused(reason)]
             }
             Down::Screen { .. } | Down::Output { .. } => vec![],
@@ -401,39 +402,51 @@ impl Remote {
             .find(|s| s.panes.iter().any(|p| p.id == pane))
     }
 
+    /// Types into a pane. A pane this app sizes that shows another grid
+    /// than the one claimed has been sized by a client used since: typing
+    /// here takes it back.
     pub fn input(&mut self, pane: u32, bytes: &[u8]) {
+        self.retake(pane);
         self.send(Up::Input(pane, bytes.to_vec()));
     }
 
-    /// Whether this app may size the session without taking anything from
-    /// anyone: nobody holds the seat, no other client is attached, and the
-    /// window's size isn't pinned.
-    pub fn free_to_size(s: &Session) -> bool {
-        s.seat.is_none() && s.foreign.unwrap_or(0) == 0 && s.pinned != Some(true)
-    }
-
-    /// Whether the window showing a pane of `s` sizes it: while this app
-    /// holds the seat, and on arrival when the seat is free (CHROTE's
-    /// claim on arrival), unless the operator gave it back here.
-    pub fn sizes_here(s: &Session, held: bool, given_back: bool) -> bool {
-        !given_back && (held || Remote::free_to_size(s))
+    /// Claims the pane's grid again when another client sizes it now, at
+    /// most once a [`RETAKE_EVERY`] while tmux catches up.
+    pub fn retake(&mut self, pane: u32) {
+        let Some(c) = self.claimed.get(&pane).copied() else {
+            return;
+        };
+        let shown = self.screen(pane).map(|s| {
+            let s = s.lock();
+            (s.cols, s.rows)
+        });
+        if shown.is_some_and(|g| g != (c.cols as usize, c.rows as usize))
+            && c.at.elapsed() >= RETAKE_EVERY
+        {
+            self.claimed.remove(&pane);
+            self.claim(pane, c.cols, c.rows);
+        }
     }
 
     /// Claims the seat at this grid, or follows the grid while holding it.
-    /// Sends nothing if the seat is ours at this grid already.
+    /// Sends nothing if this app last claimed it at this grid.
     pub fn claim(&mut self, pane: u32, cols: u16, rows: u16) {
-        self.given_back.remove(&pane);
-        if !self.open() || self.claimed.get(&pane) == Some(&(cols, rows)) {
+        if !self.open()
+            || self
+                .claimed
+                .get(&pane)
+                .is_some_and(|c| (c.cols, c.rows) == (cols, rows))
+        {
             return;
         }
-        self.claimed.insert(pane, (cols, rows));
+        let at = Instant::now();
+        self.claimed.insert(pane, Claimed { cols, rows, at });
         self.send(Up::Claim(pane, cols, rows));
     }
 
-    /// Claims even at the grid last claimed, as the operator's Claim does.
-    pub fn claim_anew(&mut self, pane: u32, cols: u16, rows: u16) {
-        self.claimed.remove(&pane);
-        self.claim(pane, cols, rows);
+    /// The grid this app last claimed for the pane, and when.
+    pub fn claimed(&self, pane: u32) -> Option<Claimed> {
+        self.claimed.get(&pane).copied()
     }
 
     /// Whether this app holds the pane's seat: it claimed it, or the node
@@ -451,17 +464,6 @@ impl Remote {
         if held {
             self.send(Up::Release(pane));
         }
-    }
-
-    /// The operator's Release: the seat goes back, and this app does not
-    /// take it again on arrival until claimed by hand.
-    pub fn give_back(&mut self, pane: u32) {
-        self.release(pane);
-        self.given_back.insert(pane);
-    }
-
-    pub fn given_back(&self, pane: u32) -> bool {
-        self.given_back.contains(&pane)
     }
 
     /// Sends text as one paste, Enter after if asked; with `ready`, once the
@@ -708,29 +710,41 @@ mod tests {
         assert_eq!((s.cols, s.rows), (20, 5));
     }
 
-    #[test]
-    fn a_window_sizes_a_free_session_on_arrival_until_given_back() {
-        let mut s = Session::default();
-        assert!(Remote::sizes_here(&s, false, false), "claimed on arrival");
-        assert!(!Remote::sizes_here(&s, false, true), "given back here");
-        s.seat = Some(Seat::Other);
-        assert!(!Remote::sizes_here(&s, false, false), "held elsewhere");
-        s.seat = Some(Seat::Mine);
-        assert!(Remote::sizes_here(&s, true, false), "held here");
-        assert!(!Remote::sizes_here(&s, true, true));
+    fn claims(client: &mut Remote) -> Vec<Up> {
+        client
+            .out
+            .drain(..)
+            .filter_map(|f| parvi_terminals_contract::decode_up(&f).ok())
+            .filter(|up| matches!(up, Up::Claim(..)))
+            .collect()
     }
 
+    /// A pane is sized by whoever was used last: the same grid is claimed
+    /// once, typing takes the pane back once another client has resized
+    /// it, and not again while that claim is on its way.
     #[test]
-    fn only_a_free_session_is_sized_on_arrival() {
-        let mut s = Session::default();
-        assert!(Remote::free_to_size(&s));
-        s.foreign = Some(1);
-        assert!(!Remote::free_to_size(&s));
-        s.foreign = Some(0);
-        s.seat = Some(Seat::Other);
-        assert!(!Remote::free_to_size(&s));
-        s.seat = None;
-        s.pinned = Some(true);
-        assert!(!Remote::free_to_size(&s));
+    fn typing_takes_back_a_pane_another_client_sized() {
+        let mut client = Remote::new("node", Screens::default());
+        client.opened();
+        let screen = Arc::new(Mutex::new(Screen::new(100, 30)));
+        client.screens.lock().insert(7, screen.clone());
+
+        client.claim(7, 100, 30);
+        client.claim(7, 100, 30);
+        assert_eq!(claims(&mut client), vec![Up::Claim(7, 100, 30)]);
+
+        // Typing while the pane shows our grid claims nothing.
+        client.input(7, b"a");
+        assert!(claims(&mut client).is_empty());
+
+        // Another client was used and the pane took its size.
+        *screen.lock() = Screen::new(120, 40);
+        client.input(7, b"b");
+        assert!(claims(&mut client).is_empty(), "the claim just went");
+        client.claimed.get_mut(&7).unwrap().at -= RETAKE_EVERY;
+        client.input(7, b"c");
+        assert_eq!(claims(&mut client), vec![Up::Claim(7, 100, 30)]);
+        client.input(7, b"d");
+        assert!(claims(&mut client).is_empty(), "once a second at most");
     }
 }

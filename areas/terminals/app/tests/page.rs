@@ -2002,7 +2002,7 @@ fn selection_copies_when_mouse_releases_outside_the_tile(cx: &mut TestAppContext
 /// Arrange a real session using the same page actions as the tab menus and
 /// drag another session from the rail into an empty window.
 #[gpui::test]
-fn arrange_tabs_preset_drag_and_claim_on_a_live_node(cx: &mut TestAppContext) {
+fn arrange_tabs_preset_drag_and_sizing_on_a_live_node(cx: &mut TestAppContext) {
     let Some(running) = start("terminals-arrange-journey") else {
         return;
     };
@@ -2107,8 +2107,7 @@ fn arrange_tabs_preset_drag_and_claim_on_a_live_node(cx: &mut TestAppContext) {
                 .is_some_and(|b| b.key.name == "beta")
         })
     });
-    cx.simulate_keystrokes("alt-c");
-    until(cx, "Fit every window reaches tmux", |cx| {
+    until(cx, "every shown window sizes its session", |cx| {
         page.read_with(cx, |p, _| {
             p.fleet
                 .all
@@ -2665,8 +2664,7 @@ fn connecting_the_app_preserves_idle_session_activity(cx: &mut TestAppContext) {
         },
     );
     let (_shell, cx, settings) = open_with_alpha(&running, "idle-journey", cx);
-    // Exercise a resize even when another follower makes automatic claim wait.
-    cx.simulate_keystrokes("alt-c");
+    // The window sizes its session even while another follower watches.
     let page = PAGE.with(|p| p.borrow().clone()).unwrap();
     until(cx, "app follows the session", |cx| {
         page.read_with(cx, |p, _| {

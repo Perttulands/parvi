@@ -310,6 +310,12 @@ impl Viewer {
         .unwrap();
     }
 
+    /// Presses a key in this client, as a person typing in it does: tmux
+    /// counts it as the client used last.
+    pub fn press(&mut self, key: &str) {
+        writeln!(self.child.stdin.as_mut().unwrap(), "send-keys -K {key}").unwrap();
+    }
+
     pub fn detach(mut self) {
         drop(self.child.stdin.take());
         self.child.wait().unwrap();

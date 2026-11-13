@@ -45,7 +45,6 @@ pub enum Act {
     SavePreset,
     RestorePreset(usize),
     DeletePreset(usize),
-    ClaimAll,
     Peek(Key),
     Send(Key),
     Attach(Key, usize),
@@ -60,8 +59,6 @@ pub enum Act {
     Remove(usize, Key),
     /// Puts a session's tag on screen in its window.
     ShowTag(usize, Key),
-    Claim(usize),
-    Release(usize),
     Pane(usize, u32),
     WindowList(usize, Key),
     WindowPane(usize, Key, u32),
@@ -253,6 +250,10 @@ pub struct Terminals {
     /// a link is drawn there.
     pub link_hover: Option<(usize, usize, usize)>,
     pub histories: HashMap<usize, History>,
+    /// Grids waiting to be sent for panes this app sizes, by pane: the grid
+    /// and the wait's number, so only the last wait sends.
+    pub resizing: HashMap<PaneAt, ((u16, u16), u64)>,
+    pub resize_seq: u64,
     /// History requests in flight: request id → window, or Peek.
     pub history_wanted: HashMap<u32, HistoryTarget>,
     pub peek: Option<Peek>,
@@ -388,6 +389,8 @@ impl Terminals {
             mouse_down_in: None,
             link_hover: None,
             histories: HashMap::new(),
+            resizing: HashMap::new(),
+            resize_seq: 0,
             history_wanted: HashMap::new(),
             peek: None,
             launchers,
@@ -1095,23 +1098,6 @@ impl Terminals {
                     self.report(&format!("Preset '{name}' deleted"), false, None);
                 }
             }
-            Act::ClaimAll => {
-                let panes = self.window_panes();
-                let n = panes.iter().flatten().count();
-                for (i, p) in panes.iter().enumerate() {
-                    if let Some(p) = p {
-                        self.claim_window(i, p);
-                    }
-                }
-                self.report(
-                    &format!(
-                        "Fitted {n} {} to this screen",
-                        if n == 1 { "window" } else { "windows" }
-                    ),
-                    false,
-                    None,
-                );
-            }
             Act::Peek(k) => {
                 self.open_peek(k, None, window, cx);
                 return;
@@ -1159,16 +1145,6 @@ impl Terminals {
                     self.histories.remove(&w);
                 }
                 self.settings.workspace.focus = w;
-            }
-            Act::Claim(w) => {
-                if let Some(Some(p)) = self.window_panes().get(w) {
-                    self.claim_window(w, p);
-                }
-            }
-            Act::Release(w) => {
-                if let Some(Some(p)) = self.window_panes().get(w) {
-                    self.fleet.give_back(&p.node, p.pane);
-                }
             }
             Act::Pane(w, p) => {
                 self.settings.workspace.choose_pane(w, p);
@@ -1219,22 +1195,6 @@ impl Terminals {
                 _ => None,
             })
             .collect()
-    }
-
-    /// Sizes the session at `at` to window `w`; false if the window has not
-    /// been drawn, so its size is unknown.
-    pub(super) fn claim_window(&mut self, w: usize, at: &PaneAt) -> bool {
-        let g = self.geo.borrow()[w];
-        if let (Some(body), Some(cell)) = (g.body, g.cell) {
-            let m = crate::term::paint::Metrics {
-                font_size: px(self.settings.font_size),
-                cell,
-            };
-            let (cols, rows) = crate::term::paint::grid_for(body.size, m);
-            self.fleet.claim_anew(&at.node, at.pane, cols, rows);
-            return true;
-        }
-        false
     }
 
     /// Keeps the name typed in the tab bar for the tab being renamed.

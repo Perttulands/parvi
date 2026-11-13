@@ -30,21 +30,10 @@ use std::ops::Range;
 
 mod drag;
 
-/// What Claim does, said where it is offered (CHROTE's words).
-pub const CLAIM_EXPLANATION: &str =
-    "Set the tmux window to this device's size. Other devices keep watching, at that size.";
-
-/// Why a pane cannot be claimed: tmux keeps its window at a fixed size.
-fn pinned(s: &parvi_terminals_contract::Session, pane: u32) -> Option<String> {
-    if s.pinned != Some(true) {
-        return None;
-    }
-    let p = s.panes.iter().find(|p| p.id == pane)?;
-    Some(format!(
-        "Pinned at {}x{}. tmux window-size is manual on this window, so Parvi cannot resize it.",
-        p.cols, p.rows
-    ))
-}
+/// How long a window's new grid must hold before tmux hears it: dragging a
+/// divider or the window resizes the session once, when the drag rests,
+/// not at every frame.
+const RESIZE_SETTLE: std::time::Duration = std::time::Duration::from_millis(120);
 
 /// What a window says while a drop on it would land there.
 fn drop_note(t: &Theme) -> gpui::Div {
@@ -101,9 +90,6 @@ struct Source {
     screen: SharedScreen,
     /// This window sets the pane's grid.
     sizing: Option<PaneAt>,
-    /// This window watches at someone else's grid and Claim would make it
-    /// the one sizing: offered when that grid does not fit (#161).
-    claimable: bool,
     history: bool,
 }
 
@@ -287,7 +273,7 @@ impl Terminals {
         if !cx.has_active_drag() {
             self.dragging_over = None;
         }
-        let tiles: Vec<AnyElement> = (0..n).map(|i| self.render_tile(i, window, cx)).collect();
+        let tiles: Vec<AnyElement> = (0..n).map(|i| self.render_tile(i, cx)).collect();
         let drawer_room = self.drawer_room(window, cx);
         let mut grid = div()
             .id("grid")
@@ -432,34 +418,26 @@ impl Terminals {
             return Some(Source {
                 screen: h.screen.clone(),
                 sizing: None,
-                claimable: false,
                 history: true,
             });
         }
         let screen = self.fleet.screen(&at.node, pane)?;
-        // One window sizes a pane: the first in the tab that shows it.
+        // One window sizes a pane: the first in the tab that shows it,
+        // unless tmux keeps the window at a fixed size.
         let first = self
             .window_panes()
             .iter()
             .position(|p| p.as_ref() == Some(&at))
             == Some(i);
-        let sizing = (first
-            && crate::remote::Remote::sizes_here(
-                session,
-                self.fleet.holds(&at.node, pane),
-                self.fleet.given_back(&at.node, pane),
-            ))
-        .then_some(at);
-        let claimable = first && sizing.is_none() && pinned(session, pane).is_none();
+        let sizing = (first && session.pinned != Some(true)).then_some(at);
         Some(Source {
             screen,
             sizing,
-            claimable,
             history: false,
         })
     }
 
-    fn render_tile(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_tile(&mut self, i: usize, cx: &mut Context<Self>) -> AnyElement {
         let t = theme(cx).clone();
         let ws = &self.settings.workspace;
         let focused = ws.focus == i;
@@ -544,7 +522,7 @@ impl Terminals {
             TileState::Live { session, pane } => {
                 let session = session.clone();
                 match self.source(i, pane, &session) {
-                    Some(src) => self.term_body(i, src, focused, &t, window, cx),
+                    Some(src) => self.term_body(i, src, focused, &t, cx),
                     None => self.detached_body(
                         None,
                         kit::note(&t, "Connecting…", None).into_any_element(),
@@ -793,7 +771,7 @@ impl Terminals {
         let seat = session.as_ref().and_then(|s| match s.seat {
             Some(parvi_terminals_contract::Seat::Mine) => None,
             Some(parvi_terminals_contract::Seat::Other) => Some("viewing"),
-            None if s.foreign.unwrap_or(0) > 0 || s.pinned == Some(true) => Some("viewing"),
+            None if s.pinned == Some(true) => Some("viewing"),
             None => None,
         });
         let history = active && self.histories.contains_key(&i);
@@ -989,17 +967,6 @@ impl Terminals {
             MenuItem::new("Scroll back", Act::History(i)),
         ];
         let session = self.fleet.session(key);
-        if self.fleet.holds(&key.node, pane) {
-            items.push(MenuItem::new("Give the size back", Act::Release(i)));
-        } else if let Some(why) = session.and_then(|s| pinned(s, pane)) {
-            items.push(MenuItem::new("Fit to this screen", Act::Claim(i)).refused(why));
-        } else {
-            items.push(
-                MenuItem::new("Fit to this screen", Act::Claim(i))
-                    .chord("Alt+C")
-                    .hint(CLAIM_EXPLANATION),
-            );
-        }
         if session.is_some_and(|s| s.windows.unwrap_or(0) > 1) {
             items.push(MenuItem::new(
                 "tmux windows…",
@@ -1171,7 +1138,6 @@ impl Terminals {
         src: Source,
         focused: bool,
         t: &Theme,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let entity = cx.entity();
@@ -1187,17 +1153,15 @@ impl Terminals {
         let Source {
             screen,
             sizing,
-            claimable,
             history,
         } = src;
-        // Below the floor an observer clips; it offers to size the session
-        // to this window instead (#161). Judged from the last paint's box.
-        let offer = claimable
-            && self.geo.borrow()[i].body.is_some_and(|b| {
-                let s = screen.lock();
-                let m = paint::fit(window, b.size, s.cols, s.rows, font);
-                !paint::fits(m, b.size, s.cols, s.rows)
-            });
+        // A window between grids draws at the terminal font, clipped or
+        // with room to spare, until tmux has the new grid; one sized by
+        // another client shrinks to show its grid whole.
+        let settling = sizing.as_ref().is_some_and(|at| {
+            let s = screen.lock();
+            self.settling(at, (s.cols, s.rows))
+        });
         let body = canvas(
             |_, _, _| (),
             move |bounds, _, window, cx| {
@@ -1208,19 +1172,16 @@ impl Terminals {
                         cx,
                     );
                 }
+                if let Some(at) = &sizing {
+                    let grid = paint::grid_for(bounds.size, paint::metrics(window, font));
+                    entity.update(cx, |sh, cx| sh.want_grid(at, grid, cx));
+                }
                 let mut s = screen.lock();
-                let m = if sizing.is_some() {
+                let m = if settling {
                     paint::metrics(window, font)
                 } else {
                     paint::fit(window, bounds.size, s.cols, s.rows, font)
                 };
-                if let Some(at) = &sizing {
-                    let (cols, rows) = paint::grid_for(bounds.size, m);
-                    entity.update(cx, |sh, cx| {
-                        sh.fleet.claim(&at.node, at.pane, cols, rows);
-                        sh.flush(cx);
-                    });
-                }
                 let o = paint::origin(bounds, m, s.rows_to_show());
                 // Found again at each paint, so output that moves the text
                 // under a resting pointer moves the underline with it.
@@ -1273,7 +1234,6 @@ impl Terminals {
                 .text_color(t.text2)
                 .child("History · type or scroll to the bottom to return")
         });
-        let claim = offer.then(|| self.clipped_note(i, t, cx));
         div()
             .flex_1()
             .min_h_0()
@@ -1287,38 +1247,54 @@ impl Terminals {
             })
             .child(body)
             .children(hint)
-            .children(claim)
             .into_any_element()
     }
 
-    /// What an observer clipped past the floor says, over its bottom edge:
-    /// the grid is too big to read here, and Claim makes it fit.
-    fn clipped_note(&self, i: usize, t: &Theme, cx: &mut Context<Self>) -> gpui::Div {
-        div()
-            .absolute()
-            .bottom(px(8.))
-            .left_0()
-            .right_0()
-            .flex()
-            .justify_center()
-            .child(
-                kit::panel(t)
-                    .px(px(10.))
-                    .py(px(4.))
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .text_size(px(size::SMALL))
-                    .text_color(t.text2)
-                    .child("Too large to read here, so it is cut off.")
-                    .child(
-                        kit::button(t, ("clipped-claim", i), "Fit to this screen", Kind::Primary)
-                            .tooltip(kit::tip(CLAIM_EXPLANATION))
-                            .on_click(cx.listener(move |s, _, window, cx| {
-                                s.act(Act::Claim(i), window, cx)
-                            })),
-                    ),
-            )
+    /// Asks tmux for the grid window `at`'s paint holds: at once the first
+    /// time, else once the grid has held for [`RESIZE_SETTLE`].
+    fn want_grid(&mut self, at: &PaneAt, grid: (u16, u16), cx: &mut Context<Self>) {
+        match self.fleet.claimed(&at.node, at.pane) {
+            None => {
+                self.resizing.remove(at);
+                self.fleet.claim(&at.node, at.pane, grid.0, grid.1);
+                self.flush(cx);
+                return;
+            }
+            Some(c) if (c.cols, c.rows) == grid => {
+                self.resizing.remove(at);
+                return;
+            }
+            Some(_) => {}
+        }
+        if self.resizing.get(at).is_some_and(|r| r.0 == grid) {
+            return;
+        }
+        self.resize_seq += 1;
+        let seq = self.resize_seq;
+        self.resizing.insert(at.clone(), (grid, seq));
+        let at = at.clone();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(RESIZE_SETTLE).await;
+            let _ = this.update(cx, |sh, cx| {
+                if sh.resizing.get(&at).is_some_and(|r| r.1 == seq) {
+                    sh.resizing.remove(&at);
+                    sh.fleet.claim(&at.node, at.pane, grid.0, grid.1);
+                    sh.flush(cx);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Whether a pane this app sizes is between grids: a new grid waits to
+    /// be sent, or was sent so recently that tmux may not have it yet.
+    fn settling(&self, at: &PaneAt, shown: (usize, usize)) -> bool {
+        self.resizing.contains_key(at)
+            || self.fleet.claimed(&at.node, at.pane).is_some_and(|c| {
+                (c.cols as usize, c.rows as usize) != shown
+                    && c.at.elapsed() < crate::remote::RETAKE_EVERY
+            })
     }
 
     // ---- input to the terminal ----
@@ -1361,6 +1337,7 @@ impl Terminals {
             }
         }
         self.fleet.input(&pane.node, pane.pane, bytes);
+        self.flush(cx);
         if let Some(k) = self.focused_key() {
             self.answered(&k, cx);
         }
@@ -1515,9 +1492,19 @@ impl Terminals {
         let in_body = self.geo.borrow()[i]
             .body
             .is_some_and(|b| b.contains(&e.position));
-        if !in_body || self.window_panes().get(i).cloned().flatten().is_none() {
+        let Some(at) = self
+            .window_panes()
+            .get(i)
+            .cloned()
+            .flatten()
+            .filter(|_| in_body)
+        else {
             return;
-        }
+        };
+        // A click is using the session here: it takes the window back from
+        // another client that sized it since.
+        self.fleet.retake(&at.node, at.pane);
+        self.flush(cx);
         window.focus(&self.term_focus, cx);
         let button = match e.button {
             MouseButton::Left => mouse::Button::Left,
@@ -1534,6 +1521,7 @@ impl Terminals {
                 pane.pane,
                 &mouse::report(mode, button, true, false, col, row, mods),
             );
+            self.flush(cx);
             self.mouse_down_in = Some((i, button as u8));
             cx.stop_propagation();
             return;
@@ -1605,6 +1593,7 @@ impl Terminals {
                 pane.pane,
                 &mouse::report(mode, button, true, true, col, row, mods),
             );
+            self.flush(cx);
         }
     }
 
@@ -1704,6 +1693,7 @@ impl Terminals {
                     pane.pane,
                     &mouse::report(mode, button, false, false, col, row, mods),
                 );
+                self.flush(cx);
             }
             return;
         }
@@ -1762,6 +1752,7 @@ impl Terminals {
             let r = mouse::report(mode, b, true, false, col, row, mods);
             for _ in 0..n.unsigned_abs() {
                 self.fleet.input(&pane.node, pane.pane, &r);
+                self.flush(cx);
             }
             return;
         }
@@ -1779,6 +1770,7 @@ impl Terminals {
                 };
                 for _ in 0..n.unsigned_abs() {
                     self.fleet.input(&pane.node, pane.pane, key);
+                    self.flush(cx);
                 }
                 return;
             }
@@ -1885,7 +1877,6 @@ impl EntityInputHandler for Terminals {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use parvi_terminals_contract::{Pane, Session};
 
     #[test]
     fn a_drop_lands_only_where_it_would_change_something() {
@@ -1902,29 +1893,6 @@ mod tests {
         assert!(tag.lands_on(0));
         let row = Dragged { key, from: None };
         assert!((0..MAX_WINDOWS).all(|i| row.lands_on(i)));
-    }
-
-    #[test]
-    fn claim_on_a_pinned_window_says_tmuxs_size_and_why() {
-        let mut s = Session {
-            name: "build".into(),
-            panes: vec![Pane {
-                id: 4,
-                cols: 100,
-                rows: 30,
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        assert_eq!(pinned(&s, 4), None);
-        s.pinned = Some(true);
-        assert_eq!(
-            pinned(&s, 4).as_deref(),
-            Some(
-                "Pinned at 100x30. tmux window-size is manual on this window, \
-                 so Parvi cannot resize it."
-            )
-        );
     }
 }
 

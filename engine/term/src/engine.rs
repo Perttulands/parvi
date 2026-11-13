@@ -3,7 +3,7 @@
 //!
 //! One control-mode client per followed session. Each client attaches with
 //! `-f ignore-size` and sends no `refresh-client -C`, so it is never a sizing
-//! candidate (issue #4 proved it) until a browser claims the sizing seat. Each pane is
+//! candidate (issue #4 proved it) until an app claims the sizing seat. Each pane is
 //! owned by the first session that lists it, so a window linked into two
 //! sessions is fed once.
 //!
@@ -17,11 +17,11 @@
 //! dropping the client as too far behind. A paused pane is continued and
 //! seeded again. Viewers get the new screen like any reseed.
 //!
-//! Claiming the sizing seat (ADR-0017 decisions 1 and 2) turns the session's
-//! own client into its sizing client: the clients that were sizing the window
-//! are set to `ignore-size`, ours drops it and tells tmux the browser's grid.
-//! Nobody is detached. Releasing undoes exactly that, so the window goes back to
-//! whoever sized it before, or keeps its size if nobody did.
+//! Claiming the sizing seat makes the session's own client a sizing client
+//! at the app's grid and the client tmux counts as used last, so under
+//! tmux's `window-size latest` the window takes the app's size; typing in
+//! any other client hands it to that client, as tmux always does. Nobody
+//! is detached and no other client's flags change ([`Seat`]).
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -683,10 +683,10 @@ impl Engine {
     }
 
     /// Takes the sizing seat of the pane's session for `holder`, at this
-    /// grid, or follows the grid if `holder` already has it. Our client sizes
-    /// the window and the clients that sized it are set to `ignore-size`,
-    /// still attached (ADR-0017 decisions 1 and 2). Another holder simply
-    /// loses the seat.
+    /// grid, or follows the grid if `holder` already has it: our client
+    /// sizes the window and becomes the client used last ([`Seat`]). A
+    /// claim at the same grid takes the window back from a client typed
+    /// into since. Another holder simply loses the seat.
     pub async fn claim(&self, pane: PaneId, holder: u64, cols: u16, rows: u16) -> Result<()> {
         // Query the actual pane's window, not the session's selected window:
         // a session can contain several windows with different sizing modes.
@@ -722,7 +722,7 @@ impl Engine {
     }
 
     /// Gives the pane's session's sizing seat back, if `holder` has it: our
-    /// client stops sizing and the clients we set aside size again.
+    /// client stops sizing and the window goes to the client used last.
     pub async fn release(&self, pane: PaneId, holder: u64) -> Result<()> {
         let requests = {
             let mut state = self.shared.state.lock().unwrap();
@@ -879,9 +879,9 @@ impl Shared {
 async fn supervise(shared: Arc<Shared>, mut stopped: oneshot::Receiver<()>) {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let mut tasks: HashMap<String, JoinHandle<()>> = HashMap::new();
-    // A node killed while it held a seat left the operator's clients set
-    // aside; they size their windows again from now.
-    restore_set_aside(shared.backend.as_ref(), None).await;
+    // An earlier node killed while it held a seat left the operator's
+    // clients set aside; they size their windows again from now.
+    restore_set_aside(shared.backend.as_ref()).await;
     loop {
         match list_sessions(shared.backend.as_ref()).await {
             Ok(found) => {
@@ -1420,9 +1420,6 @@ async fn follow_inner(
     {
         entry.activity.last_output = Some(SystemTime::UNIX_EPOCH + Duration::from_secs(seconds));
     }
-    // A follower of this session that ended without giving the seat back
-    // (its task panicked) left clients set aside.
-    restore_set_aside(shared.backend.as_ref(), Some(session)).await;
     let mut client = shared.backend.attach(session).await?;
     let attached = tokio::time::Instant::now();
     // Kept across loop turns: `read_until` keeps a partly read line here when
@@ -1528,7 +1525,6 @@ async fn follow_inner(
                                 }
                             }
                             Pending::Me => {
-                                seat.me = lines.into_iter().next().filter(|_| ok);
                                 // Attached now, so we'll hear of sessions from
                                 // here on. One made since the supervisor last
                                 // listed would otherwise go unseen.
@@ -1720,9 +1716,6 @@ async fn follow_inner(
                     for keep in wrote.and_then(|wrote| leave_output(session, wrote)).into_iter().flatten() {
                         send(&mut out, &mut pending, keep, Pending::Kept);
                     }
-                    // Leaving while holding the seat would leave the clients
-                    // we set aside unable to size the window.
-                    seat.release(session, &mut out, &mut pending);
                     client.writer.write_all(out.as_bytes()).await?;
                     client.writer.flush().await?;
                     break;
@@ -1730,34 +1723,20 @@ async fn follow_inner(
             },
         }
     } Ok(()) }.await;
-    // However the follower ended, the clients it set aside size again, if
-    // tmux still hears it; if not, the next follower or node start does it
-    // from `@parvi-aside`.
-    if seat.held {
-        let mut out = String::new();
-        seat.release(session, &mut out, &mut pending);
-        if client.writer.write_all(out.as_bytes()).await.is_ok() {
-            let _ = client.writer.flush().await;
-        }
-    }
+    // However the follower ended, its client leaves: tmux gives a window
+    // it sized to the client used most recently, as for any client that
+    // detaches.
     ended?;
     client.close().await
 }
 
-/// Gives back the sizing of the clients a follower set aside and never
-/// released, as its session's `@parvi-aside` names them: those still set
-/// to `ignore-size`, unless a follower holds that session's seat now. Only
-/// `only`'s, when given; one read when it has none.
-async fn restore_set_aside(backend: &dyn Backend, only: Option<&str>) {
+/// Gives back the sizing of the clients an earlier Parvi node set aside to
+/// hold a seat and never released, as each session's `@parvi-aside` names
+/// them: those still set to `ignore-size`, unless a follower holds that
+/// session's seat now.
+async fn restore_set_aside(backend: &dyn Backend) {
     let format = "#{session_id}\t#{@parvi-aside}";
-    let listed = match only {
-        Some(session) => {
-            backend
-                .command(&["display-message", "-p", "-t", session, format])
-                .await
-        }
-        None => backend.command(&["list-sessions", "-F", format]).await,
-    };
+    let listed = backend.command(&["list-sessions", "-F", format]).await;
     let Ok(listed) = listed else { return };
     let aside: Vec<(&str, &str)> = listed
         .lines()
@@ -1812,19 +1791,17 @@ async fn restore_set_aside(backend: &dyn Backend, only: Option<&str>) {
 }
 
 /// One session's sizing seat, as our client sees it.
+///
+/// The window follows tmux's `window-size latest`: whichever client was
+/// used last sizes it. Holding the seat makes our client one of the sizing
+/// clients and the one used last, so the window takes the app's grid; when
+/// the operator types in another client, tmux hands the window to that
+/// client, and a later claim (the app shown, resized or typed into) takes it
+/// back. Nobody else's flags are touched.
 #[derive(Default)]
 struct Seat {
-    /// Our client's name, once tmux has said it.
-    me: Option<String>,
-    /// The grid a browser wants, or `None` while nobody claims.
-    wanted: Option<(u16, u16)>,
-    /// A `list-clients` for a claim is on its way.
-    listing: bool,
     /// Our client is sizing the window.
     held: bool,
-    /// The clients that were sizing the window when we claimed it, which we
-    /// set to `ignore-size`.
-    set_aside: Vec<String>,
 }
 
 impl Seat {
@@ -1836,27 +1813,58 @@ impl Seat {
         out: &mut String,
         pending: &mut VecDeque<Pending>,
     ) {
-        self.wanted = Some((cols, rows));
-        if self.held {
+        if !self.held {
+            self.held = true;
             send(
                 out,
                 pending,
-                format!("refresh-client -C {cols},{rows}"),
+                "refresh-client -f '!ignore-size'".to_owned(),
                 Pending::Seat,
             );
-        } else if !self.listing {
-            self.listing = true;
-            send(
-                out,
-                pending,
-                format!("list-clients -t '{session}' -F '#{{client_name}} #{{client_flags}}'"),
-                Pending::Clients,
-            );
         }
+        send(
+            out,
+            pending,
+            format!("refresh-client -C {cols},{rows}"),
+            Pending::Seat,
+        );
+        // Selecting the window already current changes nothing but which
+        // client tmux counts as used last: ours.
+        send(
+            out,
+            pending,
+            format!("select-window -t '{session}:'"),
+            Pending::Seat,
+        );
     }
 
-    /// The session's clients have been listed for a claim: take the seat, if
-    /// it is still wanted.
+    /// Stops sizing. With one other client left tmux sizes the window by it
+    /// at once; with several, none of them was used last, so the one used
+    /// most recently is made so (`listed`), as tmux does when the client
+    /// used last detaches.
+    fn release(&mut self, session: &str, out: &mut String, pending: &mut VecDeque<Pending>) {
+        if !self.held {
+            return;
+        }
+        self.held = false;
+        send(
+            out,
+            pending,
+            "refresh-client -f ignore-size".to_owned(),
+            Pending::Seat,
+        );
+        send(
+            out,
+            pending,
+            format!(
+                "list-clients -t '{session}' -F '#{{client_activity}} #{{client_name}} #{{client_flags}}'"
+            ),
+            Pending::Clients,
+        );
+    }
+
+    /// The session's clients have been listed after a release: hand the
+    /// window to the one used most recently, unless we sized it again.
     fn listed(
         &mut self,
         session: &str,
@@ -1865,95 +1873,48 @@ impl Seat {
         out: &mut String,
         pending: &mut VecDeque<Pending>,
     ) {
-        self.listing = false;
-        let (Some((cols, rows)), Some(me), false, true) = (self.wanted, &self.me, self.held, ok)
-        else {
+        if self.held || !ok {
             return;
-        };
-        for line in lines {
-            let Some((name, flags)) = line.split_once(' ') else {
-                continue;
-            };
-            if name == me || flags.split(',').any(|flag| flag == "ignore-size") {
-                continue;
-            }
+        }
+        if let Some(name) = used_last(lines) {
+            // Switching a client to the session it shows changes nothing
+            // but which client was used last; `-E` leaves the session's
+            // environment alone.
             send(
                 out,
                 pending,
-                format!("refresh-client -t '{name}' -f ignore-size"),
-                Pending::Seat,
-            );
-            self.set_aside.push(name.to_owned());
-        }
-        // Kept in tmux, so they are given back even if this follower or its
-        // node dies holding the seat (`restore_set_aside`).
-        if !self.set_aside.is_empty() {
-            send(
-                out,
-                pending,
-                format!(
-                    "set-option -t '{session}' @parvi-aside '{}'",
-                    self.set_aside.join(" ")
-                ),
+                format!("switch-client -E -c '{name}' -t '{session}'"),
                 Pending::Seat,
             );
         }
-        send(
-            out,
-            pending,
-            "refresh-client -f '!ignore-size'".to_owned(),
-            Pending::Seat,
-        );
-        send(
-            out,
-            pending,
-            format!("refresh-client -C {cols},{rows}"),
-            Pending::Seat,
-        );
-        self.held = true;
     }
+}
 
-    /// Stops sizing, and lets the clients we set aside size again. Ours goes
-    /// first, so the window takes their size rather than ours.
-    fn release(&mut self, session: &str, out: &mut String, pending: &mut VecDeque<Pending>) {
-        let wanted = self.wanted.take();
-        if !self.held {
-            return;
-        }
-        self.held = false;
-        let (cols, rows) = wanted.unwrap_or((1, 1));
-        send(
-            out,
-            pending,
-            "refresh-client -f ignore-size".to_owned(),
-            Pending::Seat,
-        );
-        if !self.set_aside.is_empty() {
-            send(
-                out,
-                pending,
-                format!("set-option -u -t '{session}' @parvi-aside"),
-                Pending::Seat,
-            );
-        }
-        for name in self.set_aside.drain(..) {
-            send(
-                out,
-                pending,
-                format!("refresh-client -t '{name}' -f '!ignore-size'"),
-                Pending::Seat,
-            );
-        }
-        // Changing flags doesn't make tmux size the window again; that waits
-        // for its next resize check, seconds later on tmux 3.4. A size from
-        // our client, ignored now, makes tmux do it at once.
-        send(
-            out,
-            pending,
-            format!("refresh-client -C {cols},{rows}"),
-            Pending::Seat,
-        );
+/// Of the clients listed as `activity name flags`, the sizing one used most
+/// recently, when there are several: with one, tmux needs no help.
+/// Followers (control clients with `pause-after`, as Parvi nodes attach)
+/// are not where a person types.
+fn used_last(lines: &[String]) -> Option<&str> {
+    let sizing: Vec<(u64, &str)> = lines
+        .iter()
+        .filter_map(|line| {
+            let mut fields = line.splitn(3, ' ');
+            let activity = fields.next()?.parse().ok()?;
+            let name = fields.next()?;
+            let flags = fields.next().unwrap_or("");
+            let flags = || flags.split(',');
+            let follower = flags().any(|f| f == "control-mode")
+                && flags().any(|f| f.starts_with("pause-after"));
+            (!follower && !flags().any(|f| f == "ignore-size")).then_some((activity, name))
+        })
+        .collect();
+    if sizing.len() < 2 {
+        return None;
     }
+    sizing
+        .into_iter()
+        .max_by_key(|(activity, _)| *activity)
+        .map(|(_, name)| name)
 }
 
 /// Whether `pane` is ready for a paste a delivery holds for it (#242).
