@@ -32,11 +32,12 @@ impl Render for ScheduledPage {
         let shown = self
             .shown_task()
             .map(|(n, task)| (n.to_string(), task.clone()));
-        let list_head = pane::list_head(&t, None).child(
+        // With no task, the empty detail's New task is the one way in.
+        let list_head = pane::list_head(&t, None).children(shown.is_some().then(|| {
             pane::act(&t, "scheduled-new", "New")
                 .debug_selector(|| "scheduled-new".into())
-                .on_click(cx.listener(|page, _, _, cx| page.new_task(cx))),
-        );
+                .on_click(cx.listener(|page, _, _, cx| page.new_task(cx)))
+        }));
         let chosen = shown
             .as_ref()
             .map(|(n, task)| (n.as_str(), task.id.as_str()));
