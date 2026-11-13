@@ -1,7 +1,6 @@
 //! How big a diagram beside the terminals is drawn, and where it is moved
-//! to: fit (the panel's width, up to a ceiling so a small diagram is not
-//! blown up and down to a floor so its labels stay readable), or a
-//! percentage; and the pan that keeps it in its room.
+//! to: fit (whole in the panel, up to a ceiling so a small diagram is not
+//! blown up), or a percentage; and the pan that keeps it in its room.
 
 /// A size or a place, in pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -17,17 +16,16 @@ pub enum Level {
     Percent(u32),
 }
 
-/// Fit grows a diagram to the panel's width up to this many times its size.
+/// Fit grows a diagram to fill the panel up to this many times its size.
 pub const FIT_MOST: f32 = 2.;
-/// And shrinks it no further than this, where mermaid's 16 px labels are
-/// still read at a glance; a wider diagram is dragged along instead.
-pub const FIT_LEAST: f32 = 0.7;
 const LADDER: [u32; 13] = [10, 25, 33, 50, 67, 75, 100, 125, 150, 200, 300, 400, 600];
 
 /// The scale the level draws a diagram of `natural` size at in `room`.
 pub fn scale(level: Level, natural: Px, room: Px) -> f32 {
     match level {
-        Level::Fit => (room.w / natural.w.max(1.)).clamp(FIT_LEAST, FIT_MOST),
+        Level::Fit => (room.w / natural.w.max(1.))
+            .min(room.h / natural.h.max(1.))
+            .clamp(0.01, FIT_MOST),
         Level::Percent(p) => p as f32 / 100.,
     }
 }
@@ -75,13 +73,10 @@ mod tests {
     }
 
     #[test]
-    fn fit_fills_the_width_within_a_floor_and_a_ceiling() {
+    fn fit_shows_the_whole_diagram_but_does_not_blow_a_small_one_up() {
         assert_eq!(scale(Level::Fit, px(625., 300.), ROOM), 0.8);
-        assert_eq!(
-            scale(Level::Fit, px(1000., 300.), ROOM),
-            FIT_LEAST,
-            "a wide diagram keeps readable labels and is dragged along"
-        );
+        assert_eq!(scale(Level::Fit, px(1000., 300.), ROOM), 0.5, "a wide one");
+        assert_eq!(scale(Level::Fit, px(250., 1200.), ROOM), 0.5, "a tall one");
         assert_eq!(scale(Level::Fit, px(400., 100.), ROOM), 1.25);
         assert_eq!(scale(Level::Fit, px(100., 50.), ROOM), FIT_MOST);
         assert_eq!(scale(Level::Percent(100), px(100., 50.), ROOM), 1.);

@@ -340,7 +340,13 @@ impl Terminals {
                     Ok((svg, d)) => (Arc::from(svg), Ok(panel::Painted::of(d, density))),
                     Err(why) => (Arc::from(""), Err(why)),
                 };
+                // The panel opens as wide as the diagram at 1:1, room round it.
+                let wish = drawn
+                    .as_ref()
+                    .ok()
+                    .map(|d| d.natural.w + 2. * size::DIAGRAM_PAD + 2.);
                 let view = cx.new(|cx| DiagramView::new(host.clone(), svg, drawn, cx));
+                p.beside_wish = wish.map(|w| (view.entity_id(), w));
                 host.show_beside(crate::NAME, view.into(), cx);
             });
         })

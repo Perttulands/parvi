@@ -233,6 +233,12 @@ pub struct Terminals {
     put_away: Vec<Surface>,
     /// A view was beside the page when it last drew.
     beside_open: bool,
+    /// The width the view beside asked for (a diagram's own), by view.
+    pub beside_wish: Option<(gpui::EntityId, f32)>,
+    /// The view beside has the whole room, by view.
+    pub beside_max: Option<gpui::EntityId>,
+    /// Its edge is being dragged.
+    pub beside_resizing: bool,
     /// What is open over the page, bottom first, as this page opened it.
     pub surfaces: Vec<Surface>,
     /// Status lines said since the page last handed them to the app.
@@ -392,6 +398,9 @@ impl Terminals {
             shown: false,
             put_away: vec![],
             beside_open: false,
+            beside_wish: None,
+            beside_max: None,
+            beside_resizing: false,
             surfaces: vec![],
             said,
             geo: Rc::new(RefCell::new([Geo::default(); 4])),

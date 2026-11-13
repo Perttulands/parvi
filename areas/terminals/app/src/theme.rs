@@ -31,10 +31,12 @@ pub mod size {
     pub const ASK_MARK: f32 = 12.;
     /// A rail row's menu button, shown over the row's end on hover.
     pub const ROW_MENU: f32 = 20.;
-    /// What another page opens beside the windows (a file a link named).
-    pub const BESIDE: f32 = 560.;
-    /// The least a view beside the windows narrows to, to leave them room.
-    pub const BESIDE_MIN: f32 = 400.;
+    /// The least a view beside the windows (a file a link named, a
+    /// diagram) narrows to.
+    pub const BESIDE_MIN: f32 = 320.;
+    /// The edge between that view and the windows: dragged to size it, its
+    /// button gives the view the whole room and back.
+    pub const BESIDE_SEAM: f32 = 12.;
     /// The width a window keeps readable: under it a drawer lies over the
     /// windows rather than narrowing them.
     pub const WINDOW_MIN: f32 = 440.;

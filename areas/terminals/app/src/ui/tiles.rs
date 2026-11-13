@@ -28,6 +28,7 @@ use parvi_app_kit::widgets::kit::{self, Kind};
 use parvi_core::NodeId;
 use std::ops::Range;
 
+mod beside;
 mod drag;
 pub(super) mod pictures;
 
@@ -109,46 +110,36 @@ impl Terminals {
             self.render_rail_shut(cx)
         });
         // What another page opened beside the terminals (a file a link
-        // named), between the rail and the windows.
-        if let Some(beside) = self.host.beside(cx) {
-            let width = self.beside_width(window);
+        // named, a diagram), between the rail and the windows; given the
+        // whole room, the windows are not drawn (nor resized) meanwhile.
+        let maximised = self.beside_maximised(cx);
+        if let Some((panel, seam)) = self.render_beside(window, cx) {
+            row = row.child(panel).child(seam);
+        }
+        if !maximised {
             row = row.child(
                 div()
-                    .id("terminals-beside")
-                    .debug_selector(|| "terminals-beside".into())
-                    .w(px(width))
-                    .flex_none()
+                    .flex_1()
+                    .min_w_0()
                     .h_full()
-                    .child(beside),
+                    .flex()
+                    .flex_col()
+                    .child(self.render_grid(window, cx)),
             );
         }
-        row.child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .h_full()
-                .flex()
-                .flex_col()
-                .child(self.render_grid(window, cx)),
-        )
-        .into_any_element()
+        row.relative()
+            .children(self.render_beside_drag(cx))
+            .into_any_element()
     }
 
     /// The width the windows' row has, beside the rail.
-    fn workspace_room(&self, window: &Window) -> f32 {
+    pub(super) fn workspace_room(&self, window: &Window) -> f32 {
         let rail = if self.settings.sessions_open {
             size::RAIL
         } else {
             size::RAIL_SHUT
         };
         window.viewport_size().width / px(1.) - rail
-    }
-
-    /// What a view beside the windows takes: its full width while every
-    /// window keeps a readable width, less down to its least when not.
-    fn beside_width(&self, window: &Window) -> f32 {
-        (self.workspace_room(window) - self.columns() * size::WINDOW_MIN)
-            .clamp(size::BESIDE_MIN, size::BESIDE)
     }
 
     /// How many windows stand side by side: one row of up to three, or two
@@ -170,7 +161,11 @@ impl Terminals {
         }
         let mut room = self.workspace_room(window);
         if self.host.beside(cx).is_some() {
-            room -= self.beside_width(window);
+            room -= if self.beside_maximised(cx) {
+                room
+            } else {
+                self.beside_width(window, cx) + size::BESIDE_SEAM
+            };
         }
         let width = if find {
             Some(size::FIND_DRAWER)
@@ -434,18 +429,29 @@ impl Terminals {
                             .debug_selector(move || format!("launcher-scroll-{i}"))
                             .absolute()
                             .inset_0()
-                            .overflow_y_scroll()
+                            .overflow_hidden()
                             .p(px(12.))
                             .flex()
                             .flex_col()
                             .items_center()
-                            // A fixed share of the window above the panel, not
-                            // centring: the panel keeps its top edge when the
-                            // node it targets lists more or fewer harnesses.
-                            .child(div().h(relative(size::LAUNCHER_TOP)).min_h(px(0.)))
-                            .child(launcher)
+                            // Up to a fixed share of the window above the panel,
+                            // not centring: the panel keeps its top edge when
+                            // the node it targets lists more or fewer harnesses.
+                            // In a short window that room goes first, then the
+                            // panel's fields scroll under its pinned button.
+                            .child(div().flex_1().max_h(relative(size::LAUNCHER_TOP)))
                             .child(
                                 div()
+                                    .flex()
+                                    .flex_col()
+                                    .flex_shrink_1()
+                                    .min_h_0()
+                                    .max_w_full()
+                                    .child(launcher),
+                            )
+                            .child(
+                                div()
+                                    .flex_none()
                                     .pt(px(14.))
                                     .text_size(px(12.))
                                     .italic()

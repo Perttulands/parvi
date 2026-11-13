@@ -19,6 +19,8 @@ pub struct Settings {
     pub recent_targets: Vec<String>,
     /// The Send drawer's width, as last dragged on this device.
     pub send_width: Option<f32>,
+    /// The width of a view beside the windows, as last dragged here.
+    pub beside_width: Option<f32>,
     pub last_harness: Option<String>,
     /// The folders launched in, the latest first, by node and user
     /// ([`launched_in`]).
@@ -94,6 +96,7 @@ impl Default for Settings {
             collapsed_groups: vec![],
             recent_targets: vec![],
             send_width: None,
+            beside_width: None,
             last_harness: None,
             launched_folders: Default::default(),
             flags: Default::default(),

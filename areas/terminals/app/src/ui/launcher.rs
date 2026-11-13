@@ -778,10 +778,18 @@ impl Render for Launcher {
                 .child(list)
                 .children(editing)
         });
-        kit::panel(&t)
-            .w(px(size::LAUNCHER))
-            .max_w_full()
+        // The fields scroll inside the panel when the window is short; the
+        // launch button stays at its foot, always in view.
+        let fields = div()
+            .id(("launcher-fields", i))
+            .debug_selector(move || format!("launcher-fields-{i}"))
+            // Its own height first, so the room above the panel gives way
+            // before the fields scroll.
+            .flex_auto()
+            .min_h_0()
+            .overflow_y_scroll()
             .p(px(16.))
+            .pb(px(8.))
             .flex()
             .flex_col()
             .gap(px(8.))
@@ -857,15 +865,25 @@ impl Render for Launcher {
             .child(self.name.clone())
             // The notify line keeps its room when a shell has none, so the
             // launch button stays where it was across harnesses.
-            .child(div().min_h(px(NOTIFY_ROW)).children(notify))
+            .child(div().min_h(px(NOTIFY_ROW)).children(notify));
+        kit::panel(&t)
+            .w(px(size::LAUNCHER))
+            .max_w_full()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .child(fields)
             .children(
                 self.problem
                     .clone()
-                    .map(|p| kit::note(&t, p, Some(t.error))),
+                    .map(|p| kit::note(&t, p, Some(t.error)).px(px(16.))),
             )
             .child(
                 div()
-                    .mt(px(6.))
+                    .flex_none()
+                    .px(px(16.))
+                    .pt(px(8.))
+                    .pb(px(16.))
                     .flex()
                     .justify_end()
                     .debug_selector({
