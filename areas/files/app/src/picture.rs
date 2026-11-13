@@ -70,7 +70,9 @@ impl FilesPage {
 
     /// The picture's words in the file's header: its pixels, Fit, 1:1,
     /// −, the percent it is drawn at, +.
-    pub(super) fn zoom_bar(&self, t: &Theme, cx: &mut Context<Self>) -> Option<Div> {
+    /// `narrow` (0 to 3) leaves out its pixels and 1:1, then the percent,
+    /// then − and +.
+    pub(super) fn zoom_bar(&self, t: &Theme, narrow: u8, cx: &mut Context<Self>) -> Option<Div> {
         let Some(Show::Picture { natural, .. }) = self.side.opened.as_ref().map(|o| &o.show) else {
             return None;
         };
@@ -89,39 +91,47 @@ impl FilesPage {
                 .flex()
                 .items_center()
                 .gap(px(ZOOM_GAP))
-                .child(
-                    div()
-                        .px(px(ZOOM_PAD))
-                        .text_size(px(size::SMALL))
-                        .text_color(t.text2)
-                        .whitespace_nowrap()
-                        .child(format!("{} × {}", natural.w, natural.h)),
-                )
+                .when(narrow == 0, |d| {
+                    d.child(
+                        div()
+                            .px(px(ZOOM_PAD))
+                            .text_size(px(size::SMALL))
+                            .text_color(t.text2)
+                            .whitespace_nowrap()
+                            .child(format!("{} × {}", natural.w, natural.h)),
+                    )
+                })
                 .child(
                     word("zoom-fit", "Fit", level.is_none())
                         .on_click(cx.listener(|f, _, _, cx| f.set_zoom(None, cx))),
                 )
-                .child(
-                    word("zoom-1", "1:1", level == Some(100))
-                        .on_click(cx.listener(|f, _, _, cx| f.set_zoom(Some(100), cx))),
-                )
-                .child(
-                    word("zoom-out", "−", false)
-                        .on_click(cx.listener(move |f, _, _, cx| f.step_zoom(false, cx))),
-                )
-                .child(
-                    div()
-                        .min_w(px(ZOOM_LABEL_WIDTH))
-                        .text_size(px(size::SMALL))
-                        .text_color(t.text2)
-                        .flex()
-                        .justify_center()
-                        .children(percent),
-                )
-                .child(
-                    word("zoom-in", "+", false)
-                        .on_click(cx.listener(move |f, _, _, cx| f.step_zoom(true, cx))),
-                ),
+                .when(narrow == 0, |d| {
+                    d.child(
+                        word("zoom-1", "1:1", level == Some(100))
+                            .on_click(cx.listener(|f, _, _, cx| f.set_zoom(Some(100), cx))),
+                    )
+                })
+                .when(narrow < 3, |d| {
+                    d.child(
+                        word("zoom-out", "−", false)
+                            .on_click(cx.listener(move |f, _, _, cx| f.step_zoom(false, cx))),
+                    )
+                    .when(narrow < 2, |d| {
+                        d.child(
+                            div()
+                                .min_w(px(ZOOM_LABEL_WIDTH))
+                                .text_size(px(size::SMALL))
+                                .text_color(t.text2)
+                                .flex()
+                                .justify_center()
+                                .children(percent),
+                        )
+                    })
+                    .child(
+                        word("zoom-in", "+", false)
+                            .on_click(cx.listener(move |f, _, _, cx| f.step_zoom(true, cx))),
+                    )
+                }),
         )
     }
 

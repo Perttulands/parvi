@@ -34,9 +34,11 @@ pub mod size {
     /// The least a view beside the windows (a file a link named, a
     /// diagram) narrows to.
     pub const BESIDE_MIN: f32 = 320.;
-    /// The edge between that view and the windows: dragged to size it, its
-    /// button gives the view the whole room and back.
+    /// The edge between that view and the windows, dragged to size it, and
+    /// the grip marked on it.
     pub const BESIDE_SEAM: f32 = 12.;
+    pub const BESIDE_GRIP_W: f32 = 3.;
+    pub const BESIDE_GRIP_H: f32 = 32.;
     /// The width a window keeps readable: under it a drawer lies over the
     /// windows rather than narrowing them.
     pub const WINDOW_MIN: f32 = 440.;

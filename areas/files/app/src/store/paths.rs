@@ -73,6 +73,25 @@ pub fn root_of<'a>(roots: &'a [Root], path: &str) -> Option<&'a Root> {
         .max_by_key(|r| r.path.len())
 }
 
+/// A file's name in at most `most` letters: the middle gives way, the
+/// start and the extension stay (`screenshot-…-final.png`).
+pub fn elide_name(name: &str, most: usize) -> String {
+    let chars: Vec<char> = name.chars().collect();
+    if chars.len() <= most || most < 5 {
+        return name.to_string();
+    }
+    let ext = name
+        .rfind('.')
+        .filter(|&at| at > 0)
+        .map_or(0, |at| name[at..].chars().count());
+    let tail = ext.max((most - 1) / 2).min(most - 2);
+    let head = most - 1 - tail;
+    let mut out: String = chars[..head].iter().collect();
+    out.push('…');
+    out.extend(&chars[chars.len() - tail..]);
+    out
+}
+
 /// A path as the operator reads it: under its root's name (`~/kuvio`).
 pub fn shown(roots: &[Root], path: &str) -> String {
     match root_of(roots, path) {
@@ -139,6 +158,22 @@ pub fn bad_name(name: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_long_name_gives_way_in_the_middle_and_keeps_its_extension() {
+        assert_eq!(elide_name("chart.png", 20), "chart.png");
+        assert_eq!(
+            elide_name("screenshot-2026-11-13-final.png", 16),
+            "screensh…nal.png"
+        );
+        assert_eq!(elide_name("a-very-long-name-without-dot", 10), "a-ver…-dot");
+        assert_eq!(
+            elide_name("chart.png", 3),
+            "chart.png",
+            "too few to say anything"
+        );
+    }
+
     use super::*;
 
     #[test]

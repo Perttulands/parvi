@@ -87,9 +87,14 @@ pub struct FilesPage {
     pub confirm_close_beside: bool,
     pub menu: Option<gpui::Point<gpui::Pixels>>,
     pub drawn: Vec<std::sync::Arc<gpui::RenderImage>>,
+    /// The opened file's header, and the room its name has there, as last
+    /// laid out: a narrow header drops its least needed words first and
+    /// shortens the name in the middle.
+    pub(crate) head_room: crate::view::Width,
+    pub(crate) name_room: crate::view::Width,
     beside_view: Option<Entity<FilesPage>>,
     restored: bool,
-    beside_from: &'static str,
+    pub(crate) beside_from: &'static str,
     me: WeakEntity<FilesPage>,
     dock_view: Option<Entity<FilesPage>>,
     pub(crate) dock: bool,
@@ -361,6 +366,8 @@ impl FilesPage {
             confirm_close_beside: false,
             menu: None,
             drawn: Vec::new(),
+            head_room: Default::default(),
+            name_room: Default::default(),
             beside_view: None,
             restored: false,
             beside_from: "",
@@ -1210,6 +1217,12 @@ impl FilesPage {
             "delete" => self.mutate("delete", cx),
             "/" => parvi_app_kit::widgets::field::focus(&self.side.search, window, cx),
             "f2" => self.start_naming(Naming::Rename, window, cx),
+            // Beside another page, Esc takes the view away (its drafts are
+            // asked about first).
+            "escape" if self.beside => {
+                self.close_beside(cx);
+                cx.stop_propagation();
+            }
             "escape" => {
                 if self.side.opened.is_some() {
                     self.side.opened = None

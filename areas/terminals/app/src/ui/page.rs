@@ -235,8 +235,11 @@ pub struct Terminals {
     beside_open: bool,
     /// The width the view beside asked for (a diagram's own), by view.
     pub beside_wish: Option<(gpui::EntityId, f32)>,
-    /// The view beside has the whole room, by view.
-    pub beside_max: Option<gpui::EntityId>,
+    /// The view beside as last drawn, to give it the keyboard when it
+    /// comes.
+    pub beside_seen: Option<gpui::EntityId>,
+    /// Holds the keyboard for the view beside, so Esc closes it.
+    pub beside_focus: gpui::FocusHandle,
     /// Its edge is being dragged.
     pub beside_resizing: bool,
     /// What is open over the page, bottom first, as this page opened it.
@@ -343,6 +346,8 @@ pub fn now_ms() -> u64 {
 
 impl Terminals {
     pub fn new(host: Host, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // What opens beside the windows may have their whole area.
+        host.widens_beside(cx);
         let mut said = vec![];
         let settings = match host.setting::<Settings>(cx) {
             Ok(s) => {
@@ -399,7 +404,8 @@ impl Terminals {
             put_away: vec![],
             beside_open: false,
             beside_wish: None,
-            beside_max: None,
+            beside_seen: None,
+            beside_focus: cx.focus_handle(),
             beside_resizing: false,
             surfaces: vec![],
             said,

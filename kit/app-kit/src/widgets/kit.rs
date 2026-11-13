@@ -326,6 +326,23 @@ pub fn badge(
         .child(text.into())
 }
 
+/// A view's Expand / Restore beside a page that can give it its whole
+/// room ([`crate::Host::whole_beside`]): set it beside the view's Close.
+pub fn whole_button(t: &Theme, whole: bool) -> Stateful<Div> {
+    button(
+        t,
+        "beside-whole",
+        if whole { "Restore" } else { "Expand" },
+        Kind::Quiet,
+    )
+    .debug_selector(|| "beside-whole".into())
+    .tooltip(tip(if whole {
+        "Back to its own width"
+    } else {
+        "Give it the page's whole area"
+    }))
+}
+
 /// A hover explanation, drawn like a menu: `.tooltip(kit::tip(why))`.
 pub fn tip(
     why: impl Into<SharedString>,

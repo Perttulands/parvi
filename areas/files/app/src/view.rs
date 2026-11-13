@@ -12,6 +12,33 @@ use parvi_app_kit::theme::{
 use parvi_app_kit::widgets::kit::{self, Kind};
 
 const ROW_INSET: f32 = 6.;
+/// Under each of these widths a file's header leaves out one more of its
+/// least needed words.
+const HEAD_NARROW: [f32; 3] = [600., 460., 380.];
+/// JetBrains Mono's advance, as a share of its size: how many letters of a
+/// name fit a width.
+const NAME_ADVANCE: f32 = 0.6;
+
+/// A width as last laid out.
+pub type Width = std::rc::Rc<std::cell::Cell<Option<f32>>>;
+
+/// Records the width of what it is put in, and draws again when it
+/// changed.
+fn measure(width: Width) -> impl IntoElement {
+    gpui::canvas(
+        move |bounds, window, cx| {
+            let now = Some(f32::from(bounds.size.width));
+            if width.get() != now {
+                width.set(now);
+                // A refresh asked for while drawing is dropped, so ask after it.
+                window.defer(cx, |window, _| window.refresh());
+            }
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .size_full()
+}
 const SIZE_COLUMN: f32 = 70.;
 const MODIFIED_COLUMN: f32 = 100.;
 const CARD_W: f32 = 336.;
@@ -614,7 +641,21 @@ impl FilesPage {
         };
         let folder = paths::parent(&o.path);
         let shown_folder = paths::shown(&side.pane.roots, &folder);
+        // A narrow header leaves out the picture's pixel size and 1:1, then
+        // the percentage, then the zoom steps, and its name gives way in the
+        // middle, keeping its extension.
+        let narrow = self.head_room.get().map_or(0, |w| {
+            HEAD_NARROW.iter().filter(|&&at| w < at).count() as u8
+        });
+        let letters = self
+            .name_room
+            .get()
+            .map(|w| (w / (size::TEXT * NAME_ADVANCE)).floor() as usize);
+        let name = letters.map_or(o.name.clone(), |n| paths::elide_name(&o.name, n));
+        let folder_fits =
+            letters.is_none_or(|n| n >= o.name.chars().count() + shown_folder.chars().count() / 2);
         let mut bar = div()
+            .relative()
             .flex()
             .flex_none()
             .items_center()
@@ -634,11 +675,13 @@ impl FilesPage {
                         })),
                 )
             })
+            .child(measure(self.head_room.clone()))
             .child(
                 div()
                     .id("opened-name")
                     .flex_1()
                     .min_w_0()
+                    .relative()
                     .flex()
                     .overflow_hidden()
                     .whitespace_nowrap()
@@ -646,7 +689,8 @@ impl FilesPage {
                         let id = format!("file-view-{}", o.name);
                         move || id.clone()
                     })
-                    .when(!shown_folder.is_empty(), |name| {
+                    .child(measure(self.name_room.clone()))
+                    .when(!shown_folder.is_empty() && folder_fits, |name| {
                         name.child(
                             div()
                                 .min_w_0()
@@ -657,7 +701,7 @@ impl FilesPage {
                                 .child(format!("{shown_folder}/")),
                         )
                     })
-                    .child(div().flex_none().child(o.name.clone())),
+                    .child(div().flex_none().child(name)),
             );
         if o.editing {
             let dirty = self.drafts.contains_key(&o.key());
@@ -746,7 +790,7 @@ impl FilesPage {
                 })),
             );
         }
-        if let Some(zoom) = self.zoom_bar(&t, cx) {
+        if let Some(zoom) = self.zoom_bar(&t, narrow, cx) {
             bar = bar.child(zoom);
         }
         bar = bar.child(
@@ -755,6 +799,11 @@ impl FilesPage {
                 .on_click(cx.listener(move |p, _, _, cx| p.send(cx))),
         );
         if self.beside {
+            let from = self.beside_from;
+            bar = bar.children(self.host.whole_beside(from, cx).map(|whole| {
+                kit::whole_button(&t, whole)
+                    .on_click(cx.listener(move |p, _, _, cx| p.host.toggle_whole_beside(from, cx)))
+            }));
             bar = bar.child(
                 kit::button(&t, "files-close-beside", "Close", Kind::Quiet)
                     .on_click(cx.listener(|p, _, _, cx| p.close_beside(cx))),

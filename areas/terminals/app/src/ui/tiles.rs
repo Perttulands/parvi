@@ -17,10 +17,10 @@ use alacritty_terminal::index::{Column, Line, Point as GridPoint, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::TermMode;
 use gpui::{
-    AnyElement, App, Bounds, ClipboardItem, ContentMask, Context, DispatchPhase,
-    ElementInputHandler, EntityInputHandler, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, ScrollDelta, ScrollEvent, UTF16Selection, Window, canvas,
-    deferred, div, point, prelude::*, px, relative,
+    AnyElement, Bounds, ClipboardItem, ContentMask, Context, DispatchPhase, ElementInputHandler,
+    EntityInputHandler, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    Pixels, ScrollDelta, ScrollEvent, UTF16Selection, Window, canvas, deferred, div, point,
+    prelude::*, px, relative,
 };
 use parvi_app_kit::Ask;
 use parvi_app_kit::host::Request;
@@ -110,23 +110,21 @@ impl Terminals {
             self.render_rail_shut(cx)
         });
         // What another page opened beside the terminals (a file a link
-        // named, a diagram), between the rail and the windows; given the
-        // whole room, the windows are not drawn (nor resized) meanwhile.
-        let maximised = self.beside_maximised(cx);
-        if let Some((panel, seam)) = self.render_beside(window, cx) {
-            row = row.child(panel).child(seam);
-        }
-        if !maximised {
-            row = row.child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .flex()
-                    .flex_col()
-                    .child(self.render_grid(window, cx)),
-            );
-        }
+        // named, a diagram) lies over the windows from the rail's edge: the
+        // windows keep their layout and size under it, so no session that
+        // other clients share is reflowed for a glance at a picture.
+        let beside = self.render_beside(window, cx);
+        row = row.child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .relative()
+                .flex()
+                .flex_col()
+                .child(self.render_grid(window, cx))
+                .children(beside),
+        );
         row.relative()
             .children(self.render_beside_drag(cx))
             .into_any_element()
@@ -154,19 +152,12 @@ impl Terminals {
     /// The width an open drawer moves the windows aside by, while each keeps
     /// a readable width. `None` with a drawer open is a drawer lying over
     /// them: no session is resized for a drawer that is soon closed.
-    pub(super) fn drawer_room(&self, window: &Window, cx: &App) -> Option<f32> {
+    pub(super) fn drawer_room(&self, window: &Window) -> Option<f32> {
         let find = self.is_open(super::surface::FIND);
         if !find && !self.is_open(super::surface::SEND) {
             return None;
         }
-        let mut room = self.workspace_room(window);
-        if self.host.beside(cx).is_some() {
-            room -= if self.beside_maximised(cx) {
-                room
-            } else {
-                self.beside_width(window, cx) + size::BESIDE_SEAM
-            };
-        }
+        let room = self.workspace_room(window);
         let width = if find {
             Some(size::FIND_DRAWER)
         } else {
@@ -192,7 +183,7 @@ impl Terminals {
             self.dragging_over = None;
         }
         let tiles: Vec<AnyElement> = (0..n).map(|i| self.render_tile(i, cx)).collect();
-        let drawer_room = self.drawer_room(window, cx);
+        let drawer_room = self.drawer_room(window);
         let mut grid = div()
             .id("grid")
             .track_focus(&self.term_focus)

@@ -118,6 +118,10 @@ pub struct Hub {
     models: HashMap<TypeId, Model>,
     /// What an answer opened beside each page, by the page.
     beside: HashMap<&'static str, AnyView>,
+    /// The pages that can give what is beside them their whole room, and
+    /// those doing so now.
+    widens: HashSet<&'static str>,
+    whole: HashSet<&'static str>,
     /// The docks open beside every page, by the page that supplies each,
     /// in the order they opened.
     docks: Vec<(&'static str, AnyView)>,
@@ -186,6 +190,8 @@ impl Hub {
             clicks: HashMap::new(),
             models: HashMap::new(),
             beside: HashMap::new(),
+            widens: HashSet::new(),
+            whole: HashSet::new(),
             docks: vec![],
             guards: vec![],
         }
@@ -695,6 +701,28 @@ impl Hub {
             Some(view) => self.beside.insert(page, view),
             None => self.beside.remove(page),
         };
+        self.whole.remove(page);
+        cx.notify();
+    }
+
+    /// Page `page` can give what is beside it its whole room.
+    pub fn widens(&mut self, page: &'static str) {
+        self.widens.insert(page);
+    }
+
+    /// Whether what is beside `page` has its whole room; `None` if the
+    /// page cannot give it.
+    pub fn whole(&self, page: &str) -> Option<bool> {
+        self.widens
+            .contains(page)
+            .then(|| self.whole.contains(page))
+    }
+
+    /// Gives what is beside `page` its whole room, or takes it back.
+    pub fn toggle_whole(&mut self, page: &'static str, cx: &mut Context<Self>) {
+        if self.widens.contains(page) && !self.whole.remove(page) {
+            self.whole.insert(page);
+        }
         cx.notify();
     }
 

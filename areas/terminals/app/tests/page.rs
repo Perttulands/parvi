@@ -419,6 +419,89 @@ fn other_pages_read_the_sessions_and_open_views_beside_them(cx: &mut TestAppCont
     let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
 }
 
+/// A view beside the windows lies over them: opening it, dragging its
+/// edge, giving it the whole area and closing it with Esc leave every
+/// session at the size it had, here and for every other client.
+#[gpui::test]
+fn a_view_beside_never_resizes_a_session(cx: &mut TestAppContext) {
+    let Some(running) = start("terminals-beside-size") else {
+        return;
+    };
+    let (shell, cx, settings) = open_with_alpha(&running, "beside-size", cx);
+    let toy = shell.read_with(cx, |s, _| Host::new(s.hub()).for_page("toy", &[]));
+    let page = PAGE.with(|p| p.borrow().clone()).expect("the page");
+    let grid = |cx: &mut VisualTestContext| {
+        page.read_with(cx, |p, _| {
+            let g = p.geo.borrow()[0];
+            (g.cols, g.rows)
+        })
+    };
+    let size = || {
+        tmux(
+            &running,
+            &[
+                "display-message",
+                "-p",
+                "-t",
+                "alpha",
+                "#{window_width}x#{window_height}",
+            ],
+        )
+    };
+    until(cx, "alpha sized to its window", |cx| {
+        let (cols, rows) = grid(cx);
+        page.read_with(cx, |p, _| p.resizing.is_empty()) && size() == format!("{cols}x{rows}")
+    });
+    let (was_grid, was_size) = (grid(cx), size());
+    let unchanged = |cx: &mut VisualTestContext, when: &str| {
+        cx.run_until_parked();
+        assert_eq!(grid(cx), was_grid, "the window's grid {when}");
+        assert!(
+            page.read_with(cx, |p, _| p.resizing.is_empty()),
+            "no resize asked {when}"
+        );
+        assert_eq!(size(), was_size, "alpha's size {when}");
+    };
+
+    let note = cx.update(|_, cx| cx.new(|cx| Note(cx.focus_handle())));
+    cx.update(|_, cx| toy.show_beside("terminals", note.into(), cx));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("terminals-beside").is_some(), "drawn over");
+    unchanged(cx, "with a view beside");
+
+    let grip = cx.debug_bounds("beside-grip").expect("its edge").center();
+    cx.simulate_mouse_down(grip, gpui::MouseButton::Left, Modifiers::none());
+    for step in 1..=4 {
+        cx.simulate_mouse_move(
+            gpui::point(grip.x + px(60. * step as f32), grip.y),
+            gpui::MouseButton::Left,
+            Modifiers::none(),
+        );
+    }
+    cx.simulate_mouse_up(
+        gpui::point(grip.x + px(240.), grip.y),
+        gpui::MouseButton::Left,
+        Modifiers::none(),
+    );
+    let moved = cx.debug_bounds("beside-grip").expect("its edge").center();
+    assert!(moved.x > grip.x + px(100.), "the edge followed the drag");
+    unchanged(cx, "after dragging its edge");
+
+    cx.update(|_, cx| toy.toggle_whole_beside("terminals", cx));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("beside-grip").is_none(), "the whole area");
+    unchanged(cx, "with the view given the whole area");
+
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("terminals-beside").is_none(),
+        "Esc took it away"
+    );
+    unchanged(cx, "after it closed");
+    let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
+}
+
 #[gpui::test]
 fn a_page_starts_a_session_in_a_folder_through_launch(cx: &mut TestAppContext) {
     let Some(running) = start("terminals-page-launch") else {

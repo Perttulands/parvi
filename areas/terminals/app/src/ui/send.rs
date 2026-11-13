@@ -140,7 +140,7 @@ impl Terminals {
         // Where the windows move aside for the drawer it covers none of
         // them; otherwise it opens on the side away from the target.
         let room = window.viewport_size().width / px(1.);
-        self.send.left = self.drawer_room(window, cx).is_none()
+        self.send.left = self.drawer_room(window).is_none()
             && send::drawer_left(
                 self.aimed_span(),
                 send::width(self.settings.send_width, room),

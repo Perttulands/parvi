@@ -511,7 +511,7 @@ impl Terminals {
         };
         // Where the drawer would lie over the window showing a hit, it
         // keeps only its query and that hit.
-        let compact = self.find_shown.is_some() && self.drawer_room(window, cx).is_none();
+        let compact = self.find_shown.is_some() && self.drawer_room(window).is_none();
         let shown_hit = self.find_shown.and_then(|i| {
             let (matches, _) = found.as_ref()?;
             let m = matches.get(i)?;

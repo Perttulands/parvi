@@ -1,13 +1,17 @@
 //! A view another page (or this one) opens beside the windows: a picture,
-//! a file, a diagram. It opens as wide as its content asks, up to half the
-//! room; its edge is dragged to size it and the width is kept; the button
-//! on the edge gives it the whole room and back.
+//! a file, a diagram. It lies over the windows from the rail's edge, so no
+//! session changes size for it; whatever it covers is simply covered. It
+//! opens as wide as its content asks, up to half the room; its edge (a
+//! grip) is dragged to size it and the width is kept; the view's Expand
+//! gives it the whole area and back; Esc or Close takes it away.
 
 use super::super::page::Terminals;
 use crate::store::beside;
 use crate::theme::{size, theme};
-use gpui::{AnyElement, App, Context, MouseButton, MouseMoveEvent, Window, div, prelude::*, px};
-use parvi_app_kit::widgets::kit;
+use gpui::{
+    AnyElement, App, Context, KeyDownEvent, MouseButton, MouseMoveEvent, Window, div, prelude::*,
+    px,
+};
 
 impl Terminals {
     /// The width the view beside takes, its edge left out.
@@ -24,94 +28,86 @@ impl Terminals {
         )
     }
 
-    /// Whether the view beside has the whole room.
-    pub(super) fn beside_maximised(&self, cx: &App) -> bool {
-        let shown = self.host.beside(cx).map(|v| v.entity_id());
-        shown.is_some() && self.beside_max == shown
-    }
-
-    fn toggle_beside_max(&mut self, cx: &mut Context<Self>) {
-        let shown = self.host.beside(cx).map(|v| v.entity_id());
-        self.beside_max = if self.beside_max == shown {
-            None
-        } else {
-            shown
-        };
-        cx.notify();
-    }
-
-    /// The view and its edge: `None` when nothing is beside.
+    /// The view beside with its edge, over the windows; `None` when nothing
+    /// is beside.
     pub(super) fn render_beside(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Option<(AnyElement, AnyElement)> {
-        let view = self.host.beside(cx)?;
-        let t = theme(cx).clone();
-        let max = self.beside_maximised(cx);
-        let width = self.beside_width(window, cx);
-        let panel = div()
-            .id("terminals-beside")
-            .debug_selector(|| "terminals-beside".into())
-            .h_full()
-            .map(|d| {
-                if max {
-                    d.flex_1().min_w_0()
-                } else {
-                    d.w(px(width)).flex_none()
-                }
-            })
-            .child(view)
-            .into_any_element();
-        let (word, tip) = if max {
-            ("«", "Back beside the terminals")
-        } else {
-            ("»", "Give it the whole terminal area")
+    ) -> Option<AnyElement> {
+        let Some(view) = self.host.beside(cx) else {
+            self.beside_seen = None;
+            return None;
         };
-        let seam = div()
-            .id("beside-seam")
-            .debug_selector(|| "beside-seam".into())
+        // A view that just came takes the keyboard from the terminal, so
+        // Esc reaches it rather than the program.
+        if self.beside_seen != Some(view.entity_id()) {
+            self.beside_seen = Some(view.entity_id());
+            if self.term_focus.is_focused(window) {
+                window.focus(&self.beside_focus, cx);
+            }
+        }
+        let t = theme(cx).clone();
+        let whole = self.host.whole_beside(crate::NAME, cx) == Some(true);
+        let width = self.beside_width(window, cx);
+        let grip = div()
+            .id("beside-grip")
+            .debug_selector(|| "beside-grip".into())
             .flex_none()
             .w(px(size::BESIDE_SEAM))
             .h_full()
             .flex()
-            .flex_col()
+            .items_center()
+            .justify_center()
             .bg(t.bg)
+            .border_l_1()
+            .border_r_1()
+            .border_color(t.divider)
+            .cursor_col_resize()
+            .hover(|d| d.bg(t.accent_soft()))
+            // The grip's mark, seen at rest.
             .child(
                 div()
-                    .id("beside-max")
-                    .debug_selector(|| "beside-max".into())
-                    .flex_none()
-                    .h(px(size::STRIP))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .text_color(t.dim)
-                    .hover(|d| d.text_color(t.text))
-                    .child(word)
-                    .tooltip(kit::tip(tip))
-                    .on_click(cx.listener(|s, _, _, cx| s.toggle_beside_max(cx))),
+                    .w(px(size::BESIDE_GRIP_W))
+                    .h(px(size::BESIDE_GRIP_H))
+                    .rounded(px(size::BESIDE_GRIP_W))
+                    .bg(t.dim),
             )
-            .when(!max, |d| {
-                d.child(
-                    div()
-                        .id("beside-grip")
-                        .debug_selector(|| "beside-grip".into())
-                        .flex_1()
-                        .cursor_col_resize()
-                        .hover(|d| d.bg(t.accent_soft()))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|s, _, _, cx| {
-                                s.beside_resizing = true;
-                                cx.stop_propagation();
-                            }),
-                        ),
-                )
-            })
-            .into_any_element();
-        Some((panel, seam))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|s, _, _, cx| {
+                    s.beside_resizing = true;
+                    cx.stop_propagation();
+                }),
+            );
+        Some(
+            div()
+                .id("terminals-beside")
+                .debug_selector(|| "terminals-beside".into())
+                .track_focus(&self.beside_focus)
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left_0()
+                .map(|d| {
+                    if whole {
+                        d.right_0()
+                    } else {
+                        d.w(px(width + size::BESIDE_SEAM))
+                    }
+                })
+                .flex()
+                .shadow_lg()
+                .on_key_down(cx.listener(|s, e: &KeyDownEvent, _, cx| {
+                    if e.keystroke.key == "escape" && !e.keystroke.modifiers.modified() {
+                        s.host.close_beside(crate::NAME, cx);
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(div().flex_1().min_w_0().h_full().child(view))
+                .when(!whole, |d| d.child(grip))
+                .into_any_element(),
+        )
     }
 
     /// While the edge is dragged: a layer over the page that follows the

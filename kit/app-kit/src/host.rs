@@ -398,6 +398,25 @@ impl Host {
         self.update(cx, |h, cx| h.set_beside(asker, Some(view), cx));
     }
 
+    /// This page can give what is beside it its whole room
+    /// ([`Host::toggle_whole_beside`]).
+    pub fn widens_beside(&self, cx: &mut App) {
+        let page = self.page;
+        self.update(cx, |h, _| h.widens(page));
+    }
+
+    /// Whether what is beside page `page` has the page's whole room; `None`
+    /// when that page cannot give it, so a view offers the choice only
+    /// where it does something.
+    pub fn whole_beside(&self, page: &str, cx: &App) -> Option<bool> {
+        self.read(cx, |h| h.whole(page)).flatten()
+    }
+
+    /// Gives what is beside page `page` the page's whole room, or back.
+    pub fn toggle_whole_beside(&self, page: &'static str, cx: &mut App) {
+        self.update(cx, |h, cx| h.toggle_whole(page, cx));
+    }
+
     /// Closes what is beside page `page` (its asker, or the answerer).
     pub fn close_beside(&self, page: &'static str, cx: &mut App) {
         self.update(cx, |h, cx| h.set_beside(page, None, cx));
