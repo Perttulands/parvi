@@ -12,8 +12,8 @@
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 
-pub use parvi_host_contract::Service;
-use parvi_host_contract::{ServiceList as List, ServiceOne as One};
+pub use parvi_host_contract::{LogLine, Service};
+use parvi_host_contract::{ServiceList as List, ServiceLog, ServiceOne as One};
 
 #[derive(Deserialize)]
 struct Answer {
@@ -100,6 +100,30 @@ pub struct NodeServices {
     /// Rows whose action's end is not known yet, and what the row says
     /// meanwhile; cleared when a read finds the service settled.
     pub unsettled: HashMap<String, String>,
+    /// Each service's log as last read.
+    pub logs: HashMap<String, Log>,
+}
+
+/// A service's latest log lines, or why they could not be read.
+#[derive(Default)]
+pub struct Log {
+    pub lines: Vec<LogLine>,
+    pub errors: Vec<String>,
+    pub reading: bool,
+}
+
+impl Log {
+    /// A log read landed.
+    pub fn read(&mut self, status: u16, body: &[u8]) {
+        self.reading = false;
+        match serde_json::from_slice::<ServiceLog>(body) {
+            Ok(l) if status == 200 => {
+                self.lines = l.lines;
+                self.errors = l.errors;
+            }
+            _ => self.errors = vec![words(status, body)],
+        }
+    }
 }
 
 #[derive(Default)]
@@ -127,6 +151,32 @@ pub enum Step {
     End,
 }
 
+/// The list's groups, in its order: what needs the operator, what runs,
+/// what is stopped (on purpose: a stop that failed is in Failed).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Group {
+    Failed,
+    Running,
+    Stopped,
+}
+
+impl Group {
+    pub fn of(state: &str) -> Group {
+        match state {
+            "running" | "starting" | "stopping" => Group::Running,
+            "stopped" => Group::Stopped,
+            _ => Group::Failed,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Group::Failed => "Failed",
+            Group::Running => "Running",
+            Group::Stopped => "Stopped",
+        }
+    }
+}
+
 impl Services {
     /// Moves the chosen row through `order` (every row, in the page's
     /// order). With none chosen, Down and Up choose the first.
@@ -148,41 +198,62 @@ impl Services {
         self.selected = Some(order[to].clone());
     }
 
-    /// What Enter does to the chosen row: its one button's change, if it
-    /// has one now.
-    pub fn enter(&self) -> Option<(String, String, Change)> {
-        let (node, id) = self.selected.clone()?;
-        let n = self.nodes.get(&node)?;
-        let s = n.list.as_ref()?.iter().find(|s| s.id == id)?;
-        if !s.controllable || n.changing.contains_key(&id) {
-            return None;
-        }
-        primary(&s.state).map(|c| (node, id, c))
+    /// The service on `node` with `id`, as last read.
+    pub fn service(&self, node: &str, id: &str) -> Option<&Service> {
+        self.nodes.get(node)?.row(id)
+    }
+
+    /// What Enter does to the chosen row: opens its address, if it has one.
+    pub fn enter(&self) -> Option<String> {
+        let (node, id) = self.selected.as_ref()?;
+        let s = self.service(node, id)?;
+        (!s.link.is_empty()).then(|| s.link.clone())
     }
 }
 
-/// The one button a row offers: Stop when running, none while changing,
-/// Start otherwise.
-pub fn primary(state: &str) -> Option<Change> {
+/// The actions a service offers in its state, the one most wanted first:
+/// a running one restarts or stops, a failed or stopped one starts, one
+/// that is changing or not known offers none.
+pub fn actions(state: &str) -> &'static [Change] {
     match state {
-        "running" => Some(Change::Stop),
-        "starting" | "stopping" => None,
-        _ => Some(Change::Start),
+        "running" => &[Change::Restart, Change::Stop],
+        "failed" | "partial" | "stopped" => &[Change::Start],
+        _ => &[],
     }
 }
 
-/// Shows `host[:port]` of an http(s) link; nothing for another scheme.
-pub fn link_label(link: &str) -> Option<String> {
-    let rest = link
-        .strip_prefix("https://")
-        .or_else(|| link.strip_prefix("http://"))?;
-    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
-    (!host.is_empty()).then(|| host.to_string())
+/// How long ago, in a few characters: `<1m`, `12m`, `4h 12m`, `3d 4h`.
+pub fn ago(since: u64, now: u64) -> String {
+    let secs = now.saturating_sub(since) / 1000;
+    if secs < 60 {
+        "<1m".into()
+    } else {
+        crate::host_store::uptime(secs)
+    }
 }
 
-/// What Alt+S pastes for a row: CHROTE's reference.
-pub fn reference(s: &Service) -> String {
-    format!("service {} ({}, {})", s.id, s.name, word(&s.state))
+/// What Send hands over for a service: which, in what state since when,
+/// its units' states and its address.
+pub fn reference(s: &Service, now: u64) -> String {
+    let mut out = format!("service {} ({}): {}", s.id, s.name, word(&s.state));
+    if let Some(since) = s.since() {
+        out.push_str(&format!(" for {}", ago(since, now)));
+    }
+    if s.restarts() > 0 {
+        out.push_str(&format!(", restarted {} times by systemd", s.restarts()));
+    }
+    let units: Vec<String> = s
+        .components
+        .iter()
+        .map(|c| format!("{} {}", c.unit, c.state))
+        .collect();
+    if !units.is_empty() {
+        out.push_str(&format!("; {}", units.join(", ")));
+    }
+    if !s.link.is_empty() {
+        out.push_str(&format!("; {}", s.link));
+    }
+    out
 }
 
 impl NodeServices {
@@ -285,7 +356,7 @@ impl NodeServices {
         false
     }
 
-    fn row(&self, id: &str) -> Option<&Service> {
+    pub fn row(&self, id: &str) -> Option<&Service> {
         self.list.iter().flatten().find(|r| r.id == id)
     }
 
@@ -328,29 +399,26 @@ mod tests {
         let mut n = NodeServices::default();
         n.listed(
             200,
-            br#"{"services":[{"id":"example","name":"Example","description":"d","link":"http://h:8080/x","state":"stopped","controllable":true,"components":["inactive"]},
-                {"id":"room","name":"Room","state":"running","controllable":false,"components":["active"]}]}"#,
+            br#"{"services":[{"id":"example","name":"Example","description":"d","link":"http://h:8080/x","state":"stopped","controllable":true,"components":[{"unit":"example.service","state":"inactive","sub":"dead","since":1000}]},
+                {"id":"room","name":"Room","state":"running","controllable":false,"components":[{"unit":"room.service","state":"active"}]}]}"#,
             1,
         );
         n
     }
 
     #[test]
-    fn keys_move_the_chosen_row_and_enter_takes_its_one_button() {
+    fn keys_move_the_chosen_row_and_enter_opens_its_address() {
         let mut s = Services::default();
         s.nodes.insert("a".into(), node());
         let row = |id: &str| ("a".to_string(), id.to_string());
         let order = [row("example"), row("room")];
         s.step(&order, Step::Up);
         assert_eq!(s.selected, Some(row("example")), "none chosen: the first");
-        assert_eq!(
-            s.enter(),
-            Some(("a".into(), "example".into(), Change::Start))
-        );
+        assert_eq!(s.enter().as_deref(), Some("http://h:8080/x"));
         s.step(&order, Step::Down);
         s.step(&order, Step::Down);
         assert_eq!(s.selected, Some(row("room")), "stays on the last");
-        assert_eq!(s.enter(), None, "a read-only row has no button");
+        assert_eq!(s.enter(), None, "no address");
         s.step(&order, Step::Home);
         assert_eq!(s.selected, Some(row("example")));
         s.step(&order, Step::End);
@@ -495,20 +563,48 @@ mod tests {
     }
 
     #[test]
-    fn rows_offer_one_button_and_a_reference() {
-        assert_eq!(primary("running"), Some(Change::Stop));
-        assert_eq!(primary("starting"), None);
-        assert_eq!(primary("partial"), Some(Change::Start));
-        assert_eq!(link_label("http://h:8080/x").as_deref(), Some("h:8080"));
-        assert_eq!(
-            link_label("https://a-long-service.tailnet-example.ts.net:8443/path").as_deref(),
-            Some("a-long-service.tailnet-example.ts.net:8443")
-        );
-        assert_eq!(link_label("file:///etc"), None);
+    fn each_state_offers_its_own_actions_and_its_group() {
+        assert_eq!(actions("running"), [Change::Restart, Change::Stop]);
+        assert_eq!(actions("stopped"), [Change::Start], "not Start and Restart");
+        assert_eq!(actions("failed"), [Change::Start]);
+        assert_eq!(actions("starting"), []);
+        assert_eq!(actions("unknown"), []);
+        assert_eq!(Group::of("stopped"), Group::Stopped, "stopped on purpose");
+        assert_eq!(Group::of("failed"), Group::Failed);
+        assert_eq!(Group::of("partial"), Group::Failed);
+        assert_eq!(Group::of("unknown"), Group::Failed);
+        assert_eq!(Group::of("stopping"), Group::Running);
+    }
+
+    #[test]
+    fn a_service_is_handed_over_whole() {
         let n = node();
         assert_eq!(
-            reference(&n.list.as_ref().unwrap()[0]),
-            "service example (Example, stopped)"
+            reference(&n.list.as_ref().unwrap()[0], 1000 + 12 * 60_000),
+            "service example (Example): stopped for 12m; example.service inactive; http://h:8080/x"
         );
+        assert_eq!(
+            reference(&n.list.as_ref().unwrap()[1], 0),
+            "service room (Room): running; room.service active"
+        );
+    }
+
+    #[test]
+    fn a_log_is_its_lines_or_why_not() {
+        let mut log = Log {
+            reading: true,
+            ..Log::default()
+        };
+        log.read(
+            200,
+            br#"{"lines":[{"at":1,"text":"listening","error":false}],"errors":[]}"#,
+        );
+        assert!(!log.reading);
+        assert_eq!(log.lines[0].text, "listening");
+        log.read(
+            404,
+            br#"{"error":{"code":"not_found","message":"No such service"}}"#,
+        );
+        assert_eq!(log.errors, ["No such service"]);
     }
 }

@@ -1,7 +1,7 @@
-//! A metric row's chart: the span as runs of line over a filled area, x by
-//! time (so a silence shows as space), y to the row's own ceiling, a lone
-//! point as a stem, the time axis's ticks as faint rules, and the crosshair
-//! every row shares.
+//! A figure's line: runs of line over a filled area, x by time (so a
+//! silence shows as space), y to the line's top, a lone point as a stem.
+//! Small in a list row; big in a figure's detail, with the time axis's
+//! ticks as faint rules and a crosshair that follows the mouse.
 
 use crate::readings::ReadingsPage;
 use crate::tokens;
@@ -12,8 +12,6 @@ use gpui::{
 use parvi_app_kit::widgets::boundary;
 
 pub struct Line {
-    /// Which chart: the crosshair belongs to the one under the mouse.
-    pub id: String,
     pub runs: Vec<Vec<(u64, f32)>>,
     pub top: f32,
     pub start: u64,
@@ -25,19 +23,16 @@ pub struct Line {
     pub grid: Hsla,
 }
 
-pub fn chart(line: Line, shell: WeakEntity<ReadingsPage>) -> impl IntoElement {
+/// The line, drawn to fill its parent. With `page`, the mouse over it
+/// sets the moment the page reads.
+pub fn chart(line: Line, page: Option<WeakEntity<ReadingsPage>>) -> impl IntoElement {
     canvas(
         |_, _, _| (),
         boundary::paint(move |b: Bounds<Pixels>, _: (), window, _| {
             draw(&line, b, window);
-            follow_mouse(
-                line.id.clone(),
-                line.start,
-                line.end,
-                b,
-                shell.clone(),
-                window,
-            );
+            if let Some(page) = &page {
+                follow_mouse(line.start, line.end, b, page.clone(), window);
+            }
         }),
     )
     .size_full()
@@ -55,17 +50,6 @@ fn y_of(v: f32, l: &Line, b: Bounds<Pixels>) -> Pixels {
 
 fn draw(l: &Line, b: Bounds<Pixels>, window: &mut gpui::Window) {
     let base = b.origin.y + b.size.height - px(tokens::HAIRLINE);
-    // Half-way rule and the baseline.
-    window.paint_quad(fill(
-        Bounds::new(
-            point(b.origin.x, b.origin.y + b.size.height / 2.),
-            size(b.size.width, px(tokens::HAIRLINE)),
-        ),
-        Hsla {
-            a: l.grid.a * tokens::GRID_MID,
-            ..l.grid
-        },
-    ));
     window.paint_quad(fill(
         Bounds::new(
             point(b.origin.x, base),
@@ -140,32 +124,26 @@ fn draw(l: &Line, b: Bounds<Pixels>, window: &mut gpui::Window) {
     }
 }
 
-/// The mouse over this chart sets the moment every row reads; leaving it
-/// clears the crosshair if it was this chart's.
+/// The mouse over the chart sets the moment the page reads; leaving it
+/// clears it.
 fn follow_mouse(
-    id: String,
     start: u64,
     end: u64,
     b: Bounds<Pixels>,
-    shell: WeakEntity<ReadingsPage>,
+    page: WeakEntity<ReadingsPage>,
     window: &mut gpui::Window,
 ) {
     window.on_mouse_event(move |e: &MouseMoveEvent, phase, _, cx| {
         if phase != gpui::DispatchPhase::Bubble {
             return;
         }
-        let inside = b.contains(&e.position);
-        let at = {
+        let at = b.contains(&e.position).then(|| {
             let share = ((e.position.x - b.origin.x) / b.size.width).clamp(0., 1.);
             start + ((end - start) as f32 * share) as u64
-        };
-        let _ = shell.update(cx, |s, cx| {
-            let mine = s.hover.as_ref().is_some_and(|(h, _)| *h == id);
-            if inside {
-                s.hover = Some((id.clone(), at));
-                cx.notify();
-            } else if mine {
-                s.hover = None;
+        });
+        let _ = page.update(cx, |s, cx| {
+            if s.hover != at {
+                s.hover = at;
                 cx.notify();
             }
         });

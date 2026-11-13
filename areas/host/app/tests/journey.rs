@@ -1,4 +1,5 @@
-//! The operator's Host journey, with a fake service manager and controlled readings.
+//! The operator's Host and Services journeys, with a fake service manager
+//! and controlled readings.
 use std::{
     sync::{
         Arc, Mutex, OnceLock,
@@ -10,13 +11,15 @@ use std::{
 
 use axum::{
     Json, Router,
+    extract::Path,
     http::StatusCode,
     routing::{get, post},
 };
 use gpui::{Modifiers, TestAppContext, VisualTestContext};
 use parvi_app_kit::link::client::LinkState;
 use parvi_host_contract::{
-    self as wire, Facts, Gpu, Point, Reading, ReadingFrame, Service, ServiceList, State, Usage,
+    self as wire, Component, Facts, Gpu, Heavy, LogLine, Point, Reading, ReadingFrame, Service,
+    ServiceList, ServiceLog, State, Usage,
 };
 use parvi_node_kit::{Area, BoxFuture, Built, Channel, Client, Listing, Setup};
 use parvi_testkit::node::Node;
@@ -47,19 +50,71 @@ struct FakeArea(Arc<Control>);
 impl Area for FakeArea {
     fn routes(&self) -> Router {
         let control = self.0.clone();
-        Router::new().route("/api/services", get(|| async {
-            Json(ServiceList { services: vec![Service {
-                id: "fixture".into(), name: "Fixture service".into(), state: "running".into(),
-                controllable: true, components: vec!["active".into()], ..Service::default()
-            }, Service { id: "other".into(), name: "Other".into(), state: "stopped".into(),
-                controllable: true, link: "https://example.invalid/path".into(), ..Service::default() }] })
-        })).route("/api/services/fixture/restart", post(move || {
-            let control = control.clone();
-            async move {
-                control.restarts.fetch_add(1, Ordering::SeqCst);
-                (StatusCode::BAD_REQUEST, Json(json!({"error":{"code":"service_refused", "message":"Restart refused by fake manager"}})))
-            }
-        }))
+        Router::new()
+            .route(
+                "/api/services",
+                get(|| async {
+                    let unit = |unit: &str, state: &str| Component {
+                        unit: unit.into(),
+                        state: state.into(),
+                        ..Component::default()
+                    };
+                    Json(ServiceList {
+                        services: vec![
+                            Service {
+                                id: "fixture".into(),
+                                name: "Fixture service".into(),
+                                state: "running".into(),
+                                controllable: true,
+                                components: vec![unit("fixture.service", "active")],
+                                ..Service::default()
+                            },
+                            Service {
+                                id: "other".into(),
+                                name: "Other".into(),
+                                state: "stopped".into(),
+                                controllable: true,
+                                link: "https://example.invalid/path".into(),
+                                ..Service::default()
+                            },
+                            Service {
+                                id: "broken".into(),
+                                name: "Broken".into(),
+                                state: "failed".into(),
+                                controllable: true,
+                                components: vec![unit("broken.service", "failed")],
+                                ..Service::default()
+                            },
+                        ],
+                    })
+                }),
+            )
+            .route(
+                "/api/services/{id}/log",
+                get(|Path(id): Path<String>| async move {
+                    Json(ServiceLog {
+                        lines: vec![LogLine {
+                            at: now(),
+                            text: format!("{id} logged this"),
+                            error: id == "broken",
+                        }],
+                        errors: vec![],
+                    })
+                }),
+            )
+            .route(
+                "/api/services/fixture/restart",
+                post(move || {
+                    let control = control.clone();
+                    async move {
+                        control.restarts.fetch_add(1, Ordering::SeqCst);
+                        (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({"error":{"code":"service_refused", "message":"Restart refused by fake manager"}})),
+                        )
+                    }
+                }),
+            )
     }
     fn channel(&self, _: Client) -> Option<Box<dyn Channel>> {
         let receiver = self
@@ -113,25 +168,25 @@ fn now() -> u64 {
         .as_millis() as u64
 }
 fn sample(cpu: f32) -> ReadingFrame {
-    let at = now();
+    let reading = Reading {
+        at: now(),
+        cpu: Some(cpu),
+        memory: Some(Usage { used: 2, total: 4 }),
+        swap: Some(Usage { used: 1, total: 4 }),
+        swap_activity_bps: Some(2_000_000.),
+        gpu_reason: Some("nvidia-smi failed".into()),
+        heavy: vec![Heavy {
+            name: "rustc".into(),
+            cwd: Some("/srv/fixture".into()),
+            pids: vec![1, 2],
+            cpu: Some(40.),
+            memory: 1 << 30,
+        }],
+        ..Reading::default()
+    };
     ReadingFrame {
-        reading: Reading {
-            at,
-            cpu: Some(cpu),
-            memory: Some(Usage { used: 2, total: 4 }),
-            swap: Some(Usage { used: 1, total: 4 }),
-            swap_activity_bps: Some(2_000_000.),
-            gpu_reason: Some("nvidia-smi failed".into()),
-            ..Reading::default()
-        },
-        point: Point {
-            at,
-            cpu: Some(cpu),
-            memory: Some(50.),
-            swap: Some(25.),
-            gpu: Some(35.),
-            ..Point::default()
-        },
+        point: Point::of(&reading),
+        reading,
     }
 }
 fn frame(kind: u8, body: &impl serde::Serialize) -> Vec<u8> {
@@ -148,9 +203,7 @@ fn snapshot() -> Vec<u8> {
                 threads: 4,
                 ..Facts::default()
             },
-            every: 5_000,
-            bucket: 60_000,
-            history: vec![reading.point],
+            minutes: vec![reading.point],
             latest: Some(reading.reading),
             ..State::default()
         },
@@ -225,8 +278,18 @@ fn click(cx: &mut VisualTestContext, selector: &'static str) {
         .center();
     cx.simulate_click(position, Modifiers::none());
 }
+fn status(shell: &gpui::Entity<parvi_app_shell::Shell>, cx: &mut VisualTestContext) -> String {
+    shell.read_with(cx, |s, cx| {
+        s.hub()
+            .read(cx)
+            .status
+            .as_ref()
+            .map(|s| s.text.clone())
+            .unwrap_or_default()
+    })
+}
 #[gpui::test]
-fn service_restart_refusal_and_host_subscription_journey(cx: &mut TestAppContext) {
+fn host_and_services_journeys(cx: &mut TestAppContext) {
     let running = start();
     let dir = parvi_testkit::fresh_dir("parvi-host-journey");
     cx.executor().allow_parking();
@@ -241,6 +304,9 @@ fn service_restart_refusal_and_host_subscription_journey(cx: &mut TestAppContext
             cx,
         )
     });
+    let node = running.node.clone();
+    let at = |what: String| selector(what);
+    let shows = |cx: &mut VisualTestContext, s: &'static str| cx.debug_bounds(s).is_some();
     until(cx, "the node link", |cx| {
         shell.read_with(cx, |s, cx| {
             s.hub().read(cx).fleet.here().state == LinkState::Open
@@ -249,65 +315,23 @@ fn service_restart_refusal_and_host_subscription_journey(cx: &mut TestAppContext
     until(cx, "initial host subscription", |_| {
         running.control.on.load(Ordering::SeqCst)
     });
-    click(cx, "tab-services");
-    until(cx, "host channel off", |_| {
-        !running.control.on.load(Ordering::SeqCst)
-    });
-    let state = selector(format!("svc-state-{}-fixture-running", running.node));
-    until(cx, "fixture service running", |cx| {
-        cx.debug_bounds(state).is_some()
-    });
-    let restart = selector(format!("svc-restart-{}-fixture", running.node));
-    until(cx, "Restart", |cx| cx.debug_bounds(restart).is_some());
-    let other_restart = selector(format!("svc-restart-{}-other", running.node));
-    let first_send = selector(format!("svc-send-{}-fixture", running.node));
-    let other_send = selector(format!("svc-send-{}-other", running.node));
-    assert_eq!(
-        cx.debug_bounds(restart).unwrap().origin.x,
-        cx.debug_bounds(other_restart).unwrap().origin.x
-    );
-    assert_eq!(
-        cx.debug_bounds(first_send).unwrap().origin.x,
-        cx.debug_bounds(other_send).unwrap().origin.x
-    );
-    click(cx, restart);
-    let failure = selector(format!("svc-failure-{}-fixture", running.node));
-    until(cx, "restart refusal displayed", |cx| {
-        cx.debug_bounds(failure).is_some()
-    });
-    assert_eq!(running.control.restarts.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        shell.read_with(cx, |s, cx| s
-            .hub()
-            .read(cx)
-            .status
-            .as_ref()
-            .unwrap()
-            .text
-            .clone()),
-        "Restart refused by fake manager"
-    );
 
-    click(cx, "tab-host");
-    until(cx, "host channel on", |_| {
-        running.control.on.load(Ordering::SeqCst)
-    });
-    for metric in ["cpu", "memory", "swap", "gpu"] {
-        let row = selector(format!("metric-{}-{metric}", running.node));
-        until(cx, metric, |cx| cx.debug_bounds(row).is_some());
+    // Is this machine all right: the list says what is wrong and every
+    // figure now; the overview names each trouble.
+    let verdict = at(format!("host-verdict-{node}-2 to look at"));
+    until(cx, "the verdict", |cx| shows(cx, verdict));
+    for figure in ["cpu-10%", "memory-50%", "gpu---", "vram---"] {
+        let row = at(format!("host-now-{node}-{figure}"));
+        until(cx, figure, |cx| shows(cx, row));
     }
-    let warning = selector(format!("warning-{}-swap", running.node));
-    until(cx, "swap churn warning", |cx| {
-        cx.debug_bounds(warning).is_some()
+    let swapping = "host-trouble-Swapping 1.9 MB/s: memory is short";
+    until(cx, "swap churn", |cx| shows(cx, swapping));
+    until(cx, "the failed service", |cx| {
+        shows(cx, "host-trouble-Service Broken failed")
     });
-    let initial = selector(format!("reading-{}-cpu-10%", running.node));
-    until(cx, "the initial reading", |cx| {
-        cx.debug_bounds(initial).is_some()
-    });
-    let gpu_reason = selector(format!("meta-{}-gpu-nvidia-smi failed", running.node));
-    until(cx, "GPU failure reason", |cx| {
-        cx.debug_bounds(gpu_reason).is_some()
-    });
+    until(cx, "what is heavy", |cx| shows(cx, "host-heavy-rustc ×2"));
+
+    // A reading as it comes.
     let mut gpu_sample = sample(31.0);
     gpu_sample.reading.gpu_reason = None;
     gpu_sample.reading.gpus.push(Gpu {
@@ -315,42 +339,72 @@ fn service_restart_refusal_and_host_subscription_journey(cx: &mut TestAppContext
         util: Some(35.),
         ..Gpu::default()
     });
-    running
-        .control
-        .sender
-        .lock()
-        .unwrap()
-        .as_ref()
-        .unwrap()
-        .send(frame(wire::HOST_READING, &gpu_sample))
-        .unwrap();
-    let reading = selector(format!("reading-{}-cpu-31%", running.node));
-    until(cx, "the pushed reading", |cx| {
-        cx.debug_bounds(reading).is_some()
-    });
-    let gpu = selector(format!("reading-{}-gpu-35%", running.node));
-    until(cx, "GPU reading", |cx| cx.debug_bounds(gpu).is_some());
+    gpu_sample.point = Point::of(&gpu_sample.reading);
+    let send = |f: Vec<u8>| {
+        running
+            .control
+            .sender
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .send(f)
+            .unwrap()
+    };
+    send(frame(wire::HOST_READING, &gpu_sample));
+    let pushed = at(format!("host-now-{node}-cpu-31%"));
+    until(cx, "the pushed reading", |cx| shows(cx, pushed));
+    let gpu = at(format!("host-now-{node}-gpu-35%"));
+    until(cx, "the GPU reading", |cx| shows(cx, gpu));
     assert_eq!(running.control.forwards.load(Ordering::SeqCst), 1);
-    click(cx, "tab-services");
-    until(cx, "host channel closes", |_| {
+
+    // One click to a figure's day; its trouble leads there too.
+    click(cx, swapping);
+    until(cx, "memory's detail", |cx| {
+        shows(cx, "host-line-Now-2 B of 4 B (50%)") && shows(cx, "host-chart")
+    });
+    click(cx, at(format!("host-row-{node}-overview")));
+    until(cx, "the overview again", |cx| shows(cx, swapping));
+
+    // A failed service on Host opens it on Services, where the host
+    // channel closes.
+    click(cx, "host-trouble-Service Broken failed");
+    until(cx, "the failed service's detail", |cx| {
+        shows(cx, "pane-title-Broken") && shows(cx, "svc-log-broken logged this")
+    });
+    until(cx, "host channel off", |_| {
         !running.control.on.load(Ordering::SeqCst)
     });
-    running
-        .control
-        .sender
-        .lock()
-        .unwrap()
-        .as_ref()
-        .unwrap()
-        .send(frame(wire::HOST_READING, &sample(88.0)))
-        .unwrap();
+    send(frame(wire::HOST_READING, &sample(88.0)));
     until(cx, "closed channel discards a reading", |_| {
         running.control.discarded.load(Ordering::SeqCst) == 1
     });
     assert_eq!(running.control.forwards.load(Ordering::SeqCst), 1);
+
+    // One action per state: a failed or stopped service starts; a
+    // running one restarts or stops.
+    let start = |id: &str| at(format!("svc-start-{node}-{id}"));
+    let restart = |id: &str| at(format!("svc-restart-{node}-{id}"));
+    assert!(shows(cx, start("broken")));
+    assert!(!shows(cx, restart("broken")));
+    click(cx, at(format!("svc-row-{node}-other")));
+    until(cx, "a stopped service", |cx| {
+        shows(cx, start("other")) && shows(cx, "svc-address")
+    });
     assert!(
-        cx.debug_bounds(selector(format!("reading-{}-cpu-88%", running.node)))
-            .is_none()
+        !shows(cx, restart("other")),
+        "a stopped service offers Start"
     );
+    click(cx, at(format!("svc-row-{node}-fixture")));
+    until(cx, "a running service", |cx| {
+        shows(cx, restart("fixture")) && shows(cx, at(format!("svc-stop-{node}-fixture")))
+    });
+    assert!(!shows(cx, start("fixture")));
+    assert!(!shows(cx, "svc-address"), "it has none");
+    click(cx, restart("fixture"));
+    let failure = at(format!("svc-failure-{node}-fixture"));
+    until(cx, "restart refusal displayed", |cx| shows(cx, failure));
+    assert_eq!(running.control.restarts.load(Ordering::SeqCst), 1);
+    assert_eq!(status(&shell, cx), "Restart refused by fake manager");
     let _ = std::fs::remove_dir_all(dir);
 }

@@ -1,10 +1,11 @@
-//! Readings from Linux's `/proc`: CPU time, memory, swap, load, uptime and
-//! what the machine is. Parsing is apart from reading, so the parsers are
+//! Readings from Linux's `/proc`: CPU time, memory, swap, uptime, the
+//! processes, OOM kills and what the machine is. Parsing is apart from reading, so the parsers are
 //! tested on fixed text. Ported from CHROTE's `system.go`, which counts
 //! iowait as idle and falls back from `MemAvailable` on old kernels.
 
 use super::cpu::CpuTimes;
-use super::reading::{Load, Usage};
+use super::heavy::Sample;
+use super::reading::Usage;
 
 fn read(path: &str) -> Option<String> {
     std::fs::read_to_string(path).ok()
@@ -42,17 +43,76 @@ pub fn swap_pages() -> Option<(u64, u64)> {
 }
 
 fn parse_swap_pages(vmstat: &str) -> Option<(u64, u64)> {
-    let field = |name| {
-        vmstat.lines().find_map(|line| {
-            let (key, value) = line.split_once(char::is_whitespace)?;
-            (key == name).then(|| value.trim().parse().ok()).flatten()
-        })
-    };
-    Some((field("pswpin")?, field("pswpout")?))
+    Some((
+        vmstat_field(vmstat, "pswpin")?,
+        vmstat_field(vmstat, "pswpout")?,
+    ))
 }
 
-pub fn load() -> Option<Load> {
-    parse_load(&read("/proc/loadavg")?)
+/// How often the kernel has killed a process for memory since boot.
+pub fn oom_kills() -> Option<u64> {
+    vmstat_field(&read("/proc/vmstat")?, "oom_kill")
+}
+
+fn vmstat_field(vmstat: &str, name: &str) -> Option<u64> {
+    vmstat.lines().find_map(|line| {
+        let (key, value) = line.split_once(char::is_whitespace)?;
+        (key == name).then(|| value.trim().parse().ok()).flatten()
+    })
+}
+
+/// Every process's name, CPU time and resident memory now. One that ends
+/// while it is read is left out.
+pub fn processes() -> Vec<Sample> {
+    let page = page_size();
+    let Ok(dir) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    dir.flatten()
+        .filter_map(|entry| {
+            let pid: u32 = entry.file_name().to_str()?.parse().ok()?;
+            let (name, ticks, pages) = parse_stat(&read(&format!("/proc/{pid}/stat"))?)?;
+            Some(Sample {
+                pid,
+                name,
+                ticks,
+                memory: pages * page,
+            })
+        })
+        .collect()
+}
+
+/// The folder a process runs in, where this user may read it.
+pub fn cwd(pid: u32) -> Option<String> {
+    std::fs::read_link(format!("/proc/{pid}/cwd"))
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Clock ticks per second, the unit of a process's CPU time.
+pub fn ticks_per_second() -> f32 {
+    // SAFETY: sysconf reads a constant.
+    let ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    if ticks > 0 { ticks as f32 } else { 100. }
+}
+
+fn page_size() -> u64 {
+    // SAFETY: sysconf reads a constant.
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if page > 0 { page as u64 } else { 4096 }
+}
+
+/// A `/proc/<pid>/stat` line: the name, user and system ticks, and the
+/// resident pages. The name is in parentheses and may hold anything, so
+/// the fields are counted from its last `)`.
+pub fn parse_stat(stat: &str) -> Option<(String, u64, u64)> {
+    let open = stat.find('(')?;
+    let close = stat.rfind(')')?;
+    let name = stat.get(open + 1..close)?.to_owned();
+    let fields: Vec<&str> = stat.get(close + 1..)?.split_whitespace().collect();
+    // Field 3 (state) is fields[0]: utime is 14, stime 15, rss 24.
+    let number = |i: usize| fields.get(i)?.parse::<u64>().ok();
+    Some((name, number(11)? + number(12)?, number(21)?))
 }
 
 /// A `/proc/meminfo` field in bytes.
@@ -85,17 +145,6 @@ pub fn parse_swap(meminfo: &str) -> Option<Usage> {
     Some(Usage {
         used: total.saturating_sub(free),
         total,
-    })
-}
-
-/// The 1, 5 and 15 minute load averages.
-pub fn parse_load(loadavg: &str) -> Option<Load> {
-    let mut fields = loadavg.split_whitespace().map(str::parse::<f32>);
-    let mut next = || fields.next()?.ok();
-    Some(Load {
-        one: next()?,
-        five: next()?,
-        fifteen: next()?,
     })
 }
 
@@ -185,16 +234,22 @@ mod tests {
     }
 
     #[test]
-    fn load_is_the_first_three_averages() {
+    fn a_stat_line_counts_its_fields_after_the_name() {
+        let stat = "4242 (tmux: server) S 1 4242 4242 0 -1 4194560 300 0 0 0 \
+                    150 50 0 0 20 0 1 0 900 12345678 2048 18446744073709551615";
         assert_eq!(
-            parse_load("0.42 0.73 0.62 2/1234 5678\n"),
-            Some(Load {
-                one: 0.42,
-                five: 0.73,
-                fifteen: 0.62
-            })
+            parse_stat(stat),
+            Some(("tmux: server".to_owned(), 200, 2048))
         );
-        assert_eq!(parse_load("0.42 x\n"), None);
+        let odd = "7 (a) b (c)) R 1 7 7 0 -1 0 0 0 0 0 3 4 0 0 20 0 1 0 9 100 5";
+        assert_eq!(parse_stat(odd), Some(("a) b (c)".to_owned(), 7, 5)));
+        assert_eq!(parse_stat("7 (gone"), None);
+    }
+
+    #[test]
+    fn oom_kills_come_from_vmstat() {
+        assert_eq!(vmstat_field("pswpin 1\noom_kill 3\n", "oom_kill"), Some(3));
+        assert_eq!(vmstat_field("pswpin 1\n", "oom_kill"), None);
     }
 
     #[test]

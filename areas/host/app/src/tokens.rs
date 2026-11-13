@@ -1,28 +1,21 @@
-//! Measurements for the host instruments and service rows.
-pub const FLOOR_MIN: f32 = 380.;
-pub const CHART_H: f32 = 56.;
-pub const METRIC_LABEL: f32 = 172.;
-pub const SCALE_COL: f32 = 34.;
-pub const AXIS_H: f32 = 14.;
+//! The host and services pages' own measures.
+
+/// A list row's small line: the last hour.
+pub const SPARK_W: f32 = 56.;
+pub const SPARK_H: f32 = 14.;
+/// A figure's big chart, its time axis and a tick's label.
+pub const CHART_H: f32 = 180.;
+pub const AXIS_H: f32 = 16.;
 pub const TICK_W: f32 = 40.;
-pub const READING: f32 = 20.;
-pub const METER_H: f32 = 4.;
-pub const PAD: f32 = 12.;
-pub const GAP: f32 = 10.;
-pub const SMALL_GAP: f32 = 8.;
+/// Table columns: a figure, a time.
+pub const FIGURE_COL: f32 = 72.;
+pub const TIME_COL: f32 = 64.;
+/// A service's state mark.
+pub const GLYPH: f32 = 8.;
 pub const HAIRLINE: f32 = 1.;
-pub const THIN: f32 = 2.;
-pub const COL: f32 = 180.;
-pub const ACTION_COL: f32 = 80.;
-pub const LINK_COL: f32 = 180.;
-pub const SEND_COL: f32 = 56.;
-pub const EVENT_W: f32 = 600.;
-pub const SELECTED: f32 = 0.08;
-pub const GAP_TIGHT: f32 = 3.;
-pub const GAP_SMALL: f32 = 4.;
 pub const STROKE: f32 = 1.5;
-pub const GRID_MID: f32 = 0.5;
 pub const GRID_TICK: f32 = 0.4;
 pub const AREA_ALPHA: f32 = 0.18;
 pub const LINE_ALPHA: f32 = 0.6;
-pub const GLYPH: f32 = 8.;
+/// A service that is starting: its mark half there.
+pub const FADED: f32 = 0.5;

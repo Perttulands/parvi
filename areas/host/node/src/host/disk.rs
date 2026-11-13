@@ -1,19 +1,62 @@
-//! How full the system's file system is: the root on Linux (on WSL that is
-//! the VM's virtual disk, not a Windows drive), the system drive on Windows.
+//! How full the file systems the operator can fill are: on Linux the root
+//! (on WSL the VM's virtual disk) and on WSL each Windows drive it mounts
+//! writable, since the virtual disk lives on one of them; on Windows the
+//! system drive. Which ones is read once, at start.
 
 use super::reading::Usage;
 
-/// The mount the Fleet tab reports.
-#[cfg(not(windows))]
-pub fn mount() -> String {
-    "/".into()
+/// A file system to report: what the operator calls it and where it is.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Mount {
+    pub name: String,
+    pub path: String,
 }
 
-/// The drive Windows runs from, like `C:\`.
+#[cfg(not(windows))]
+pub fn mounts() -> Vec<Mount> {
+    let root = Mount {
+        name: "/".into(),
+        path: "/".into(),
+    };
+    let drives = std::fs::read_to_string("/proc/mounts")
+        .map(|m| drives(&m))
+        .unwrap_or_default();
+    std::iter::once(root).chain(drives).collect()
+}
+
+/// WSL's Windows drives in `/proc/mounts`: `9p` (or the older `drvfs`)
+/// with `aname=drvfs`, mounted read-write at `/mnt/<letter>`.
+pub fn drives(mounts: &str) -> Vec<Mount> {
+    mounts
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let (_, path, kind, options) = (
+                fields.next()?,
+                fields.next()?,
+                fields.next()?,
+                fields.next()?,
+            );
+            let letter = path.strip_prefix("/mnt/")?;
+            let drvfs = kind == "drvfs" || (kind == "9p" && options.contains("aname=drvfs"));
+            let writable = options.split(',').any(|o| o == "rw");
+            let one = letter.len() == 1 && letter.chars().all(|c| c.is_ascii_lowercase());
+            (drvfs && writable && one).then(|| Mount {
+                name: format!("{}:", letter.to_ascii_uppercase()),
+                path: path.to_owned(),
+            })
+        })
+        .collect()
+}
+
+/// The drive Windows runs from, like `C:`.
 #[cfg(windows)]
-pub fn mount() -> String {
+pub fn mounts() -> Vec<Mount> {
     let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
-    format!("{drive}\\")
+    vec![Mount {
+        path: format!("{drive}\\"),
+        name: drive,
+    }]
 }
 
 /// Used bytes of the file system holding `path`, out of what users can fill:
@@ -57,10 +100,21 @@ pub fn usage(_path: &str) -> Option<Usage> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn wsl_reports_its_writable_windows_drives() {
+        let mounts = "/dev/sdd / ext4 rw,relatime 0 0\n\
+            D: /mnt/d 9p ro,noatime,aname=drvfs;path=D: 0 0\n\
+            C:\\134 /mnt/c 9p rw,noatime,aname=drvfs;path=C:\\ 0 0\n\
+            none /mnt/wsl tmpfs rw,relatime 0 0\n\
+            E: /mnt/e drvfs rw,noatime 0 0\n";
+        let names: Vec<_> = super::drives(mounts).into_iter().map(|m| m.name).collect();
+        assert_eq!(names, ["C:", "E:"]);
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_root_file_system_has_a_size() {
-        let root = super::usage(&super::mount()).expect("statvfs on /");
+        let root = super::usage("/").expect("statvfs on /");
         assert!(root.total > 0 && root.used <= root.total);
         assert_eq!(super::usage("/no/such/path/65"), None);
     }
@@ -68,7 +122,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn the_system_drive_has_a_size() {
-        let drive = super::usage(&super::mount()).expect("the system drive");
+        let drive = super::usage(&super::mounts()[0].path).expect("the system drive");
         assert!(drive.total > 0 && drive.used <= drive.total);
         assert_eq!(super::usage("Q:\\no\\such\\drive"), None);
     }

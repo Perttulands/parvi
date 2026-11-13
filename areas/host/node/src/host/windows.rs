@@ -1,6 +1,6 @@
 //! Readings from Windows itself: CPU time (`GetSystemTimes`), memory and the
 //! commit charge (`GlobalMemoryStatusEx`), uptime, and what the machine is
-//! from the registry. Windows keeps no load average, so there is none.
+//! from the registry. What is heavy and OOM kills are not read here yet.
 
 use std::ptr;
 
@@ -14,7 +14,7 @@ use windows_sys::Win32::System::SystemInformation::{
 use windows_sys::Win32::System::Threading::GetSystemTimes;
 
 use super::cpu::CpuTimes;
-use super::reading::{Load, Usage};
+use super::reading::Usage;
 
 /// Idle, kernel and user time over every core. Kernel time includes idle.
 pub fn cpu_times() -> Option<CpuTimes> {
@@ -61,8 +61,23 @@ pub fn swap() -> Option<Usage> {
     })
 }
 
-pub fn load() -> Option<Load> {
+/// Processes are not read on Windows yet: nothing is shown as heavy.
+pub fn processes() -> Vec<super::heavy::Sample> {
+    Vec::new()
+}
+
+pub fn cwd(_: u32) -> Option<String> {
     None
+}
+
+/// Windows keeps no count of processes killed for memory.
+pub fn oom_kills() -> Option<u64> {
+    None
+}
+
+/// Windows counts process time in 100 ns.
+pub fn ticks_per_second() -> f32 {
+    10_000_000.
 }
 
 /// Seconds since boot.

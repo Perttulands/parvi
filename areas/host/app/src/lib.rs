@@ -1,6 +1,5 @@
 //! Host readings and services pages.
 mod chart;
-mod floor;
 mod host_store;
 mod readings;
 mod services;

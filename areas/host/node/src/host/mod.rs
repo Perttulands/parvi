@@ -1,23 +1,25 @@
-//! Host: what this node's machine is doing (ARCHITECTURE.md, Host).
+//! Host: what this node's machine is doing.
 //!
-//! One sampler per node reads CPU, memory, swap, load, disk, GPUs and
-//! uptime every [`EVERY`] into a day of history: the last [`HISTORY`]
-//! points (an hour) as read, minutes before them (`history.rs`). It is the
-//! one standing timer Parvi keeps without a subscriber, so the Fleet tab
-//! opens on the day so far. A browser that turns the host channel on gets
-//! the whole state with the node's runtime events (`crate::events`), then
-//! each reading as it is taken and each event as it happens; one that turns
-//! it off, or goes, costs nothing more.
+//! One sampler per node keeps a day of the host in minutes (`history.rs`).
+//! While nobody looks it reads the host once every [`IDLE`]: `/proc`, a
+//! `statvfs` per disk and one `nvidia-smi`, so the page opens on the day so
+//! far. While an app has the host channel on it reads every [`EVERY`], and
+//! what is heavy (every process's CPU time and memory) besides; the first
+//! reading after someone starts to look comes at once and the next one
+//! [`SOON`] after, so what is busy shows without waiting. A browser that
+//! turns the channel on gets the whole state with the node's runtime events
+//! (`crate::events`), then each reading and each event as it happens.
 //!
-//! Linux, WSL and Windows. On WSL the figures are the VM's, and Fleet uses
-//! the hello environment to label them; Windows has no load average, and
-//! its swap is the commit charge.
+//! Linux, WSL and Windows. On WSL the figures are the VM's, and its Windows
+//! drives are reported beside the root; Windows reads no processes, and its
+//! swap is the commit charge.
 
 mod channel;
 mod cpu;
 mod disk;
 mod facts;
 mod gpu;
+mod heavy;
 mod history;
 #[cfg(not(windows))]
 mod procfs;
@@ -32,27 +34,27 @@ use procfs as os;
 #[cfg(windows)]
 use windows as os;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{Notify, broadcast, mpsc};
 use tokio::task::JoinHandle;
 
 use facts::Facts;
 pub use history::History;
 
 pub use channel::{HOST, HOST_EVENT, HOST_READING, HOST_STATE, decode_on, encode_on, owns};
-pub use reading::{Point, Probe, Reading};
+pub use reading::{Probe, Reading};
 pub use ring::Ring;
 
-/// How often the sampler reads the host.
+/// How often the sampler reads the host while someone looks.
 pub const EVERY: Duration = Duration::from_secs(5);
-
-/// Points kept as read: an hour at [`EVERY`].
-pub const HISTORY: usize = 720;
-
-/// How far back the history reaches.
-pub const DAY: Duration = Duration::from_secs(24 * 3600);
+/// How often it reads while nobody looks: once a minute, the history's step.
+pub const IDLE: Duration = Duration::from_secs(60);
+/// The reading after the one taken when someone starts to look: soon
+/// enough that what is busy shows at once, long enough to measure.
+pub const SOON: Duration = Duration::from_secs(1);
 
 /// The node's host: its facts, its history and the sampler keeping it.
 /// Dropping it stops the sampler.
@@ -64,10 +66,13 @@ pub struct Host {
 struct Shared {
     events: Arc<parvi_node_kit::events::Log>,
     facts: Facts,
-    every: Duration,
     kept: Mutex<Kept>,
     /// Each reading's frame, for the browsers streaming.
     readings: broadcast::Sender<Arc<Vec<u8>>>,
+    /// Streams open now.
+    watchers: AtomicUsize,
+    /// Rung when the first stream opens.
+    looked: Notify,
 }
 
 struct Kept {
@@ -75,22 +80,36 @@ struct Kept {
     latest: Option<Reading>,
 }
 
+/// One stream open: counted while it lives.
+struct Watching(Arc<Shared>);
+
+impl Drop for Watching {
+    fn drop(&mut self) {
+        self.0.watchers.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 impl Host {
-    /// Reads the facts and starts sampling every `every`, keeping `recent`
-    /// points as read and minutes before them to make up a [`DAY`], one of
-    /// them still filling. The first reading is taken at once.
-    pub fn start(every: Duration, recent: usize, events: Arc<parvi_node_kit::events::Log>) -> Host {
+    /// Reads the facts and starts sampling, every `idle` while nobody looks
+    /// and every `every` while someone does, keeping a day of minutes. The
+    /// first reading is taken at once.
+    pub fn start(
+        every: Duration,
+        idle: Duration,
+        events: Arc<parvi_node_kit::events::Log>,
+    ) -> Host {
         let shared = Arc::new(Shared {
             events,
             facts: facts::read(),
-            every,
             kept: Mutex::new(Kept {
-                history: History::spanning(DAY, every, recent),
+                history: History::new(history::MINUTES),
                 latest: None,
             }),
             readings: broadcast::channel(4).0,
+            watchers: AtomicUsize::new(0),
+            looked: Notify::new(),
         });
-        let sampler = tokio::spawn(sample(shared.clone()));
+        let sampler = tokio::spawn(sample(shared.clone(), every, idle));
         Host { shared, sampler }
     }
 
@@ -101,6 +120,10 @@ impl Host {
         let shared = self.shared.clone();
         async move {
             let (state, mut readings, mut events) = shared.state_and_stream();
+            if shared.watchers.fetch_add(1, Ordering::SeqCst) == 0 {
+                shared.looked.notify_one();
+            }
+            let _watching = Watching(shared.clone());
             if outbox.send(state).await.is_err() {
                 return;
             }
@@ -133,27 +156,21 @@ impl Host {
     }
 }
 
-/// The host now, as the Host view shows it: its facts, a reading taken
-/// over `window` (CPU is busy time across it), and the recent events.
+/// The host now, as `parvi host show` tells it: its facts, a reading taken
+/// over `window` (CPU, and what is heavy, measured across it), and the
+/// recent events.
 pub async fn now(window: Duration, log: &parvi_node_kit::events::Log) -> serde_json::Value {
-    let mut probe = reading::Probe::new();
-    tokio::time::sleep(window).await;
-    let reading = probe.read().await;
     let facts = facts::read();
+    let mut probe = reading::Probe::new(disk::mounts(), facts.threads);
+    probe.read(true).await;
+    tokio::time::sleep(window).await;
+    let reading = probe.read(true).await;
     let (events, _) = log.listen();
-    let frame = channel::state(&channel::State {
-        facts: &facts,
-        every_ms: 0,
-        history: &History::new(1, 1),
-        latest: Some(&reading),
-        events: &events,
-    });
+    let frame = channel::state(&facts, Vec::new(), Some(&reading), &events);
     let mut state: serde_json::Value =
         serde_json::from_slice(&frame[1..]).expect("the state frame is JSON");
     if let Some(state) = state.as_object_mut() {
-        for key in ["history", "earlier", "bucket", "every"] {
-            state.remove(key);
-        }
+        state.remove("minutes");
     }
     state
 }
@@ -176,31 +193,65 @@ impl Shared {
     ) {
         let kept = self.kept.lock().unwrap();
         let (logged, events) = self.events.listen();
-        let state = channel::state(&channel::State {
-            facts: &self.facts,
-            every_ms: self.every.as_millis() as u64,
-            history: &kept.history,
-            latest: kept.latest.as_ref(),
-            events: &logged,
-        });
+        let state = channel::state(
+            &self.facts,
+            kept.history.minutes(),
+            kept.latest.as_ref(),
+            &logged,
+        );
         (state, self.readings.subscribe(), events)
+    }
+
+    fn watched(&self) -> bool {
+        self.watchers.load(Ordering::SeqCst) > 0
     }
 }
 
 /// The sampler: one reading per tick, into history and out to every stream.
-async fn sample(shared: Arc<Shared>) {
-    let mut probe = Probe::new();
-    let mut tick = tokio::time::interval(shared.every);
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+/// It waits `idle` between readings while nobody looks and `every` while
+/// someone does; someone starting to look wakes it at once.
+async fn sample(shared: Arc<Shared>, every: Duration, idle: Duration) {
+    let mut probe = Probe::new(disk::mounts(), shared.facts.threads);
+    let mut killed = os::oom_kills();
+    let mut wait = Duration::ZERO;
     loop {
-        tick.tick().await;
-        let reading = probe.read().await;
-        let point = reading::point_of(&reading, shared.facts.threads);
-        let frame = Arc::new(channel::reading(&reading, &point));
-        let mut kept = shared.kept.lock().unwrap();
-        kept.history.push(point);
-        kept.latest = Some(reading);
+        let woken = tokio::select! {
+            () = tokio::time::sleep(wait) => false,
+            () = shared.looked.notified() => true,
+        };
+        let watched = shared.watched();
+        let reading = probe.read(watched).await;
+        let now_killed = os::oom_kills();
+        if let (Some(before), Some(now)) = (killed, now_killed)
+            && now > before
+        {
+            let n = now - before;
+            shared.events.record(
+                "host",
+                true,
+                format!(
+                    "Out of memory: the kernel killed {} ({now} since boot)",
+                    if n == 1 {
+                        "a process".to_owned()
+                    } else {
+                        format!("{n} processes")
+                    }
+                ),
+            );
+        }
+        killed = now_killed.or(killed);
+        let frame = Arc::new(channel::reading(&reading));
+        {
+            let mut kept = shared.kept.lock().unwrap();
+            kept.history.push(&parvi_host_contract::Point::of(&reading));
+            kept.latest = Some(reading);
+        }
         let _ = shared.readings.send(frame);
+        wait = match (watched, woken) {
+            (false, _) => idle,
+            (true, true) => SOON.min(every),
+            (true, false) => every,
+        };
     }
 }
 
@@ -211,23 +262,12 @@ mod tests {
     fn publish(shared: &Shared, at: u64) {
         let reading = Reading {
             at,
-            cpu: None,
-            memory: None,
-            swap: None,
-            swap_activity_bps: None,
-            gpu_reason: None,
-            load: None,
-            disk: None,
-            gpus: Vec::new(),
-            uptime: None,
+            ..Reading::default()
         };
-        let point = reading::point_of(&reading, 1);
         let mut kept = shared.kept.lock().unwrap();
-        kept.history.push(point);
+        kept.history.push(&parvi_host_contract::Point::of(&reading));
         kept.latest = Some(reading.clone());
-        let _ = shared
-            .readings
-            .send(Arc::new(channel::reading(&reading, &point)));
+        let _ = shared.readings.send(Arc::new(channel::reading(&reading)));
     }
 
     fn json(frame: &[u8]) -> serde_json::Value {
@@ -236,7 +276,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_lagged_stream_resumes_after_its_recovery_state() {
-        let host = Host::start(Duration::from_secs(60), 16, Arc::default());
+        let host = Host::start(
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Arc::default(),
+        );
         host.sampler.abort();
         let (outbox, mut frames) = mpsc::channel(1);
         let streaming = tokio::spawn(host.stream(outbox));
@@ -276,8 +320,16 @@ mod tests {
         let second_log = Arc::new(parvi_node_kit::events::Log::default());
         first_log.record(parvi_node_kit::events::NODE, false, "first before");
         second_log.record(parvi_node_kit::events::NODE, false, "second before");
-        let first = Host::start(Duration::from_secs(60), 4, first_log.clone());
-        let second = Host::start(Duration::from_secs(60), 4, second_log.clone());
+        let first = Host::start(
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            first_log.clone(),
+        );
+        let second = Host::start(
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            second_log.clone(),
+        );
         first.sampler.abort();
         second.sampler.abort();
         let (first_tx, mut first_rx) = mpsc::channel(8);
@@ -304,7 +356,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_stream_starts_with_the_state_then_follows_each_reading() {
-        let host = Host::start(Duration::from_millis(50), 4, Arc::default());
+        let host = Host::start(
+            Duration::from_millis(50),
+            Duration::from_secs(3600),
+            Arc::default(),
+        );
         let (outbox, mut frames) = mpsc::channel(8);
         let streaming = tokio::spawn(host.stream(outbox));
         let first = frames.recv().await.unwrap();
@@ -318,5 +374,50 @@ mod tests {
             .await
             .expect("the stream ends when its browser goes")
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn nobody_looking_costs_one_reading_an_idle_tick_and_no_processes() {
+        let host = Host::start(
+            Duration::from_millis(50),
+            Duration::from_secs(3600),
+            Arc::default(),
+        );
+        // The first reading is taken at once, without what is heavy.
+        let first = loop {
+            if let Some(r) = host.shared.kept.lock().unwrap().latest.clone() {
+                break r;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        assert!(first.heavy.is_empty());
+        let mut readings = host.shared.readings.subscribe();
+        // Nothing more for as long as nobody looks.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            readings.try_recv().is_err(),
+            "no reading while nobody looks"
+        );
+        // Someone looks: a reading at once, with the processes on Linux.
+        let (outbox, mut frames) = mpsc::channel(8);
+        let streaming = tokio::spawn(host.stream(outbox));
+        assert_eq!(frames.recv().await.unwrap()[0], HOST_STATE);
+        let looked = tokio::time::timeout(Duration::from_secs(2), frames.recv())
+            .await
+            .expect("a reading as soon as someone looks")
+            .unwrap();
+        assert_eq!(looked[0], HOST_READING);
+        if cfg!(target_os = "linux") {
+            assert!(
+                !json(&looked)["reading"]["heavy"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        // They go: the count falls back and the sampler idles again.
+        streaming.abort();
+        let _ = streaming.await;
+        assert!(!host.shared.watched());
     }
 }

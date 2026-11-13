@@ -60,7 +60,7 @@ These are the commands advertised by the enabled areas. Run `parvi <noun> <verb>
 
 ## service
 
-`parvi service list`, `parvi service restart`, `parvi service show`, `parvi service start`, `parvi service stop`.
+`parvi service list`, `parvi service log`, `parvi service restart`, `parvi service show`, `parvi service start`, `parvi service stop`.
 
 ## session
 

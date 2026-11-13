@@ -139,6 +139,24 @@ fn command(url: &str, noun: &str, args: &[&str]) -> Value {
     .join()
     .unwrap()
 }
+/// An action the node refuses: its words.
+fn refused(url: &str, path: &str) -> String {
+    let url = url.to_owned();
+    let path = path.to_owned();
+    std::thread::spawn(move || {
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let client = NodeClient::new(Some(&url)).unwrap();
+                let answer = client
+                    .request(axum::http::Method::POST, &path, None, None)
+                    .await;
+                format!("{:#}", answer.expect_err("refused"))
+            })
+    })
+    .join()
+    .unwrap()
+}
 #[gpui::test]
 fn disposable_systemd_service_and_host_health_journey(cx: &mut TestAppContext) {
     let unit = Unit::new();
@@ -180,9 +198,17 @@ fn disposable_systemd_service_and_host_health_journey(cx: &mut TestAppContext) {
             .len(),
         2
     );
+    click(cx, selector(format!("svc-row-{}-single", node.id)));
+    until(cx, "a stopped unit offers Start", |cx| {
+        cx.debug_bounds(action("start")).is_some()
+    });
+    assert!(
+        cx.debug_bounds(action("restart")).is_none(),
+        "and only Start"
+    );
     click(cx, action("start"));
     until(cx, "app start", |cx| {
-        cx.debug_bounds(state("running")).is_some()
+        cx.debug_bounds(state("running")).is_some() && cx.debug_bounds(action("restart")).is_some()
     });
     click(cx, action("restart"));
     until(cx, "app restart", |cx| {
@@ -194,6 +220,9 @@ fn disposable_systemd_service_and_host_health_journey(cx: &mut TestAppContext) {
                 .is_some_and(|v| v.text.contains("restarted"))
         })
     });
+    until(cx, "Stop after the restart", |cx| {
+        cx.debug_bounds(action("stop")).is_some()
+    });
     click(cx, action("stop"));
     until(cx, "app stop", |cx| {
         cx.debug_bounds(state("stopped")).is_some()
@@ -201,6 +230,18 @@ fn disposable_systemd_service_and_host_health_journey(cx: &mut TestAppContext) {
     for verb in ["start", "restart", "stop"] {
         let answer = command(&node.url, "service", &[verb, "single"]);
         assert_eq!(answer["outcome"], "done", "{answer}");
+    }
+    // A unit systemd does not know is not known: listed as such, with
+    // nothing to press, and systemd's refusal reaches whoever asks.
+    click(cx, selector(format!("svc-row-{}-missing", node.id)));
+    until(cx, "the missing unit, unknown", |cx| {
+        cx.debug_bounds(selector(format!("svc-state-{}-missing-unknown", node.id)))
+            .is_some()
+            && cx.debug_bounds("pane-title-Missing unit").is_some()
+    });
+    for verb in ["start", "stop", "restart"] {
+        let control = selector(format!("svc-{verb}-{}-missing", node.id));
+        assert!(cx.debug_bounds(control).is_none(), "{verb}");
     }
     let missing = format!("missing-{}", unit.name);
     let expected = Command::new("systemctl")
@@ -212,20 +253,8 @@ fn disposable_systemd_service_and_host_health_journey(cx: &mut TestAppContext) {
         .unwrap()
         .trim()
         .to_string();
-    let restart_missing = selector(format!("svc-restart-{}-missing", node.id));
-    until(cx, "missing unit control", |cx| {
-        cx.debug_bounds(restart_missing).is_some()
-    });
-    click(cx, restart_missing);
-    until(cx, "systemd refusal", |cx| {
-        shell.read_with(cx, |s, cx| {
-            s.hub()
-                .read(cx)
-                .status
-                .as_ref()
-                .is_some_and(|status| status.text.contains(&words))
-        })
-    });
+    let answer = refused(&node.url, "/api/services/missing/restart");
+    assert!(answer.contains(&words), "{answer}");
     let host = command(&node.url, "host", &["show"]);
     assert!(
         host["events"]

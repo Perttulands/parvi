@@ -1,13 +1,16 @@
-//! What a component is doing, and starting or stopping it, through
-//! systemd directly: `systemctl --user` for the user's own units (through
-//! `sudo -n -u` for another user's), `systemctl show` for a system unit,
-//! and a loopback request for an HTTP probe. As CHROTE's controller does.
+//! What a component is doing, starting or stopping it and reading its log,
+//! through systemd directly: `systemctl --user` and `journalctl --user` for
+//! the user's own units (through `sudo -n -u` for another user's),
+//! `systemctl show` and `journalctl` for a system unit, and a loopback
+//! request for an HTTP probe. As CHROTE's controller does.
 
 use std::process::Stdio;
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
+
+use parvi_host_contract::{Component as State, LogLine};
 
 use super::catalog::Component;
 
@@ -16,13 +19,24 @@ pub const SYSTEMCTL: Duration = Duration::from_secs(15);
 /// The most an HTTP probe may take.
 const PROBE: Duration = Duration::from_secs(2);
 
-/// `systemctl` for this component and verb (`show`, `start`, `stop`).
-fn command(component: &Component, verb: &str) -> Result<Command, String> {
-    let props = ["--property=LoadState", "--property=ActiveState"];
+/// The most log lines one read gives back.
+pub const LOG_MOST: usize = 200;
+
+/// What `systemctl show` is asked for.
+const PROPS: &str = "--property=LoadState,ActiveState,SubState,NRestarts,\
+                     ActiveEnterTimestampMonotonic,InactiveEnterTimestampMonotonic";
+
+/// `program` (`systemctl` or `journalctl`) for this component, as its
+/// user's manager or the system's, with `args`.
+fn command(component: &Component, program: &str, args: &[&str]) -> Result<Command, String> {
     match component {
         Component::System { unit } => {
-            let mut c = Command::new("systemctl");
-            c.arg("show").args(props).arg(unit);
+            let mut c = Command::new(program);
+            c.args(args);
+            if program == "journalctl" {
+                c.arg("-u");
+            }
+            c.arg(unit);
             Ok(c)
         }
         Component::User { user, unit } => {
@@ -38,9 +52,9 @@ fn command(component: &Component, verb: &str) -> Result<Command, String> {
                 c.args(["-n", "-u", user, "env"]);
                 c
             };
-            c.args(env).args(["systemctl", "--user", verb]);
-            if verb == "show" {
-                c.args(props);
+            c.args(env).args([program, "--user"]).args(args);
+            if program == "journalctl" {
+                c.arg("-u");
             }
             c.arg(unit);
             Ok(c)
@@ -48,48 +62,166 @@ fn command(component: &Component, verb: &str) -> Result<Command, String> {
         Component::Http { .. } => Err("an HTTP probe is not a unit".into()),
     }
     .map(|mut c| {
-        // A systemctl that outlives its deadline is killed with the wait
-        // for it, so hung calls never pile up behind the node.
+        // A call that outlives its deadline is killed with the wait for
+        // it, so hung calls never pile up behind the node.
         c.kill_on_drop(true);
         c
     })
 }
 
-/// `active`, `inactive`, `failed`, `activating`, `deactivating`,
-/// `reloading`, or `unknown` when systemd does not say.
-pub async fn state(component: &Component) -> &'static str {
-    if let Component::Http { url } = component {
-        return probe(url).await;
-    }
-    let Ok(mut c) = command(component, "show") else {
-        return "unknown";
+/// What the component is doing, as systemd says.
+pub async fn state(component: &Component) -> State {
+    let unit = match component {
+        Component::Http { url } => {
+            return State {
+                unit: url.clone(),
+                state: probe(url).await.into(),
+                ..State::default()
+            };
+        }
+        Component::User { unit, .. } | Component::System { unit } => unit.clone(),
+    };
+    let unknown = State {
+        unit: unit.clone(),
+        state: "unknown".into(),
+        ..State::default()
+    };
+    let Ok(mut c) = command(component, "systemctl", &["show", PROPS]) else {
+        return unknown;
     };
     let out = tokio::time::timeout(SYSTEMCTL, c.stdin(Stdio::null()).output()).await;
     match out {
-        Ok(Ok(o)) if o.status.success() => active_state(&String::from_utf8_lossy(&o.stdout)),
-        _ => "unknown",
+        Ok(Ok(o)) if o.status.success() => State {
+            unit,
+            ..shown(
+                &String::from_utf8_lossy(&o.stdout),
+                now_ms(),
+                monotonic_us(),
+            )
+        },
+        _ => unknown,
     }
 }
 
-/// Reads `systemctl show`'s answer.
-pub fn active_state(show: &str) -> &'static str {
+/// Reads `systemctl show`'s answer, at `now` (Unix ms) and `clock` (the
+/// monotonic clock, µs, which systemd's `…Monotonic` times count in).
+pub fn shown(show: &str, now: u64, clock: u64) -> State {
     let field = |name: &str| {
         show.lines()
             .find_map(|l| l.strip_prefix(name)?.strip_prefix('='))
             .unwrap_or("")
     };
     if field("LoadState") != "loaded" {
-        return "unknown";
+        return State {
+            state: "unknown".into(),
+            ..State::default()
+        };
     }
-    match field("ActiveState") {
-        "active" => "active",
-        "inactive" => "inactive",
-        "failed" => "failed",
-        "activating" => "activating",
-        "deactivating" => "deactivating",
-        "reloading" => "reloading",
+    let sub = field("SubState").to_owned();
+    let state = match (field("ActiveState"), sub.as_str()) {
+        // Dead and waiting to be started again: a crash loop, not a start.
+        ("activating", "auto-restart") => "failed",
+        ("active", _) => "active",
+        ("inactive", _) => "inactive",
+        ("failed", _) => "failed",
+        ("activating", _) => "activating",
+        ("deactivating", _) => "deactivating",
+        ("reloading", _) => "reloading",
         _ => "unknown",
+    };
+    let entered = if matches!(state, "active" | "activating" | "reloading") {
+        "ActiveEnterTimestampMonotonic"
+    } else {
+        "InactiveEnterTimestampMonotonic"
+    };
+    let since = field(entered)
+        .parse::<u64>()
+        .ok()
+        .filter(|us| *us > 0 && *us <= clock)
+        .map(|us| now.saturating_sub((clock - us) / 1000));
+    State {
+        unit: String::new(),
+        state: state.into(),
+        sub,
+        since,
+        restarts: field("NRestarts").parse().unwrap_or(0),
     }
+}
+
+/// The last `lines` lines `component` logged, oldest first.
+pub async fn log(component: &Component, lines: usize) -> Result<Vec<LogLine>, String> {
+    let n = lines.min(LOG_MOST).to_string();
+    let args = ["-n", n.as_str(), "-o", "json", "--no-pager", "-q"];
+    let mut c = command(component, "journalctl", &args)?;
+    let out = tokio::time::timeout(SYSTEMCTL, c.stdin(Stdio::null()).output())
+        .await
+        .map_err(|_| format!("journalctl gave no answer in {} s", SYSTEMCTL.as_secs()))?
+        .map_err(|e| format!("journalctl: {e}"))?;
+    if !out.status.success() {
+        let words = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if words.is_empty() {
+            format!("journalctl {}", out.status)
+        } else {
+            words.chars().take(500).collect()
+        });
+    }
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(journal_line)
+        .collect())
+}
+
+/// One `journalctl -o json` entry: its time, message and priority. A
+/// message journald keeps as bytes is read as text.
+pub fn journal_line(json: &str) -> Option<LogLine> {
+    let entry: serde_json::Value = serde_json::from_str(json).ok()?;
+    let at = entry["__REALTIME_TIMESTAMP"]
+        .as_str()?
+        .parse::<u64>()
+        .ok()?
+        / 1000;
+    let text = match &entry["MESSAGE"] {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(bytes) => {
+            let bytes: Vec<u8> = bytes
+                .iter()
+                .filter_map(|b| b.as_u64())
+                .map(|b| b as u8)
+                .collect();
+            String::from_utf8_lossy(&bytes).into_owned()
+        }
+        _ => return None,
+    };
+    let priority = entry["PRIORITY"]
+        .as_str()
+        .and_then(|p| p.parse::<u8>().ok());
+    Some(LogLine {
+        at,
+        text: text.trim_end().to_owned(),
+        error: priority.is_some_and(|p| p <= 3),
+    })
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
+/// The monotonic clock systemd's `…Monotonic` times count, in µs.
+#[cfg(unix)]
+fn monotonic_us() -> u64 {
+    let mut t: libc::timespec = unsafe { std::mem::zeroed() };
+    // SAFETY: `t` is valid for writing.
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut t) } != 0 {
+        return 0;
+    }
+    t.tv_sec as u64 * 1_000_000 + t.tv_nsec as u64 / 1000
+}
+
+#[cfg(not(unix))]
+fn monotonic_us() -> u64 {
+    0
 }
 
 /// Why a unit did not do as told.
@@ -105,7 +237,7 @@ pub enum Refusal {
 /// Starts or stops one unit within `within`. The failure is systemctl's
 /// own words.
 pub async fn act(component: &Component, verb: &str, within: Duration) -> Result<(), Refusal> {
-    let mut c = command(component, verb).map_err(Refusal::Failed)?;
+    let mut c = command(component, "systemctl", &[verb]).map_err(Refusal::Failed)?;
     let out = tokio::time::timeout(within, c.stdin(Stdio::null()).output())
         .await
         .map_err(|_| {
@@ -185,24 +317,62 @@ fn uid_of(_: &str) -> Option<u32> {
 mod tests {
     use super::*;
 
+    fn state(show: &str) -> String {
+        shown(show, 0, 0).state
+    }
+
     #[test]
     fn reads_systemds_words() {
+        assert_eq!(state("LoadState=loaded\nActiveState=active\n"), "active");
+        assert_eq!(state("ActiveState=failed\nLoadState=loaded"), "failed");
         assert_eq!(
-            active_state("LoadState=loaded\nActiveState=active\n"),
-            "active"
-        );
-        assert_eq!(
-            active_state("ActiveState=failed\nLoadState=loaded"),
-            "failed"
-        );
-        assert_eq!(
-            active_state("LoadState=not-found\nActiveState=inactive"),
+            state("LoadState=not-found\nActiveState=inactive"),
             "unknown",
             "a unit systemd does not know is unknown, not stopped"
         );
         assert_eq!(
-            active_state("LoadState=loaded\nActiveState=maintenance"),
+            state("LoadState=loaded\nActiveState=maintenance"),
             "unknown"
         );
+        assert_eq!(
+            state("LoadState=loaded\nActiveState=activating\nSubState=auto-restart"),
+            "failed",
+            "waiting to be restarted after dying is failing"
+        );
+    }
+
+    #[test]
+    fn says_since_when_and_how_often_systemd_restarted_it() {
+        // The clock at 100 s, the unit active since 40 s: a minute ago.
+        let show = "LoadState=loaded\nActiveState=active\nSubState=running\nNRestarts=3\n\
+                    ActiveEnterTimestampMonotonic=40000000\nInactiveEnterTimestampMonotonic=1";
+        let s = shown(show, 1_000_000, 100_000_000);
+        assert_eq!(
+            (s.sub.as_str(), s.since, s.restarts),
+            ("running", Some(940_000), 3)
+        );
+        let never = "LoadState=loaded\nActiveState=inactive\nInactiveEnterTimestampMonotonic=0";
+        assert_eq!(shown(never, 1_000_000, 100_000_000).since, None);
+    }
+
+    #[test]
+    fn reads_journal_entries_as_text_bytes_or_not_at_all() {
+        let line = journal_line(
+            r#"{"__REALTIME_TIMESTAMP":"1700000000123456","MESSAGE":"listening on :80  ","PRIORITY":"6"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (line.at, line.text.as_str(), line.error),
+            (1_700_000_000_123, "listening on :80", false)
+        );
+        let bytes =
+            journal_line(r#"{"__REALTIME_TIMESTAMP":"1000","MESSAGE":[104,105],"PRIORITY":"3"}"#)
+                .unwrap();
+        assert_eq!((bytes.text.as_str(), bytes.error), ("hi", true));
+        assert_eq!(
+            journal_line(r#"{"__REALTIME_TIMESTAMP":"1000","MESSAGE":null}"#),
+            None
+        );
+        assert_eq!(journal_line("not json"), None);
     }
 }

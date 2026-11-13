@@ -1,31 +1,37 @@
-//! The services page: read each node's catalog and control its services.
+//! The Services page: what runs, what failed and what is stopped, on each
+//! node; beside the list, the chosen service's address, units, actions and
+//! latest log lines.
 use crate::{
-    services_store::{self, Change, Ended, NO_ANSWER, Services, Step},
+    services_store::{self, Change, Ended, Group, NO_ANSWER, Service, Services, Step},
     tokens,
 };
 use gpui::{
-    App, Context, Div, FocusHandle, IntoElement, KeyDownEvent, ParentElement, Render, ScrollHandle,
-    Styled, Window, canvas, div, prelude::*, px,
+    App, ClipboardItem, Context, Div, FocusHandle, IntoElement, KeyDownEvent, ParentElement,
+    Render, SharedString, Styled, Window, div, prelude::*, px,
 };
 use parvi_app_kit::{
     Ask, Host, Page,
-    host::{Request, Status},
+    ask::Answers,
+    host::{Node, Request, Status},
+    hub::now_ms,
     link::client::LinkState,
-    theme::{self, size},
-    widgets::kit,
+    theme::{self, Theme, size},
+    widgets::{kit, pane},
 };
 use parvi_core::NodeId;
-use std::{cell::Cell, rc::Rc, time::Duration};
+use std::time::Duration;
 
 const ACTION_WAIT: Duration = Duration::from_secs(50);
+/// A running service started less than this long ago says so in the list.
+const LATELY: u64 = 3_600_000;
+
 pub struct ServicesPage {
     host: Host,
     state: Services,
     shown: bool,
     focus: FocusHandle,
-    scroll: ScrollHandle,
-    reveal: Rc<Cell<bool>>,
 }
+
 impl ServicesPage {
     pub fn new(host: Host, _: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
@@ -33,10 +39,9 @@ impl ServicesPage {
             state: Services::default(),
             shown: false,
             focus: cx.focus_handle(),
-            scroll: ScrollHandle::new(),
-            reveal: Rc::new(Cell::new(false)),
         }
     }
+
     fn ask(
         &mut self,
         request: Request,
@@ -56,11 +61,14 @@ impl ServicesPage {
         })
         .detach();
     }
+
     fn read_all(&mut self, cx: &mut Context<Self>) {
         for node in self.host.nodes(cx) {
             self.read(node.id.as_str(), cx);
         }
+        self.read_log(cx);
     }
+
     fn read(&mut self, node: &str, cx: &mut Context<Self>) {
         let state = self.state.nodes.entry(node.to_string()).or_default();
         if state.reading {
@@ -71,16 +79,61 @@ impl ServicesPage {
         self.ask(
             Request::get(NodeId(at.clone()), "/api/services"),
             move |s, status, body, cx| {
-                s.state.nodes.entry(at).or_default().listed(
-                    status,
-                    &body,
-                    parvi_app_kit::hub::now_ms(),
-                );
+                s.state
+                    .nodes
+                    .entry(at)
+                    .or_default()
+                    .listed(status, &body, now_ms());
+                if s.state.selected.is_none() {
+                    s.state.selected = s.order(cx).into_iter().next();
+                    s.read_log(cx);
+                }
                 cx.notify();
             },
             cx,
         );
     }
+
+    /// Reads the chosen service's latest log lines.
+    fn read_log(&mut self, cx: &mut Context<Self>) {
+        let Some((node, id)) = self.state.selected.clone() else {
+            return;
+        };
+        let n = self.state.nodes.entry(node.clone()).or_default();
+        let log = n.logs.entry(id.clone()).or_default();
+        if log.reading {
+            return;
+        }
+        log.reading = true;
+        self.ask(
+            Request::get(
+                NodeId(node.clone()),
+                format!("/api/services/{id}/log?lines={}", LOG_LINES),
+            ),
+            move |s, status, body, cx| {
+                s.state
+                    .nodes
+                    .entry(node)
+                    .or_default()
+                    .logs
+                    .entry(id)
+                    .or_default()
+                    .read(status, &body);
+                cx.notify();
+            },
+            cx,
+        );
+    }
+
+    fn choose(&mut self, node: &str, id: &str, cx: &mut Context<Self>) {
+        let key = (node.to_owned(), id.to_owned());
+        if self.state.selected.as_ref() != Some(&key) {
+            self.state.selected = Some(key);
+            self.read_log(cx);
+        }
+        cx.notify();
+    }
+
     fn act(&mut self, node: &str, id: &str, change: Change, cx: &mut Context<Self>) {
         let n = self.state.nodes.entry(node.to_owned()).or_default();
         if n.changing.contains_key(id) {
@@ -106,12 +159,41 @@ impl ServicesPage {
                     Ended::Follow => s.follow(at, row, 0, cx),
                     Ended::Elsewhere => {}
                 }
+                s.read_log(cx);
                 cx.notify();
             },
             cx,
         );
         cx.notify();
     }
+
+    /// Every row, in the list's order: each node's, by group then name.
+    fn order(&self, cx: &App) -> Vec<(String, String)> {
+        self.host
+            .nodes(cx)
+            .iter()
+            .flat_map(|node| {
+                self.sorted(node.id.as_str())
+                    .into_iter()
+                    .map(|s| (node.id.to_string(), s.id.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    fn sorted(&self, node: &str) -> Vec<&Service> {
+        let mut list: Vec<&Service> = self
+            .state
+            .nodes
+            .get(node)
+            .and_then(|n| n.list.as_ref())
+            .into_iter()
+            .flatten()
+            .collect();
+        list.sort_by_key(|s| (Group::of(&s.state), s.name.to_lowercase()));
+        list
+    }
+
     fn key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         if event.keystroke.modifiers.modified() {
             return;
@@ -124,30 +206,16 @@ impl ServicesPage {
             _ => None,
         };
         if let Some(step) = step {
-            let order: Vec<_> = self
-                .host
-                .nodes(cx)
-                .iter()
-                .flat_map(|node| {
-                    self.state
-                        .nodes
-                        .get(node.id.as_str())
-                        .and_then(|n| n.list.as_ref())
-                        .into_iter()
-                        .flatten()
-                        .map(|s| (node.id.to_string(), s.id.clone()))
-                        .collect::<Vec<_>>()
-                })
-                .collect();
+            let order = self.order(cx);
+            let before = self.state.selected.clone();
             self.state.step(&order, step);
-            self.reveal.set(true);
-        } else if event.keystroke.key == "escape" && self.state.selected.is_some() {
-            self.state.selected = None;
+            if self.state.selected != before {
+                self.read_log(cx);
+            }
         } else if event.keystroke.key == "enter" {
-            if let Some((node, id, change)) = self.state.enter() {
-                self.act(&node, &id, change, cx);
-            } else {
-                return;
+            match self.state.enter() {
+                Some(link) => cx.open_url(&link),
+                None => return,
             }
         } else {
             return;
@@ -155,6 +223,7 @@ impl ServicesPage {
         cx.stop_propagation();
         cx.notify();
     }
+
     fn follow(&mut self, node: String, id: String, read: usize, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             cx.background_executor()
@@ -167,7 +236,7 @@ impl ServicesPage {
                     Request::get(NodeId(node), path),
                     move |s, status, body, cx| {
                         let last = read + 1 == services_store::FOLLOW.len();
-                        let clock = parvi_app_kit::clock::hhmm(parvi_app_kit::hub::now_ms());
+                        let clock = parvi_app_kit::clock::hhmm(now_ms());
                         if s.state
                             .nodes
                             .entry(at.clone())
@@ -175,6 +244,8 @@ impl ServicesPage {
                             .followed(&id, status, &body, last, &clock)
                         {
                             s.follow(at, id, read + 1, cx);
+                        } else {
+                            s.read_log(cx);
                         }
                         cx.notify();
                     },
@@ -185,20 +256,50 @@ impl ServicesPage {
         .detach();
     }
 }
+
+/// Log lines the detail shows: the latest, oldest first, as many as the
+/// first screen holds.
+const LOG_LINES: usize = 20;
+
 impl Page for ServicesPage {
     const ID: &'static str = "services";
     const TITLE: &'static str = "Services";
     const KEY: Option<char> = Some('E');
     const AREA: Option<&'static str> = Some("host");
+    const ANSWERS: &'static [Answers] = &[Answers::Reveal("service")];
+
     fn focus(&self, _: &App) -> Option<FocusHandle> {
         Some(self.focus.clone())
     }
+
     fn shown(&mut self, shown: bool, _: &mut Window, cx: &mut Context<Self>) {
         self.shown = shown;
         if shown {
             self.read_all(cx);
         }
     }
+
+    fn answer(&mut self, ask: Ask, _: &'static str, _: &mut Window, cx: &mut Context<Self>) {
+        let Ask::Reveal { id, node, .. } = ask else {
+            return;
+        };
+        let node = node.map(|n| n.to_string()).or_else(|| {
+            self.state
+                .nodes
+                .iter()
+                .find(|(_, n)| n.row(&id).is_some())
+                .map(|(n, _)| n.clone())
+        });
+        match node {
+            Some(node) => {
+                self.choose(&node, &id, cx);
+            }
+            None => self
+                .host
+                .report(Status::failure(format!("No service {id} is listed")), cx),
+        }
+    }
+
     fn link(
         &mut self,
         node: &NodeId,
@@ -211,289 +312,344 @@ impl Page for ServicesPage {
         }
     }
 }
+
 impl Render for ServicesPage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme::theme(cx).clone();
-        let mut body = div().flex().flex_col().gap(px(tokens::GAP));
-        let (mut count, mut running, mut partial, mut failed) = (0, 0, 0, 0);
-        let mut refreshed = None;
-        for node in self.host.nodes(cx) {
-            let id = node.id.as_str();
-            let state = self.state.nodes.get(id);
-            let mut room = div()
-                .flex()
-                .flex_col()
-                .border_1()
-                .border_color(t.divider)
-                .rounded(px(size::RADIUS))
-                .bg(t.surface)
-                .child(div().p(px(tokens::PAD)).child(kit::device_label(
-                    &t,
-                    &node.device,
-                    &node.environment,
-                )));
-            if let Some(error) = state.and_then(|s| s.error.as_ref()) {
-                room = room.child(
-                    div()
-                        .px(px(tokens::PAD))
-                        .pb(px(tokens::PAD))
-                        .child(kit::note(&t, error.clone(), Some(t.error))),
-                );
-            }
-            if let Some(n) = state {
-                if let Some(list) = &n.list {
-                    count += list.len();
-                    running += list.iter().filter(|s| s.state == "running").count();
-                    partial += list.iter().filter(|s| s.state == "partial").count();
-                    failed += list.iter().filter(|s| s.state == "failed").count();
-                    refreshed = refreshed.max(n.read_at);
-                    if list.is_empty() {
-                        room =
-                            room.child(div().px(px(tokens::PAD)).pb(px(tokens::PAD)).child(
-                                kit::note(&t, "The catalog lists no services.", Some(t.dim)),
-                            ));
-                    }
-                    for service in list {
-                        let (node_id, service_id) = (id.to_owned(), service.id.clone());
-                        let selected = self.state.selected.as_ref()
-                            == Some(&(node_id.clone(), service_id.clone()));
-                        let (pick_node, pick_id) = (node_id.clone(), service_id.clone());
-                        let selector = format!("svc-row-{id}-{}", service.id);
-                        let status_selector =
-                            format!("svc-state-{id}-{}-{}", service.id, n.shown(service));
-                        let failure_selector = n
-                            .failures
-                            .get(&service.id)
-                            .map(|_| format!("svc-failure-{id}-{}", service.id));
-                        let mut row = div()
-                            .debug_selector(move || selector)
-                            .id(gpui::SharedString::from(format!(
-                                "svc-row-{id}-{}",
-                                service.id
-                            )))
-                            .flex()
-                            .items_center()
-                            .gap(px(tokens::SMALL_GAP))
-                            .p(px(tokens::PAD))
-                            .border_t_1()
-                            .border_color(t.divider)
-                            .relative()
-                            .when(selected, |d| {
-                                d.bg(theme::alpha(t.accent, tokens::SELECTED))
-                                    .child(reveal(self.scroll.clone(), self.reveal.clone()))
-                            })
-                            .on_click(cx.listener(move |s, _, window, cx| {
-                                s.state.selected = Some((pick_node.clone(), pick_id.clone()));
-                                window.focus(&s.focus, cx);
-                                cx.notify();
-                            }))
-                            .child(
-                                div()
-                                    .w(px(tokens::COL))
-                                    .flex_none()
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .whitespace_nowrap()
-                                    .child(service.name.clone()),
-                            )
-                            .child(
-                                div()
-                                    .w(px(tokens::COL))
-                                    .flex_none()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(tokens::SMALL_GAP))
-                                    .child(glyph(&t, &service.state))
-                                    .child(
-                                        div()
-                                            .debug_selector(move || status_selector)
-                                            .child(n.shown(service).to_string()),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .when_some(failure_selector, |d, selector| {
-                                        d.debug_selector(move || selector)
-                                    })
-                                    .child(
-                                        n.failures
-                                            .get(&service.id)
-                                            .or_else(|| n.unsettled.get(&service.id))
-                                            .cloned()
-                                            .unwrap_or_else(|| service.description.clone()),
-                                    ),
-                            );
-                        let mut primary = div().w(px(tokens::ACTION_COL)).flex_none();
-                        let mut restart = div().w(px(tokens::ACTION_COL)).flex_none();
-                        if service.controllable && !n.changing.contains_key(&service.id) {
-                            if let Some(change) = services_store::primary(&service.state) {
-                                let (node, row_id) = (node_id.clone(), service_id.clone());
-                                let selector = format!("svc-{}-{id}-{}", change.verb(), service.id);
-                                primary = primary.child(
-                                    kit::button(
-                                        &t,
-                                        gpui::SharedString::from(format!(
-                                            "svc-{}-{id}-{}",
-                                            change.verb(),
-                                            service.id
-                                        )),
-                                        if change == Change::Stop {
-                                            "Stop"
-                                        } else {
-                                            "Start"
-                                        },
-                                        kit::Kind::Plain,
-                                    )
-                                    .debug_selector(move || selector)
-                                    .on_click(cx.listener(
-                                        move |s, _, _, cx| s.act(&node, &row_id, change, cx),
-                                    )),
-                                );
-                            }
-                            let (node, row_id) = (node_id.clone(), service_id.clone());
-                            let selector = format!("svc-restart-{id}-{}", service.id);
-                            restart = restart.child(
-                                kit::button(
-                                    &t,
-                                    gpui::SharedString::from(selector.clone()),
-                                    "Restart",
-                                    kit::Kind::Plain,
-                                )
-                                .debug_selector(move || selector)
-                                .on_click(cx.listener(
-                                    move |s, _, _, cx| s.act(&node, &row_id, Change::Restart, cx),
-                                )),
-                            );
-                        } else if !service.controllable {
-                            primary = primary.child(kit::note(&t, "read-only", Some(t.dim)));
-                        }
-                        row = row.child(primary).child(restart);
-                        let mut link_column =
-                            div().w(px(tokens::LINK_COL)).flex_none().overflow_hidden();
-                        if let Some(label) = services_store::link_label(&service.link) {
-                            let link = service.link.clone();
-                            let (host, port) = match label.rsplit_once(':') {
-                                Some((host, port)) => (host.to_owned(), format!(":{port}")),
-                                None => (label, String::new()),
-                            };
-                            link_column = link_column.child(
-                                kit::button(
-                                    &t,
-                                    gpui::SharedString::from(format!(
-                                        "svc-link-{id}-{}",
-                                        service.id
-                                    )),
-                                    "",
-                                    kit::Kind::Quiet,
-                                )
-                                .w_full()
-                                .justify_start()
-                                .whitespace_nowrap()
-                                .tooltip(kit::tip(link.clone()))
-                                // Links on one host differ in the port: a
-                                // long host gives way, the port shows whole.
-                                .child(
-                                    div()
-                                        .min_w_0()
-                                        .flex_shrink_1()
-                                        .overflow_hidden()
-                                        .text_ellipsis()
-                                        .child(host),
-                                )
-                                .child(div().flex_none().child(port))
-                                .on_click(move |_, _, cx| cx.open_url(&link)),
-                            );
-                        }
-                        row = row.child(link_column);
-                        let reference = services_store::reference(service);
-                        let send_selector = format!("svc-send-{id}-{}", service.id);
-                        row = row.child(
-                            div().w(px(tokens::SEND_COL)).flex_none().child(
-                                kit::button(
-                                    &t,
-                                    gpui::SharedString::from(format!(
-                                        "svc-send-{id}-{}",
-                                        service.id
-                                    )),
-                                    "Send",
-                                    kit::Kind::Quiet,
-                                )
-                                .debug_selector(move || send_selector)
-                                .on_click(cx.listener(
-                                    move |s, _, _, cx| {
-                                        let _ = s.host.ask(
-                                            Ask::Send {
-                                                reference: reference.clone(),
-                                                target: None,
-                                            },
-                                            cx,
-                                        );
-                                    },
-                                )),
-                            ),
-                        );
-                        room = room.child(row);
-                    }
-                } else if n.error.is_none() {
-                    room = room.child(kit::note(&t, "Reading services…", Some(t.dim)));
-                }
-            }
-            body = body.child(room);
+        let nodes = self.host.nodes(cx);
+        let several = nodes.len() > 1;
+        let mut rows = div().flex().flex_col();
+        for node in &nodes {
+            rows = rows.child(self.node_rows(&t, node, several, cx));
         }
+        let head = pane::list_head(&t, None).child(
+            pane::act(&t, "services-refresh", "Refresh")
+                .debug_selector(|| "services-refresh".into())
+                .on_click(cx.listener(|s, _, _, cx| s.read_all(cx))),
+        );
+        let list = pane::list(&t, "services-list", head, rows);
+        let chosen = self
+            .state
+            .selected
+            .clone()
+            .and_then(|(n, id)| Some((n.clone(), self.state.service(&n, &id)?.clone())));
+        let detail = match chosen {
+            Some((node, service)) => self.detail(&t, &node, &service, cx),
+            None => {
+                let reading = self.state.nodes.values().any(|n| n.list.is_none());
+                let words = if nodes.is_empty() {
+                    "Waiting for a node…"
+                } else if reading {
+                    "Reading services…"
+                } else {
+                    "The catalog lists no services."
+                };
+                pane::detail(
+                    &t,
+                    "services-detail",
+                    pane::head(&t),
+                    pane::empty(&t, words, None).p_0(),
+                )
+            }
+        };
         div()
             .id("services")
+            .size_full()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|s, e: &KeyDownEvent, _, cx| s.key(e, cx)))
-            .size_full()
-            .flex()
-            .flex_col()
-            .bg(t.bg)
-            .text_color(t.text)
-            .child(
-                kit::page_bar(&t)
-                    .child(kit::page_title(&t, "Services"))
-                    .child(div().flex_1())
-                    .child(
-                        kit::button(&t, "services-refresh", "Refresh", kit::Kind::Quiet)
-                            .debug_selector(|| "services-refresh".into())
-                            .on_click(cx.listener(|s, _, _, cx| s.read_all(cx))),
-                    ),
-            )
-            .child(
-                div()
-                    .id("services-list")
-                    .track_scroll(&self.scroll)
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .p(px(tokens::PAD))
-                    .child(body),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap(px(tokens::GAP))
-                    .p(px(tokens::PAD))
-                    .border_t_1()
-                    .border_color(t.divider)
-                    .text_size(px(size::SMALL))
-                    .text_color(t.text2)
-                    .child(format!("{count} services"))
-                    .child(format!("{running} running"))
-                    .when(partial > 0, |d| d.child(format!("{partial} partial")))
-                    .when(failed > 0, |d| {
-                        d.child(div().text_color(t.error).child(format!("{failed} failed")))
-                    })
-                    .when_some(refreshed, |d, at| {
-                        d.child(format!("refreshed {}", parvi_app_kit::clock::hhmm(at)))
-                    }),
-            )
+            .child(pane::page(&t, list, detail).text_color(t.text))
     }
 }
 
-fn glyph(t: &theme::Theme, state: &str) -> Div {
+impl ServicesPage {
+    fn node_rows(&self, t: &Theme, node: &Node, several: bool, cx: &mut Context<Self>) -> Div {
+        let id = node.id.as_str();
+        let mut out = div().flex().flex_col();
+        let n = self.state.nodes.get(id);
+        if several {
+            out = out.child(
+                div()
+                    .px(px(size::ROW_PAD))
+                    .pt(px(size::LABEL_TOP))
+                    .child(kit::device_label(t, &node.device, &node.environment)),
+            );
+        }
+        if let Some(e) = n.and_then(|n| n.error.as_ref()) {
+            out = out.child(
+                div()
+                    .px(px(size::ROW_PAD))
+                    .py(px(size::LABEL_BOTTOM))
+                    .child(pane::meta(t, format!("Not read: {e}"), Some(t.error))),
+            );
+        }
+        let Some(n) = n else { return out };
+        let now = now_ms();
+        let mut group = None;
+        for service in self.sorted(id) {
+            let g = Group::of(&service.state);
+            if group != Some(g) {
+                group = Some(g);
+                out = out.child(pane::label(t, g.label()));
+            }
+            let chosen = self.state.selected.as_ref() == Some(&(id.to_owned(), service.id.clone()));
+            let changing = n.changing.get(&service.id).map(|c| c.word());
+            let (meta, colour) = match (changing, g) {
+                (Some(w), _) => (w.to_string(), None),
+                (None, Group::Failed) => (service.state.clone(), Some(t.error)),
+                (None, Group::Running) => match service.since() {
+                    _ if service.state != "running" => {
+                        (services_store::word(&service.state).to_string(), None)
+                    }
+                    Some(since) if now.saturating_sub(since) < LATELY => {
+                        (format!("up {}", services_store::ago(since, now)), None)
+                    }
+                    _ => (String::new(), None),
+                },
+                (None, Group::Stopped) => (String::new(), None),
+            };
+            let shown = n.shown(service).to_string();
+            let state_selector = format!("svc-state-{id}-{}-{shown}", service.id);
+            let selector = format!("svc-row-{id}-{}", service.id);
+            let (at, sid) = (id.to_owned(), service.id.clone());
+            out = out.child(
+                pane::row(t, SharedString::from(selector.clone()), chosen)
+                    .debug_selector(move || selector)
+                    .child(glyph(t, &service.state))
+                    .child(pane::cell(service.name.clone()))
+                    .child(
+                        div()
+                            .debug_selector(move || state_selector)
+                            .child(pane::meta(t, meta, colour)),
+                    )
+                    .on_click(cx.listener(move |s, _, window, cx| {
+                        window.focus(&s.focus, cx);
+                        s.choose(&at, &sid, cx);
+                    })),
+            );
+        }
+        if n.list.as_ref().is_some_and(Vec::is_empty) {
+            out = out.child(div().px(px(size::ROW_PAD)).child(pane::meta(
+                t,
+                "The catalog lists no services.",
+                None,
+            )));
+        }
+        out
+    }
+
+    fn detail(&self, t: &Theme, node: &str, s: &Service, cx: &mut Context<Self>) -> Div {
+        let n = self.state.nodes.get(node).expect("listed");
+        let now = now_ms();
+        let mut head = pane::head(t)
+            .child(pane::title(t, s.name.clone()))
+            .child(pane::send(
+                t,
+                "svc-send",
+                &self.host,
+                services_store::reference(s, now),
+            ));
+        if !s.link.is_empty() {
+            let link = s.link.clone();
+            head = head.child(
+                pane::act(t, "svc-open", "Open")
+                    .debug_selector(|| "svc-open".into())
+                    .tooltip(kit::tip(s.link.clone()))
+                    .on_click(move |_, _, cx| cx.open_url(&link)),
+            );
+        }
+        if s.controllable && !n.changing.contains_key(&s.id) {
+            for change in services_store::actions(&s.state) {
+                let change = *change;
+                let selector = format!("svc-{}-{node}-{}", change.verb(), s.id);
+                let (at, id) = (node.to_owned(), s.id.clone());
+                let word = match change {
+                    Change::Start => "Start",
+                    Change::Stop => "Stop",
+                    Change::Restart => "Restart",
+                };
+                head = head.child(
+                    pane::act(t, SharedString::from(selector.clone()), word)
+                        .debug_selector(move || selector)
+                        .on_click(cx.listener(move |p, _, _, cx| p.act(&at, &id, change, cx))),
+                );
+            }
+        }
+
+        let group = Group::of(&s.state);
+        let mut state = n.shown(s).to_string();
+        if let Some(since) = s.since() {
+            state.push_str(&format!(" for {}", services_store::ago(since, now)));
+        }
+        if s.restarts() > 0 {
+            state.push_str(&format!(", restarted {} times by systemd", s.restarts()));
+        }
+        let state_selector = format!("svc-detail-state-{state}");
+        let mut lines = div().flex().flex_col().child(pane::line(
+            t,
+            "State",
+            div()
+                .debug_selector(move || state_selector)
+                .when(group == Group::Failed, |d| d.text_color(t.error))
+                .child(state),
+        ));
+        if let Some(failure) = n.failures.get(&s.id) {
+            let selector = format!("svc-failure-{node}-{}", s.id);
+            lines = lines.child(pane::line(
+                t,
+                "Last action",
+                div()
+                    .debug_selector(move || selector)
+                    .text_color(t.error)
+                    .child(failure.clone()),
+            ));
+        } else if let Some(note) = n.unsettled.get(&s.id) {
+            lines = lines.child(pane::line(
+                t,
+                "Last action",
+                div().text_color(t.text2).child(note.clone()),
+            ));
+        }
+        if !s.link.is_empty() {
+            let (open, copy) = (s.link.clone(), s.link.clone());
+            lines = lines.child(pane::line(
+                t,
+                "Address",
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(size::HEAD_GAP))
+                    .child(
+                        div()
+                            .id("svc-address")
+                            .debug_selector(|| "svc-address".into())
+                            .min_w_0()
+                            .text_color(t.accent)
+                            .cursor_pointer()
+                            .hover(|d| d.underline())
+                            .child(s.link.clone())
+                            .on_click(move |_, _, cx| cx.open_url(&open)),
+                    )
+                    .child(
+                        pane::act(t, "svc-copy", "Copy")
+                            .debug_selector(|| "svc-copy".into())
+                            .on_click(cx.listener(move |p, _, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
+                                p.host.toast("Address copied", cx);
+                            })),
+                    ),
+            ));
+        }
+        if !s.description.is_empty() {
+            lines = lines.child(pane::line(
+                t,
+                "What",
+                div().text_color(t.text2).child(s.description.clone()),
+            ));
+        }
+        if !s.components.is_empty() {
+            let mut units = div().flex().flex_col();
+            for c in &s.components {
+                let state = if c.sub.is_empty() || c.sub == c.state {
+                    c.state.clone()
+                } else {
+                    format!("{} ({})", c.state, c.sub)
+                };
+                units = units.child(
+                    div()
+                        .min_h(px(size::ROW))
+                        .flex()
+                        .items_center()
+                        .gap(px(size::HEAD_GAP))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .text_color(t.text2)
+                                .child(c.unit.clone()),
+                        )
+                        .child(pane::meta(
+                            t,
+                            state,
+                            (c.state == "failed").then_some(t.error),
+                        )),
+                );
+            }
+            let name = if s.components.len() == 1 {
+                "Unit"
+            } else {
+                "Units"
+            };
+            lines = lines.child(pane::line(t, name, units));
+        }
+        if !s.controllable {
+            lines = lines.child(pane::line(
+                t,
+                "Control",
+                div()
+                    .text_color(t.dim)
+                    .child("Read-only: the catalog does not let Parvi start or stop it"),
+            ));
+        }
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap(px(size::SECTION_GAP))
+            .child(lines)
+            .child(self.log(t, n.logs.get(&s.id)));
+        pane::detail(t, "services-detail", head, body)
+    }
+
+    fn log(&self, t: &Theme, log: Option<&services_store::Log>) -> Div {
+        let mut section = pane::section(t, "Log");
+        let Some(log) = log else {
+            return section.child(div().text_color(t.dim).child("Reading the log…"));
+        };
+        for e in &log.errors {
+            section = section.child(div().text_color(t.dim).child(e.clone()));
+        }
+        if log.lines.is_empty() {
+            let words = if log.reading {
+                "Reading the log…"
+            } else {
+                "Nothing logged."
+            };
+            if log.errors.is_empty() || log.reading {
+                section = section.child(div().text_color(t.dim).child(words));
+            }
+            return section;
+        }
+        for line in &log.lines {
+            let selector = format!("svc-log-{}", line.text);
+            section = section.child(
+                div()
+                    .debug_selector(move || selector)
+                    .flex()
+                    .items_start()
+                    .gap(px(size::HEAD_GAP))
+                    .text_size(px(size::SMALL))
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(px(tokens::TIME_COL))
+                            .text_color(t.dim)
+                            .child(parvi_app_kit::clock::hhmm(line.at)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_color(if line.error { t.error } else { t.text2 })
+                            .child(line.text.clone()),
+                    ),
+            );
+        }
+        section
+    }
+}
+
+fn glyph(t: &Theme, state: &str) -> Div {
     let dot = div()
         .size(px(tokens::GLYPH))
         .flex_none()
@@ -501,59 +657,14 @@ fn glyph(t: &theme::Theme, state: &str) -> Div {
         .overflow_hidden();
     match state {
         "running" => dot.bg(t.accent),
-        "starting" => dot.bg(theme::alpha(t.accent, tokens::GRID_MID)),
+        "starting" => dot.bg(theme::alpha(t.accent, tokens::FADED)),
         "partial" => dot
             .border_1()
-            .border_color(t.accent)
-            .child(div().w(px(tokens::GLYPH / 2.)).h_full().bg(t.accent)),
+            .border_color(t.error)
+            .child(div().w(px(tokens::GLYPH / 2.)).h_full().bg(t.error)),
         "failed" => dot.bg(t.error),
-        "unknown" => dot.border_1().border_dashed().border_color(t.dim),
+        "unknown" => dot.border_1().border_dashed().border_color(t.error),
         "stopping" => dot.border_1().border_color(t.accent),
         _ => dot.border_1().border_color(t.dim),
-    }
-}
-
-/// Reveal the chosen keyboard row without moving a row already visible.
-fn reveal(scroll: ScrollHandle, pending: Rc<Cell<bool>>) -> impl IntoElement {
-    canvas(
-        move |row, window, cx| {
-            if !pending.take() {
-                return;
-            }
-            let view = scroll.bounds();
-            let by = into_view(
-                (row.top().into(), row.bottom().into()),
-                (view.top().into(), view.bottom().into()),
-            );
-            if by != 0. {
-                let at = scroll.offset();
-                scroll.set_offset(gpui::point(at.x, at.y + px(by)));
-                window.defer(cx, |window, _| window.refresh());
-            }
-        },
-        |_, _, _, _| {},
-    )
-    .absolute()
-    .size_full()
-}
-fn into_view(row: (f32, f32), view: (f32, f32)) -> f32 {
-    if row.0 < view.0 {
-        view.0 - row.0
-    } else if row.1 > view.1 {
-        (view.1 - row.1).max(view.0 - row.0)
-    } else {
-        0.
-    }
-}
-#[cfg(test)]
-mod tests {
-    use super::into_view;
-    #[test]
-    fn a_chosen_row_scrolls_just_into_view() {
-        let view = (100., 400.);
-        assert_eq!(into_view((150., 180.), view), 0.);
-        assert_eq!(into_view((60., 90.), view), 40.);
-        assert_eq!(into_view((390., 420.), view), -20.);
-        assert_eq!(into_view((350., 800.), view), -250.);
     }
 }

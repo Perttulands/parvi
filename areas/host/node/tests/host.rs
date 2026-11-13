@@ -120,7 +120,8 @@ async fn services_and_commands_use_the_same_catalog_and_coded_errors() {
             "service_show",
             "service_start",
             "service_stop",
-            "service_restart"
+            "service_restart",
+            "service_log"
         ]
     );
     for tool in tools {
@@ -169,11 +170,27 @@ async fn services_and_commands_use_the_same_catalog_and_coded_errors() {
             .code,
         "unknown_node"
     );
+    // A probe has no log; a unit whose journal does not read says why.
+    let log = node
+        .call("service_log", json!({"id":"fixture"}))
+        .await
+        .unwrap();
+    assert_eq!(log["lines"], json!([]));
+    assert_eq!(log["errors"], json!([]));
+    let log = node
+        .call("service_log", json!({"id":"failing", "lines": 5}))
+        .await
+        .unwrap();
+    assert_eq!(log["errors"].as_array().unwrap().len(), 1, "{log}");
     let host = node.call("host_show", json!({})).await.unwrap();
     assert_eq!(host["node"], node.id());
     assert!(host["facts"]["threads"].as_u64().is_some_and(|n| n > 0));
     #[cfg(target_os = "linux")]
-    assert!(host["latest"]["memory"].is_object());
+    {
+        assert!(host["latest"]["memory"].is_object());
+        assert!(!host["latest"]["heavy"].as_array().unwrap().is_empty());
+        assert!(!host["latest"]["disks"].as_array().unwrap().is_empty());
+    }
 
     let host_args = ["show", "--node", &node.url(), "--json"].map(String::from);
     let mut host_output = Vec::new();
@@ -220,13 +237,29 @@ async fn socket_subscription_starts_with_state_streams_readings_and_stops() {
     let state = read(&mut socket).await;
     assert_eq!(state[0], contract::HOST_STATE);
     let state: State = serde_json::from_slice(&state[1..]).unwrap();
-    assert_eq!(state.every, 5000);
-    let frame = read(&mut socket).await;
-    assert_eq!(frame[0], contract::HOST_READING);
-    let reading: ReadingFrame = serde_json::from_slice(&frame[1..]).unwrap();
-    assert_eq!(reading.reading.at, reading.point.at);
+    assert!(state.facts.threads > 0);
+    // Someone looking gets a reading with what is heavy at once, not at
+    // the next idle tick (one the node was taking as they came may be
+    // first, without it).
+    let mut looked = None;
+    for _ in 0..2 {
+        let frame = tokio::time::timeout(Duration::from_secs(3), socket.next())
+            .await
+            .expect("a reading as soon as the channel opens")
+            .unwrap()
+            .unwrap()
+            .into_data();
+        assert_eq!(frame[0], contract::HOST_READING);
+        let reading: ReadingFrame = serde_json::from_slice(&frame[1..]).unwrap();
+        assert_eq!(reading.reading.at, reading.point.at);
+        if !reading.reading.heavy.is_empty() || cfg!(not(target_os = "linux")) {
+            looked = Some(reading);
+            break;
+        }
+    }
+    let looked = looked.expect("what is heavy, read while someone looks");
     #[cfg(target_os = "linux")]
-    assert!(reading.reading.memory.is_some());
+    assert!(looked.reading.memory.is_some());
 
     // A refused systemd invocation logs an event without reaching a manager.
     std::fs::write(

@@ -16,6 +16,7 @@ pub const LISTING: Listing = Listing {
         "service_start",
         "service_stop",
         "service_restart",
+        "service_log",
     ],
     build,
 };
@@ -40,7 +41,7 @@ pub fn build(setup: &Setup) -> anyhow::Result<Built> {
     Built::now(HostArea {
         host: Arc::new(host::Host::start(
             host::EVERY,
-            host::HISTORY,
+            host::IDLE,
             setup.events.clone(),
         )),
         services: Arc::new(

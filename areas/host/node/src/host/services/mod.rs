@@ -1,11 +1,14 @@
-//! Services: the host's catalog of services with their state, started and
-//! stopped through systemd (#188). Parvi owns this itself, with CHROTE's
+//! Services: the host's catalog of services with their state and log,
+//! started and stopped through systemd. Parvi owns this itself, with CHROTE's
 //! catalog, group and partial-state rules; it reads only when asked, so it
 //! costs nothing while nobody looks.
 //!
 //! `GET /api/services` lists `{services:[{id,name,description,link,state,
-//! controllable,components}]}`, and `GET /api/services/{id}` reads one
-//! service's units alone (a client following its own action).
+//! controllable,components:[{unit,state,sub,since,restarts}]}]}`, and
+//! `GET /api/services/{id}` reads one service's units alone (a client
+//! following its own action). `GET /api/services/{id}/log?lines=N` answers
+//! its units' last lines from the journal, merged oldest first, and why a
+//! unit's could not be read.
 //! `POST /api/services/{id}/{start|stop|restart}` answers `{service,
 //! errors, outcome}`: 200 `done` when every unit did as told, 502 `failed`
 //! with systemd's words, and 202 `unconfirmed` when a unit gave no answer
@@ -21,12 +24,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use parvi_host_contract::{Outcome, Service};
+use parvi_host_contract::{Outcome, Service, ServiceLog};
 use tokio::sync::Mutex;
 
 use catalog::Entry;
@@ -67,16 +70,20 @@ pub fn group(components: &[&str]) -> &'static str {
 async fn status(e: &Entry) -> Service {
     let reads = e.components.iter().map(systemd::state);
     let components = futures_util::future::join_all(reads).await;
+    let states: Vec<&str> = components.iter().map(|c| c.state.as_str()).collect();
     Service {
         id: e.id.clone(),
         name: e.name.clone(),
         description: e.description.clone(),
         link: e.link.clone(),
-        state: group(&components).to_string(),
+        state: group(&states).to_string(),
         controllable: !e.read_only,
-        components: components.into_iter().map(str::to_owned).collect(),
+        components,
     }
 }
+
+/// How many log lines a read gives when it does not say.
+pub const LOG_LINES: usize = 40;
 
 impl Services {
     pub fn with_events(mut self, events: std::sync::Arc<parvi_node_kit::events::Log>) -> Self {
@@ -125,6 +132,28 @@ impl Services {
     /// One service as its units are now.
     pub async fn one(&self, id: &str) -> Result<Service, Refused> {
         Ok(status(&self.entry(id)?).await)
+    }
+
+    /// The last `lines` lines a service's units logged, oldest first; a
+    /// unit whose log does not read says why instead.
+    pub async fn log(&self, id: &str, lines: usize) -> Result<ServiceLog, Refused> {
+        let entry = self.entry(id)?;
+        let units = entry
+            .components
+            .iter()
+            .filter(|c| !matches!(c, catalog::Component::Http { .. }));
+        let reads = futures_util::future::join_all(units.map(|c| systemd::log(c, lines))).await;
+        let mut log = ServiceLog::default();
+        for read in reads {
+            match read {
+                Ok(lines) => log.lines.extend(lines),
+                Err(e) => log.errors.push(e),
+            }
+        }
+        log.lines.sort_by_key(|l| l.at);
+        let over = log.lines.len().saturating_sub(lines);
+        log.lines.drain(..over);
+        Ok(log)
     }
 
     /// Starts, stops or restarts every unit of a service within
@@ -241,6 +270,7 @@ pub fn routes<S: Clone + Send + Sync + 'static>(services: Arc<Services>) -> Rout
     Router::new()
         .route("/api/services", get(list))
         .route("/api/services/{id}", get(one))
+        .route("/api/services/{id}/log", get(log))
         .route("/api/services/{id}/{action}", post(act))
         .with_state(services)
 }
@@ -255,6 +285,22 @@ async fn list(State(s): State<Arc<Services>>) -> Response {
 async fn one(State(s): State<Arc<Services>>, Path(id): Path<String>) -> Response {
     match s.one(&id).await {
         Ok(service) => Json(parvi_host_contract::ServiceOne { service }).into_response(),
+        Err(r) => r.into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct Lines {
+    lines: Option<usize>,
+}
+
+async fn log(
+    State(s): State<Arc<Services>>,
+    Path(id): Path<String>,
+    Query(q): Query<Lines>,
+) -> Response {
+    match s.log(&id, q.lines.unwrap_or(LOG_LINES)).await {
+        Ok(log) => Json(log).into_response(),
         Err(r) => r.into_response(),
     }
 }

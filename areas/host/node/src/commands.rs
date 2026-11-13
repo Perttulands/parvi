@@ -29,6 +29,10 @@ pub(crate) fn commands(services: Arc<Services>, events: Arc<Log>, node: String) 
             "service_restart",
             "Stop every unit of a service, then start them.",
         ),
+        (
+            "service_log",
+            "The last lines a service's units logged, oldest first.",
+        ),
     ]
     .into_iter()
     .map(|(name, description)| {
@@ -36,6 +40,14 @@ pub(crate) fn commands(services: Arc<Services>, events: Arc<Log>, node: String) 
         let schema = move || {
             if matches!(name, "host_show" | "service_list") {
                 object(json!({}), &[])
+            } else if name == "service_log" {
+                object(
+                    json!({
+                        "id": {"type": "string", "description": "The service id."},
+                        "lines": {"type": "integer", "description": "How many lines (40 if not said, at most 200)."}
+                    }),
+                    &["id"],
+                )
             } else {
                 object(
                     json!({"id": {"type": "string", "description": "The service id."}}),
@@ -59,6 +71,13 @@ pub(crate) fn commands(services: Arc<Services>, events: Arc<Log>, node: String) 
                 if name == "service_show" {
                     let service = services.one(id).await.map_err(|e| e.error())?;
                     return Ok(json!({"node": node, "service": service}));
+                }
+                if name == "service_log" {
+                    let lines = args["lines"]
+                        .as_u64()
+                        .map_or(host::services::LOG_LINES, |n| n as usize);
+                    let log = services.log(id, lines).await.map_err(|e| e.error())?;
+                    return Ok(json!({"node": node, "lines": log.lines, "errors": log.errors}));
                 }
                 let action = name.strip_prefix("service_").expect("service command");
                 let (service, errors, outcome) =
