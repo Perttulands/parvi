@@ -2,11 +2,14 @@
 //! no session changes size: the focused session's project's open work as
 //! the page's tree, or an item from it read in place with Back and Send.
 use crate::Work;
-use crate::store::work::outline;
+use crate::store::work::outline::{self, Line};
 use crate::tokens::*;
 use crate::view::{Place, status_meta};
-use gpui::{AnyElement, AppContext, Context, Div, Entity, Render, Window, div, prelude::*, px};
+use gpui::{
+    AnyElement, AppContext, Context, Div, Entity, KeyDownEvent, Render, Window, div, prelude::*, px,
+};
 use parvi_app_kit::theme::{FAMILY, Theme, size, theme};
+use parvi_app_kit::widgets::field::{self, FieldEvent};
 use parvi_app_kit::widgets::{kit, pane};
 
 /// The page the Work panel opens beside.
@@ -36,9 +39,9 @@ impl Work {
         })
     }
 
-    /// Opens the Work panel beside the terminals and shows them, or closes
-    /// it.
-    pub(crate) fn toggle_panel(&mut self, cx: &mut Context<Self>) {
+    /// Opens the Work panel beside the terminals and shows them, its find
+    /// holding the keyboard, or closes it.
+    pub(crate) fn toggle_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.panel_open(cx) {
             self.close_panel(cx);
             return;
@@ -53,8 +56,53 @@ impl Work {
         self.panel_item = None;
         self.panel_picking = false;
         self.panel_project = None;
+        self.panel_search.update(cx, |f, cx| f.set("", false, cx));
         self.host.show_beside(PANEL_BESIDE, panel.into(), cx);
         self.host.for_page(PANEL_BESIDE, &[]).show(cx);
+        field::focus(&self.panel_search, window, cx);
+    }
+
+    /// Typing in the panel's find narrows the tree to the matches; Enter
+    /// reads the first.
+    pub(crate) fn panel_search_event(
+        &mut self,
+        ev: FieldEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if ev == FieldEvent::Submit
+            && let Some(&row) = self.panel_rows(cx).first()
+        {
+            self.panel_item = self.board.rows.get(row).map(crate::store::work::RowKey::of);
+            window.focus(&self.panel_focus, cx);
+        }
+        cx.notify();
+    }
+
+    /// The rows the panel lists: what its find matches, here first, or
+    /// none while it is empty.
+    fn panel_rows(&self, cx: &gpui::App) -> Vec<usize> {
+        let found = outline::search(
+            &self.board,
+            self.panel_project(cx),
+            &self.panel_search.read(cx).text,
+        );
+        found.here.into_iter().chain(found.elsewhere).collect()
+    }
+
+    /// Esc in the panel: a find is cleared, else the panel closes.
+    fn panel_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if e.keystroke.key != "escape" || e.keystroke.modifiers.modified() {
+            return;
+        }
+        let search = self.panel_search.read(cx);
+        if search.is_focused(window) && !search.text.is_empty() {
+            self.panel_search.update(cx, |f, cx| f.set("", false, cx));
+        } else {
+            self.close_panel(cx);
+        }
+        cx.stop_propagation();
+        cx.notify();
     }
 
     pub(crate) fn close_panel(&mut self, cx: &mut Context<Self>) {
@@ -95,12 +143,25 @@ impl Work {
                         ),
                     )
                     .child(self.panel_close(&t, cx));
-                let lines = project
-                    .map(|p| outline::tree(&self.board, p))
-                    .unwrap_or_default();
+                let finding = !self.panel_search.read(cx).text.trim().is_empty();
+                let lines = if finding {
+                    self.panel_rows(cx)
+                        .into_iter()
+                        .map(|row| Line { row, depth: 0 })
+                        .collect()
+                } else {
+                    project
+                        .map(|p| outline::tree(&self.board, p))
+                        .unwrap_or_default()
+                };
                 let mut rows = div().flex().flex_col().py(px(size::ROW_INSET));
                 if lines.is_empty() {
-                    rows = rows.child(pane::empty(&t, self.why_empty(cx), None));
+                    let why = if finding {
+                        "Nothing matches.".into()
+                    } else {
+                        self.why_empty(cx)
+                    };
+                    rows = rows.child(pane::empty(&t, why, None));
                 }
                 for (at, line) in lines.into_iter().enumerate() {
                     let r = &self.board.rows[line.row];
@@ -119,13 +180,24 @@ impl Work {
                             })),
                     );
                 }
-                panel_frame(head, rows)
+                let find = pane::list_head(
+                    &t,
+                    Some(
+                        div()
+                            .debug_selector(|| "work-panel-search".into())
+                            .child(self.panel_search.clone())
+                            .into_any_element(),
+                    ),
+                );
+                panel_frame(div().flex_none().child(head).child(find), rows)
             }
         };
         // The terminals decide its width.
         div()
             .id("work-panel")
             .debug_selector(|| "work-panel".into())
+            .track_focus(&self.panel_focus)
+            .on_key_down(cx.listener(Self::panel_key))
             .size_full()
             .flex()
             .flex_col()

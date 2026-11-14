@@ -443,8 +443,19 @@ impl FilesPage {
             p.watch(window, cx);
         });
         self.keep_beside_open(true, cx);
+        // Opened by its key, the panel has the keyboard: in its find, or
+        // on the file it shows.
+        let (query, focus, file) = {
+            let p = view.read(cx);
+            (p.query.clone(), p.focus.clone(), p.opened.is_some())
+        };
         self.host.show_beside(PANEL_BESIDE, view.into(), cx);
         self.host.for_page(PANEL_BESIDE, &[]).show(cx);
+        if file {
+            window.focus(&focus, cx);
+        } else {
+            parvi_app_kit::widgets::field::focus(&query, window, cx);
+        }
     }
 
     /// The view this page opens beside another, made the first time.
@@ -1004,6 +1015,10 @@ impl FilesPage {
         let name = paths::base_name(&path).to_string();
         self.seen.remove(&path);
         self.opened = Some(Opened::reading(node.clone(), path.clone()));
+        // Beside, the file takes the list's place: the keys go with it.
+        if self.beside && self.query.read(cx).is_focused(window) {
+            window.focus(&self.focus, cx);
+        }
         self.tree.select(&path);
         self.keep(cx);
         let kind = store::kinds::kind(&name);
@@ -1356,6 +1371,16 @@ impl FilesPage {
         )
     }
     pub fn search_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // Beside another page, Esc in an empty find takes the view away.
+        if e.keystroke.key == "escape"
+            && self.beside
+            && self.query.read(cx).is_focused(window)
+            && self.query.read(cx).text.is_empty()
+        {
+            self.close_beside(cx);
+            cx.stop_propagation();
+            return;
+        }
         if e.keystroke.key == "escape" && self.query.read(cx).is_focused(window) {
             self.clear_find(cx);
             window.focus(&self.focus, cx);
@@ -1402,8 +1427,8 @@ impl FilesPage {
             "/" => parvi_app_kit::widgets::field::focus(&self.query, window, cx),
             "f2" => self.start_rename(window, cx),
             // Beside another page, Esc takes the view away (its drafts are
-            // asked about first).
-            "escape" if self.beside && self.find.is_none() => {
+            // asked about first), with a find under the file shown too.
+            "escape" if self.beside && (self.find.is_none() || self.opened.is_some()) => {
                 self.close_beside(cx);
             }
             "escape" => {

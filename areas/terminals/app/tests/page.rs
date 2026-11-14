@@ -722,13 +722,26 @@ fn nothing_opened_on_the_page_resizes_a_session(cx: &mut TestAppContext) {
 /// the focus or starts reading back, and Esc after such a click closes
 /// what was clicked. Held for a view beside, Send, the output search,
 /// Overview, Peek and a launcher too big for its window, each over a live
-/// session.
+/// session. A view opened from elsewhere leaves the keyboard in the
+/// terminal; a panel opened by its key (Files, Work, Brain) has it in its
+/// find, and closed with Esc gives it back to the terminal.
 #[gpui::test]
 fn what_lies_over_the_windows_takes_every_click_inside_it(cx: &mut TestAppContext) {
-    let Some(running) = start("terminals-over") else {
+    let Some(running) = start_config("terminals-over", false, false, true, false) else {
         return;
     };
-    let (shell, cx, settings) = open_with_alpha(&running, "over", cx);
+    let (shell, cx, settings) = open_pages_with_alpha(
+        &running,
+        "over",
+        &[
+            terminals,
+            toy,
+            parvi_files_app::build,
+            parvi_work_app::build,
+            parvi_brain_app::build,
+        ],
+        cx,
+    );
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     let page = PAGE.with(|p| p.borrow().clone()).expect("the page");
     let beta = Key {
@@ -793,10 +806,19 @@ fn what_lies_over_the_windows_takes_every_click_inside_it(cx: &mut TestAppContex
     let inside =
         |b: gpui::Bounds<gpui::Pixels>| gpui::point(b.right() - px(24.), b.bottom() - px(24.));
 
-    // A view beside: the click gives it the keyboard, and Esc closes it.
+    // A view beside: opened from elsewhere it leaves the keyboard in the
+    // terminal; a click gives it the keyboard, and Esc closes it.
+    let term_focused = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| page.read(cx).term_focus.is_focused(window))
+    };
+    assert!(term_focused(cx), "alpha's terminal has the keyboard");
     let note = cx.update(|_, cx| cx.new(|cx| Note(cx.focus_handle())));
     cx.update(|_, cx| toy.show_beside("terminals", note.into(), cx));
     cx.run_until_parked();
+    assert!(
+        term_focused(cx),
+        "a view opened from elsewhere leaves the keyboard in the terminal"
+    );
     let beside = cx.debug_bounds("terminals-beside").expect("drawn over");
     poke(cx, beside.center(), "window-1");
     untouched(cx, "a view beside", 0);
@@ -810,6 +832,79 @@ fn what_lies_over_the_windows_takes_every_click_inside_it(cx: &mut TestAppContex
         cx.debug_bounds("terminals-beside").is_none(),
         "Esc after a click in the view closes it"
     );
+    assert!(
+        term_focused(cx),
+        "closed, the terminal has the keyboard back"
+    );
+
+    // A panel opened by its key has the keyboard in its find. Files: Alt+O,
+    // type, Enter opens the file found; Esc closes it.
+    std::fs::write(running.fixture.join(format!("{MARK}-note.txt")), "found\n").unwrap();
+    let cd = format!("cd {}", running.fixture.display());
+    tmux(&running, &["send-keys", "-t", "alpha", &cd, "Enter"]);
+    let sessions = cx
+        .update(|_, cx| toy.model::<SessionList>(cx))
+        .expect("the hub");
+    until(cx, "alpha in the fixture folder", |cx| {
+        sessions.read_with(cx, |l, _| {
+            l.sessions.iter().any(|s| {
+                s.name == "alpha" && s.cwd.as_deref() == Some(running.fixture.to_str().unwrap())
+            })
+        })
+    });
+    cx.simulate_keystrokes("alt-o");
+    until(cx, "the Files panel", |cx| {
+        cx.debug_bounds("files-search").is_some()
+    });
+    cx.simulate_input(MARK);
+    // The find waits for typing to pause.
+    cx.executor().advance_clock(Duration::from_millis(300));
+    until(cx, "the file found", |cx| {
+        cx.debug_bounds(Box::leak(format!("hit-{MARK}-note.txt").into_boxed_str()))
+            .is_some()
+    });
+    cx.simulate_keystrokes("enter");
+    until(cx, "the file open in the panel", |cx| {
+        cx.debug_bounds(Box::leak(
+            format!("file-view-{MARK}-note.txt").into_boxed_str(),
+        ))
+        .is_some()
+    });
+    untouched(cx, "the Files panel's find", 0);
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("terminals-beside").is_none(),
+        "Esc closed Files"
+    );
+    assert!(
+        term_focused(cx),
+        "Esc from Files gives the terminal the keyboard"
+    );
+    // Work and Brain: what is typed goes to their find, so the first Esc
+    // clears it and the second closes the panel.
+    for (keys, drawn) in [("alt-b", "work-panel-search"), ("alt-l", "brain-search")] {
+        cx.simulate_keystrokes(keys);
+        until(cx, drawn, |cx| cx.debug_bounds(drawn).is_some());
+        cx.simulate_input(MARK);
+        untouched(cx, drawn, 0);
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("terminals-beside").is_some(),
+            "the first Esc cleared {drawn}"
+        );
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("terminals-beside").is_none(),
+            "Esc closed {drawn}"
+        );
+        assert!(
+            term_focused(cx),
+            "Esc from {drawn} gives the terminal the keyboard"
+        );
+    }
 
     // The layers, opened from the keyboard with the terminal focused.
     cx.update(|window, cx| {

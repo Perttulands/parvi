@@ -100,6 +100,10 @@ pub struct Work {
     /// it since it opened.
     panel_picking: bool,
     panel_project: Option<String>,
+    /// The panel's find, which has the keyboard when Alt+B opens it, and
+    /// what holds the keyboard in the panel once the find is left.
+    panel_search: Entity<TextField>,
+    panel_focus: FocusHandle,
 }
 
 impl Page for Work {
@@ -169,8 +173,8 @@ impl Page for Work {
             })
             .alt("i", Some(false))
             .everywhere(),
-            parvi_app_kit::chords::Chord::new("b", "Work beside", move |_, cx| {
-                let _ = me.update(cx, |work, cx| work.toggle_panel(cx));
+            parvi_app_kit::chords::Chord::new("b", "Work beside", move |window, cx| {
+                let _ = me.update(cx, |work, cx| work.toggle_panel(window, cx));
             })
             .alt("b", Some(false))
             .everywhere(),
@@ -186,6 +190,11 @@ impl Work {
         let search = cx.new(|cx| TextField::new(cx, SEARCH));
         cx.subscribe_in(&search, window, |w: &mut Self, _, ev, window, cx| {
             w.search_event(*ev, window, cx)
+        })
+        .detach();
+        let panel_search = cx.new(|cx| TextField::new(cx, PANEL_SEARCH));
+        cx.subscribe_in(&panel_search, window, |w: &mut Self, _, ev, window, cx| {
+            w.panel_search_event(*ev, window, cx)
         })
         .detach();
         let sessions = host.model::<SessionList>(cx);
@@ -223,6 +232,8 @@ impl Work {
             panel_item: None,
             panel_picking: false,
             panel_project: None,
+            panel_search,
+            panel_focus: cx.focus_handle(),
             show_finished: false,
             list_scroll: gpui::ScrollHandle::new(),
             reveal: false,
@@ -901,6 +912,7 @@ impl Work {
 }
 
 const SEARCH: &str = "Search…";
+const PANEL_SEARCH: &str = "Find work";
 const PICK: &str = "Project…";
 
 /// Every node's projects in one snapshot, in node order.

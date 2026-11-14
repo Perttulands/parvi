@@ -240,9 +240,6 @@ pub struct Terminals {
     put_away: Vec<Surface>,
     /// A view was beside the page when it last drew.
     beside_open: bool,
-    /// The view beside as last drawn, to give it the keyboard when it
-    /// comes.
-    pub beside_seen: Option<gpui::EntityId>,
     /// Holds the keyboard for the view beside, so Esc closes it.
     pub beside_focus: gpui::FocusHandle,
     /// Its edge is being dragged.
@@ -414,7 +411,6 @@ impl Terminals {
             shown: false,
             put_away: vec![],
             beside_open: false,
-            beside_seen: None,
             beside_focus: cx.focus_handle(),
             beside_resizing: false,
             surfaces: vec![],

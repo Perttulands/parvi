@@ -4,8 +4,10 @@
 //! its left, so no session changes size for it. Every view opens at half
 //! the room; its edge (a grip) is dragged to size it and the width is kept;
 //! the view's Expand gives it the whole area and back. Its Close, Esc once
-//! it has the keyboard (a click in it gives it that) and the key that
-//! opened it take it away.
+//! it has the keyboard and the key that opened it take it away. A view
+//! opened by its key has the keyboard in its field; one opened from a
+//! terminal (a printed path, a picture) leaves it there until clicked.
+//! Closed, the terminal has the keyboard back.
 
 use super::super::page::Terminals;
 use super::super::surface;
@@ -43,18 +45,7 @@ impl Terminals {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let Some(view) = self.host.beside(cx) else {
-            self.beside_seen = None;
-            return None;
-        };
-        // A view that just came takes the keyboard from the terminal, so
-        // Esc reaches it rather than the program.
-        if self.beside_seen != Some(view.entity_id()) {
-            self.beside_seen = Some(view.entity_id());
-            if self.term_focus.is_focused(window) {
-                window.focus(&self.beside_focus, cx);
-            }
-        }
+        let view = self.host.beside(cx)?;
         let t = theme(cx).clone();
         let whole = self.host.whole_beside(crate::NAME, cx) == Some(true);
         let width = self.beside_width(window);
