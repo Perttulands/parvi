@@ -94,11 +94,15 @@ fn role_library_edits_and_saves_a_fixture_card(cx: &mut TestAppContext) {
     cx.simulate_click(at, Modifiers::none());
     let at = cx.debug_bounds("agents-library").unwrap().center();
     cx.simulate_click(at, Modifiers::none());
-    until(cx, "the fixture role", |cx| {
-        cx.debug_bounds("role-fixture-writer").is_some()
+    // The library opens on its first role, unasked.
+    until(cx, "the first role's detail", |cx| {
+        cx.debug_bounds("role-edit").is_some()
     });
     let at = cx.debug_bounds("role-fixture-writer").unwrap().center();
     cx.simulate_click(at, Modifiers::none());
+    until(cx, "the fixture role's detail", |cx| {
+        cx.debug_bounds("role-fixture-writer-shown").is_some()
+    });
     until(cx, "the role detail", |cx| {
         cx.debug_bounds("role-edit").is_some()
     });

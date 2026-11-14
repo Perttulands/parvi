@@ -394,32 +394,34 @@ impl AgentsPage {
                 },
             ));
             if tl.path.is_some() {
-                lines = lines
-                    .child(pane::line(
-                        t,
-                        "Version",
-                        div().child(tl.version.clone().unwrap_or_else(|| "unknown".into())),
-                    ))
-                    .child(pane::line(
+                lines = lines.child(pane::line(
+                    t,
+                    "Version",
+                    div().child(tl.version.clone().unwrap_or_else(|| "unknown".into())),
+                ));
+                // Said only when the harness tells: most do not.
+                if let Some(signed_in) = tl.signed_in {
+                    lines = lines.child(pane::line(
                         t,
                         "Signed in",
-                        match tl.signed_in {
-                            Some(true) => div().child("yes"),
-                            Some(false) => div()
-                                .text_color(tone_colour(t, Tone::Behind))
-                                .child(format!("no: run {} and sign in", tl.command)),
-                            None => div().text_color(t.text2).child("unknown"),
-                        },
-                    ))
-                    .child(pane::line(
-                        t,
-                        "Credentials",
-                        div().child(if tl.credentials_present {
-                            "on this device"
+                        if signed_in {
+                            div().child("yes")
                         } else {
-                            "not found"
-                        }),
+                            div()
+                                .text_color(tone_colour(t, Tone::Behind))
+                                .child(format!("no: run {} and sign in", tl.command))
+                        },
                     ));
+                }
+                lines = lines.child(pane::line(
+                    t,
+                    "Credentials",
+                    div().child(if tl.credentials_present {
+                        "on this device"
+                    } else {
+                        "not found"
+                    }),
+                ));
             }
             if let Some(folder) = &tl.skills {
                 let linked = agents::tool_skills(r, tl)
@@ -450,16 +452,11 @@ impl AgentsPage {
                 }
                 lines = lines.child(pane::line(t, "Settings", files));
             }
-            // What is off in the checkouts its skills come from.
-            let feeds: Vec<String> = agents::tool_checkouts(r, tl)
-                .iter()
-                .map(|c| c.name.clone())
-                .collect();
+            // What is off with the harness itself. What is off in a checkout
+            // is said once, on the overview and on that checkout.
             let mine: Vec<Off> = agents::off(r)
                 .into_iter()
-                .filter(|o| {
-                    o.subject == tl.name || o.checkout.as_ref().is_some_and(|c| feeds.contains(c))
-                })
+                .filter(|o| o.checkout.is_none() && o.subject == tl.name)
                 .collect();
             let mut part = if several {
                 pane::section(t, self.place_name(node))

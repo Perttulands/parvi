@@ -141,6 +141,14 @@ impl AgentsPage {
                     }
                     Err(e) => l.error = Some(e),
                 }
+                // The library opens on a role, the first until one is chosen.
+                let l = &s.library;
+                if l.form.is_none() && !l.roles.iter().any(|r| r.id == l.wanted) {
+                    match l.roles.first().map(|r| r.id.clone()) {
+                        Some(first) => s.inspect_role(first, cx),
+                        None => s.library.wanted.clear(),
+                    }
+                }
                 cx.notify();
             },
         );
@@ -527,7 +535,10 @@ impl AgentsPage {
             (head, body)
         } else if let Some(role) = &l.selected {
             let head = pane::head(&t)
-                .child(pane::title(&t, role.display_name.clone()))
+                .child(pane::title(&t, role.display_name.clone()).debug_selector({
+                    let shown = format!("role-{}-shown", role.id);
+                    move || shown
+                }))
                 .child(
                     pane::act(&t, "role-edit", "Edit")
                         .debug_selector(|| "role-edit".into())
@@ -633,12 +644,12 @@ impl AgentsPage {
             }
             (head, body.child(said))
         } else {
-            let words = if l.busy {
+            let words = if l.busy || !l.wanted.is_empty() && l.error.is_none() {
                 "Reading the roles…"
-            } else if l.roles.is_empty() {
+            } else if l.roles.is_empty() && l.error.is_none() {
                 "No roles yet."
             } else {
-                "Choose a role."
+                ""
             };
             (
                 pane::head(&t),
@@ -647,7 +658,9 @@ impl AgentsPage {
                     .flex_col()
                     .gap(px(size::SECTION_GAP))
                     .when(!quiet, |d| d.child(notes))
-                    .child(pane::empty(&t, words, None).p_0()),
+                    .when(!words.is_empty(), |d| {
+                        d.child(pane::empty(&t, words, None).p_0())
+                    }),
             )
         };
         pane::page(&t, list, pane::detail(&t, "roles-detail", head, body))
