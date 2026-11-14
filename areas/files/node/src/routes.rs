@@ -146,7 +146,7 @@ async fn find(
     let result = blocking(&files, &at.node, move |f| {
         if at.path.is_empty() {
             let near = (!at.near.is_empty()).then_some(at.near.as_str());
-            Ok(f.locate(&at.q, near))
+            Ok(f.locate(&at.q, near, at.beside))
         } else {
             f.find(&at.path, &at.q, false)
         }

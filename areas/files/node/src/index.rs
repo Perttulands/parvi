@@ -7,22 +7,30 @@
 //! own: a request builds the index (or refreshes a stale one), and the
 //! index is let go once nobody has asked for it a while.
 //!
-//! A find also takes the folder its asker stands in. When the walk of the
-//! roots left that folder out (it lies under a hidden or generated one),
-//! it is walked for this find alone, so what is beside you is always found.
+//! A find also takes the folder its asker stands in. Its files come first,
+//! and can be asked for alone: that answer never waits for a walk of the
+//! roots. When the roots' walk left the folder out (it lies under a hidden
+//! or generated one), it is walked for this find alone, so what is beside
+//! you is always found.
+//!
+//! A walk reads folders on several threads: the roots hold hundreds of
+//! thousands of files, and one thread took seconds over them.
 
 use super::roots::Roots;
 use parvi_files_contract::{Changed, Match, Matches};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 /// The most files one walk takes in.
 const MOST: usize = 2_000_000;
 /// The most files the walk of the folder a find stands in takes in.
 const MOST_NEAR: usize = 100_000;
+/// The most threads one walk reads folders on.
+const WALKERS: usize = 8;
 /// Results a name find answers.
 const RESULTS: usize = 50;
 /// What changed answers this many lines at most.
@@ -63,33 +71,42 @@ impl Index {
         recent_of(&items, roots, RECENT)
     }
 
-    /// Files whose path holds every word of `query`, those whose name does
-    /// first: under every root, and under `near` when the roots' walk
-    /// leaves that folder out.
+    /// Files whose path holds every word of `query`: those under `near`
+    /// first, and those whose name holds the words before the rest. It
+    /// looks under every root, and under `near` when the roots' walk leaves
+    /// that folder out.
     pub fn find(self: &Arc<Self>, roots: &Roots, query: &str, near: Option<&Path>) -> Matches {
-        let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
-        if words.is_empty() {
-            return Matches {
-                matches: vec![],
-                truncated: false,
-            };
-        }
+        let Some(words) = words(query) else {
+            return nothing();
+        };
         let items = self.items(roots, USABLE, true);
         let beside = match near {
-            Some(folder) if left_out(roots, folder) => {
-                let mut items = Vec::new();
-                walk_into(
-                    folder.to_path_buf(),
-                    &super::find::mount_points(),
-                    &mut HashSet::new(),
-                    &mut items,
-                    MOST_NEAR,
-                );
-                items
-            }
+            Some(folder) if left_out(roots, folder) => walk_one(folder),
             _ => Vec::new(),
         };
-        find_in(beside.iter().chain(items.iter()), &words)
+        find_in(beside.iter().chain(items.iter()), &words, near)
+    }
+
+    /// The same find over the files under `folder` alone: what
+    /// [`Self::find`] puts first, answered without a walk of the roots.
+    pub fn find_beside(&self, roots: &Roots, query: &str, folder: &Path) -> Matches {
+        let Some(words) = words(query) else {
+            return nothing();
+        };
+        let kept = match self.built.lock().unwrap().as_ref() {
+            Some(b) if b.at.elapsed() <= USABLE && !left_out(roots, folder) => {
+                Some(b.items.clone())
+            }
+            _ => None,
+        };
+        match kept {
+            Some(items) => find_in(
+                items.iter().filter(|i| under(&i.path, folder)),
+                &words,
+                None,
+            ),
+            None => find_in(walk_one(folder).iter(), &words, None),
+        }
     }
 
     /// The files changed most recently under `folder`, newest first, each
@@ -174,39 +191,92 @@ impl Index {
 }
 
 fn walk(roots: &Roots) -> Vec<Item> {
-    let mounts = super::find::mount_points();
-    let mut seen = HashSet::new();
-    let mut items = Vec::new();
-    for root in roots.list() {
-        walk_into(
-            PathBuf::from(&root.path),
-            &mounts,
-            &mut seen,
-            &mut items,
-            MOST,
-        );
-    }
-    items
+    let starts = roots
+        .list()
+        .into_iter()
+        .map(|r| PathBuf::from(r.path))
+        .collect();
+    walk_into(starts, MOST)
 }
 
-/// Every file under `start` joins `items`, until they are `most`. `start`
-/// itself is always entered; under it the walk's rules hold.
-fn walk_into(
-    start: PathBuf,
-    mounts: &[PathBuf],
-    seen: &mut HashSet<String>,
-    items: &mut Vec<Item>,
+/// The files under the one folder a find stands in.
+fn walk_one(folder: &Path) -> Vec<Item> {
+    walk_into(vec![folder.to_path_buf()], MOST_NEAR)
+}
+
+/// What the threads of one walk share: the folders still to read and how
+/// many threads are reading one now, and every folder entered so far (a
+/// root inside another root is read once).
+struct Walk {
+    pending: Mutex<(Vec<PathBuf>, usize)>,
+    more: Condvar,
+    entered: Mutex<HashSet<PathBuf>>,
+    found: AtomicUsize,
     most: usize,
-) {
-    let mut pending = vec![start];
-    while let Some(dir) = pending.pop() {
-        let Ok(entries) = fs::read_dir(&dir) else {
-            continue;
+    mounts: Vec<PathBuf>,
+}
+
+/// Every file under `starts`, until they are `most`. A start is always
+/// entered; under it the walk's rules hold.
+fn walk_into(starts: Vec<PathBuf>, most: usize) -> Vec<Item> {
+    let walk = Walk {
+        pending: Mutex::new((starts, 0)),
+        more: Condvar::new(),
+        entered: Mutex::new(HashSet::new()),
+        found: AtomicUsize::new(0),
+        most,
+        mounts: super::find::mount_points(),
+    };
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(WALKERS));
+    std::thread::scope(|scope| {
+        let walkers: Vec<_> = (0..threads).map(|_| scope.spawn(|| walk.run())).collect();
+        walkers
+            .into_iter()
+            .flat_map(|w| w.join().expect("a walk thread"))
+            .collect()
+    })
+}
+
+impl Walk {
+    /// Reads folders until none is left and no thread may add one.
+    fn run(&self) -> Vec<Item> {
+        let mut items = Vec::new();
+        while let Some(dir) = self.next() {
+            let mut below = Vec::new();
+            if self.entered.lock().unwrap().insert(dir.clone()) {
+                self.read(&dir, &mut items, &mut below);
+            }
+            let mut pending = self.pending.lock().unwrap();
+            pending.0.append(&mut below);
+            pending.1 -= 1;
+            self.more.notify_all();
+        }
+        items
+    }
+
+    /// A folder to read; none once all are read or the walk is full.
+    fn next(&self) -> Option<PathBuf> {
+        let mut pending = self.pending.lock().unwrap();
+        loop {
+            if self.found.load(Ordering::Relaxed) >= self.most {
+                pending.0.clear();
+            }
+            if let Some(dir) = pending.0.pop() {
+                pending.1 += 1;
+                return Some(dir);
+            }
+            if pending.1 == 0 {
+                return None;
+            }
+            pending = self.more.wait(pending).unwrap();
+        }
+    }
+
+    fn read(&self, dir: &Path, items: &mut Vec<Item>, below: &mut Vec<PathBuf>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
         };
         for entry in entries.flatten() {
-            if items.len() >= most {
-                return;
-            }
             let Ok(kind) = entry.file_type() else {
                 continue;
             };
@@ -215,13 +285,15 @@ fn walk_into(
             };
             let path = entry.path();
             if kind.is_dir() {
-                if !super::find::skipped(&name) && !mounts.contains(&path) {
-                    pending.push(path);
+                if !super::find::skipped(&name) && !self.mounts.contains(&path) {
+                    below.push(path);
                 }
             } else if kind.is_file()
                 && let Some(text) = path.to_str()
-                && seen.insert(text.to_owned())
             {
+                if self.found.fetch_add(1, Ordering::Relaxed) >= self.most {
+                    return;
+                }
                 let modified = entry
                     .metadata()
                     .ok()
@@ -283,10 +355,33 @@ fn recent_of(items: &[Item], roots: &Roots, most: usize) -> Vec<Changed> {
     recent::summarize(&files, &roots, most)
 }
 
-fn find_in<'a>(items: impl Iterator<Item = &'a Item>, words: &[String]) -> Matches {
-    // Rank: every word in the name, the name starting with the first word,
-    // then the shorter path, then the newer.
-    let mut hits: Vec<(u8, usize, u64, &Item)> = Vec::new();
+/// A find's words, lowered; none when it has none.
+fn words(query: &str) -> Option<Vec<String>> {
+    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    (!words.is_empty()).then_some(words)
+}
+
+fn nothing() -> Matches {
+    Matches {
+        matches: vec![],
+        truncated: false,
+    }
+}
+
+/// Whether the file at `path` lies under `folder`.
+fn under(path: &str, folder: &Path) -> bool {
+    Path::new(path).starts_with(folder)
+}
+
+fn find_in<'a>(
+    items: impl Iterator<Item = &'a Item>,
+    words: &[String],
+    near: Option<&Path>,
+) -> Matches {
+    // Rank: under the folder stood in, every word in the name, the name
+    // starting with the first word, then the shorter path, the newer, and
+    // the path itself (a walk lists files in no fixed order).
+    let mut hits = Vec::new();
     for item in items {
         let path = item.path.to_lowercase();
         if !words.iter().all(|w| path.contains(w.as_str())) {
@@ -302,18 +397,26 @@ fn find_in<'a>(items: impl Iterator<Item = &'a Item>, words: &[String]) -> Match
         } else {
             3
         };
-        hits.push((rank, item.path.len(), u64::MAX - item.modified, item));
+        let away = !near.is_some_and(|folder| under(&item.path, folder));
+        let key = (
+            away,
+            rank,
+            item.path.len(),
+            u64::MAX - item.modified,
+            item.path.as_str(),
+        );
+        hits.push((key, item));
     }
     let truncated = hits.len() > RESULTS;
     if truncated {
-        hits.select_nth_unstable_by(RESULTS, |a, b| (a.0, a.1, a.2).cmp(&(b.0, b.1, b.2)));
+        hits.select_nth_unstable_by_key(RESULTS, |hit| hit.0);
         hits.truncate(RESULTS);
     }
-    hits.sort_by_key(|a| (a.0, a.1, a.2));
+    hits.sort_unstable_by_key(|hit| hit.0);
     Matches {
         matches: hits
             .into_iter()
-            .map(|(_, _, _, item)| Match {
+            .map(|(_, item)| Match {
                 path: item.path.clone(),
                 name: item.path[item.name..].to_owned(),
                 line: None,
@@ -347,7 +450,7 @@ mod tests {
         ];
         let found = |q: &str| -> Vec<String> {
             let words: Vec<String> = q.split_whitespace().map(str::to_lowercase).collect();
-            find_in(items.iter(), &words)
+            find_in(items.iter(), &words, None)
                 .matches
                 .into_iter()
                 .map(|m| m.path)
@@ -363,6 +466,35 @@ mod tests {
         );
         assert_eq!(found("Gen world"), ["/r/src/world/terrain_generator.rs"]);
         assert!(found("nothing").is_empty());
+    }
+
+    #[test]
+    fn what_is_under_the_folder_stood_in_comes_first() {
+        let items = [
+            item("/r/terrain.rs", 1),
+            item("/r/here/deep/old_terrain.rs", 1),
+            item("/r/here/terrain_notes.md", 1),
+            item("/r/hereafter/terrain.rs", 1),
+        ];
+        let words = ["terrain".to_string()];
+        let paths = |near: Option<&Path>| -> Vec<String> {
+            find_in(items.iter(), &words, near)
+                .matches
+                .into_iter()
+                .map(|m| m.path)
+                .collect()
+        };
+        assert_eq!(paths(None)[0], "/r/terrain.rs");
+        assert_eq!(
+            paths(Some(Path::new("/r/here"))),
+            [
+                "/r/here/terrain_notes.md",
+                "/r/here/deep/old_terrain.rs",
+                "/r/terrain.rs",
+                "/r/hereafter/terrain.rs"
+            ],
+            "its own files, best first, then the rest; a folder named alike is not it"
+        );
     }
 
     #[test]
@@ -415,10 +547,30 @@ mod tests {
         assert_eq!(
             names(Some(&here), "pic"),
             [
-                "/src/pic.rs",
                 "/.cache/walk/work/pic.png",
-                "/.cache/walk/work/deep/pic-two.png"
+                "/.cache/walk/work/deep/pic-two.png",
+                "/src/pic.rs"
             ]
+        );
+        // Asked for alone, what is beside you is the head of that answer,
+        // whether the roots' walk covers the folder or not.
+        let beside = |folder: &Path| -> Vec<String> {
+            index
+                .find_beside(&roots, "pic", folder)
+                .matches
+                .into_iter()
+                .map(|m| m.name)
+                .collect()
+        };
+        assert_eq!(beside(&here), ["pic.png", "pic-two.png"]);
+        assert_eq!(beside(&root.join("src")), ["pic.rs"]);
+        assert_eq!(
+            Index::default()
+                .find_beside(&roots, "pic", &root.join("src"))
+                .matches
+                .len(),
+            1,
+            "with no index kept, the folder is walked"
         );
         assert_eq!(
             names(Some(&here), "walk pic.png"),

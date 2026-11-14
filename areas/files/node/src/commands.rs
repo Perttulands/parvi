@@ -89,8 +89,8 @@ pub fn commands(files: Arc<Files>, home: Option<PathBuf>) -> Vec<Command> {
         ),
         (
             "file_locate",
-            "Find files under every root by words in their path, names first; a query that is a path names its file. --near is a folder also looked in when it is hidden.",
-            &["query", "near"],
+            "Find files under every root by words in their path, names first; a query that is a path names its file. --near is the folder you stand in: its files come first, also when it is hidden, and --beside answers only them, at once.",
+            &["query", "near", "beside"],
             &["query"],
         ),
         (
@@ -132,7 +132,7 @@ pub fn commands(files: Arc<Files>, home: Option<PathBuf>) -> Vec<Command> {
                     for key in &props {
                         fields.insert(
                             (*key).into(),
-                            if *key == "new" || *key == "replace" {
+                            if matches!(*key, "new" | "replace" | "beside") {
                                 json!({"type":"boolean", "default":false})
                             } else {
                                 json!({"type":"string"})
@@ -225,7 +225,8 @@ fn work(name: &str, files: &Files, home: Option<&Path>, args: &Value) -> Result<
             Some(_) => Some(path(args, "near", home)?),
             None => None,
         };
-        return serde_json::to_value(files.locate(query, near.as_deref())).map_err(bad);
+        let beside = flag(args, "beside", false).map_err(bad)?;
+        return serde_json::to_value(files.locate(query, near.as_deref(), beside)).map_err(bad);
     }
     let at = path(args, "path", home)?;
     match name {

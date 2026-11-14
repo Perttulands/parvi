@@ -67,6 +67,15 @@ impl Naming {
     }
 }
 
+/// Which part of a find an answer is for: the files beside the asker,
+/// the names under every root, or the text inside files.
+#[derive(Clone, Copy)]
+enum Part {
+    Beside,
+    Names,
+    Inside,
+}
+
 /// The row the keyboard is on in the list.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pick {
@@ -683,6 +692,13 @@ impl FilesPage {
             cx,
         );
     }
+    /// Opens the file an Enter pressed before any answer waited for.
+    pub(crate) fn open_first_found(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(path) = self.find.as_mut().and_then(|f| f.take_first()) {
+            self.open(path, window, cx);
+            cx.notify();
+        }
+    }
     /// With nothing open, the page shows the file changed last: the first
     /// screen answers what just changed with the file itself.
     pub(crate) fn open_newest(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -826,13 +842,20 @@ impl FilesPage {
             let _ = this.update(cx, |page, cx| {
                 if page.find_revision == revision {
                     let uri = format!("/api/files/find?q={}&near={}", enc(&query), enc(&near));
-                    page.ask_find(Request::get(NodeId(node), uri), revision, false, cx);
+                    // What is beside you is asked for alone as well: it
+                    // answers at once, the find under every root after.
+                    if !near.is_empty() {
+                        let beside =
+                            Request::get(NodeId(node.clone()), format!("{uri}&beside=true"));
+                        page.ask_find(beside, revision, Part::Beside, cx);
+                    }
+                    page.ask_find(Request::get(NodeId(node), uri), revision, Part::Names, cx);
                 }
             });
         })
         .detach();
     }
-    fn ask_find(&mut self, request: Request, revision: u64, inside: bool, cx: &mut Context<Self>) {
+    fn ask_find(&mut self, request: Request, revision: u64, part: Part, cx: &mut Context<Self>) {
         self.request(
             request,
             move |p, s, b, cx| {
@@ -842,10 +865,10 @@ impl FilesPage {
                     Err(message(s, &b))
                 };
                 if let Some(find) = p.find.as_mut() {
-                    if inside {
-                        find.answer_inside(revision, found);
-                    } else {
-                        find.answer(revision, found);
+                    match part {
+                        Part::Beside => find.answer_beside(revision, found),
+                        Part::Names => find.answer(revision, found),
+                        Part::Inside => find.answer_inside(revision, found),
                     }
                 }
                 cx.notify()
@@ -875,7 +898,7 @@ impl FilesPage {
         let first = find.matches().len();
         self.pick = Some(Pick::Hit(first));
         let uri = format!("{}&q={}", route("search", &folder), enc(&query));
-        self.ask_find(Request::get(self.node(), uri), revision, true, cx);
+        self.ask_find(Request::get(self.node(), uri), revision, Part::Inside, cx);
         cx.notify();
     }
     fn clear_find(&mut self, cx: &mut Context<Self>) {
@@ -984,8 +1007,11 @@ impl FilesPage {
             },
             Pick::Hit(i) => {
                 let hit = self.find.as_ref().and_then(|f| f.matches().get(i).cloned());
-                if let Some(hit) = hit {
-                    self.open_at(hit.path, hit.line, window, cx);
+                match (hit, self.find.as_mut()) {
+                    (Some(hit), _) => self.open_at(hit.path, hit.line, window, cx),
+                    // Enter before any answer: the first file found opens.
+                    (None, Some(find)) if i == 0 && find.widening => find.open_first = true,
+                    _ => {}
                 }
             }
             Pick::InText => self.find_in_text(cx),

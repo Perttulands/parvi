@@ -99,6 +99,14 @@ pub fn lines(p: &FilesPage) -> Vec<Line> {
             format!("No file name has {quoted}"),
             &mut out,
         );
+        // What is beside you stands; the rest is still being looked for.
+        if find.widening && find.found.is_some() {
+            out.push(Line::Note {
+                text: "Looking further\u{2026}".into(),
+                depth: 0,
+                error: false,
+            });
+        }
         let scope = find
             .inside
             .as_ref()
@@ -1096,6 +1104,9 @@ impl Render for FilesPage {
         self.release_pictures(window);
         if self.newest_due {
             cx.defer_in(window, |page, window, cx| page.open_newest(window, cx));
+        }
+        if self.find.as_ref().is_some_and(|f| f.open_first) {
+            cx.defer_in(window, |page, window, cx| page.open_first_found(window, cx));
         }
         let t = theme(cx).clone();
         let root = div()

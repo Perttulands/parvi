@@ -84,16 +84,24 @@ impl Files {
     /// Files under every root by the words of `query` in their path. A
     /// query that is itself a path (absolute, or from `~`) answers the file
     /// it names, or the files it could go on to name. `near` is the folder
-    /// the asker stands in: it is covered even where the roots' walk
-    /// leaves it out.
-    pub fn locate(&self, query: &str, near: Option<&str>) -> Matches {
+    /// the asker stands in: its files come first, and it is covered even
+    /// where the roots' walk leaves it out. With `beside`, only its files
+    /// are answered, at once: nothing waits for a walk of the roots.
+    pub fn locate(&self, query: &str, near: Option<&str>, beside: bool) -> Matches {
         if let Some(named) = find::named(&self.roots, self.home.as_deref(), query) {
             return named;
         }
         let near = near
             .and_then(|folder| self.roots.existing(folder).ok())
             .filter(|folder| folder.is_dir());
-        self.index.find(&self.roots, query, near.as_deref())
+        match (beside, near.as_deref()) {
+            (true, Some(folder)) => self.index.find_beside(&self.roots, query, folder),
+            (true, None) => Matches {
+                matches: vec![],
+                truncated: false,
+            },
+            (false, near) => self.index.find(&self.roots, query, near),
+        }
     }
     /// The files changed most recently under the roots, or with a folder
     /// the files changed most recently under it, each as itself.

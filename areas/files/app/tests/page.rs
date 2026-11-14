@@ -577,6 +577,16 @@ fn a_recent_folder_opens_to_its_files_and_a_find_covers_where_you_stand(cx: &mut
     until(cx, "back on the folder", |cx| {
         cx.debug_bounds("picked-walk").is_some() && cx.debug_bounds("hit-pic.txt").is_none()
     });
+    // Enter pressed before the node has answered opens the first file
+    // found, when it is found.
+    click(cx, "files-search");
+    cx.simulate_input("pic");
+    cx.simulate_keystrokes("enter");
+    assert!(cx.debug_bounds("file-view-pic.txt").is_none());
+    cx.executor().advance_clock(Duration::from_millis(300));
+    until(cx, "the file found opened by the early Enter", |cx| {
+        cx.debug_bounds("file-view-pic.txt").is_some()
+    });
     drop(running);
     std::fs::remove_dir_all(root).unwrap();
 }
