@@ -151,10 +151,72 @@ fn the_keys_walk_the_tree_and_slash_searches_every_store(cx: &mut TestAppContext
         listed(&work, cx),
         [("Other projects".to_string(), 0), ("ctx-xvl".into(), 0)]
     );
+    // The item in hand stays while the list narrows; Enter takes the
+    // first match.
+    assert_eq!(shown(&work, cx).as_deref(), Some("library-zvi"));
+    cx.simulate_keystrokes("enter");
     assert_eq!(shown(&work, cx).as_deref(), Some("ctx-xvl"));
     // Escape clears it, and the tree is back.
     cx.simulate_keystrokes("escape");
     assert_eq!(listed(&work, cx), tree());
+}
+
+#[gpui::test]
+fn a_search_that_matches_nothing_shows_no_item(cx: &mut TestAppContext) {
+    let (work, cx) = page(cx);
+    cx.simulate_keystrokes("j /");
+    cx.simulate_input("qqxyzzy");
+    assert!(listed(&work, cx).is_empty());
+    assert_eq!(shown(&work, cx), None, "no unrelated item stays beside it");
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("work-card-title-Move the remaining records")
+            .is_none()
+    );
+    // The search cleared, the item that was in hand is back.
+    cx.simulate_keystrokes("escape");
+    assert_eq!(shown(&work, cx).as_deref(), Some("library-zvi.1"));
+}
+
+#[gpui::test]
+fn with_nothing_chosen_no_project_shows_until_every_one_is_read(cx: &mut TestAppContext) {
+    let (work, cx) = page(cx);
+    let unread = |project: &mut Project| {
+        if let Project::Beads(s) = project {
+            s.items = None;
+        }
+    };
+    // The store whose work moved last is still being read: the page waits
+    // rather than showing the other one first.
+    let mut partial = snapshot();
+    unread(&mut partial.projects[0]);
+    cx.update(|_, cx| {
+        work.update(cx, |w, cx| {
+            w.project = None;
+            w.settled = None;
+            w.snapshots.insert("node".into(), Arc::new(partial));
+            w.rebuild(cx);
+        })
+    });
+    work.read_with(cx, |w, cx| assert_eq!(w.project(cx), None));
+    cx.update(|_, cx| {
+        work.update(cx, |w, cx| {
+            w.snapshots.insert("node".into(), Arc::new(snapshot()));
+            w.rebuild(cx);
+        })
+    });
+    let first = work.read_with(cx, |w, cx| w.project(cx));
+    assert!(first.is_some());
+    // And it stays, whatever moves in another project later.
+    let mut later = snapshot();
+    unread(&mut later.projects[0]);
+    cx.update(|_, cx| {
+        work.update(cx, |w, cx| {
+            w.snapshots.insert("node".into(), Arc::new(later));
+            w.rebuild(cx);
+        })
+    });
+    work.read_with(cx, |w, cx| assert_eq!(w.project(cx), first));
 }
 
 #[gpui::test]

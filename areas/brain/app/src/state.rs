@@ -255,16 +255,17 @@ impl Brain {
         self.reading += 1;
     }
 
-    /// The count line under the search.
-    pub fn count(&self) -> String {
+    /// How many pages the search found, beside it. With none it says
+    /// nothing: the list says so, once.
+    pub fn count(&self) -> Option<String> {
         if self.searching {
-            return "Searching…".into();
+            return Some("Searching…".into());
         }
         match self.results.len() {
-            0 => "Nothing found".into(),
-            1 => "1 page".into(),
-            n if n >= LIMIT => format!("{n} pages, best first"),
-            n => format!("{n} pages"),
+            0 => None,
+            1 => Some("1 page".into()),
+            n if n >= LIMIT => Some(format!("{n} pages, best first")),
+            n => Some(format!("{n} pages")),
         }
     }
 
@@ -582,7 +583,7 @@ mod tests {
     fn counts_as_chrote_does() {
         let mut b = Brain::default();
         let n = b.typed("x").unwrap();
-        assert_eq!(b.count(), "Searching…");
+        assert_eq!(b.count().as_deref(), Some("Searching…"));
         let many: Vec<String> = (0..50)
             .map(|i| format!(r#"{{"path":"{i}","title":"{i}"}}"#))
             .collect();
@@ -591,7 +592,7 @@ mod tests {
             200,
             format!(r#"{{"results":[{}]}}"#, many.join(",")).as_bytes(),
         );
-        assert_eq!(b.count(), "50 pages, best first");
+        assert_eq!(b.count().as_deref(), Some("50 pages, best first"));
     }
 
     #[test]

@@ -68,6 +68,10 @@ pub struct Work {
     board: Rc<Board>,
     /// The project chosen last, by its folder or repository; kept.
     project: Option<String>,
+    /// With no project chosen and none named by a session: the project
+    /// whose work moved last, settled once every project has been read so
+    /// the page never shows one project and then another.
+    settled: Option<String>,
     query: String,
     /// Choosing a project: the search names one, the list holds them.
     picking: bool,
@@ -92,6 +96,10 @@ pub struct Work {
     /// item it shows instead of its tree.
     panel: Option<Entity<panel::Panel>>,
     panel_item: Option<RowKey>,
+    /// The panel lists the projects to choose from, and the one chosen in
+    /// it since it opened.
+    panel_picking: bool,
+    panel_project: Option<String>,
 }
 
 impl Page for Work {
@@ -198,6 +206,7 @@ impl Work {
             refreshing: BTreeMap::new(),
             board: Rc::default(),
             project: settings["project"].as_str().map(str::to_owned),
+            settled: None,
             query: String::new(),
             picking: false,
             picked: 0,
@@ -212,6 +221,8 @@ impl Work {
             sessions,
             panel: None,
             panel_item: None,
+            panel_picking: false,
+            panel_project: None,
             show_finished: false,
             list_scroll: gpui::ScrollHandle::new(),
             reveal: false,
@@ -272,6 +283,7 @@ impl Work {
 
     fn set_board(&mut self, board: Board, cx: &mut Context<Self>) {
         self.board = Rc::new(board);
+        self.settle();
         self.relist(cx);
         self.open_wanted(cx);
         cx.notify();
@@ -353,29 +365,51 @@ impl Work {
         outline::project_of_folder(&self.board, session.cwd.as_deref()?)
     }
 
+    /// Once every project has been read (or could not be), names the one
+    /// whose open work moved last; it stays for as long as the app runs.
+    fn settle(&mut self) {
+        let projects = &self.board.projects;
+        if self.settled.is_some()
+            || projects.is_empty()
+            || !projects.iter().all(|p| p.read || p.error.is_some())
+        {
+            return;
+        }
+        self.settled = (0..self.board.rows.len())
+            .filter(|&i| outline::open(&self.board, i))
+            .max_by_key(|&i| self.board.rows[i].updated)
+            .map(|i| projects[self.board.rows[i].project].path.clone());
+    }
+
+    fn project_at(&self, path: Option<&String>) -> Option<usize> {
+        path.and_then(|p| self.board.projects.iter().position(|x| &x.path == p))
+    }
+
     /// The project the page shows: the one chosen last, else the focused
-    /// session's, else the one whose work moved last.
+    /// session's, else the one whose work moved last (none until every
+    /// project has been read).
     pub fn project(&self, cx: &App) -> Option<usize> {
-        self.project
-            .as_ref()
-            .and_then(|p| self.board.projects.iter().position(|x| &x.path == p))
+        self.project_at(self.project.as_ref())
             .or_else(|| self.session_project(cx))
-            .or_else(|| {
-                (0..self.board.rows.len())
-                    .filter(|&i| outline::open(&self.board, i))
-                    .max_by_key(|&i| self.board.rows[i].updated)
-                    .map(|i| self.board.rows[i].project)
-            })
+            .or_else(|| self.project_at(self.settled.as_ref()))
     }
 
-    /// The project beside a terminal: the focused session's, else the
-    /// page's.
+    /// The project beside a terminal: the one chosen in the panel since
+    /// it opened, else the focused session's, else the page's.
     fn panel_project(&self, cx: &App) -> Option<usize> {
-        self.session_project(cx).or_else(|| self.project(cx))
+        self.project_at(self.panel_project.as_ref())
+            .or_else(|| self.session_project(cx))
+            .or_else(|| self.project(cx))
     }
 
-    /// Chooses a project, and keeps the choice.
+    /// Chooses a project on the page, and keeps the choice.
     pub fn choose_project(&mut self, project: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.keep_project(project, cx);
+        window.focus(&self.focus, cx);
+    }
+
+    /// The chosen project becomes the page's, kept for the next run.
+    fn keep_project(&mut self, project: usize, cx: &mut Context<Self>) {
         let Some(path) = self.board.projects.get(project).map(|p| p.path.clone()) else {
             return;
         };
@@ -393,7 +427,6 @@ impl Work {
         self.selected_node = None;
         self.trail.clear();
         self.relist(cx);
-        window.focus(&self.focus, cx);
         cx.notify();
     }
 
@@ -428,13 +461,18 @@ impl Work {
     /// name matches.
     pub fn projects_listed(&self, cx: &App) -> Vec<usize> {
         let needle = self.search.read(cx).text.trim().to_lowercase();
+        self.projects_named(&needle)
+    }
+
+    /// Every project `needle` is part of the name of, most open work first.
+    fn projects_named(&self, needle: &str) -> Vec<usize> {
         let open = outline::open_counts(&self.board);
         let mut order: Vec<usize> = (0..self.board.projects.len())
             .filter(|&p| {
                 let info = &self.board.projects[p];
                 needle.is_empty()
-                    || info.label.to_lowercase().contains(&needle)
-                    || info.path.to_lowercase().contains(&needle)
+                    || info.label.to_lowercase().contains(needle)
+                    || info.path.to_lowercase().contains(needle)
             })
             .collect();
         order.sort_by(|&a, &b| {
@@ -516,10 +554,14 @@ impl Work {
         })
     }
 
-    /// The row the item view shows: the one chosen, else the list's first.
+    /// The row the item view shows: the one chosen, else the list's first;
+    /// none while a search matches nothing.
     pub fn shown_row(&self) -> Option<usize> {
-        self.selected_row()
-            .or_else(|| self.listed().first().copied())
+        let listed = self.listed();
+        if listed.is_empty() && !self.query.trim().is_empty() {
+            return None;
+        }
+        self.selected_row().or_else(|| listed.first().copied())
     }
 
     pub fn select(&mut self, row: usize, cx: &mut Context<Self>) {
@@ -594,18 +636,20 @@ impl Work {
             return;
         }
         match ev {
+            // Typing narrows the list; the item in hand stays until a
+            // match is moved to, clicked or taken with Enter.
             FieldEvent::Changed => {
+                let held = self.shown_row();
                 self.query = self.search.read(cx).text.clone();
                 self.relist(cx);
-                if let Some(&first) = self.listed().first() {
-                    self.select(first, cx);
+                if let Some(row) = held.filter(|_| self.selected_row().is_none()) {
+                    self.select(row, cx);
                 }
             }
             FieldEvent::Down | FieldEvent::Submit => {
-                if let Some(&first) = self.listed().first()
-                    && self.selected_row().is_none()
-                {
+                if let Some(&first) = self.listed().first() {
                     self.select(first, cx);
+                    self.reveal = true;
                 }
                 window.focus(&self.focus, cx);
             }

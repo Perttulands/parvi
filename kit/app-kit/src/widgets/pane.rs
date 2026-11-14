@@ -36,22 +36,20 @@ pub fn list(t: &Theme, id: impl Into<ElementId>, head: Div, rows: impl IntoEleme
     list_frame(t, head, scrolling(id, rows))
 }
 
-/// A list whose rows are sentences rather than names (work items, search
-/// results): [`size::LIST_WIDE`] wide, never more than half the page.
-pub fn list_wide(t: &Theme, id: impl Into<ElementId>, head: Div, rows: impl IntoElement) -> Div {
-    list_wide_frame(t, head, scrolling(id, rows))
-}
-
 /// The list column around a body that scrolls itself, such as a uniform
 /// list of many rows.
 pub fn list_frame(t: &Theme, head: Div, body: impl IntoElement) -> Div {
     frame(t, size::LIST, head, body)
 }
 
-/// The wide list around a body that scrolls itself, such as one that keeps
-/// the row the keys reached in view.
+/// A list whose rows are sentences rather than names (work items, search
+/// results), around a body that scrolls itself: [`size::LIST_WIDE`] wide
+/// where the page has the room. In a narrow page the detail wins: the list
+/// takes a third of it at most, and never less than [`size::LIST`].
 pub fn list_wide_frame(t: &Theme, head: Div, body: impl IntoElement) -> Div {
-    frame(t, size::LIST_WIDE, head, body).max_w(relative(0.5))
+    frame(t, size::LIST_WIDE, head, body)
+        .max_w(relative(1. / 3.))
+        .min_w(px(size::LIST))
 }
 
 fn scrolling(id: impl Into<ElementId>, rows: impl IntoElement) -> Stateful<Div> {

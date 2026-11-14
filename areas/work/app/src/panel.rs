@@ -5,8 +5,8 @@ use crate::Work;
 use crate::store::work::outline;
 use crate::tokens::*;
 use crate::view::{Place, status_meta};
-use gpui::{AnyElement, AppContext, Context, Entity, Render, Window, div, prelude::*, px};
-use parvi_app_kit::theme::{FAMILY, size, theme};
+use gpui::{AnyElement, AppContext, Context, Div, Entity, Render, Window, div, prelude::*, px};
+use parvi_app_kit::theme::{FAMILY, Theme, size, theme};
 use parvi_app_kit::widgets::{kit, pane};
 
 /// The page the Work panel opens beside.
@@ -51,6 +51,8 @@ impl Work {
             .get_or_insert_with(|| cx.new(|cx| Panel::new(work, cx)))
             .clone();
         self.panel_item = None;
+        self.panel_picking = false;
+        self.panel_project = None;
         self.host.show_beside(PANEL_BESIDE, panel.into(), cx);
         self.host.for_page(PANEL_BESIDE, &[]).show(cx);
     }
@@ -69,17 +71,30 @@ impl Work {
             .and_then(|key| self.board.position(key));
         let inner = match item {
             Some(row) => self.detail(&t, row, Place::Panel, cx),
+            None if self.panel_picking => self.panel_projects(&t, cx),
             None => {
                 let project = self.panel_project(cx);
                 let label = project
                     .map(|p| self.board.projects[p].label.clone())
-                    .unwrap_or_else(|| "Work".into());
-                let head = pane::head(&t).child(pane::title(&t, label)).child(
-                    pane::act(&t, "work-close-beside", "Close")
-                        .debug_selector(|| "work-close-beside".into())
-                        .tooltip(kit::tip("Alt+B or Esc"))
-                        .on_click(cx.listener(|w, _, _, cx| w.close_panel(cx))),
-                );
+                    .unwrap_or_else(|| "Project".into());
+                let head = pane::head(&t)
+                    .child(
+                        div().flex_1().min_w_0().flex().child(
+                            pane::act(&t, "work-panel-project", label)
+                                .debug_selector(|| "work-panel-project".into())
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(t.text)
+                                .tooltip(kit::tip("Choose the project"))
+                                .on_click(cx.listener(|w, _, _, cx| {
+                                    w.panel_picking = true;
+                                    cx.notify();
+                                })),
+                        ),
+                    )
+                    .child(self.panel_close(&t, cx));
                 let lines = project
                     .map(|p| outline::tree(&self.board, p))
                     .unwrap_or_default();
@@ -104,14 +119,7 @@ impl Work {
                             })),
                     );
                 }
-                div().size_full().flex().flex_col().child(head).child(
-                    div()
-                        .id("work-panel-rows")
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scroll()
-                        .child(rows),
-                )
+                panel_frame(head, rows)
             }
         };
         // The terminals decide its width.
@@ -127,4 +135,51 @@ impl Work {
             .child(inner)
             .into_any_element()
     }
+
+    fn panel_close(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        pane::act(t, "work-close-beside", "Close")
+            .debug_selector(|| "work-close-beside".into())
+            .tooltip(kit::tip("Alt+B or Esc"))
+            .on_click(cx.listener(|w, _, _, cx| w.close_panel(cx)))
+    }
+
+    /// The projects to choose from in the panel, as the page lists them:
+    /// most open work first, each with how much is open. The one chosen
+    /// shows in the panel now and is the page's from then on.
+    fn panel_projects(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
+        let open = outline::open_counts(&self.board);
+        let current = self.panel_project(cx);
+        let head = pane::head(t)
+            .child(pane::title(t, "Project"))
+            .child(self.panel_close(t, cx));
+        let mut rows = div().flex().flex_col().py(px(size::ROW_INSET));
+        for (at, p) in self.projects_named("").into_iter().enumerate() {
+            let info = &self.board.projects[p];
+            let selector = format!("work-panel-pick-{}", info.label);
+            rows = rows.child(
+                pane::row(t, ("work-panel-pick", at), Some(p) == current)
+                    .debug_selector(move || selector)
+                    .child(pane::cell(info.label.clone()))
+                    .child(pane::meta(t, open[p].to_string(), None))
+                    .on_click(cx.listener(move |w, _, _, cx| {
+                        w.panel_project = w.board.projects.get(p).map(|p| p.path.clone());
+                        w.panel_picking = false;
+                        w.keep_project(p, cx);
+                    })),
+            );
+        }
+        panel_frame(head, rows)
+    }
+}
+
+/// The panel's head over its rows, which scroll.
+fn panel_frame(head: Div, rows: Div) -> Div {
+    div().size_full().flex().flex_col().child(head).child(
+        div()
+            .id("work-panel-rows")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .child(rows),
+    )
 }

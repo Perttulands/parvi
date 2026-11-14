@@ -61,12 +61,8 @@ impl Render for Work {
         let list = pane::list_wide_frame(&t, self.list_head(&t, cx), body);
         let detail = match self.shown_row() {
             Some(row) => self.detail(&t, row, Place::Page, cx),
-            None => pane::detail(
-                &t,
-                "work-detail",
-                pane::head(&t),
-                pane::empty(&t, self.why_empty(cx), None).p_0(),
-            ),
+            // The list says why it holds nothing; the detail stays clear.
+            None => pane::detail(&t, "work-detail", pane::head(&t), div()),
         };
         pane::page(&t, list, detail)
             .id("work")

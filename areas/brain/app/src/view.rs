@@ -99,11 +99,14 @@ impl Render for BrainPage {
 
 impl BrainPage {
     fn list_head(&self, t: &Theme) -> Div {
-        let count = (!self.state.query.is_empty()).then(|| {
-            let count = self.state.count();
-            let selector = format!("brain-count-{count}");
-            pane::meta(t, count, None).debug_selector(move || selector)
-        });
+        let count = self
+            .state
+            .count()
+            .filter(|_| !self.state.query.is_empty())
+            .map(|count| {
+                let selector = format!("brain-count-{count}");
+                pane::meta(t, count, None).debug_selector(move || selector)
+            });
         pane::head(t)
             .child(
                 div()
