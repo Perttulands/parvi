@@ -392,14 +392,24 @@ fn host_and_services_journeys(cx: &mut TestAppContext) {
         shows(cx, start("other")) && shows(cx, "svc-address")
     });
     assert!(
-        !shows(cx, restart("other")),
+        !shows(cx, restart("other")) && !shows(cx, "svc-more"),
         "a stopped service offers Start"
     );
+    assert!(
+        !shows(cx, "svc-open"),
+        "nothing answers at a stopped service's address"
+    );
+    // A running one restarts; Stop waits under More.
     click(cx, at(format!("svc-row-{node}-fixture")));
     until(cx, "a running service", |cx| {
-        shows(cx, restart("fixture")) && shows(cx, at(format!("svc-stop-{node}-fixture")))
+        shows(cx, restart("fixture")) && shows(cx, "svc-more")
     });
     assert!(!shows(cx, start("fixture")));
+    assert!(!shows(cx, at(format!("svc-stop-{node}-fixture"))));
+    click(cx, "svc-more");
+    until(cx, "Stop under More", |cx| shows(cx, "menu-label-Stop"));
+    cx.simulate_keystrokes("escape");
+    until(cx, "the menu closed", |cx| !shows(cx, "menu-label-Stop"));
     assert!(!shows(cx, "svc-address"), "it has none");
     click(cx, restart("fixture"));
     let failure = at(format!("svc-failure-{node}-fixture"));

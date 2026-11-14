@@ -514,6 +514,26 @@ fn heavy_words(h: &Heavy) -> String {
     out
 }
 
+/// A program is heavy from this share of the machine's CPU, or of its
+/// memory, in percent.
+const HEAVY_CPU: f32 = 10.;
+const HEAVY_MEMORY: f32 = 10.;
+
+/// The programs that weigh on the machine now, which the overview names;
+/// none while it idles. (A figure's own page lists the heaviest whatever
+/// they weigh.)
+pub fn weighing(r: &Reading) -> Vec<Heavy> {
+    let total = r.memory.map_or(0, |m| m.total);
+    r.heavy
+        .iter()
+        .filter(|h| {
+            h.cpu.is_some_and(|cpu| cpu >= HEAVY_CPU)
+                || (total > 0 && h.memory as f32 / total as f32 * 100. >= HEAVY_MEMORY)
+        })
+        .cloned()
+        .collect()
+}
+
 /// What is heavy, heaviest by `figure` first (memory unless CPU).
 pub fn sorted(heavy: &[Heavy], figure: Figure) -> Vec<&Heavy> {
     let mut out: Vec<&Heavy> = heavy.iter().collect();
@@ -820,6 +840,32 @@ mod tests {
         assert_eq!(uptime(4 * 3600 + 12 * 60), "4h 12m");
         assert_eq!(folder("/home/me/x", Some("/home/me")), "~/x");
         assert_eq!(folder("/srv/x", Some("/home/me")), "/srv/x");
+    }
+
+    #[test]
+    fn only_what_weighs_on_the_machine_is_heavy_now() {
+        let program = |name: &str, cpu: f32, memory: u64| Heavy {
+            name: name.into(),
+            cpu: Some(cpu),
+            memory,
+            ..Heavy::default()
+        };
+        let mut r = Reading {
+            memory: Some(Usage {
+                used: 8 << 30,
+                total: 32 << 30,
+            }),
+            heavy: vec![
+                program("idle", 0.4, 300 << 20),
+                program("shell", 0., 20 << 20),
+            ],
+            ..Reading::default()
+        };
+        assert!(weighing(&r).is_empty(), "an idle machine names nothing");
+        r.heavy.push(program("rustc", 35., 1 << 30));
+        r.heavy.push(program("model", 1., 6 << 30));
+        let names: Vec<String> = weighing(&r).into_iter().map(|h| h.name).collect();
+        assert_eq!(names, ["rustc", "model"]);
     }
 
     #[test]

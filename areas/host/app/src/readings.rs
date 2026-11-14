@@ -435,8 +435,17 @@ impl ReadingsPage {
             .flex()
             .flex_col()
             .gap(px(size::SECTION_GAP))
-            .child(verdict)
-            .child(self.heavy(t, id, s, Figure::Memory, "Heavy now", cx));
+            .child(verdict);
+        // Named only while something weighs on the machine.
+        let weighing = store::weighing(s.latest.as_ref().expect("a reading"));
+        if !weighing.is_empty() {
+            let listed = Programs {
+                label: "Heavy now",
+                heavy: &weighing,
+                by: Figure::Memory,
+            };
+            body = body.child(self.heavy(t, id, s, listed, cx));
+        }
         let today: Vec<_> = s
             .events
             .iter()
@@ -469,17 +478,20 @@ impl ReadingsPage {
         pane::detail(t, "host-detail", head, body)
     }
 
-    /// What is heavy now, heaviest by `figure` first.
+    /// The programs listed, heaviest first.
     fn heavy(
         &self,
         t: &Theme,
         node: &str,
         s: &State,
-        figure: Figure,
-        label: &str,
+        listed: Programs,
         cx: &mut Context<Self>,
     ) -> Div {
-        let r = s.latest.as_ref().expect("a reading");
+        let Programs {
+            label,
+            heavy,
+            by: figure,
+        } = listed;
         let home = s.facts.user.as_deref().map(|u| match u {
             "root" => "/root".to_string(),
             u => format!("/home/{u}"),
@@ -501,10 +513,10 @@ impl ReadingsPage {
             .map(|(n, c)| (n.as_str(), c.as_str()))
             .collect();
         let section = pane::section(t, label.to_owned());
-        if r.heavy.is_empty() {
+        if heavy.is_empty() {
             return section.child(div().text_color(t.dim).child("Reading what runs…"));
         }
-        let rows = store::sorted(&r.heavy, figure)
+        let rows = store::sorted(heavy, figure)
             .into_iter()
             .map(|h| {
                 let selector = format!("host-heavy-{}", store::program(h));
@@ -623,7 +635,13 @@ impl ReadingsPage {
             .child(lines)
             .child(self.big_chart(t, figure, &points, start, end, warn, cx));
         if matches!(figure, Figure::Cpu | Figure::Memory) {
-            body = body.child(self.heavy(t, id, s, figure, "Heaviest now", cx));
+            let heavy = &s.latest.as_ref().expect("a reading").heavy;
+            let listed = Programs {
+                label: "Heaviest now",
+                heavy,
+                by: figure,
+            };
+            body = body.child(self.heavy(t, id, s, listed, cx));
         }
         pane::detail(t, "host-detail", head, body)
     }
@@ -722,4 +740,12 @@ fn title(node: &Node) -> String {
 
 fn meta(t: &Theme, selector: String, text: String, colour: Option<Hsla>) -> Div {
     pane::meta(t, text, colour).debug_selector(move || selector)
+}
+
+/// A list of programs for a page: its label, the programs, and the figure
+/// the heaviest come first by.
+struct Programs<'a> {
+    label: &'static str,
+    heavy: &'a [store::Heavy],
+    by: Figure,
 }

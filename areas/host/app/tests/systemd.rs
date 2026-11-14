@@ -220,10 +220,16 @@ fn disposable_systemd_service_and_host_health_journey(cx: &mut TestAppContext) {
                 .is_some_and(|v| v.text.contains("restarted"))
         })
     });
-    until(cx, "Stop after the restart", |cx| {
-        cx.debug_bounds(action("stop")).is_some()
+    // A running unit keeps Stop under More.
+    until(cx, "More after the restart", |cx| {
+        cx.debug_bounds("svc-more").is_some()
     });
-    click(cx, action("stop"));
+    assert!(cx.debug_bounds(action("stop")).is_none());
+    click(cx, "svc-more");
+    until(cx, "Stop under More", |cx| {
+        cx.debug_bounds("menu-label-Stop").is_some()
+    });
+    click(cx, "menu-label-Stop");
     until(cx, "app stop", |cx| {
         cx.debug_bounds(state("stopped")).is_some()
     });

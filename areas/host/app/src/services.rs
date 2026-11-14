@@ -30,6 +30,10 @@ pub struct ServicesPage {
     state: Services,
     shown: bool,
     focus: FocusHandle,
+    /// The list's scroll, and whether the row the keys reached is to be
+    /// brought into view at the next draw.
+    list_scroll: gpui::ScrollHandle,
+    reveal: bool,
 }
 
 impl ServicesPage {
@@ -39,6 +43,8 @@ impl ServicesPage {
             state: Services::default(),
             shown: false,
             focus: cx.focus_handle(),
+            list_scroll: gpui::ScrollHandle::new(),
+            reveal: false,
         }
     }
 
@@ -211,6 +217,7 @@ impl ServicesPage {
             self.state.step(&order, step);
             if self.state.selected != before {
                 self.read_log(cx);
+                self.reveal = true;
             }
         } else if event.keystroke.key == "enter" {
             match self.state.enter() {
@@ -318,16 +325,31 @@ impl Render for ServicesPage {
         let t = theme::theme(cx).clone();
         let nodes = self.host.nodes(cx);
         let several = nodes.len() > 1;
-        let mut rows = div().flex().flex_col();
+        let (mut rows, mut chosen_at) = (Vec::new(), None);
         for node in &nodes {
-            rows = rows.child(self.node_rows(&t, node, several, cx));
+            self.node_rows(&t, node, several, &mut rows, &mut chosen_at, cx);
         }
+        // The row the keys reached stays in view.
+        if std::mem::take(&mut self.reveal)
+            && let Some(at) = chosen_at
+        {
+            self.list_scroll.scroll_to_item(at);
+        }
+        let rows = div()
+            .id("services-list")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .track_scroll(&self.list_scroll)
+            .flex()
+            .flex_col()
+            .children(rows);
         let head = pane::list_head(&t, None).child(
             pane::act(&t, "services-refresh", "Refresh")
                 .debug_selector(|| "services-refresh".into())
                 .on_click(cx.listener(|s, _, _, cx| s.read_all(cx))),
         );
-        let list = pane::list(&t, "services-list", head, rows);
+        let list = pane::list_frame(&t, head, rows);
         let chosen = self
             .state
             .selected
@@ -362,40 +384,56 @@ impl Render for ServicesPage {
 }
 
 impl ServicesPage {
-    fn node_rows(&self, t: &Theme, node: &Node, several: bool, cx: &mut Context<Self>) -> Div {
+    /// One node's lines join `out`, each a child of the list so the keys
+    /// can scroll to it; `chosen_at` is where the chosen row stands.
+    fn node_rows(
+        &self,
+        t: &Theme,
+        node: &Node,
+        several: bool,
+        out: &mut Vec<gpui::AnyElement>,
+        chosen_at: &mut Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
         let id = node.id.as_str();
-        let mut out = div().flex().flex_col();
         let n = self.state.nodes.get(id);
         if several {
-            out = out.child(
+            out.push(
                 div()
+                    .flex_none()
                     .px(px(size::ROW_PAD))
                     .pt(px(size::LABEL_TOP))
-                    .child(kit::device_label(t, &node.device, &node.environment)),
+                    .child(kit::device_label(t, &node.device, &node.environment))
+                    .into_any_element(),
             );
         }
         if let Some(e) = n.and_then(|n| n.error.as_ref()) {
-            out = out.child(
+            out.push(
                 div()
+                    .flex_none()
                     .px(px(size::ROW_PAD))
                     .py(px(size::LABEL_BOTTOM))
-                    .child(pane::meta(t, format!("Not read: {e}"), Some(t.error))),
+                    .child(pane::meta(t, format!("Not read: {e}"), Some(t.error)))
+                    .into_any_element(),
             );
         }
-        let Some(n) = n else { return out };
+        let Some(n) = n else { return };
         let now = now_ms();
         let mut group = None;
         for service in self.sorted(id) {
             let g = Group::of(&service.state);
             if group != Some(g) {
                 group = Some(g);
-                out = out.child(pane::label(t, g.label()));
+                out.push(pane::label(t, g.label()).into_any_element());
             }
             let chosen = self.state.selected.as_ref() == Some(&(id.to_owned(), service.id.clone()));
             let changing = n.changing.get(&service.id).map(|c| c.word());
             let (meta, colour) = match (changing, g) {
                 (Some(w), _) => (w.to_string(), None),
-                (None, Group::Failed) => (service.state.clone(), Some(t.error)),
+                (None, Group::Failed) => (
+                    services_store::state_word(service).to_string(),
+                    Some(t.error),
+                ),
                 (None, Group::Running) => match service.since() {
                     _ if service.state != "running" => {
                         (services_store::word(&service.state).to_string(), None)
@@ -411,7 +449,10 @@ impl ServicesPage {
             let state_selector = format!("svc-state-{id}-{}-{shown}", service.id);
             let selector = format!("svc-row-{id}-{}", service.id);
             let (at, sid) = (id.to_owned(), service.id.clone());
-            out = out.child(
+            if chosen {
+                *chosen_at = Some(out.len());
+            }
+            out.push(
                 pane::row(t, SharedString::from(selector.clone()), chosen)
                     .debug_selector(move || selector)
                     .child(glyph(t, &service.state))
@@ -424,17 +465,19 @@ impl ServicesPage {
                     .on_click(cx.listener(move |s, _, window, cx| {
                         window.focus(&s.focus, cx);
                         s.choose(&at, &sid, cx);
-                    })),
+                    }))
+                    .into_any_element(),
             );
         }
         if n.list.as_ref().is_some_and(Vec::is_empty) {
-            out = out.child(div().px(px(size::ROW_PAD)).child(pane::meta(
-                t,
-                "The catalog lists no services.",
-                None,
-            )));
+            out.push(
+                div()
+                    .flex_none()
+                    .px(px(size::ROW_PAD))
+                    .child(pane::meta(t, "The catalog lists no services.", None))
+                    .into_any_element(),
+            );
         }
-        out
     }
 
     fn detail(&self, t: &Theme, node: &str, s: &Service, cx: &mut Context<Self>) -> Div {
@@ -448,7 +491,7 @@ impl ServicesPage {
                 &self.host,
                 services_store::reference(s, now),
             ));
-        if !s.link.is_empty() {
+        if services_store::opens(s) {
             let link = s.link.clone();
             head = head.child(
                 pane::act(t, "svc-open", "Open")
@@ -457,20 +500,44 @@ impl ServicesPage {
                     .on_click(move |_, _, cx| cx.open_url(&link)),
             );
         }
+        // One action per state in the head; what else the state allows
+        // waits under More.
         if s.controllable && !n.changing.contains_key(&s.id) {
-            for change in services_store::actions(&s.state) {
-                let change = *change;
+            let mut offered = services_store::actions(&s.state, services_store::looping(s))
+                .iter()
+                .copied();
+            if let Some(change) = offered.next() {
                 let selector = format!("svc-{}-{node}-{}", change.verb(), s.id);
                 let (at, id) = (node.to_owned(), s.id.clone());
-                let word = match change {
-                    Change::Start => "Start",
-                    Change::Stop => "Stop",
-                    Change::Restart => "Restart",
-                };
                 head = head.child(
-                    pane::act(t, SharedString::from(selector.clone()), word)
+                    pane::act(t, SharedString::from(selector.clone()), change.label())
                         .debug_selector(move || selector)
                         .on_click(cx.listener(move |p, _, _, cx| p.act(&at, &id, change, cx))),
+                );
+            }
+            let more: Vec<Change> = offered.collect();
+            if !more.is_empty() {
+                let (at, id) = (node.to_owned(), s.id.clone());
+                head = head.child(
+                    pane::act(t, "svc-more", "…")
+                        .debug_selector(|| "svc-more".into())
+                        .on_click(cx.listener(move |p, e: &gpui::ClickEvent, _, cx| {
+                            let me = cx.weak_entity();
+                            let rows = more
+                                .iter()
+                                .map(|&change| {
+                                    let (me, at, id) = (me.clone(), at.clone(), id.clone());
+                                    parvi_app_kit::menu::MenuRow::new(
+                                        change.label(),
+                                        move |_, cx| {
+                                            let _ =
+                                                me.update(cx, |p, cx| p.act(&at, &id, change, cx));
+                                        },
+                                    )
+                                })
+                                .collect();
+                            p.host.menu(rows, e.position(), cx);
+                        })),
                 );
             }
         }
@@ -480,8 +547,13 @@ impl ServicesPage {
         if let Some(since) = s.since() {
             state.push_str(&format!(" for {}", services_store::ago(since, now)));
         }
-        if s.restarts() > 0 {
-            state.push_str(&format!(", restarted {} times by systemd", s.restarts()));
+        if s.state == "failed" && services_store::looping(s) {
+            state.push_str(": systemd keeps restarting it");
+            if s.restarts() > 0 {
+                state.push_str(&format!(", {} so far", times(s.restarts())));
+            }
+        } else if s.restarts() > 0 {
+            state.push_str(&format!(", restarted {} by systemd", times(s.restarts())));
         }
         let state_selector = format!("svc-detail-state-{state}");
         let mut lines = div().flex().flex_col().child(pane::line(
@@ -523,11 +595,16 @@ impl ServicesPage {
                             .id("svc-address")
                             .debug_selector(|| "svc-address".into())
                             .min_w_0()
-                            .text_color(t.accent)
-                            .cursor_pointer()
-                            .hover(|d| d.underline())
                             .child(s.link.clone())
-                            .on_click(move |_, _, cx| cx.open_url(&open)),
+                            // A link while something may answer there.
+                            .map(|d| match services_store::opens(s) {
+                                true => d
+                                    .text_color(t.accent)
+                                    .cursor_pointer()
+                                    .hover(|d| d.underline())
+                                    .on_click(move |_, _, cx| cx.open_url(&open)),
+                                false => d.text_color(t.text2),
+                            }),
                     )
                     .child(
                         pane::act(t, "svc-copy", "Copy")
@@ -597,11 +674,18 @@ impl ServicesPage {
             .flex_col()
             .gap(px(size::SECTION_GAP))
             .child(lines)
-            .child(self.log(t, n.logs.get(&s.id)));
+            .child(self.log(
+                t,
+                n.logs.get(&s.id),
+                s.since().filter(|_| s.state == "running"),
+            ));
         pane::detail(t, "services-detail", head, body)
     }
 
-    fn log(&self, t: &Theme, log: Option<&services_store::Log>) -> Div {
+    /// The latest log lines. A running service's lines from before this
+    /// run (it began at `running_since`) stand under their own label; a
+    /// line from another day says its day.
+    fn log(&self, t: &Theme, log: Option<&services_store::Log>, running_since: Option<u64>) -> Div {
         let mut section = pane::section(t, "Log");
         let Some(log) = log else {
             return section.child(div().text_color(t.dim).child("Reading the log…"));
@@ -620,7 +704,30 @@ impl ServicesPage {
             }
             return section;
         }
-        for line in &log.lines {
+        let now = now_ms();
+        let stamps: Vec<String> = log
+            .lines
+            .iter()
+            .map(|l| parvi_app_kit::clock::stamp(l.at, now))
+            .collect();
+        let time_col = match stamps.iter().any(|s| s.len() > 5) {
+            true => tokens::DAY_TIME_COL,
+            false => tokens::TIME_COL,
+        };
+        let earlier = services_store::earlier(&log.lines, running_since);
+        if earlier > 0 {
+            section = section.child(
+                pane::meta(t, "Earlier runs", None).debug_selector(|| "svc-log-earlier".into()),
+            );
+        }
+        for (at, (line, stamp)) in log.lines.iter().zip(stamps).enumerate() {
+            if earlier > 0 && at == earlier {
+                section = section.child(
+                    pane::meta(t, "This run", None)
+                        .pt(px(size::LABEL_TOP))
+                        .debug_selector(|| "svc-log-this-run".into()),
+                );
+            }
             let selector = format!("svc-log-{}", line.text);
             section = section.child(
                 div()
@@ -632,9 +739,9 @@ impl ServicesPage {
                     .child(
                         div()
                             .flex_none()
-                            .w(px(tokens::TIME_COL))
+                            .w(px(time_col))
                             .text_color(t.dim)
-                            .child(parvi_app_kit::clock::hhmm(line.at)),
+                            .child(stamp),
                     )
                     .child(
                         div()
@@ -666,5 +773,14 @@ fn glyph(t: &Theme, state: &str) -> Div {
         "unknown" => dot.border_1().border_dashed().border_color(t.error),
         "stopping" => dot.border_1().border_color(t.accent),
         _ => dot.border_1().border_color(t.dim),
+    }
+}
+
+/// A count of times in words: "once", "3 times".
+fn times(n: u32) -> String {
+    if n == 1 {
+        "once".into()
+    } else {
+        format!("{n} times")
     }
 }

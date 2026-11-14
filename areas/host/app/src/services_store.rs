@@ -60,6 +60,14 @@ impl Change {
             Change::Restart => "restart",
         }
     }
+    /// The action's name where it is offered.
+    pub fn label(self) -> &'static str {
+        match self {
+            Change::Start => "Start",
+            Change::Stop => "Stop",
+            Change::Restart => "Restart",
+        }
+    }
     /// What the row says while the change runs.
     pub fn word(self) -> &'static str {
         match self {
@@ -203,20 +211,59 @@ impl Services {
         self.nodes.get(node)?.row(id)
     }
 
-    /// What Enter does to the chosen row: opens its address, if it has one.
+    /// What Enter does to the chosen row: opens its address, if it has one
+    /// that answers.
     pub fn enter(&self) -> Option<String> {
         let (node, id) = self.selected.as_ref()?;
         let s = self.service(node, id)?;
-        (!s.link.is_empty()).then(|| s.link.clone())
+        opens(s).then(|| s.link.clone())
     }
 }
 
-/// The actions a service offers in its state, the one most wanted first:
-/// a running one restarts or stops, a failed or stopped one starts, one
-/// that is changing or not known offers none.
-pub fn actions(state: &str) -> &'static [Change] {
+/// Whether a service's address is offered to open: it has one, and
+/// something may answer there (nothing does while it is stopped or failed).
+pub fn opens(s: &Service) -> bool {
+    !s.link.is_empty() && !matches!(s.state.as_str(), "stopped" | "failed")
+}
+
+/// Whether systemd keeps restarting a service that keeps dying.
+pub fn looping(s: &Service) -> bool {
+    s.components.iter().any(|c| c.sub == "auto-restart")
+}
+
+/// A service's state in the list's few words: a failed one that systemd
+/// keeps restarting says so.
+pub fn state_word(s: &Service) -> &str {
+    if s.state == "failed" && looping(s) {
+        "keeps restarting"
+    } else {
+        word(&s.state)
+    }
+}
+
+/// The lines of a log from before the service's current run, when it
+/// runs: how many of the first lines are older than `since`.
+pub fn earlier(lines: &[LogLine], since: Option<u64>) -> usize {
+    since.map_or(0, |since| {
+        lines
+            .iter()
+            .take_while(|l| l.at.saturating_add(RUN_SLACK) < since)
+            .count()
+    })
+}
+/// A run's first lines are written a little before systemd counts it as
+/// entered.
+const RUN_SLACK: u64 = 2_000;
+
+/// The actions a service offers in its state, the one most wanted first
+/// (it stands in the head; the rest wait under More): a running one
+/// restarts or stops, a failed or stopped one starts, one that is changing
+/// or not known offers none.
+pub fn actions(state: &str, looping: bool) -> &'static [Change] {
     match state {
         "running" => &[Change::Restart, Change::Stop],
+        // Stopping is what ends the restarts of one that keeps dying.
+        "failed" if looping => &[Change::Start, Change::Stop],
         "failed" | "partial" | "stopped" => &[Change::Start],
         _ => &[],
     }
@@ -414,6 +461,8 @@ mod tests {
         let order = [row("example"), row("room")];
         s.step(&order, Step::Up);
         assert_eq!(s.selected, Some(row("example")), "none chosen: the first");
+        assert_eq!(s.enter(), None, "stopped: nothing answers there");
+        s.nodes.get_mut("a").unwrap().list.as_mut().unwrap()[0].state = "running".into();
         assert_eq!(s.enter().as_deref(), Some("http://h:8080/x"));
         s.step(&order, Step::Down);
         s.step(&order, Step::Down);
@@ -564,16 +613,63 @@ mod tests {
 
     #[test]
     fn each_state_offers_its_own_actions_and_its_group() {
-        assert_eq!(actions("running"), [Change::Restart, Change::Stop]);
-        assert_eq!(actions("stopped"), [Change::Start], "not Start and Restart");
-        assert_eq!(actions("failed"), [Change::Start]);
-        assert_eq!(actions("starting"), []);
-        assert_eq!(actions("unknown"), []);
+        assert_eq!(actions("running", false), [Change::Restart, Change::Stop]);
+        assert_eq!(
+            actions("stopped", false),
+            [Change::Start],
+            "not Start and Restart"
+        );
+        assert_eq!(actions("failed", false), [Change::Start]);
+        assert_eq!(
+            actions("failed", true),
+            [Change::Start, Change::Stop],
+            "Stop ends the restarts"
+        );
+        assert_eq!(actions("starting", false), []);
+        assert_eq!(actions("unknown", false), []);
         assert_eq!(Group::of("stopped"), Group::Stopped, "stopped on purpose");
         assert_eq!(Group::of("failed"), Group::Failed);
         assert_eq!(Group::of("partial"), Group::Failed);
         assert_eq!(Group::of("unknown"), Group::Failed);
         assert_eq!(Group::of("stopping"), Group::Running);
+    }
+
+    #[test]
+    fn an_address_is_offered_only_where_something_may_answer() {
+        let mut n = node();
+        let list = n.list.as_mut().unwrap();
+        assert!(!opens(&list[0]), "stopped");
+        list[0].state = "running".into();
+        assert!(opens(&list[0]));
+        list[0].state = "failed".into();
+        assert!(!opens(&list[0]));
+        assert!(!opens(&list[1]), "running, but it has no address");
+    }
+
+    #[test]
+    fn a_unit_systemd_keeps_restarting_says_so() {
+        let mut n = node();
+        let s = &mut n.list.as_mut().unwrap()[0];
+        s.state = "failed".into();
+        assert_eq!(state_word(s), "failed");
+        s.components[0].sub = "auto-restart".into();
+        assert_eq!(state_word(s), "keeps restarting");
+    }
+
+    #[test]
+    fn a_log_knows_which_lines_are_from_before_this_run() {
+        let line = |at: u64| LogLine {
+            at,
+            ..LogLine::default()
+        };
+        let lines = [line(1_000), line(50_000), line(99_000), line(120_000)];
+        assert_eq!(earlier(&lines, Some(100_000)), 2);
+        assert_eq!(earlier(&lines, Some(500)), 0);
+        assert_eq!(
+            earlier(&lines, None),
+            0,
+            "not running: no run to tell apart"
+        );
     }
 
     #[test]
