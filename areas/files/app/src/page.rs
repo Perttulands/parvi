@@ -30,6 +30,8 @@ const WATCH: Duration = Duration::from_secs(2);
 const RECENT_AGAIN: Duration = Duration::from_secs(60);
 /// A pause in typing this long sends the find.
 const TYPED: Duration = Duration::from_millis(90);
+/// The page the Files panel opens beside.
+const PANEL_BESIDE: &str = "terminals";
 
 struct Upload {
     source: PathBuf,
@@ -118,9 +120,6 @@ pub struct FilesPage {
     restored: bool,
     pub(crate) beside_from: &'static str,
     me: WeakEntity<FilesPage>,
-    dock_view: Option<Entity<FilesPage>>,
-    pub(crate) dock: bool,
-    dock_previous_focus: Option<FocusHandle>,
     pub(crate) sessions: Option<Entity<parvi_terminals_contract::SessionList>>,
     uploads: VecDeque<Upload>,
     uploading: bool,
@@ -184,7 +183,7 @@ impl Page for FilesPage {
         let me = self.me.clone();
         vec![
             parvi_app_kit::chords::Chord::new("o", "Files panel", move |window, cx| {
-                let _ = me.update(cx, |page, cx| page.toggle_dock(window, cx));
+                let _ = me.update(cx, |page, cx| page.toggle_panel(window, cx));
             })
             .alt("o", Some(false))
             .everywhere(),
@@ -215,7 +214,7 @@ impl Page for FilesPage {
             cx.notify();
             return;
         }
-        if let Some(view) = &self.dock_view {
+        if let Some(view) = &self.beside_view {
             view.update(cx, |page, cx| {
                 page.start(cx);
                 if let Some(path) = page
@@ -239,10 +238,16 @@ impl Page for FilesPage {
                 self.show_in_tree(&file, cx);
                 self.open(file, window, cx);
             }
-            if kept.sidecar_open
-                && let Some(file) = kept.sidecar.selected
-            {
-                self.open_beside("terminals", NodeId(kept.sidecar.node), file, window, cx);
+            if kept.beside_open {
+                let view = self.panel(window, cx);
+                view.update(cx, |p, cx| {
+                    p.beside_from = PANEL_BESIDE;
+                    if let Some(file) = kept.beside_file {
+                        p.open(file, window, cx);
+                    }
+                    p.watch(window, cx);
+                });
+                self.host.show_beside(PANEL_BESIDE, view.into(), cx);
             }
         }
     }
@@ -276,16 +281,22 @@ impl Page for FilesPage {
 
 impl FilesPage {
     pub fn new(host: Host, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::create(host, window, cx, true)
-    }
-    fn create(host: Host, window: &mut Window, cx: &mut Context<Self>, guard: bool) -> Self {
         let kept: store::Kept = host.setting(cx).unwrap_or_default();
         let sessions = host.model::<parvi_terminals_contract::SessionList>(cx);
         if let Some(sessions) = &sessions {
             cx.observe(sessions, |_, _, cx| cx.notify()).detach();
         }
-        let code = cx.new(Code::new);
-        let pretty_code = cx.new(Code::new);
+        let wrap = !kept.unwrapped;
+        let code = cx.new(|cx| {
+            let mut c = Code::new(cx);
+            c.set_wrap(wrap, cx);
+            c
+        });
+        let pretty_code = cx.new(|cx| {
+            let mut c = Code::new(cx);
+            c.set_wrap(wrap, cx);
+            c
+        });
         let query = cx.new(|cx| TextField::new(cx, "Find a file"));
         let name_field = cx.new(|cx| TextField::new(cx, "New name"));
         cx.subscribe_in(
@@ -320,27 +331,20 @@ impl FilesPage {
             }
         })
         .detach();
-        if guard {
-            host.guard_close(
-                &cx.entity(),
-                |page: &FilesPage, cx| {
-                    let mut names: Vec<_> = page
-                        .drafts
-                        .keys()
-                        .chain(
-                            page.dock_view
-                                .iter()
-                                .flat_map(|dock| dock.read(cx).drafts.keys()),
-                        )
-                        .map(|(_, path)| paths::base_name(path).to_owned())
-                        .collect();
-                    names.sort();
-                    names.dedup();
-                    (!names.is_empty()).then(|| names.join(", "))
-                },
-                cx,
-            );
-        }
+        host.guard_close(
+            &cx.entity(),
+            |page: &FilesPage, _| {
+                let mut names: Vec<_> = page
+                    .drafts
+                    .keys()
+                    .map(|(_, path)| paths::base_name(path).to_owned())
+                    .collect();
+                names.sort();
+                names.dedup();
+                (!names.is_empty()).then(|| names.join(", "))
+            },
+            cx,
+        );
         Self {
             focus: cx.focus_handle().tab_stop(true),
             host,
@@ -379,9 +383,6 @@ impl FilesPage {
             restored: false,
             beside_from: "",
             me: cx.weak_entity(),
-            dock_view: None,
-            dock: false,
-            dock_previous_focus: None,
             sessions,
             uploads: VecDeque::new(),
             uploading: false,
@@ -395,47 +396,61 @@ impl FilesPage {
         self.host.report(Status::failure(text), cx);
     }
 
-    fn toggle_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.host.docked(cx) {
-            let focused = self
-                .dock_view
-                .as_ref()
-                .is_some_and(|view| view.read(cx).focus.contains_focused(window, cx));
-            self.host.close_dock(cx);
-            if let Some(focus) = self.dock_previous_focus.take().filter(|_| focused) {
-                window.focus(&focus, cx);
-            }
+    /// The Files panel (Alt+O): this page's view beside the terminals,
+    /// at the focused session's folder, or away again. It is the same view
+    /// a printed path opens, over the windows, so no session changes size.
+    fn toggle_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(view) = self.beside_view.clone().filter(|v| {
+            self.host
+                .beside_of(PANEL_BESIDE, cx)
+                .is_some_and(|b| b.entity_id() == v.entity_id())
+        }) {
+            view.update(cx, |p, cx| p.close_beside(cx));
             return;
         }
-        self.dock_previous_focus = window.focused(cx);
-        let view = match &self.dock_view {
-            Some(view) => view.clone(),
-            None => {
-                let host = self.host.clone();
-                let kept: store::Kept = host.setting(cx).unwrap_or_default();
-                let view = cx.new(|cx| FilesPage::create(host, window, cx, false));
-                view.update(cx, |page, cx| {
-                    page.dock = true;
-                    page.tree = Tree::from_kept(&kept.dock);
-                    page.start(cx);
-                    if let Some(path) = kept.dock_file {
-                        page.open(path, window, cx);
-                    }
-                });
-                self.dock_view = Some(view.clone());
-                view
+        let folder = self.session_folder(cx);
+        let view = self.panel(window, cx);
+        view.update(cx, |p, cx| {
+            p.beside_from = PANEL_BESIDE;
+            if let Some((node, folder)) = folder {
+                p.on_node(&node, cx);
+                p.opened = None;
+                p.show_folder(folder, cx);
             }
-        };
-        // Beside a terminal the dock starts at that session's folder.
-        if let Some((node, folder)) = self.session_folder(cx) {
-            view.update(cx, |page, cx| {
-                page.on_node(&node, cx);
-                page.opened = None;
-                page.show_folder(folder, cx);
-            });
+            p.refresh_recent(cx);
+            p.watch(window, cx);
+        });
+        self.keep_beside_open(true, cx);
+        self.host.show_beside(PANEL_BESIDE, view.into(), cx);
+        self.host.for_page(PANEL_BESIDE, &[]).show(cx);
+    }
+
+    /// The view this page opens beside another, made the first time.
+    fn panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<FilesPage> {
+        if let Some(view) = &self.beside_view {
+            return view.clone();
         }
-        view.update(cx, |page, cx| page.watch(window, cx));
-        self.host.show_dock(view.into(), cx);
+        let host = self.host.clone();
+        let kept: store::Kept = host.setting(cx).unwrap_or_default();
+        let view = cx.new(|cx| FilesPage::new(host, window, cx));
+        view.update(cx, |p, cx| {
+            p.beside = true;
+            p.tree = Tree::from_kept(&kept.beside);
+            p.start(cx);
+            p.refresh_recent(cx);
+        });
+        self.beside_view = Some(view.clone());
+        view
+    }
+
+    /// Whether the panel beside the terminals is open, kept for the next
+    /// run.
+    fn keep_beside_open(&self, open: bool, cx: &mut Context<Self>) {
+        let mut kept: store::Kept = self.host.setting(cx).unwrap_or_default();
+        if kept.beside_open != open {
+            kept.beside_open = open;
+            let _ = self.host.set_setting(&kept, cx);
+        }
     }
 
     /// The node and folder of the session in the focused terminal tile.
@@ -459,30 +474,18 @@ impl FilesPage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if from == "terminals" {
-            let mut kept: store::Kept = self.host.setting(cx).unwrap_or_default();
-            kept.sidecar_open = true;
-            kept.sidecar.node = node.to_string();
-            kept.sidecar.selected = Some(path.clone());
-            let _ = self.host.set_setting(&kept, cx);
-        }
-        let host = self.host.clone();
-        let view = match &self.beside_view {
-            Some(view) => view.clone(),
-            None => {
-                let view = cx.new(|cx| FilesPage::new(host.clone(), window, cx));
-                self.beside_view = Some(view.clone());
-                view
-            }
-        };
+        let view = self.panel(window, cx);
         view.update(cx, |p, cx| {
-            p.beside = true;
             p.beside_from = from;
-            p.tree.node = node.to_string();
+            p.on_node(node.as_str(), cx);
+            p.show_in_tree(&path, cx);
             p.open(path, window, cx);
             p.watch(window, cx);
         });
-        host.show_beside(from, view.into(), cx);
+        if from == PANEL_BESIDE {
+            self.keep_beside_open(true, cx);
+        }
+        self.host.show_beside(from, view.into(), cx);
     }
     pub fn close_beside(&mut self, cx: &mut Context<Self>) {
         if !self.drafts.is_empty() {
@@ -502,10 +505,8 @@ impl FilesPage {
         self.close_beside_now(cx);
     }
     fn close_beside_now(&self, cx: &mut Context<Self>) {
-        if self.beside_from == "terminals" {
-            let mut kept: store::Kept = self.host.setting(cx).unwrap_or_default();
-            kept.sidecar_open = false;
-            let _ = self.host.set_setting(&kept, cx);
+        if self.beside_from == PANEL_BESIDE {
+            self.keep_beside_open(false, cx);
         }
         self.host.close_beside(self.beside_from, cx);
     }
@@ -544,9 +545,7 @@ impl FilesPage {
         if self.tree.node.is_empty() {
             self.tree.node = node;
         }
-        if !self.beside {
-            self.roots(cx);
-        }
+        self.roots(cx);
     }
     fn roots(&mut self, cx: &mut Context<Self>) {
         let node = self.tree.node.clone();
@@ -587,7 +586,7 @@ impl FilesPage {
         }
     }
     pub fn refresh_recent(&mut self, cx: &mut Context<Self>) {
-        if self.beside || self.dock || self.recent_asked || self.tree.node.is_empty() {
+        if self.recent_asked || self.tree.node.is_empty() {
             return;
         }
         self.recent_asked = true;
@@ -654,12 +653,19 @@ impl FilesPage {
         self.keep(cx);
         cx.notify();
     }
+    /// Beside another page: from the file back to the list, the file
+    /// picked in it.
+    pub fn back_to_list(&mut self, cx: &mut Context<Self>) {
+        if let Some(o) = self.opened.take() {
+            self.pick = Some(Pick::Node(o.path));
+            self.scroll_pending = !self.scroll_to_pick();
+        }
+        self.keep(cx);
+        cx.notify();
+    }
     /// Opens the tree down to `path` and picks its row: what was asked
     /// for from elsewhere shows where it is.
     pub fn show_in_tree(&mut self, path: &str, cx: &mut Context<Self>) {
-        if self.beside {
-            return;
-        }
         self.clear_find(cx);
         self.reveal_in_tree(path, cx);
         self.set_pick(Pick::Node(path.to_owned()), cx);
@@ -722,7 +728,7 @@ impl FilesPage {
             return;
         }
         let revision = self.find_revision;
-        self.find = Some(Find::new(&query, None, revision));
+        self.find = Some(Find::new(&query, revision));
         self.pick = Some(Pick::Hit(0));
         let node = self.tree.node.clone();
         cx.spawn(async move |this, cx| {
@@ -730,13 +736,13 @@ impl FilesPage {
             let _ = this.update(cx, |page, cx| {
                 if page.find_revision == revision {
                     let uri = format!("/api/files/find?q={}", enc(&query));
-                    page.ask_find(Request::get(NodeId(node), uri), revision, cx);
+                    page.ask_find(Request::get(NodeId(node), uri), revision, false, cx);
                 }
             });
         })
         .detach();
     }
-    fn ask_find(&mut self, request: Request, revision: u64, cx: &mut Context<Self>) {
+    fn ask_find(&mut self, request: Request, revision: u64, inside: bool, cx: &mut Context<Self>) {
         self.request(
             request,
             move |p, s, b, cx| {
@@ -746,7 +752,11 @@ impl FilesPage {
                     Err(message(s, &b))
                 };
                 if let Some(find) = p.find.as_mut() {
-                    find.answer(revision, found);
+                    if inside {
+                        find.answer_inside(revision, found);
+                    } else {
+                        find.answer(revision, found);
+                    }
                 }
                 cx.notify()
             },
@@ -758,19 +768,24 @@ impl FilesPage {
     pub fn text_scope(&self) -> Option<String> {
         self.tree.folder_here()
     }
+    /// Looks for the query inside the files under the text scope; the
+    /// names found stay above.
     pub fn find_in_text(&mut self, cx: &mut Context<Self>) {
-        let (Some(folder), Some(query)) = (
-            self.text_scope(),
-            self.find.as_ref().map(|f| f.query.clone()),
-        ) else {
+        let Some(folder) = self.text_scope() else {
             return;
         };
-        self.find_revision += 1;
-        let revision = self.find_revision;
-        self.find = Some(Find::new(&query, Some(folder.clone()), revision));
-        self.pick = Some(Pick::Hit(0));
+        let Some(find) = self.find.as_mut() else {
+            return;
+        };
+        find.inside = Some(store::find::Inside {
+            folder: folder.clone(),
+            found: None,
+        });
+        let (query, revision) = (find.query.clone(), find.revision);
+        let first = find.matches().len();
+        self.pick = Some(Pick::Hit(first));
         let uri = format!("{}&q={}", route("search", &folder), enc(&query));
-        self.ask_find(Request::get(self.node(), uri), revision, cx);
+        self.ask_find(Request::get(self.node(), uri), revision, true, cx);
         cx.notify();
     }
     fn clear_find(&mut self, cx: &mut Context<Self>) {
@@ -835,7 +850,14 @@ impl FilesPage {
             None => return,
         };
         match pick {
-            Pick::Recent(path) => self.open(path, window, cx),
+            Pick::Recent(path) => {
+                let folder = matches!(&self.recent, Some(Ok(r)) if r.iter().any(|c| c.path == path && c.files.is_some()));
+                if folder {
+                    self.show_folder(path, cx);
+                } else {
+                    self.open(path, window, cx)
+                }
+            }
             Pick::More => {
                 self.recent_more = true;
                 cx.notify();
@@ -882,10 +904,8 @@ impl FilesPage {
         let name = paths::base_name(&path).to_string();
         self.seen.remove(&path);
         self.opened = Some(Opened::reading(node.clone(), path.clone()));
-        if !self.beside {
-            self.tree.select(&path);
-            self.keep(cx);
-        }
+        self.tree.select(&path);
+        self.keep(cx);
         let kind = store::kinds::kind(&name);
         if matches!(
             kind,
@@ -1284,7 +1304,7 @@ impl FilesPage {
             "f2" => self.start_rename(window, cx),
             // Beside another page, Esc takes the view away (its drafts are
             // asked about first).
-            "escape" if self.beside => {
+            "escape" if self.beside && self.find.is_none() => {
                 self.close_beside(cx);
             }
             "escape" => {
@@ -1312,8 +1332,7 @@ impl FilesPage {
             Pick::Hit(i) => self
                 .find
                 .as_ref()
-                .and_then(|f| f.matches().get(*i))
-                .map(|m| m.path.clone()),
+                .and_then(|f| f.matches().get(*i).map(|m| m.path.clone())),
             Pick::More | Pick::InText => None,
         }
     }
@@ -1635,6 +1654,44 @@ impl FilesPage {
         at: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
+        let rows = self.menu_rows(path, folder);
+        self.host.menu(rows, at, cx);
+    }
+
+    /// The viewer's "…": how long lines show, then the file's own menu.
+    pub fn file_menu(&mut self, at: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
+        let Some(path) = self.opened.as_ref().map(|o| o.path.clone()) else {
+            return;
+        };
+        let me = self.me.clone();
+        let wraps = self.code.read(cx).wraps();
+        let mut rows = vec![
+            MenuRow::new(
+                if wraps {
+                    "Let long lines run on"
+                } else {
+                    "Wrap long lines"
+                },
+                move |_, cx| {
+                    let _ = me.update(cx, |p, cx| p.set_wrap(!wraps, cx));
+                },
+            ),
+            MenuRow::rule(),
+        ];
+        rows.extend(self.menu_rows(path, false));
+        self.host.menu(rows, at, cx);
+    }
+
+    pub fn set_wrap(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.code.update(cx, |c, cx| c.set_wrap(on, cx));
+        self.pretty_code.update(cx, |c, cx| c.set_wrap(on, cx));
+        let mut k: store::Kept = self.host.setting(cx).unwrap_or_default();
+        k.unwrapped = !on;
+        let _ = self.host.set_setting(&k, cx);
+        cx.notify();
+    }
+
+    fn menu_rows(&self, path: String, folder: bool) -> Vec<MenuRow> {
         let me = self.me.clone();
         let node = self.node();
         let root = self.tree.roots.iter().any(|r| r.path == path);
@@ -1711,7 +1768,7 @@ impl FilesPage {
                 );
             }
         }
-        self.host.menu(rows, at, cx);
+        rows
     }
 
     pub(crate) fn download_path(&mut self, node: NodeId, path: String, cx: &mut Context<Self>) {
@@ -1853,13 +1910,10 @@ impl FilesPage {
         self.send_path(path, cx);
     }
     pub(crate) fn keep(&self, cx: &mut Context<Self>) {
-        if self.beside {
-            return;
-        }
         let mut k: store::Kept = self.host.setting(cx).unwrap_or_default();
-        if self.dock {
-            k.dock = self.tree.kept();
-            k.dock_file = self.opened.as_ref().map(|o| o.path.clone());
+        if self.beside {
+            k.beside = self.tree.kept();
+            k.beside_file = self.opened.as_ref().map(|o| o.path.clone());
         } else {
             k.tree = self.tree.kept();
             k.file = self.opened.as_ref().map(|o| o.path.clone());
@@ -1871,9 +1925,7 @@ impl FilesPage {
 
     /// Whether anyone sees this view now.
     fn seen_now(&self, cx: &App) -> bool {
-        if self.dock {
-            self.host.docked(cx)
-        } else if self.beside {
+        if self.beside {
             self.host
                 .beside_of(self.beside_from, cx)
                 .is_some_and(|v| Some(v.entity_id()) == self.me.upgrade().map(|e| e.entity_id()))
@@ -1897,6 +1949,10 @@ impl FilesPage {
                     if !p.seen_now(cx) {
                         p.watching = false;
                         p.seen.clear();
+                        // Closed by the page it was beside (its Esc).
+                        if p.beside && p.beside_from == PANEL_BESIDE {
+                            p.keep_beside_open(false, cx);
+                        }
                         return false;
                     }
                     if window.is_window_active() {
@@ -1920,7 +1976,8 @@ impl FilesPage {
         {
             asked.push(o.path.clone());
         }
-        if !self.beside {
+        // Beside, the list is seen only while no file is open.
+        if !self.beside || self.opened.is_none() {
             asked.extend(
                 self.tree
                     .open_folders()

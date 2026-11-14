@@ -201,8 +201,10 @@ fn modified(path: &std::path::Path, seconds_ago: u64) {
         .unwrap();
 }
 
+/// Alt+O opens the Files panel beside the terminals, from any page: the
+/// same view a printed path opens, which browses, sends and remembers.
 #[gpui::test]
-fn files_dock_browses_sends_and_remembers_beside_a_page(cx: &mut TestAppContext) {
+fn files_panel_browses_sends_and_remembers_beside_the_terminals(cx: &mut TestAppContext) {
     let root = parvi_testkit::fresh_dir("files-dock");
     std::fs::create_dir(root.join("folder")).unwrap();
     let file = root.join("folder/note.txt");
@@ -214,7 +216,7 @@ fn files_dock_browses_sends_and_remembers_beside_a_page(cx: &mut TestAppContext)
     let settings = root.join("settings.json");
     let (shell, cx) = cx.add_window_view(move |w, cx| {
         parvi_app_shell::start(
-            &[toy, parvi_files_app::build],
+            &[toy, terminal, parvi_files_app::build],
             Some(url),
             Some(settings),
             w,
@@ -234,17 +236,17 @@ fn files_dock_browses_sends_and_remembers_beside_a_page(cx: &mut TestAppContext)
     }));
     cx.simulate_keystrokes("alt-o");
     tree(cx, "file-row-folder");
-    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy"));
+    assert_eq!(
+        shell.read_with(cx, |s, _| s.shown_page()),
+        Some("terminals"),
+        "the terminals come forward with the panel beside them"
+    );
+    assert!(cx.debug_bounds("dock-files").is_none(), "no dock column");
+    assert!(cx.debug_bounds("files-close-beside").is_some(), "Close");
     click(cx, "file-row-folder");
     tree(cx, "file-row-note.txt");
-    let dock = cx.debug_bounds("dock-files").expect("dock drawn");
-    let row = cx.debug_bounds("file-row-note.txt").unwrap();
-    assert!(
-        row.left() >= dock.left() && row.right() <= dock.right(),
-        "the folder's rows stay inside the dock"
-    );
     click(cx, "file-row-note.txt");
-    until(cx, "dock viewer, its file read", |cx| {
+    until(cx, "the panel's viewer, its file read", |cx| {
         cx.debug_bounds("files-edit").is_some()
     });
     SENT.with(|sent| *sent.borrow_mut() = None);
@@ -257,25 +259,28 @@ fn files_dock_browses_sends_and_remembers_beside_a_page(cx: &mut TestAppContext)
         Some(format!("path {}", file.display()))
     );
     cx.simulate_keystrokes("alt-o");
-    assert!(cx.debug_bounds("dock-files").is_none());
-    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy"));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("file-view-note.txt").is_none(), "closed");
+    assert!(!kept(&shell, cx).beside_open);
     cx.simulate_keystrokes("alt-o");
     until(cx, "remembered file", |cx| {
         cx.debug_bounds("file-view-note.txt").is_some() && cx.debug_bounds("files-send").is_some()
     });
+    assert!(kept(&shell, cx).beside_open);
     click(cx, "files-back");
-    until(cx, "back to the tree", |cx| {
-        cx.debug_bounds("file-row-note.txt").is_some() && cx.debug_bounds("files-send").is_none()
+    until(cx, "back to the tree, the file picked", |cx| {
+        cx.debug_bounds("picked-note.txt").is_some() && cx.debug_bounds("files-send").is_none()
     });
     drop(running);
     std::fs::remove_dir_all(root).unwrap();
 }
 
-/// The dock opens at the focused session's folder; a find there reaches
-/// names and text; a path the session prints opens beside it.
+/// The Files panel opens over the terminals at the focused session's
+/// folder; a find there reaches names and text; a path the session prints
+/// opens in the same panel.
 #[cfg(unix)]
 #[gpui::test]
-fn terminal_dock_search_and_printed_path_open_beside(cx: &mut TestAppContext) {
+fn terminal_panel_search_and_printed_path_open_beside(cx: &mut TestAppContext) {
     let Some(tmux) = parvi_testkit::tmux::Server::start_in("files-finish-terminal") else {
         assert!(std::env::var_os("PARVI_REQUIRE_TMUX").is_none());
         return;
@@ -329,9 +334,9 @@ fn terminal_dock_search_and_printed_path_open_beside(cx: &mut TestAppContext) {
     until(cx, "terminal painted", |cx| {
         terminal.read_with(cx, |p, _| p.geo.borrow()[0].origin.is_some())
     });
-    // The dock opens at the session's folder, picked.
+    // The panel opens at the session's folder, picked.
     cx.simulate_keystrokes("alt-o");
-    until(cx, "dock at the session's folder", |cx| {
+    until(cx, "the panel at the session's folder", |cx| {
         cx.debug_bounds("file-row-note.txt").is_some() && cx.debug_bounds("picked-sub").is_some()
     });
     assert_eq!(
@@ -361,13 +366,13 @@ fn terminal_dock_search_and_printed_path_open_beside(cx: &mut TestAppContext) {
         cx.debug_bounds("hit-note.txt:12").is_some()
     });
     click(cx, "hit-note.txt:12");
-    until(cx, "dock file", |cx| {
+    until(cx, "the panel's file", |cx| {
         cx.debug_bounds("file-view-note.txt").is_some()
             && cx.debug_bounds("files-code-top-9").is_some()
     });
     cx.simulate_keystrokes("alt-o");
-    until(cx, "dock closed", |cx| {
-        cx.debug_bounds("dock-files").is_none()
+    until(cx, "the panel closed", |cx| {
+        cx.debug_bounds("terminals-beside").is_none()
     });
     let path = file.to_string_lossy().into_owned();
     tmux.run(&[

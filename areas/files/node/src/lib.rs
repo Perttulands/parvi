@@ -9,6 +9,7 @@ pub mod find;
 mod identity;
 mod index;
 mod receive;
+mod recent;
 pub mod roots;
 #[cfg(test)]
 mod scratch;

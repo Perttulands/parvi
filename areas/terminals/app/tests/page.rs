@@ -261,6 +261,16 @@ fn open_with_alpha<'a>(
     name: &str,
     cx: &'a mut TestAppContext,
 ) -> (Entity<Shell>, &'a mut VisualTestContext, std::path::PathBuf) {
+    open_pages_with_alpha(running, name, &[terminals, toy], cx)
+}
+
+/// [`open_with_alpha`] with `pages` mounted instead of the page and the toy.
+fn open_pages_with_alpha<'a>(
+    running: &Running,
+    name: &str,
+    pages: &'static [parvi_app_kit::Build],
+    cx: &'a mut TestAppContext,
+) -> (Entity<Shell>, &'a mut VisualTestContext, std::path::PathBuf) {
     let settings = std::env::temp_dir()
         .join(format!("parvi-terminals-{name}-{}", std::process::id()))
         .join("app.json");
@@ -270,7 +280,7 @@ fn open_with_alpha<'a>(
     cx.update(parvi_app_shell::prepare);
     let (url, path) = (running.url.clone(), settings.clone());
     let (shell, cx) = cx.add_window_view(move |window, cx| {
-        parvi_app_shell::start(&[terminals, toy], Some(url), Some(path), window, cx)
+        parvi_app_shell::start(pages, Some(url), Some(path), window, cx)
     });
     until(cx, "the link to open", |cx| {
         shell.read_with(cx, |s, cx| {
@@ -425,10 +435,21 @@ fn other_pages_read_the_sessions_and_open_views_beside_them(cx: &mut TestAppCont
 /// session at the size it had, here and for every other client.
 #[gpui::test]
 fn nothing_opened_on_the_page_resizes_a_session(cx: &mut TestAppContext) {
-    let Some(running) = start("terminals-opened-size") else {
+    let Some(running) = start_config("terminals-opened-size", false, false, true, false) else {
         return;
     };
-    let (shell, cx, settings) = open_with_alpha(&running, "opened-size", cx);
+    let picture = running.fixture.join("plan.svg");
+    std::fs::write(
+        &picture,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="#c33"/></svg>"##,
+    )
+    .unwrap();
+    let (shell, cx, settings) = open_pages_with_alpha(
+        &running,
+        "opened-size",
+        &[terminals, parvi_files_app::build],
+        cx,
+    );
     // Wide enough that a drawer could have moved the window aside.
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     let toy = shell.read_with(cx, |s, _| Host::new(s.hub()).for_page("toy", &[]));
@@ -519,6 +540,72 @@ fn nothing_opened_on_the_page_resizes_a_session(cx: &mut TestAppContext) {
         "Esc took it away"
     );
     unchanged(cx, "after it closed");
+
+    // Files opens beside the windows by every route, and lies over them
+    // too: the Files panel (Alt+O), ...
+    cx.simulate_keystrokes("alt-o");
+    until(cx, "the Files panel over the windows", |cx| {
+        cx.debug_bounds("terminals-beside").is_some()
+            && cx.debug_bounds("files-close-beside").is_some()
+    });
+    unchanged(cx, "with the Files panel open");
+    cx.simulate_keystrokes("alt-o");
+    until(cx, "the Files panel closed", |cx| {
+        cx.debug_bounds("terminals-beside").is_none()
+    });
+    unchanged(cx, "after the Files panel closed");
+
+    // ... a path the session printed, clicked, ...
+    let command = format!("printf '\\033[2J\\033[Hmade {}\\n'", picture.display());
+    tmux(&running, &["send-keys", "-t", "alpha", &command, "Enter"]);
+    until(cx, "the printed picture drawn small", |cx| {
+        page.read_with(cx, |p, _| !p.chips.borrow()[0].is_empty())
+    });
+    let chip = page.read_with(cx, |p, _| p.chips.borrow()[0][0].bounds);
+    cx.simulate_click(chip.center(), Modifiers::none());
+    until(cx, "the printed path open in Files beside", |cx| {
+        cx.debug_bounds("terminals-beside").is_some()
+            && cx.debug_bounds("file-view-plan.svg").is_some()
+    });
+    unchanged(cx, "with a printed path open beside");
+    click(cx, "files-close-beside".into());
+    until(cx, "the printed path closed", |cx| {
+        cx.debug_bounds("terminals-beside").is_none()
+    });
+
+    // ... and an agent's `parvi view open`, which brings Files forward;
+    // the windows are as they were when the terminals come back.
+    let rt = tokio::runtime::Runtime::new().expect("a runtime");
+    let path = picture.display().to_string();
+    let args: Vec<String> = [
+        "open",
+        "--page",
+        "files",
+        "--path",
+        &path,
+        "--json",
+        "--node",
+        &running.url,
+    ]
+    .iter()
+    .map(|a| a.to_string())
+    .collect();
+    let opened = rt.spawn(async move {
+        let mut out = Vec::new();
+        parvi_node_kit::cli::run("view", &args, &mut out)
+            .await
+            .expect("the command runs")
+    });
+    until(cx, "parvi view open answered", |_| opened.is_finished());
+    assert_eq!(rt.block_on(opened).expect("its task"), 0);
+    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("files"));
+    unchanged(cx, "with Files shown by parvi view open");
+    let terminals = shell.read_with(cx, |s, _| Host::new(s.hub()).for_page("terminals", &[]));
+    cx.update(|_, cx| terminals.show(cx));
+    until(cx, "the terminals back", |cx| {
+        shell.read_with(cx, |s, _| s.shown_page()) == Some("terminals")
+    });
+    unchanged(cx, "with the terminals back");
     let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
 }
 

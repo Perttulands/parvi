@@ -5201,6 +5201,7 @@ dependencies = [
  "parvi-app-shell",
  "parvi-core",
  "parvi-files",
+ "parvi-files-app",
  "parvi-node-kit",
  "parvi-term",
  "parvi-terminals",

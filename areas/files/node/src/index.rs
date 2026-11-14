@@ -11,7 +11,7 @@ use super::roots::Roots;
 use parvi_files_contract::{Changed, Match, Matches};
 use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -19,10 +19,8 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 const MOST: usize = 2_000_000;
 /// Results a name find answers.
 const RESULTS: usize = 50;
-/// What changed answers this many at most, and at most `PER_FOLDER` from
-/// one folder, so one agent writing a hundred files leaves room for others.
+/// What changed answers this many lines at most.
 pub const RECENT: usize = 40;
-const PER_FOLDER: usize = 3;
 /// How old an index a recent-changes answer accepts, and a name find (a
 /// find answers from an older one and refreshes it behind).
 const FRESH: Duration = Duration::from_secs(2);
@@ -52,10 +50,11 @@ pub struct Index {
 }
 
 impl Index {
-    /// The files changed most recently, newest first.
+    /// What changed most recently, newest first, as [`super::recent`]
+    /// sums it up.
     pub fn recent(self: &Arc<Self>, roots: &Roots) -> Vec<Changed> {
         let items = self.items(roots, FRESH, false);
-        recent_of(&items, RECENT)
+        recent_of(&items, roots, RECENT)
     }
 
     /// Files whose path holds every word of `query`, those whose name does
@@ -175,33 +174,26 @@ fn walk(roots: &Roots) -> Vec<Item> {
     items
 }
 
-fn folder_of(path: &str) -> &str {
-    Path::new(path)
-        .parent()
-        .and_then(Path::to_str)
-        .unwrap_or_default()
-}
-
-fn recent_of(items: &[Item], most: usize) -> Vec<Changed> {
-    let mut order: Vec<&Item> = items.iter().collect();
+fn recent_of(items: &[Item], roots: &Roots, most: usize) -> Vec<Changed> {
+    use super::recent;
+    let mut order: Vec<&Item> = items
+        .iter()
+        .filter(|i| !recent::machine_state(&i.path[i.name..]))
+        .collect();
     order.sort_unstable_by(|a, b| b.modified.cmp(&a.modified).then(a.path.cmp(&b.path)));
-    let mut per_folder: std::collections::HashMap<&str, usize> = Default::default();
-    let mut out = Vec::new();
-    for item in order {
-        let n = per_folder.entry(folder_of(&item.path)).or_default();
-        if *n >= PER_FOLDER {
-            continue;
-        }
-        *n += 1;
-        out.push(Changed {
-            path: item.path.clone(),
-            modified: item.modified,
-        });
-        if out.len() >= most {
-            break;
-        }
-    }
-    out
+    order.truncate(recent::CANDIDATES);
+    let paths: Vec<&str> = order.iter().map(|i| i.path.as_str()).collect();
+    let ignored = recent::ignored(&paths);
+    let files: Vec<recent::File> = order
+        .iter()
+        .filter(|i| !ignored.contains(&i.path))
+        .map(|i| recent::File {
+            path: &i.path,
+            modified: i.modified,
+        })
+        .collect();
+    let roots: Vec<String> = roots.list().into_iter().map(|r| r.path).collect();
+    recent::summarize(&files, &roots, most)
 }
 
 fn find_in(items: &[Item], words: &[String]) -> Matches {
@@ -256,27 +248,6 @@ mod tests {
             path: path.into(),
             modified,
         }
-    }
-
-    #[test]
-    fn recent_changes_come_newest_first_a_few_per_folder() {
-        let mut items: Vec<Item> = (0..10)
-            .map(|n| item(&format!("/r/out/{n}.png"), 100 + n))
-            .collect();
-        items.push(item("/r/src/main.rs", 50));
-        items.push(item("/r/README.md", 200));
-        let recent = recent_of(&items, 40);
-        let paths: Vec<&str> = recent.iter().map(|c| c.path.as_str()).collect();
-        assert_eq!(
-            paths,
-            [
-                "/r/README.md",
-                "/r/out/9.png",
-                "/r/out/8.png",
-                "/r/out/7.png",
-                "/r/src/main.rs"
-            ]
-        );
     }
 
     #[test]

@@ -94,7 +94,7 @@ pub(super) fn skipped(name: &str) -> bool {
     name.starts_with('.')
         || matches!(
             name,
-            "node_modules" | "dist" | "build" | "target" | "vendor"
+            "node_modules" | "dist" | "build" | "target" | "vendor" | "__pycache__"
         )
 }
 

@@ -55,11 +55,15 @@ pub struct NodeRoots {
     pub roots: Vec<Root>,
 }
 
-/// A file and when it last changed, in milliseconds since the Unix epoch.
+/// A file and when it last changed, in milliseconds since the Unix epoch;
+/// or, with `files`, a folder in which that many files changed together
+/// (a checkout, a batch of renders), `modified` the newest of them.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct Changed {
     pub path: String,
     pub modified: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<usize>,
 }
 
 /// The files changed most recently under the roots, newest first.

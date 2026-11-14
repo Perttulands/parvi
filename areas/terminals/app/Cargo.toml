@@ -39,6 +39,7 @@ gpui = { package = "gpui-pre", version = "=0.3.12", features = ["test-support"] 
 parvi-app-shell = { path = "../../../kit/app-shell" }
 parvi-terminals = { path = "../node" }
 parvi-files = { path = "../../files/node" }
+parvi-files-app = { path = "../../files/app" }
 parvi-testkit = { path = "../../../kit/testkit" }
 parvi-node-kit = { path = "../../../kit/node-kit" }
 parvi-term = { path = "../../../engine/term" }

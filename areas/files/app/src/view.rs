@@ -7,7 +7,7 @@ use gpui::{
     AnyElement, Context, Div, MouseButton, MouseMoveEvent, Render, ScrollDelta, SharedString,
     Window, div, img, prelude::*, px, uniform_list,
 };
-use parvi_app_kit::theme::{Theme, board::LIST_W, size, theme};
+use parvi_app_kit::theme::{Theme, size, theme};
 use parvi_app_kit::widgets::kit::{self, Kind};
 use parvi_app_kit::widgets::pane;
 use parvi_files_contract::{Changed, Match};
@@ -88,51 +88,36 @@ impl Line {
 pub fn lines(p: &FilesPage) -> Vec<Line> {
     let mut out = Vec::new();
     if let Some(find) = &p.find {
-        if let Some(folder) = &find.text {
-            let name = p
-                .tree
-                .row(folder)
-                .map_or_else(|| paths::base_name(folder).to_owned(), |r| r.name);
-            out.push(Line::Label(format!("Text in {name}")));
-        }
-        match &find.found {
-            None => out.push(Line::Note {
-                text: "Looking…".into(),
-                depth: 0,
-                error: false,
-            }),
-            Some(Err(e)) => out.push(Line::Note {
-                text: e.clone(),
-                depth: 0,
-                error: true,
-            }),
-            Some(Ok(m)) if m.matches.is_empty() => out.push(Line::Note {
-                text: if find.text.is_some() {
-                    "No file there has it".into()
-                } else {
-                    "No file name has it".into()
-                },
-                depth: 0,
-                error: false,
-            }),
-            Some(Ok(m)) => {
-                // Said first: under a long list it would never be seen.
-                if m.truncated {
-                    out.push(Line::Note {
-                        text: format!("Only the first {}; type more of it", m.matches.len()),
-                        depth: 0,
-                        error: false,
-                    });
+        // Names first, then the lines inside files, each under its label.
+        let quoted = format!("\u{201c}{}\u{201d}", find.query.trim());
+        out.push(Line::Label("Names".into()));
+        let names = found_lines(
+            &find.found,
+            0,
+            format!("No file name has {quoted}"),
+            &mut out,
+        );
+        let scope = find
+            .inside
+            .as_ref()
+            .map(|i| i.folder.clone())
+            .or_else(|| p.text_scope());
+        if let Some(folder) = scope {
+            out.push(Line::Label(format!(
+                "Inside files in {}",
+                paths::shown(&p.tree.roots, &folder)
+            )));
+            match &find.inside {
+                Some(inside) => {
+                    found_lines(
+                        &inside.found,
+                        names,
+                        format!("No file here has {quoted}"),
+                        &mut out,
+                    );
                 }
-                for (i, hit) in m.matches.iter().enumerate() {
-                    out.push(Line::Hit(i, hit.clone()));
-                }
+                None => out.push(Line::InText(quoted)),
             }
-        }
-        if find.text.is_none()
-            && let Some(folder) = p.text_scope()
-        {
-            out.push(Line::InText(folder));
         }
         return out;
     }
@@ -188,6 +173,48 @@ pub fn lines(p: &FilesPage) -> Vec<Line> {
     out
 }
 
+/// One group of hits, numbered from `first`: still looking, why not, none,
+/// or the hits (with a word first when there were more). Answers how many.
+fn found_lines(
+    found: &Option<Result<parvi_files_contract::Matches, String>>,
+    first: usize,
+    none: String,
+    out: &mut Vec<Line>,
+) -> usize {
+    let note = |text: String, error: bool| Line::Note {
+        text,
+        depth: 0,
+        error,
+    };
+    match found {
+        None => {
+            out.push(note("Looking\u{2026}".into(), false));
+            0
+        }
+        Some(Err(e)) => {
+            out.push(note(e.clone(), true));
+            0
+        }
+        Some(Ok(m)) if m.matches.is_empty() => {
+            out.push(note(none, false));
+            0
+        }
+        Some(Ok(m)) => {
+            // Said first: under a long list it would never be seen.
+            if m.truncated {
+                out.push(note(
+                    format!("Only the first {}; type more of it", m.matches.len()),
+                    false,
+                ));
+            }
+            for (i, hit) in m.matches.iter().enumerate() {
+                out.push(Line::Hit(first + i, hit.clone()));
+            }
+            m.matches.len()
+        }
+    }
+}
+
 impl FilesPage {
     /// Letters a row's words have in the list.
     fn row_letters(&self, indent: f32) -> usize {
@@ -198,7 +225,13 @@ impl FilesPage {
     fn line(&self, line: Line, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let picked = line.pick().is_some_and(|l| self.pick.as_ref() == Some(&l));
         match line {
-            Line::Label(text) => pane::label(t, text).h(px(size::ROW)).into_any_element(),
+            Line::Label(text) => {
+                let fit = (self.row_letters(0.) as f32 * size::TEXT / size::SMALL) as usize;
+                pane::label(t, pane::middle(&text, fit))
+                    .h(px(size::ROW))
+                    .whitespace_nowrap()
+                    .into_any_element()
+            }
             Line::Note { text, depth, error } => div()
                 .debug_selector({
                     let id = format!("files-note-{text}");
@@ -226,8 +259,13 @@ impl FilesPage {
                 }))
                 .into_any_element(),
             Line::Recent(c) => {
-                let name = paths::base_name(&c.path).to_owned();
-                let folder = paths::base_name(&paths::parent(&c.path)).to_owned();
+                let mut name = paths::base_name(&c.path).to_owned();
+                let mut folder = paths::base_name(&paths::parent(&c.path)).to_owned();
+                // A folder in which many files changed together.
+                if let Some(n) = c.files {
+                    name.push('/');
+                    folder = format!("{n} files, in {folder}");
+                }
                 let room = self.row_letters(0.).saturating_sub(AGE + 1);
                 let path = c.path.clone();
                 let selector = format!("recent-{name}");
@@ -243,7 +281,10 @@ impl FilesPage {
                 )
                 .debug_selector(move || selector.clone())
                 .tooltip(kit::tip(c.path.clone()))
-                .on_mouse_down(MouseButton::Right, self.menu_at(c.path.clone(), false, cx))
+                .on_mouse_down(
+                    MouseButton::Right,
+                    self.menu_at(c.path.clone(), c.files.is_some(), cx),
+                )
                 .on_click(cx.listener(move |p, _, w, cx| {
                     p.set_pick(Pick::Recent(path.clone()), cx);
                     p.activate(w, cx);
@@ -301,25 +342,16 @@ impl FilesPage {
                     }))
                     .into_any_element()
             }
-            Line::InText(folder) => {
-                let query = self.find.as_ref().map_or("", |f| f.query.as_str());
-                let name = self
-                    .tree
-                    .row(&folder)
-                    .map_or_else(|| paths::base_name(&folder).to_owned(), |r| r.name);
-                pane::row(t, "files-in-text", picked)
-                    .h(px(size::ROW))
-                    .debug_selector(|| "files-in-text".into())
-                    .tooltip(kit::tip(format!("Look inside the files under {folder}")))
-                    .child(pane::cell(format!("In the text under {name}")).text_color(t.text2))
-                    .child(pane::meta(t, "Enter", None).when(!picked, |m| m.opacity(0.)))
-                    .when(query.is_empty(), |r| r.opacity(0.))
-                    .on_click(cx.listener(|p, _, w, cx| {
-                        p.set_pick(Pick::InText, cx);
-                        p.activate(w, cx);
-                    }))
-                    .into_any_element()
-            }
+            Line::InText(quoted) => pane::row(t, "files-in-text", picked)
+                .h(px(size::ROW))
+                .debug_selector(|| "files-in-text".into())
+                .tooltip(kit::tip("Enter looks inside every file here"))
+                .child(pane::cell(format!("Look for {quoted} inside them")).text_color(t.text2))
+                .on_click(cx.listener(|p, _, w, cx| {
+                    p.set_pick(Pick::InText, cx);
+                    p.activate(w, cx);
+                }))
+                .into_any_element(),
             Line::Node(row) => self.tree_row(row, picked, t, cx),
         }
     }
@@ -485,6 +517,7 @@ impl FilesPage {
                     })),
             );
         }
+        head = head.children(self.beside_acts(t, cx));
         let n = lines(self).len();
         let body = uniform_list(
             "files-list",
@@ -511,7 +544,7 @@ impl FilesPage {
         .debug_selector(|| "files-list".into());
         let drop_into = self.tree.folder_here();
         pane::list_frame(t, head, body)
-            .when(self.dock, |l| l.w(px(LIST_W)))
+            .when(self.beside, |l| l.flex_1().min_w_0().border_r_0())
             .on_drop(cx.listener(move |p, dropped: &gpui::ExternalPaths, _, cx| {
                 if let Some(folder) = drop_into.clone() {
                     p.upload_paths(folder, dropped.paths(), cx);
@@ -526,15 +559,12 @@ impl FilesPage {
         let mut head = pane::head(t)
             .relative()
             .child(measure(self.head_room.clone()));
-        if self.dock {
+        if self.beside {
             head = head.child(
                 pane::act(t, "files-back", "Back")
                     .debug_selector(|| "files-back".into())
-                    .on_click(cx.listener(|p, _, _, cx| {
-                        p.opened = None;
-                        p.keep(cx);
-                        cx.notify()
-                    })),
+                    .tooltip(kit::tip("To the list, the file picked in it"))
+                    .on_click(cx.listener(|p, _, _, cx| p.back_to_list(cx))),
             );
         }
         let Some(o) = &self.opened else {
@@ -660,22 +690,40 @@ impl FilesPage {
         } else if text && !matches!(o.show, Show::Reading) {
             head = head.child(pane::meta(t, "Too large to edit here", None));
         }
-        if self.beside {
-            let from = self.beside_from;
-            head = head
-                .children(self.host.whole_beside(from, cx).map(|whole| {
-                    kit::whole_button(t, whole).on_click(
-                        cx.listener(move |p, _, _, cx| p.host.toggle_whole_beside(from, cx)),
-                    )
-                }))
-                .child(
-                    pane::act(t, "files-close-beside", "Close")
-                        .debug_selector(|| "files-close-beside".into())
-                        .tooltip(kit::tip("Esc"))
-                        .on_click(cx.listener(|p, _, _, cx| p.close_beside(cx))),
-                );
+        head = head.child(
+            pane::act(t, "files-more", "\u{2026}")
+                .debug_selector(|| "files-more".into())
+                .tooltip(kit::tip("Long lines, and the file's menu"))
+                .on_click(
+                    cx.listener(|p, e: &gpui::ClickEvent, _, cx| p.file_menu(e.position(), cx)),
+                ),
+        );
+        head.children(self.beside_acts(t, cx))
+    }
+
+    /// Beside another page: Expand (where that page can give its whole
+    /// room) and Close.
+    fn beside_acts(&self, t: &Theme, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        if !self.beside {
+            return vec![];
         }
-        head
+        let from = self.beside_from;
+        let mut acts: Vec<gpui::AnyElement> = vec![];
+        if let Some(whole) = self.host.whole_beside(from, cx) {
+            acts.push(
+                kit::whole_button(t, whole)
+                    .on_click(cx.listener(move |p, _, _, cx| p.host.toggle_whole_beside(from, cx)))
+                    .into_any_element(),
+            );
+        }
+        acts.push(
+            pane::act(t, "files-close-beside", "Close")
+                .debug_selector(|| "files-close-beside".into())
+                .tooltip(kit::tip("Esc"))
+                .on_click(cx.listener(|p, _, _, cx| p.close_beside(cx)))
+                .into_any_element(),
+        );
+        acts
     }
 
     /// A decision the page waits on, on a line under the viewer's head.
@@ -1030,16 +1078,13 @@ impl Render for FilesPage {
             .bg(t.bg)
             .text_color(t.text);
         if self.beside {
-            return root.child(self.viewer(&t, cx));
-        }
-        if self.dock {
-            // The dock is a column: the list, or the file opened from it.
-            let column = if self.opened.is_some() {
+            // Beside another page it is one column: the list, or the file
+            // opened from it.
+            return root.flex().child(if self.opened.is_some() {
                 self.viewer(&t, cx)
             } else {
                 self.list_column(&t, cx)
-            };
-            return root.child(div().w(px(LIST_W)).h_full().flex().child(column));
+            });
         }
         root.child(pane::page(
             &t,

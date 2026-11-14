@@ -48,7 +48,8 @@ pub struct Code {
     selected: Range<usize>,
     reversed: bool,
     marked: Option<Range<usize>>,
-    /// The first line in view, fractional, and the horizontal offset.
+    /// The first row in view, fractional, and the horizontal offset. A row
+    /// is a line, or with `wrap` one stretch of a long line.
     top: f32,
     left: Pixels,
     undo: Vec<(String, Range<usize>)>,
@@ -60,6 +61,12 @@ pub struct Code {
     /// Where the text (after the gutter) was last drawn, and its metrics.
     area: Option<Bounds<Pixels>>,
     char_w: Pixels,
+    /// Long lines go on in rows under them instead of past the edge.
+    wrap: bool,
+    /// Letters a wrapped row holds, as last drawn; none before.
+    cols: usize,
+    /// The first row of each line, and the count of rows after the last.
+    row_starts: Vec<usize>,
 }
 
 impl EventEmitter<CodeEvent> for Code {}
@@ -72,6 +79,30 @@ impl Focusable for Code {
 
 fn line_height() -> Pixels {
     px((size::TEXT * 1.55).round())
+}
+
+/// A shown line cut into rows of at most `cols` letters (none: one row),
+/// in bytes: after the last space that fits, or mid-word when a word is
+/// longer than a row.
+fn segments_of(shown: &str, cols: usize) -> Vec<Range<usize>> {
+    if cols == 0 {
+        return vec![0..shown.len()];
+    }
+    let chars: Vec<(usize, char)> = shown.char_indices().collect();
+    let byte = |k: usize| chars.get(k).map_or(shown.len(), |c| c.0);
+    let mut out = vec![];
+    let mut start = 0;
+    while chars.len() - start > cols {
+        let end = start + cols;
+        let cut = (start + 1..=end)
+            .rev()
+            .find(|&k| chars[k - 1].1 == ' ')
+            .unwrap_or(end);
+        out.push(byte(start)..byte(cut));
+        start = cut;
+    }
+    out.push(byte(start)..shown.len());
+    out
 }
 
 /// Line starts of `text`.
@@ -128,7 +159,71 @@ impl Code {
             end_pending: false,
             area: None,
             char_w: px(8.),
+            wrap: false,
+            cols: 0,
+            row_starts: vec![0, 1],
         }
+    }
+
+    /// Wraps long lines, or lets them run past the edge to scroll to.
+    pub fn set_wrap(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.wrap != on {
+            let (line, _) = self.line_at_row(self.top);
+            self.wrap = on;
+            self.left = px(0.);
+            self.rows_again();
+            self.top = self.row_starts[line] as f32;
+            cx.notify();
+        }
+    }
+
+    pub fn wraps(&self) -> bool {
+        self.wrap
+    }
+
+    /// Letters line `n` shows, tabs as spaces.
+    fn shown_len(&self, n: usize) -> usize {
+        let line = &self.text[self.line_range(n)];
+        line.chars().count() + line.matches('\t').count() * (TAB_SHOWN - 1)
+    }
+
+    /// Finds the rows again, after the text or the width changed.
+    fn rows_again(&mut self) {
+        let lines = self.starts.len();
+        let cols = if self.wrap { self.cols } else { 0 };
+        let mut starts = Vec::with_capacity(lines + 1);
+        let mut row = 0;
+        for n in 0..lines {
+            starts.push(row);
+            row += if cols == 0 || self.shown_len(n) <= cols {
+                1
+            } else {
+                let r = self.line_range(n);
+                segments_of(&expand(&self.text[r]), cols).len()
+            };
+        }
+        starts.push(row);
+        self.row_starts = starts;
+    }
+
+    fn rows_total(&self) -> usize {
+        *self.row_starts.last().unwrap_or(&1)
+    }
+
+    /// The line row `row` is in, and which of its rows it is.
+    fn line_at_row(&self, row: f32) -> (usize, usize) {
+        let row = (row.max(0.) as usize).min(self.rows_total().saturating_sub(1));
+        let n = match self.row_starts.binary_search(&row) {
+            Ok(i) => i,
+            Err(i) => i - 1,
+        }
+        .min(self.starts.len() - 1);
+        (n, row - self.row_starts[n])
+    }
+
+    /// The stretches of a shown line each row draws, in bytes of it.
+    fn segments(&self, shown: &str) -> Vec<Range<usize>> {
+        segments_of(shown, if self.wrap { self.cols } else { 0 })
     }
 
     pub fn text(&self) -> &str {
@@ -145,6 +240,7 @@ impl Code {
     /// Finds the lines again after the text changed.
     fn reindex(&mut self) {
         self.starts = starts_of(&self.text);
+        self.rows_again();
         self.carries = match self.lang {
             Some(lang) if self.text.len() <= syntax::MAX_BYTES => {
                 syntax::carries(lang, self.text.split('\n'))
@@ -186,14 +282,14 @@ impl Code {
         if follow {
             self.show_end(cx);
         } else {
-            self.top = top.min(self.starts.len().saturating_sub(1) as f32);
+            self.top = top.min(self.rows_total().saturating_sub(1) as f32);
             self.left = left;
         }
     }
 
     /// Whether the last line is in view.
     pub fn at_end(&self) -> bool {
-        self.top_line() + self.rows_in_view() >= self.starts.len()
+        self.top.max(0.) as usize + self.rows_in_view() >= self.rows_total()
     }
 
     /// Scrolls so the last lines fill the view.
@@ -204,7 +300,7 @@ impl Code {
     }
 
     fn end_top(&self) -> f32 {
-        self.starts.len().saturating_sub(self.rows_in_view()) as f32
+        self.rows_total().saturating_sub(self.rows_in_view()) as f32
     }
 
     /// Gives the view the keyboard.
@@ -219,7 +315,7 @@ impl Code {
 
     /// The first line in view (0-based).
     pub fn top_line(&self) -> usize {
-        self.top.max(0.) as usize
+        self.line_at_row(self.top).0
     }
 
     /// Turns editing on or off. On, the caret lands at the start of the
@@ -237,7 +333,7 @@ impl Code {
 
     /// Scrolls so line `n` (0-based) is the first in view.
     pub fn show_line(&mut self, n: usize, cx: &mut Context<Self>) {
-        self.top = n.min(self.starts.len().saturating_sub(1)) as f32;
+        self.top = self.row_starts[n.min(self.starts.len().saturating_sub(1))] as f32;
         cx.notify();
     }
 
@@ -298,17 +394,23 @@ impl Code {
     }
 
     fn reveal(&mut self) {
-        let line = self.line_of(self.cursor()) as f32;
+        let n = self.line_of(self.cursor());
+        let r = self.line_range(n);
+        let col = to_shown(&self.text[r.clone()], self.cursor() - r.start);
+        let mut line = self.row_starts[n] as f32;
+        if self.wrap && self.cols > 0 {
+            let segs = self.segments(&expand(&self.text[r.clone()]));
+            line += segs.iter().rposition(|s| s.start <= col).unwrap_or(0) as f32;
+        }
         let rows = self.rows_in_view() as f32;
         if line < self.top {
             self.top = line;
         } else if line >= self.top + rows {
             self.top = line - rows + 1.;
         }
-        if let Some(b) = self.area {
-            let n = self.line_of(self.cursor());
-            let r = self.line_range(n);
-            let col = to_shown(&self.text[r.clone()], self.cursor() - r.start);
+        if let Some(b) = self.area
+            && !self.wrap
+        {
             let x = self.char_w * col as f32;
             if x < self.left {
                 self.left = (x - self.char_w * 8.).max(px(0.));
@@ -630,7 +732,7 @@ impl Code {
     }
 
     fn scroll_lines(&mut self, by: f32, cx: &mut Context<Self>) {
-        let max = (self.starts.len() as f32 - self.rows_in_view() as f32).max(0.);
+        let max = (self.rows_total() as f32 - self.rows_in_view() as f32).max(0.);
         self.top = (self.top + by).clamp(0., max);
         cx.notify();
     }
@@ -643,22 +745,25 @@ impl Code {
             (d.x, d.y)
         };
         self.scroll_lines(-(dy / line_height()), cx);
-        self.left = (self.left - dx).max(px(0.));
+        if !self.wrap {
+            self.left = (self.left - dx).max(px(0.));
+        }
         cx.stop_propagation();
         cx.notify();
     }
 
     fn index_at(&self, p: Point<Pixels>, window: &mut Window) -> usize {
         let Some(b) = self.area else { return 0 };
-        let row = ((p.y - b.origin.y) / line_height() + self.top)
-            .floor()
-            .max(0.) as usize;
-        let n = row.min(self.starts.len() - 1);
+        let row = ((p.y - b.origin.y) / line_height() + self.top).floor();
+        let (n, k) = self.line_at_row(row);
         let r = self.line_range(n);
         let line = &self.text[r.clone()];
-        let shaped = shape(window, &expand(line), MEASURE, &[]);
+        let shown = expand(line);
+        let segs = self.segments(&shown);
+        let seg = segs[k.min(segs.len() - 1)].clone();
+        let shaped = shape(window, &shown[seg.clone()], MEASURE, &[]);
         let x = (p.x - b.origin.x + self.left).max(px(0.));
-        r.start + from_shown(line, shaped.closest_index_for_x(x))
+        r.start + from_shown(line, seg.start + shaped.closest_index_for_x(x))
     }
 
     fn mouse_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -843,9 +948,16 @@ impl EntityInputHandler for Code {
         let n = self.line_of(at);
         let lr = self.line_range(n);
         let line = &self.text[lr.clone()];
-        let shaped = shape(window, &expand(line), MEASURE, &[]);
-        let x = shaped.x_for_index(to_shown(line, at - lr.start));
-        let y = (n as f32 - self.top) * line_height();
+        let shown = expand(line);
+        let at_shown = to_shown(line, at - lr.start);
+        let segs = self.segments(&shown);
+        let k = segs
+            .iter()
+            .position(|s| at_shown < s.end)
+            .unwrap_or(segs.len() - 1);
+        let shaped = shape(window, &shown[segs[k].clone()], MEASURE, &[]);
+        let x = shaped.x_for_index(at_shown - segs[k].start);
+        let y = ((self.row_starts[n] + k) as f32 - self.top) * line_height();
         Some(Bounds::new(
             point(b.origin.x + x - self.left, b.origin.y + y),
             sz(px(2.), line_height()),
@@ -931,11 +1043,14 @@ impl Element for CodeElement {
         let mut quads = vec![];
         let mut caret = None;
         let caret_line = c.line_of(caret_at);
-        for n in first..(first + rows).min(c.starts.len()) {
-            let y = bounds.origin.y + lh * (n - first) as f32 - offset;
+        let x0 = area.origin.x - c.left;
+        let (mut n, mut k) = c.line_at_row(first as f32);
+        let mut drawn = 0;
+        while drawn < rows && n < c.starts.len() {
             let r = c.line_range(n);
             let line = &c.text[r.clone()];
             let shown = expand(line);
+            let segs = c.segments(&shown);
             let coloured: Vec<_> = c
                 .tokens(n)
                 .into_iter()
@@ -946,52 +1061,81 @@ impl Element for CodeElement {
                     )
                 })
                 .collect();
-            let shaped = shape(window, &shown, t.text, &coloured);
-            let num = shape(
-                window,
-                &format!("{:>digits$}", n + 1),
-                if n == caret_line && c.editable {
-                    t.text2
-                } else {
-                    t.dim
-                },
-                &[],
-            );
-            gutter.push((point(bounds.origin.x + px(10.), y), num));
-            let x0 = area.origin.x - c.left;
-            // The selection's band on this line.
-            let s = c.selected.start.max(r.start);
-            let e = c.selected.end.min(r.end);
-            if !c.selected.is_empty()
-                && s <= e
-                && c.selected.start <= r.end
-                && c.selected.end >= r.start
-            {
-                let xs = shaped.x_for_index(to_shown(line, s - r.start));
-                let mut xe = shaped.x_for_index(to_shown(line, e - r.start));
-                if c.selected.end > r.end {
-                    xe += char_w;
+            // The selection and the caret, in bytes of the shown line.
+            let selected =
+                (!c.selected.is_empty() && c.selected.start <= r.end && c.selected.end >= r.start)
+                    .then(|| {
+                        let s = c.selected.start.max(r.start);
+                        let e = c.selected.end.min(r.end);
+                        (to_shown(line, s - r.start), to_shown(line, e - r.start))
+                    });
+            let caret_shown =
+                (c.editable && n == caret_line).then(|| to_shown(line, caret_at - r.start));
+            while k < segs.len() && drawn < rows {
+                let seg = segs[k].clone();
+                let last = k + 1 == segs.len();
+                let y = bounds.origin.y + lh * drawn as f32 - offset;
+                let part: Vec<_> = coloured
+                    .iter()
+                    .filter(|(cr, _)| cr.end > seg.start && cr.start < seg.end)
+                    .map(|(cr, colour)| {
+                        (
+                            cr.start.max(seg.start) - seg.start..cr.end.min(seg.end) - seg.start,
+                            *colour,
+                        )
+                    })
+                    .collect();
+                let shaped = shape(window, &shown[seg.clone()], t.text, &part);
+                if k == 0 {
+                    let num = shape(
+                        window,
+                        &format!("{:>digits$}", n + 1),
+                        if n == caret_line && c.editable {
+                            t.text2
+                        } else {
+                            t.dim
+                        },
+                        &[],
+                    );
+                    gutter.push((point(bounds.origin.x + px(10.), y), num));
                 }
-                quads.push(fill(
-                    Bounds::new(point(x0 + xs, y), sz((xe - xs).max(px(2.)), lh)),
-                    alpha(t.accent, 0.3),
-                ));
+                if let Some((ss, se)) = selected
+                    && ss <= seg.end
+                    && se >= seg.start
+                    && (ss < seg.end || last)
+                {
+                    let xs = shaped.x_for_index(ss.max(seg.start) - seg.start);
+                    let mut xe = shaped.x_for_index(se.min(seg.end) - seg.start);
+                    if (c.selected.end > r.end && last) || se > seg.end {
+                        xe += char_w;
+                    }
+                    quads.push(fill(
+                        Bounds::new(point(x0 + xs, y), sz((xe - xs).max(px(2.)), lh)),
+                        alpha(t.accent, 0.3),
+                    ));
+                }
+                if let Some(cs) = caret_shown {
+                    if cs >= seg.start && (cs < seg.end || last) {
+                        let x = shaped.x_for_index(cs - seg.start);
+                        caret = Some(fill(
+                            Bounds::new(point(x0 + x, y + px(2.)), sz(px(1.5), lh - px(4.))),
+                            t.accent,
+                        ));
+                    }
+                    quads.insert(
+                        0,
+                        fill(
+                            Bounds::new(point(bounds.origin.x, y), sz(bounds.size.width, lh)),
+                            alpha(t.text, 0.04),
+                        ),
+                    );
+                }
+                lines.push((point(x0, y), shaped));
+                drawn += 1;
+                k += 1;
             }
-            if c.editable && n == caret_line {
-                let x = shaped.x_for_index(to_shown(line, caret_at - r.start));
-                caret = Some(fill(
-                    Bounds::new(point(x0 + x, y + px(2.)), sz(px(1.5), lh - px(4.))),
-                    t.accent,
-                ));
-                quads.insert(
-                    0,
-                    fill(
-                        Bounds::new(point(bounds.origin.x, y), sz(bounds.size.width, lh)),
-                        alpha(t.text, 0.04),
-                    ),
-                );
-            }
-            lines.push((point(x0, y), shaped));
+            n += 1;
+            k = 0;
         }
         Painted {
             gutter,
@@ -1052,6 +1196,22 @@ impl Element for CodeElement {
         let moved = self.code.update(cx, |c, _| {
             c.area = Some(area);
             c.char_w = char_w;
+            // The width the rows were found for changed: find them again,
+            // keeping the line in view.
+            let cols = ((area.size.width - char_w) / char_w).floor().max(8.) as usize;
+            let rewrapped = c.wrap && c.cols != cols && {
+                let follow = c.cols > 0 && c.at_end();
+                let (line, _) = c.line_at_row(c.top);
+                c.cols = cols;
+                c.rows_again();
+                c.top = if follow {
+                    c.end_top()
+                } else {
+                    c.row_starts[line] as f32
+                };
+                true
+            };
+            rewrapped ||
             // The end was asked for before the view knew its height.
             std::mem::take(&mut c.end_pending) && {
                 c.top = c.end_top();
@@ -1094,6 +1254,22 @@ impl Render for Code {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_line_wraps_into_rows_of_whole_letters() {
+        // After the last space that fits; a longer word is cut.
+        assert_eq!(
+            segments_of("the lake shore", 9),
+            vec![0..9, 9..14],
+            "\"the lake \" then \"shore\""
+        );
+        assert_eq!(segments_of("ab abcdefgh", 4), vec![0..3, 3..7, 7..11]);
+        assert_eq!(segments_of("abcdefg", 3), vec![0..3, 3..6, 6..7]);
+        assert_eq!(segments_of("abcdef", 3), vec![0..3, 3..6]);
+        assert_eq!(segments_of("", 3), vec![0..0]);
+        assert_eq!(segments_of("äöåx", 2), vec![0..4, 4..7]);
+        assert_eq!(segments_of("abcdefg", 0), vec![0..7]);
+    }
 
     #[test]
     fn tabs_show_as_spaces_and_map_back() {

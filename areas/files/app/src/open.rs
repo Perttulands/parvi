@@ -174,15 +174,71 @@ pub fn show(name: &str, bytes: &[u8]) -> (Show, String, Option<String>) {
     }
 }
 
-/// JSON laid out for reading, when that differs from its text.
+/// JSON laid out for reading, when that differs from its text: a JSON
+/// file, or any file whose text is JSON on one line.
 pub fn pretty(name: &str, text: &str) -> Option<String> {
-    if kinds::kind(name) != kinds::Kind::Json {
+    let body = text.trim();
+    let one_line = !body.contains('\n') && (body.starts_with('{') || body.starts_with('['));
+    if kinds::kind(name) != kinds::Kind::Json && !one_line {
         return None;
     }
-    serde_json::from_str::<serde_json::Value>(text)
-        .ok()
-        .and_then(|v| serde_json::to_string_pretty(&v).ok())
-        .filter(|p| p != text)
+    serde_json::from_str::<serde::de::IgnoredAny>(text).ok()?;
+    Some(lay_out(body)).filter(|p| p != text)
+}
+
+/// Valid JSON laid out two spaces to a level, its keys in their order.
+fn lay_out(json: &str) -> String {
+    let mut out = String::with_capacity(json.len() * 2);
+    let mut depth = 0usize;
+    let (mut quoted, mut escaped) = (false, false);
+    let mut chars = json.chars().peekable();
+    let newline = |out: &mut String, depth: usize| {
+        out.push('\n');
+        out.push_str(&"  ".repeat(depth));
+    };
+    while let Some(c) = chars.next() {
+        if quoted {
+            out.push(c);
+            match (escaped, c) {
+                (true, _) => escaped = false,
+                (false, '\\') => escaped = true,
+                (false, '"') => quoted = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                quoted = true;
+                out.push(c);
+            }
+            '{' | '[' => {
+                out.push(c);
+                while chars.peek().is_some_and(|c| c.is_whitespace()) {
+                    chars.next();
+                }
+                if matches!(chars.peek(), Some('}' | ']')) {
+                    out.push(chars.next().unwrap_or_default());
+                } else {
+                    depth += 1;
+                    newline(&mut out, depth);
+                }
+            }
+            '}' | ']' => {
+                depth = depth.saturating_sub(1);
+                newline(&mut out, depth);
+                out.push(c);
+            }
+            ',' => {
+                out.push(c);
+                newline(&mut out, depth);
+            }
+            ':' => out.push_str(": "),
+            c if c.is_whitespace() => {}
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -200,6 +256,18 @@ mod tests {
         assert_eq!(text, r#"{"a":1}"#, "edited and saved as the file has it");
         assert_eq!(pretty.as_deref(), Some("{\n  \"a\": 1\n}"), "read laid out");
         assert_eq!(show("b.json", b"{\n  \"a\": 1\n}").2, None);
+        assert_eq!(
+            show("slot-0", br#"{"pid": 1, "note": "x"}"#).2.as_deref(),
+            Some("{\n  \"pid\": 1,\n  \"note\": \"x\"\n}"),
+            "JSON on one line is laid out whatever the name, its keys in order"
+        );
+        assert_eq!(
+            show("a.json", br#"{"b":[1,{}],"a":"x, \"y\": {z}"}"#)
+                .2
+                .as_deref(),
+            Some("{\n  \"b\": [\n    1,\n    {}\n  ],\n  \"a\": \"x, \\\"y\\\": {z}\"\n}")
+        );
+        assert_eq!(show("notes.txt", b"[not json").2, None);
         assert!(
             matches!(show("a.bin", &[0, 1, 2]).0, Show::Not(t) if t == "3 B of binary, not shown here")
         );

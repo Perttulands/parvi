@@ -18,11 +18,14 @@ pub struct Kept {
     pub tree: tree::Kept,
     /// The file the page showed last.
     pub file: Option<String>,
-    pub sidecar_open: bool,
-    pub sidecar: tree::Kept,
-    pub dock: tree::Kept,
-    pub dock_file: Option<String>,
+    /// The panel beside the terminals is open, and what it shows: its
+    /// tree, and the file open in it.
+    pub beside_open: bool,
+    pub beside: tree::Kept,
+    pub beside_file: Option<String>,
     pub download_folder: String,
+    /// Long lines run past the edge instead of wrapping.
+    pub unwrapped: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zoom: zoom::Level,
 }
