@@ -376,7 +376,6 @@ impl MissionsPage {
     pub(super) fn prepare_card_run(&mut self, id: &str, cx: &mut Context<Self>) {
         if !self.mission_input_runnable(id) {
             self.run_tried = true;
-            self.findings_open = true;
         }
         if self.unsaved(cx).is_some() {
             self.state.error = Some("Save or discard the current draft first.".into());
@@ -1139,6 +1138,10 @@ impl MissionsPage {
             row = row.child(
                 kit::button(t, SharedString::from(selector.clone()), label, Kind::Quiet)
                     .debug_selector(move || selector.clone())
+                    // Held inside the form; the whole value is in its tip.
+                    .max_w_full()
+                    .justify_start()
+                    .truncate()
                     .tooltip(kit::tip(tip))
                     .on_click(cx.listener(move |_, _, _, cx| {
                         field.update(cx, |f, cx| f.set(&value, false, cx));

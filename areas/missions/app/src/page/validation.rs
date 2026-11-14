@@ -1,7 +1,7 @@
 //! Keep Run's emphasis tied to a current node-side validation result.
 use super::*;
 use crate::store::validation::Key;
-use parvi_missions_contract::ValidationResponse;
+use parvi_missions_contract::{Mission, ValidationResponse};
 
 impl MissionsPage {
     fn validation_key(&self) -> Option<Key> {
@@ -50,6 +50,77 @@ impl MissionsPage {
                     .map(|finding| (finding, false)),
             )
             .collect()
+    }
+    /// What stands between the mission and a run: its errors, and the
+    /// warning that no Input leads anywhere.
+    pub(super) fn todo(
+        &self,
+        mission: &Mission,
+    ) -> Vec<(String, Vec<parvi_missions_contract::Finding>)> {
+        crate::store::validation::todo_lines(
+            mission,
+            self.canvas_findings()
+                .into_iter()
+                .filter(|(finding, error)| {
+                    *error || finding.code == parvi_missions_contract::Code::MissionNotRunnable
+                })
+                .map(|(finding, _)| finding),
+        )
+    }
+    /// What the mission still lacks, below the canvas so it never covers a
+    /// card: one plain line per thing to do, gone once it is done. In red
+    /// once a run was asked for and could not start.
+    pub(super) fn todo_band(
+        &self,
+        t: &parvi_app_kit::theme::Theme,
+        mission: &Mission,
+    ) -> Option<Div> {
+        let lines = self.todo(mission);
+        if lines.is_empty() {
+            return None;
+        }
+        let color = if self.run_tried { t.error } else { t.text };
+        let heading = format!(
+            "{} {} before it can run",
+            lines.len(),
+            if self.run_tried { "to fix" } else { "to do" }
+        );
+        let mut list = div()
+            .debug_selector(|| "canvas-findings-list".into())
+            .flex()
+            .flex_col();
+        for (line, found) in lines {
+            let shown = format!("validation-display-{line}");
+            let mut row = div()
+                .debug_selector(move || shown.clone())
+                .text_color(color)
+                .child(line);
+            for finding in found {
+                let selector =
+                    format!("validation-message-{}-{}", finding.node_id, finding.message);
+                row = row.child(div().debug_selector(move || selector.clone()));
+            }
+            list = list.child(row);
+        }
+        Some(
+            div()
+                .debug_selector(|| "canvas-findings".into())
+                .flex_none()
+                .flex()
+                .flex_col()
+                .gap(px(size::RADIUS))
+                .px(px(PAD))
+                .py(px(TAB_GAP))
+                .border_t_1()
+                .border_color(t.divider)
+                .bg(t.surface)
+                .child(
+                    div()
+                        .text_color(if self.run_tried { t.error } else { t.text2 })
+                        .child(heading),
+                )
+                .child(list),
+        )
     }
     pub(super) fn mission_input_runnable(&self, input: &str) -> bool {
         if self.writing || self.is_showing_run() {

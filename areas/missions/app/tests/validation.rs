@@ -125,6 +125,7 @@ fn run_is_only_emphasized_for_a_current_runnable_mission(cx: &mut TestAppContext
     });
     assert!(cx.debug_bounds("mission-run-quiet").is_some());
     assert!(cx.debug_bounds("mission-run-ready").is_none());
+    assert!(cx.debug_bounds("prepare-run").is_none());
     let rail = cx.debug_bounds("missions-rail").unwrap();
     assert_eq!(rail.size.width, gpui::px(parvi_app_kit::theme::size::LIST));
     let canvas = cx.debug_bounds("mission-mode-canvas").unwrap().center();
@@ -148,5 +149,6 @@ fn run_is_only_emphasized_for_a_current_runnable_mission(cx: &mut TestAppContext
         cx.debug_bounds("mission-run-ready").is_some()
     });
     assert!(cx.debug_bounds("mission-run-quiet").is_none());
+    assert!(cx.debug_bounds("prepare-run").is_some());
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }

@@ -324,7 +324,7 @@ impl MissionsPage {
                                 div()
                                     .debug_selector(|| "mission-archive-explanation".into())
                                     .child(format!(
-                                        "“{title}” leaves the list for good. Its runs stay."
+                                        "“{title}” is deleted for good, with its layout and notes. Its runs stay."
                                     )),
                             )
                         })

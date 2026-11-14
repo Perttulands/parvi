@@ -232,8 +232,10 @@ fn designs_a_multi_gate_mission_and_shows_findings_on_the_canvas(cx: &mut TestAp
     let mission = format!("mission-{}-design-journey", running.node);
     until(cx, "mission listing", |cx| has(cx, &mission));
     click(cx, &mission);
-    until(cx, "canvas control", |cx| has(cx, "mission-mode-canvas"));
-    click(cx, "mission-mode-canvas");
+    // An empty mission begins with Define it, which adds its Input.
+    until(cx, "how to begin", |cx| has(cx, "flow-empty-input"));
+    assert!(!has(cx, "mission-mode-canvas"));
+    click(cx, "flow-empty-input");
     let rt = tokio::runtime::Runtime::new().unwrap();
     let client = NodeClient::new(Some(&format!("{}/", running.url))).unwrap();
     let read = || {
@@ -247,8 +249,6 @@ fn designs_a_multi_gate_mission_and_shows_findings_on_the_canvas(cx: &mut TestAp
         .0["mission"]
             .clone()
     };
-    until(cx, "board ready for edit", |cx| has(cx, "undo"));
-    click(cx, "new-input");
     until(cx, "input saved", |_| {
         read()["inputCards"].as_array().unwrap().len() == 1
     });
@@ -274,7 +274,7 @@ fn designs_a_multi_gate_mission_and_shows_findings_on_the_canvas(cx: &mut TestAp
         ("new-step", "formations", 2),
         ("menu-label-Add gate", "gates", 1),
     ] {
-        until(cx, "board ready for edit", |cx| has(cx, "undo"));
+        until(cx, "board ready for edit", |cx| has(cx, "board-ready"));
         if button != "new-step" {
             click(cx, "edit-more");
             until(cx, "the rarer cards", |cx| has(cx, button));
@@ -285,7 +285,7 @@ fn designs_a_multi_gate_mission_and_shows_findings_on_the_canvas(cx: &mut TestAp
         });
     }
     let gate_id = read()["gates"][0]["id"].as_str().unwrap().to_owned();
-    until(cx, "board ready to arrange", |cx| has(cx, "undo"));
+    until(cx, "board ready to arrange", |cx| has(cx, "board-ready"));
     click(cx, "arrange");
     until(cx, "arranged layout saved", |_| {
         let layout = rt
@@ -322,7 +322,7 @@ fn designs_a_multi_gate_mission_and_shows_findings_on_the_canvas(cx: &mut TestAp
         ("menu-label-Add gate", "gates", 2),
         ("menu-label-Add end", "ends", 1),
     ] {
-        until(cx, "board ready for edit", |cx| has(cx, "undo"));
+        until(cx, "board ready for edit", |cx| has(cx, "board-ready"));
         if button != "new-step" {
             click(cx, "edit-more");
             until(cx, "the rarer cards", |cx| has(cx, button));

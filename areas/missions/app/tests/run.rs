@@ -630,7 +630,18 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
     until(cx, "bad mission", |cx| {
         cx.debug_bounds("flow-step-empty").is_some()
     });
-    click(cx, "prepare-run");
+    // Start is offered only to a mission that can run; this one says what
+    // it still lacks, and that leads to the canvas where it is done.
+    until(cx, "what it lacks", |cx| {
+        cx.debug_bounds("mission-todo").is_some()
+    });
+    assert!(cx.debug_bounds("prepare-run").is_none());
+    click(cx, "mission-todo");
+    until(cx, "the to-do above the canvas", |cx| {
+        cx.debug_bounds("canvas-findings").is_some() && cx.debug_bounds("canvas-play-inp").is_some()
+    });
+    // Its Input's play control still tries, and the node says why not.
+    click(cx, "canvas-play-inp");
     until(cx, "start form", |cx| {
         cx.debug_bounds("run-start").is_some()
     });

@@ -102,9 +102,6 @@ pub struct MissionsPage {
     /// The operator asked to run this mission while it could not: what it
     /// still lacks now reads as a problem rather than as a to-do.
     run_tried: bool,
-    /// The blocked step's recorded output is shown.
-    /// The to-do list over the canvas is open.
-    findings_open: bool,
     /// A staffing pick made while another write was in flight.
     staff_pending: bool,
     seen_run_snapshots: std::collections::BTreeSet<String>,
@@ -215,7 +212,6 @@ impl MissionsPage {
             reveal_card: None,
             new_step: None,
             run_tried: false,
-            findings_open: false,
             staff_pending: false,
             seen_run_snapshots: Default::default(),
         };
@@ -535,7 +531,6 @@ impl MissionsPage {
             self.canvas = canvas::View::default();
             self.mission_canvas_mode = false;
             self.run_tried = false;
-            self.findings_open = false;
         }
         self.reveal_card = None;
         self.generation += 1;
@@ -1498,23 +1493,37 @@ impl Render for MissionsPage {
             div()
                 .debug_selector(|| "missions-error".into())
                 .text_color(t.error)
-                .child(e)
+                .child(crate::store::validation::plain_error(
+                    self.state.mission.as_ref(),
+                    &e,
+                ))
         });
         let detail: Div = if let Some((head, body)) = self.run_detail(&t, cx) {
             pane::detail(&t, "missions-run", head, body.children(error))
         } else if let Some(m) = self.state.mission.clone() {
             if self.mission_canvas_mode {
                 let head = self.edit_head(&t, &m, cx);
+                let todo = self.todo_band(&t, &m);
                 pane::detail_frame(
                     head,
                     div()
-                        .id("missions-board-scroll")
                         .size_full()
-                        .overflow_scroll()
-                        .child(self.render_canvas(&t, &m, false, cx))
-                        .when_some(error, |d, e| {
-                            d.child(div().absolute().top(px(PAD)).left(px(PAD)).child(e))
-                        }),
+                        .flex()
+                        .flex_col()
+                        // Below the board, so neither covers a card nor
+                        // moves the board when it comes or goes.
+                        .child(
+                            div()
+                                .id("missions-board-scroll")
+                                .flex_1()
+                                .min_h_0()
+                                .overflow_scroll()
+                                .child(self.render_canvas(&t, &m, false, cx)),
+                        )
+                        .children(
+                            error.map(|e| div().flex_none().px(px(PAD)).py(px(TAB_GAP)).child(e)),
+                        )
+                        .children(todo),
                 )
             } else {
                 let (head, body) = self.mission_detail(&t, &m, cx);
@@ -1649,6 +1658,7 @@ impl Render for MissionsPage {
                                 EditKind::End => "Edit end",
                             }))
                             .when(!ed.deleting, |d| d.child(left(kit::button(&t, "step-delete", "Delete", Kind::Quiet).debug_selector(|| "step-delete".into()).on_click(cx.listener(|p, _, _, cx| p.delete_card(cx))))))
+
                             .child(
                                 kit::button(&t, "step-save", "Done", Kind::Primary)
                                     .debug_selector(|| "step-save".into())
@@ -1766,17 +1776,9 @@ impl Render for MissionsPage {
                                 div()
                                     .debug_selector({ let error = error.clone(); move || format!("step-error-{error}") })
                                     .text_color(t.error)
-                                    .child(error),
+                                    .child(crate::store::validation::plain_error(self.state.mission.as_ref(), &error)),
                             )
                         })
-                        .child(
-                            kit::button(&t, "step-cancel", "Cancel", Kind::Quiet).on_click(
-                                cx.listener(|p, _, _, cx| {
-                                    if !p.editor.as_ref().is_some_and(|e| e.busy) && !p.note_saving && p.note.read(cx).text == p.note_base { p.note_id = None; p.note_base.clear(); p.note.update(cx, |f, cx| f.set("", false, cx)); p.editor = None; p.resolve_wanted(cx); }
-                                    cx.notify();
-                                }),
-                            ),
-                        ),
                 )
             })
             .children(start_form)

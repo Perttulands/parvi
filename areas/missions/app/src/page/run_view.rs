@@ -109,7 +109,13 @@ impl MissionsPage {
             );
         }
         if run.resume_allowed {
-            body = body.child(self.resume_choices(t, cx));
+            // Why it stopped, from its block or else from what its step
+            // reported.
+            let reason = self
+                .last_reason(&run, &name_of)
+                .map(|(reason, _)| reason)
+                .unwrap_or_default();
+            body = body.child(self.resume_choices(t, &run, &reason, cx));
         }
         body = body.children(self.run_gates(t, &run, mission.as_ref(), &place, cx));
         body = body.children(self.run_result(t, &run, &node, &place, &name_of, cx));
@@ -347,46 +353,41 @@ impl MissionsPage {
     }
 
     /// What a blocked run can do next; Resume is the usual one.
-    fn resume_choices(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
+    /// The ways on from a block that fit its reason: a spent limit takes
+    /// more allowance (or the best judged attempt); anything else resumes
+    /// or starts the step again, and a judge that answered badly can take
+    /// the fail route.
+    fn resume_choices(
+        &self,
+        t: &Theme,
+        run: &RunProjection,
+        reported: &str,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let mut row = div()
             .flex()
             .flex_wrap()
             .items_center()
-            .gap(px(size::HEAD_GAP))
-            .child(
-                kit::button(t, "run-resume", "Resume", Kind::Primary).on_click(cx.listener(
-                    |p, _, _, cx| {
-                        p.run_post(
-                            "/resume".into(),
-                            json!({"mode":"reattach", "actor":"human:operator"}),
-                            cx,
-                        )
-                    },
-                )),
-            );
-        for (id, label, body) in [
-            (
-                "run-redispatch",
-                "Run the step again",
-                json!({"mode":"redispatch", "actor":"human:operator"}),
-            ),
-            (
-                "run-grant",
-                "Allow more",
-                json!({"mode":"reattach", "grant":true, "actor":"human:operator"}),
-            ),
-            (
-                "run-take-fail",
-                "Take the fail route",
-                json!({"mode":"reattach", "takeFail":true, "actor":"human:operator"}),
-            ),
-            (
-                "run-pick-best",
-                "Pick the best attempt",
-                json!({"mode":"reattach", "pickBest":true, "actor":"human:operator"}),
-            ),
-        ] {
-            row = row.child(pane::act(t, id, label).on_click(
+            .gap(px(size::HEAD_GAP));
+        let reason = run
+            .events
+            .iter()
+            .rev()
+            // Since the run last went on, so an older block does not count.
+            .take_while(|event| event.kind != "run_resumed")
+            .filter(|event| event.kind == "run_blocked" || event.kind == "error")
+            .find(|event| !event.detail.is_empty())
+            .map_or(reported, |event| event.detail.as_str());
+        for (i, (id, label, body)) in resume_offers(&run.resume_policy, &run.block_code, reason)
+            .into_iter()
+            .enumerate()
+        {
+            let control = if i == 0 {
+                kit::button(t, id, label, Kind::Primary)
+            } else {
+                pane::act(t, id, label)
+            };
+            row = row.child(control.debug_selector(move || id.into()).on_click(
                 cx.listener(move |p, _, _, cx| p.run_post("/resume".into(), body.clone(), cx)),
             ));
         }
@@ -862,6 +863,60 @@ impl MissionsPage {
     }
 }
 
+/// What a blocked run can do next, by its block's resume policy and code,
+/// as the engine accepts them (run_limit::resume_refusal, run_resume): the
+/// first is the usual way on.
+fn resume_offers(
+    policy: &str,
+    code: &str,
+    reason: &str,
+) -> Vec<(&'static str, &'static str, serde_json::Value)> {
+    let grant = (
+        "run-grant",
+        "Allow more",
+        json!({"mode":"reattach", "grant":true, "actor":"human:operator"}),
+    );
+    match policy {
+        "grant" => vec![grant],
+        "grant_or_pick" => vec![
+            grant,
+            (
+                "run-pick-best",
+                "Pick the best attempt",
+                json!({"mode":"reattach", "pickBest":true, "actor":"human:operator"}),
+            ),
+        ],
+        // The agent's session is gone: there is nothing to go on in.
+        _ if code == "seat_gone" || reason.contains("session ended") => vec![(
+            "run-redispatch",
+            "Run the step again",
+            json!({"mode":"redispatch", "actor":"human:operator"}),
+        )],
+        _ => {
+            let mut offers = vec![
+                (
+                    "run-resume",
+                    "Resume",
+                    json!({"mode":"reattach", "actor":"human:operator"}),
+                ),
+                (
+                    "run-redispatch",
+                    "Run the step again",
+                    json!({"mode":"redispatch", "actor":"human:operator"}),
+                ),
+            ];
+            if code == "invalid_judge_result" {
+                offers.push((
+                    "run-take-fail",
+                    "Take the fail route",
+                    json!({"mode":"reattach", "takeFail":true, "actor":"human:operator"}),
+                ));
+            }
+            offers
+        }
+    }
+}
+
 /// `reason` without `name` in front, its first word made a capital:
 /// "Write tests ran out of time" under Write tests reads "Ran out of time".
 fn without_name(reason: &str, name: &str) -> String {
@@ -1147,6 +1202,36 @@ impl MissionsPage {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_block_offers_only_the_ways_on_that_fit_its_reason() {
+        let ids = |policy, code, reason| {
+            super::resume_offers(policy, code, reason)
+                .into_iter()
+                .map(|(id, _, _)| id)
+                .collect::<Vec<_>>()
+        };
+        // An agent's session that ended: nothing to go on in, nothing spent,
+        // nothing judged.
+        let ended = "the agent's session ended before it finished";
+        assert_eq!(
+            ids("explicit", "executor_failed", ended),
+            ["run-redispatch"]
+        );
+        assert_eq!(ids("explicit", "seat_gone", ""), ["run-redispatch"]);
+        assert_eq!(
+            ids("explicit", "executor_failed", "disk full"),
+            ["run-resume", "run-redispatch"]
+        );
+        assert_eq!(ids("grant", "limit_exhausted", ""), ["run-grant"]);
+        assert_eq!(
+            ids("grant_or_pick", "limit_exhausted", ""),
+            ["run-grant", "run-pick-best"]
+        );
+        assert_eq!(
+            ids("explicit", "invalid_judge_result", ""),
+            ["run-resume", "run-redispatch", "run-take-fail"]
+        );
+    }
     #[test]
     fn a_reason_under_its_step_drops_the_steps_name() {
         assert_eq!(

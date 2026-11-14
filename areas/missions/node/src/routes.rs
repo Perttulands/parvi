@@ -292,6 +292,10 @@ async fn delete(
         },
     )?;
     m.changed();
+    // The operator confirmed a delete for good: no safety copy is left to
+    // clear by hand. An agent's `mission delete` keeps one, listed by
+    // `mission archives`.
+    m.store.remove_mission_archive(&e.slug, &e.archive_id)?;
     Ok(ok(
         json!({"deletion":{"id":e.id,"slug":e.slug,"title":e.title,"archiveId":e.archive_id}}),
     ))

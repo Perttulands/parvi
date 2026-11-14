@@ -184,15 +184,30 @@ impl MissionsPage {
         };
         let ready = self.mission_run_ready();
         let complete = self.validation_complete();
-        let start = kit::button(
-            t,
-            "prepare-run",
-            "Start",
-            if ready { Kind::Primary } else { Kind::Quiet },
-        )
-        .debug_selector(|| "prepare-run".into())
-        .tooltip(kit::tip("Give it what it asks for and set it off"))
-        .on_click(cx.listener(|p, _, _, cx| p.prepare_run(cx)));
+        // An empty mission's body already says how to begin.
+        let empty = mission.input_cards.is_empty() && mission.formations.is_empty();
+        // Start only when it can run; until then, what it still lacks,
+        // one click from the canvas where it is done.
+        let start = if ready {
+            kit::button(t, "prepare-run", "Start", Kind::Primary)
+                .debug_selector(|| "prepare-run".into())
+                .tooltip(kit::tip("Give it what it asks for and set it off"))
+                .on_click(cx.listener(|p, _, _, cx| p.prepare_run(cx)))
+                .into_any_element()
+        } else {
+            let todo = self.todo(mission).len();
+            if complete && todo > 0 && !empty {
+                pane::act(t, "mission-todo", format!("{todo} to do before it can run"))
+                    .debug_selector(|| "mission-todo".into())
+                    .on_click(cx.listener(|p, _, _, cx| {
+                        p.mission_canvas_mode = true;
+                        cx.notify();
+                    }))
+                    .into_any_element()
+            } else {
+                div().into_any_element()
+            }
+        };
         let failed = self.validation_failed();
         pane::head(t)
             .child(pane::title(t, title))
@@ -217,15 +232,17 @@ impl MissionsPage {
                             .child(start),
                     ),
             )
-            .child(
-                pane::act(t, "mission-mode-canvas", "Edit")
-                    .debug_selector(|| "mission-mode-canvas".into())
-                    .tooltip(kit::tip("Change its steps and who does them"))
-                    .on_click(cx.listener(|p, _, _, cx| {
-                        p.mission_canvas_mode = true;
-                        cx.notify();
-                    })),
-            )
+            .when(!empty, |d| {
+                d.child(
+                    pane::act(t, "mission-mode-canvas", "Edit")
+                        .debug_selector(|| "mission-mode-canvas".into())
+                        .tooltip(kit::tip("Change its steps and who does them"))
+                        .on_click(cx.listener(|p, _, _, cx| {
+                            p.mission_canvas_mode = true;
+                            cx.notify();
+                        })),
+                )
+            })
             .child(
                 pane::act(t, "mission-more", "…")
                     .debug_selector(|| "mission-more".into())
@@ -270,40 +287,53 @@ impl MissionsPage {
         };
         pane::head(t)
             .child(
-                pane::title(t, format!("Editing {title}")).child(div().debug_selector(move || {
-                    if complete {
-                        "mission-validation-complete".into()
-                    } else {
-                        "mission-validation-pending".into()
-                    }
-                })),
+                pane::title(t, format!("Editing {title}"))
+                    .child(div().debug_selector(move || {
+                        if complete {
+                            "mission-validation-complete".into()
+                        } else {
+                            "mission-validation-pending".into()
+                        }
+                    }))
+                    .child(div().debug_selector(move || {
+                        if busy {
+                            "board-busy".into()
+                        } else {
+                            "board-ready".into()
+                        }
+                    })),
             )
             .when(mission.input_cards.is_empty(), |d| {
                 d.child(add("new-input", "Add input", board::Kind::Input))
             })
             .child(add("new-step", "Add step", board::Kind::Formation))
-            .child(
-                pane::act(t, "undo", "Undo")
-                    .debug_selector(move || {
-                        if busy {
-                            "undo-busy".into()
-                        } else {
-                            "undo".into()
-                        }
-                    })
-                    .on_click(cx.listener(|p, _, _, cx| p.undo(false, cx))),
-            )
-            .child(
-                pane::act(t, "redo", "Redo")
-                    .debug_selector(move || {
-                        if busy {
-                            "redo-busy".into()
-                        } else {
-                            "redo".into()
-                        }
-                    })
-                    .on_click(cx.listener(|p, _, _, cx| p.undo(true, cx))),
-            )
+            // Undo and Redo only when there is something to undo or redo.
+            .when(self.history.can_undo(), |d| {
+                d.child(
+                    pane::act(t, "undo", "Undo")
+                        .debug_selector(move || {
+                            if busy {
+                                "undo-busy".into()
+                            } else {
+                                "undo".into()
+                            }
+                        })
+                        .on_click(cx.listener(|p, _, _, cx| p.undo(false, cx))),
+                )
+            })
+            .when(self.history.can_redo(), |d| {
+                d.child(
+                    pane::act(t, "redo", "Redo")
+                        .debug_selector(move || {
+                            if busy {
+                                "redo-busy".into()
+                            } else {
+                                "redo".into()
+                            }
+                        })
+                        .on_click(cx.listener(|p, _, _, cx| p.undo(true, cx))),
+                )
+            })
             .child(
                 // Gates, ends and the mission's note are rarer than steps.
                 pane::act(t, "edit-more", "…")
@@ -329,15 +359,17 @@ impl MissionsPage {
                         p.host.menu(rows, e.position(), cx);
                     })),
             )
-            .child(
-                kit::button(t, "mission-mode-flow", "Done", Kind::Plain)
-                    .debug_selector(|| "mission-mode-flow".into())
-                    .on_click(cx.listener(|p, _, _, cx| {
-                        p.mission_canvas_mode = false;
-                        p.editor = None;
-                        cx.notify();
-                    })),
-            )
+            // One Done at a time: while a card is open, its own Done.
+            .when(self.editor.is_none(), |d| {
+                d.child(
+                    kit::button(t, "mission-mode-flow", "Done", Kind::Plain)
+                        .debug_selector(|| "mission-mode-flow".into())
+                        .on_click(cx.listener(|p, _, _, cx| {
+                            p.mission_canvas_mode = false;
+                            cx.notify();
+                        })),
+                )
+            })
     }
 
     /// One step as read: its number and name, who does it, its brief, and

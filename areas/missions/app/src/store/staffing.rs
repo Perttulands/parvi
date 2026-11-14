@@ -57,7 +57,23 @@ pub fn pick_harness(catalog: &Roles, staff: &mut [String; 4], harness: &str) {
     {
         staff[2].clear();
     }
+    // A harness never stands without an effort: the role's usual one, so
+    // the step is whole the moment a harness is chosen.
+    if staff[3].is_empty() && !harness.is_empty() {
+        staff[3] = usual_effort(&staff[0]).to_owned();
+    }
     clamp(catalog, staff);
+}
+
+/// The effort a role usually works at, after the node's effort policy: low
+/// for errands, medium for making things, xhigh for architecture and
+/// review. Max is only ever chosen by hand.
+pub fn usual_effort(role: &str) -> &'static str {
+    match role {
+        "verifier" | "scout" => "low",
+        "reviewer" | "judge" | "architect" | "designer" | "planner" | "orchestrator" => "xhigh",
+        _ => "medium",
+    }
 }
 pub fn pick_model(catalog: &Roles, staff: &mut [String; 4], model: &str) {
     staff[2] = model.to_owned();
@@ -166,6 +182,25 @@ pub fn choices(catalog: Option<&Roles>, staff: &[String; 4]) -> Choices {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_harness_chosen_first_comes_with_its_roles_usual_effort() {
+        let c: Roles = serde_json::from_str(r#"{"harnesses":[{"id":"claude-code","efforts":["low","medium","high","xhigh","max"]},{"id":"openai-codex","efforts":["low","high"]}]}"#).unwrap();
+        let mut s = [String::new(), String::new(), String::new(), String::new()];
+        pick_harness(&c, &mut s, "claude-code");
+        assert_eq!(s[3], "medium");
+        let mut s = [
+            "reviewer".into(),
+            String::new(),
+            String::new(),
+            String::new(),
+        ];
+        pick_harness(&c, &mut s, "claude-code");
+        assert_eq!(s[3], "xhigh");
+        // An effort the harness lacks gives way to the nearest below it.
+        let mut s = [String::new(), String::new(), String::new(), String::new()];
+        pick_harness(&c, &mut s, "openai-codex");
+        assert_eq!(s[3], "low");
+    }
     #[test]
     fn a_harness_change_keeps_what_it_can() {
         let c: Roles = serde_json::from_str(r#"{"roles":[{"id":"planner","displayName":"Planner"}],"harnesses":[{"id":"claude-code","efforts":["low","medium","high","xhigh","max"],"models":[{"id":"opus"}]},{"id":"openai-codex","efforts":["low","medium","high","xhigh","max","ultra"],"models":[{"id":"gpt-6","efforts":["low","high"]}]}]}"#).unwrap();

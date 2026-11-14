@@ -200,6 +200,12 @@ async fn mission_routes_on_a_node_with_fake_sessions() {
         .await
         .unwrap();
     assert_eq!(deleted["deletion"]["slug"], "example");
+    // The operator's Delete is for good: nothing of it is left behind.
+    let left: Vec<_> = std::fs::read_dir(node.dir().join("missions/missions"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
     let error = client
         .request(Method::GET, "/api/missions/missing", None, None)
         .await

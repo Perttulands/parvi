@@ -134,12 +134,16 @@ fn canvas_shows_exact_findings_on_cards_and_edges_and_clears_them(cx: &mut TestA
                 || label.origin.y + label.size.height <= pin.origin.y
         );
     }
-    // The list of what the mission lacks opens from its heading.
-    let toggle = cx.debug_bounds("canvas-findings-toggle").unwrap().center();
-    cx.simulate_click(toggle, Modifiers::none());
+    // What the mission lacks is listed below the canvas, never over a card.
     until(cx, "findings list", |cx| {
         cx.debug_bounds("canvas-findings-list").is_some()
     });
+    let band = cx.debug_bounds("canvas-findings").unwrap();
+    let board = cx.debug_bounds("mission-canvas").unwrap();
+    assert!(
+        board.origin.y + board.size.height <= band.origin.y + gpui::px(1.),
+        "the to-do {band:?} lies over the board {board:?}"
+    );
     let rt = tokio::runtime::Runtime::new().unwrap();
     let client = NodeClient::new(Some(&format!("{}/", running.url))).unwrap();
     let (report, _) = rt
@@ -163,13 +167,12 @@ fn canvas_shows_exact_findings_on_cards_and_edges_and_clears_them(cx: &mut TestA
                 && finding["message"].as_str().unwrap().contains("step_work")
         })
         .unwrap();
-    let text = parvi_missions_app::store::validation::readable_message(
-        &mission,
-        finding["message"].as_str().unwrap(),
-    );
-    assert!(!text.contains("step_work"));
-    let selector = Box::leak(format!("validation-display-Work: {text}").into_boxed_str());
-    assert!(cx.debug_bounds(selector).is_some());
+    let finding: parvi_missions_contract::Finding =
+        serde_json::from_value(finding.clone()).unwrap();
+    let text = parvi_missions_app::store::validation::todo_line(&mission, &finding);
+    assert!(!text.contains("step_work") && !text.contains(finding.code.as_str()));
+    let selector = Box::leak(format!("validation-display-{text}").into_boxed_str());
+    assert!(cx.debug_bounds(selector).is_some(), "{selector}");
     for id in [
         "step_work",
         "gate_review",

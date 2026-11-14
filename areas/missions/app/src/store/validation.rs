@@ -4,6 +4,61 @@ use std::collections::HashMap;
 
 /// Render validation prose using known titles and labels while retaining the
 /// node IDs in the underlying report for actions and diagnostics.
+/// One thing a mission still lacks, said as what to do: "Choose who works
+/// Write", "Connect Input to a first step". Findings without a plainer
+/// form keep the node's own words, with names for ids.
+pub fn todo_line(mission: &Mission, finding: &parvi_missions_contract::Finding) -> String {
+    let name = mission.node_name(&finding.node_id);
+    let step = mission.formations.iter().any(|f| f.id == finding.node_id);
+    match finding.code {
+        Code::UnstaffedSlot | Code::FormationWithoutSlots => format!("Choose who works {name}"),
+        Code::InvalidSlotSettings if finding.message.contains("needs an effort") => {
+            format!("Choose an effort for {name}")
+        }
+        Code::RouteLeadsNowhere if step => format!("Connect {name} to a next step or an End"),
+        Code::MissionNotRunnable if mission.has_input_card(&finding.node_id) => {
+            format!("Connect {name} to a first step")
+        }
+        Code::UnreachableNode => format!("Connect {name} after the Input or an earlier step"),
+        _ => readable_message(
+            mission,
+            &parvi_missions_contract::plain_reason(&finding.message),
+        ),
+    }
+}
+
+/// What a mission still lacks before it can run, one line per thing to do:
+/// findings that ask for the same thing share a line, so the count is the
+/// list's length.
+pub fn todo_lines(
+    mission: &Mission,
+    blocking: impl IntoIterator<Item = parvi_missions_contract::Finding>,
+) -> Vec<(String, Vec<parvi_missions_contract::Finding>)> {
+    let mut lines: Vec<(String, Vec<parvi_missions_contract::Finding>)> = Vec::new();
+    for finding in blocking {
+        let finding = &finding;
+        let line = todo_line(mission, finding);
+        match lines.iter_mut().find(|(text, _)| *text == line) {
+            Some((_, findings)) => findings.push(finding.clone()),
+            None => lines.push((line, vec![finding.clone()])),
+        }
+    }
+    lines
+}
+
+/// An error from the node as the editor says it: no codes, names instead
+/// of ids, and the effort policy's long explanation cut to what to do.
+pub fn plain_error(mission: Option<&Mission>, text: &str) -> String {
+    let text = parvi_missions_contract::plain_reason(text);
+    if text.contains("needs an effort") {
+        return "Choose an effort for this agent.".into();
+    }
+    match mission {
+        Some(mission) => readable_message(mission, &text),
+        None => text,
+    }
+}
+
 pub fn readable_message(mission: &Mission, message: &str) -> String {
     let mut names = HashMap::<&str, &str>::new();
     fn add<'a>(names: &mut HashMap<&'a str, &'a str>, id: &'a str, name: &'a str) {
@@ -164,6 +219,38 @@ mod tests {
                 "connection \"edge_1\" from \"inp_1:out\" to \"fmn_10:port_1\""
             ),
             "connection \"connection\" from \"Start:out\" to \"Build:Input\""
+        );
+    }
+    #[test]
+    fn the_to_do_says_each_thing_once_in_plain_words() {
+        let mission: Mission = toml_fixture();
+        let findings = [
+            Finding::new(
+                Code::UnstaffedSlot,
+                "fmn_10",
+                "slot \"slot_1\" is unstaffed".into(),
+            ),
+            Finding::new(
+                Code::UnstaffedSlot,
+                "fmn_10",
+                "slot \"slot_2\" is unstaffed".into(),
+            ),
+            Finding::new(
+                Code::InvalidSlotSettings,
+                "fmn_10",
+                "invalid_slot_settings: slot needs an effort; the policy is long".into(),
+            ),
+        ];
+        let lines: Vec<_> = todo_lines(&mission, findings)
+            .into_iter()
+            .map(|(line, found)| (line, found.len()))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                ("Choose who works Build".to_owned(), 2),
+                ("Choose an effort for Build".to_owned(), 1)
+            ]
         );
     }
     fn toml_fixture() -> Mission {

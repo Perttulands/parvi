@@ -360,30 +360,50 @@ pub(crate) fn resolve(
         }
     }
     if !failed.is_empty() {
-        // A seat that stopped short again, or whose terminal is gone, keeps
-        // its own code and words; anything else is a reattach failure.
-        let (code, reason) = match reasons.as_slice() {
-            [one]
-                if matches!(
-                    crate::run_worker::error_code(one),
-                    "seat_idle_without_sentinel" | "seat_stuck"
-                ) || one.contains("seat_gone") =>
-            {
-                let detail = one.split_once(": ").map_or(one.as_str(), |(_, rest)| rest);
-                let code = if detail.contains("seat_gone") {
-                    "seat_gone"
-                } else {
-                    crate::run_worker::error_code(detail)
-                };
-                (code, detail.to_owned())
-            }
-            _ => (
-                "dispatch_reattach_failed",
-                format!("dispatch reattach failed: {}", reasons.join("; ")),
-            ),
-        };
+        let (code, reason) = block_reason(&reasons);
         c.append(id, RunEvent { kind:"run_blocked".into(), timestamp:crate::run_storage::now(), data:json!({"code":code,"reason":reason,"resumeAllowed":true,"resumePolicy":"explicit","openDispatches":failed}).as_object().unwrap().clone(), node_id: if failed.len() == 1 { failed[0]["nodeId"].as_str().unwrap_or("").into() } else { String::new() }, ..Default::default() })?;
         return Ok(false);
     }
     Ok(true)
+}
+
+/// Why a reattach blocks the run. A seat that stopped short again, or whose
+/// terminal or session is gone, keeps its own code and words, so the way on
+/// offered fits it (an ended session can only run the step again); anything
+/// else is a reattach failure.
+fn block_reason(reasons: &[String]) -> (&'static str, String) {
+    match reasons {
+        [one]
+            if matches!(
+                crate::run_worker::error_code(one),
+                "seat_idle_without_sentinel" | "seat_stuck"
+            ) || one.contains("seat_gone")
+                || one.contains("session ended") =>
+        {
+            let detail = one.split_once(": ").map_or(one.as_str(), |(_, rest)| rest);
+            let code = if detail.contains("seat_gone") || detail.contains("session ended") {
+                "seat_gone"
+            } else {
+                crate::run_worker::error_code(detail)
+            };
+            (code, detail.to_owned())
+        }
+        _ => (
+            "dispatch_reattach_failed",
+            format!("dispatch reattach failed: {}", reasons.join("; ")),
+        ),
+    }
+}
+
+#[cfg(test)]
+mod block_tests {
+    #[test]
+    fn an_ended_session_blocks_as_gone_in_its_own_words() {
+        let (code, reason) =
+            super::block_reason(&["fmn_work: the agent's session ended before it finished".into()]);
+        assert_eq!(code, "seat_gone");
+        assert_eq!(reason, "the agent's session ended before it finished");
+        let (code, _) = super::block_reason(&["fmn_work: something else".into()]);
+        assert_eq!(code, "dispatch_reattach_failed");
+    }
 }

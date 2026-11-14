@@ -289,6 +289,8 @@ impl MissionsPage {
                     if let Some(editor) = &mut self.editor {
                         editor.busy = false;
                         editor.baseline = Some(submitted);
+                        // A write that lands answers what the last one lacked.
+                        editor.error = None;
                         // Edits typed meanwhile are applied in turn.
                         if changed_since && !keep {
                             editor.error = Some(
@@ -305,7 +307,8 @@ impl MissionsPage {
                 }
             }
         }
-        self.state.error = error;
+        // An edit's error is told once, beside the edit that caused it.
+        self.state.error = error.filter(|_| !(mode == Mode::Edit && self.editor.is_some()));
         if refresh {
             self.history_refresh(pending.node, pending.slug, pending.generation, cx);
         } else {

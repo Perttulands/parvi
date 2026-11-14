@@ -129,8 +129,12 @@ impl MissionsPage {
             }
         }
         // A pick staffs the slot at once: no separate Assign, nothing for
-        // Save. One made during another write follows when that lands; a
-        // harness waits for its effort, which the node requires with it.
+        // Save. One made during another write follows when that lands. A
+        // harness comes with an effort, so the slot is never half set.
+        if !staff[1].is_empty() && staff[3].is_empty() {
+            staff[3] = staffing::usual_effort(&staff[0]).to_owned();
+            self.effort.update(cx, |f, cx| f.set(&staff[3], false, cx));
+        }
         let complete = staff[1].is_empty() || !staff[3].is_empty();
         if complete && self.writing {
             self.staff_pending = true;

@@ -87,13 +87,6 @@ impl View {
     pub(super) fn invalidate_fit(&mut self) {
         self.fitted = false;
     }
-    /// Frame the whole board again after it changed, unless the operator
-    /// has moved the view by hand since.
-    pub(super) fn refit(&mut self) {
-        if !self.touched {
-            self.fitted = false;
-        }
-    }
     pub(super) fn close_menu(&mut self) -> bool {
         self.menu.take().is_some()
     }
@@ -459,92 +452,6 @@ impl MissionsPage {
                     .child("!")
                     .tooltip(kit::tip(message)),
             );
-        }
-        // What the mission still lacks, over the canvas's corner: a short
-        // to-do while it is being built, open and in red once a run was
-        // asked for and could not start.
-        if !findings.is_empty() {
-            let open = self.findings_open;
-            let errors = findings.iter().filter(|(_, error)| *error).count();
-            let heading = if self.run_tried && errors > 0 {
-                format!("{errors} to fix before it can run")
-            } else {
-                format!("{} to do before it can run", findings.len())
-            };
-            let mut overlay = div()
-                .id("canvas-findings")
-                .debug_selector(|| "canvas-findings".into())
-                .absolute()
-                .occlude()
-                .top(px(PAD))
-                .right(px(PAD))
-                .max_w(px(size::LABEL_COL))
-                .flex()
-                .flex_col()
-                .gap(px(TAB_GAP))
-                .p(px(TAB_GAP))
-                .rounded(px(size::RADIUS))
-                .border_1()
-                .border_color(if self.run_tried { t.error } else { t.divider })
-                .bg(t.surface)
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(
-                    div()
-                        .id("canvas-findings-toggle")
-                        .debug_selector(|| "canvas-findings-toggle".into())
-                        .cursor_pointer()
-                        .text_color(if self.run_tried { t.error } else { t.text2 })
-                        .child(format!("{} {heading}", if open { "▾" } else { "▸" }))
-                        .on_click(cx.listener(|p, _, _, cx| {
-                            p.findings_open = !p.findings_open;
-                            cx.notify();
-                        })),
-                );
-            if open {
-                let mut list = div()
-                    .id("canvas-findings-list")
-                    .debug_selector(|| "canvas-findings-list".into())
-                    .max_h(px(size::LABEL_COL))
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .gap(px(TAB_GAP));
-                for (finding, error) in &findings {
-                    let title = if finding.node_id.is_empty() {
-                        "Mission".to_owned()
-                    } else if mission
-                        .connections
-                        .iter()
-                        .any(|edge| edge.id == finding.node_id)
-                    {
-                        "Connection".to_owned()
-                    } else {
-                        mission.node_name(&finding.node_id).to_owned()
-                    };
-                    let selector =
-                        format!("validation-message-{}-{}", finding.node_id, finding.message);
-                    let message =
-                        crate::store::validation::readable_message(mission, &finding.message);
-                    let display_selector = format!("validation-display-{title}: {message}");
-                    let color = if self.run_tried {
-                        self.finding_color(t, *error)
-                    } else {
-                        t.text
-                    };
-                    list = list.child(
-                        div()
-                            .debug_selector(move || selector.clone())
-                            .text_color(color)
-                            .child(
-                                div()
-                                    .debug_selector(move || display_selector.clone())
-                                    .child(format!("{title}: {message}")),
-                            ),
-                    );
-                }
-                overlay = overlay.child(list);
-            }
-            layer = layer.child(overlay);
         }
         if !running && let Some(at) = view.menu {
             layer = layer.child(self.canvas_menu(t, mission, at, &view, cx));
@@ -1082,16 +989,14 @@ fn wires(
                 f32::from(b.size.height),
             ));
             // A panel opening beside the canvas narrows it: draw again so
-            // the card being edited is brought back into view.
-            // One the operator has not moved is framed again.
+            // the card being edited is brought back into view. The board
+            // itself stays where it is, so nothing moves under the pointer
+            // when the panel closes.
             let resized = (before.2, before.3) != (bounds.get().2, bounds.get().3);
-            if resized && (view.follow.is_some() || !view.touched) {
+            if resized && view.follow.is_some() {
                 let entity = entity.clone();
                 cx.defer(move |cx| {
-                    let _ = entity.update(cx, |page, cx| {
-                        page.canvas.refit();
-                        cx.notify()
-                    });
+                    let _ = entity.update(cx, |_, cx| cx.notify());
                 });
             }
             if ready_to_fit && !view.fitted {
@@ -1723,8 +1628,18 @@ pub(super) fn asks_you(mission: &Mission) -> bool {
 impl MissionsPage {
     /// Add a card where it can be seen: in free space in view, or beside
     /// the board and brought into view when the view is full.
+    /// A step comes after the one being edited, else after the last step
+    /// nothing follows yet, else after the Input: wired, so the common
+    /// case needs no wiring by hand.
     pub(super) fn add_card(&mut self, kind: board::Kind, cx: &mut Context<Self>) {
-        self.place_card(kind, None, cx);
+        let after = (kind == board::Kind::Formation)
+            .then_some(self.state.mission.as_ref())
+            .flatten()
+            .and_then(|m| {
+                let editing = self.editor.as_ref().map(|e| e.id.as_str());
+                step_after(m, editing)
+            });
+        self.place_card(kind, after.as_deref(), cx);
     }
 
     /// Add the step that comes after `card`, to its right, wired from it.
@@ -1795,7 +1710,6 @@ impl MissionsPage {
         let Some((kind, from)) = self.new_step.take() else {
             return;
         };
-        self.canvas.refit();
         if kind == board::Kind::End {
             let end = self.state.mission.as_ref().and_then(|m| {
                 m.ends
@@ -1903,6 +1817,30 @@ impl MissionsPage {
 
 /// The port a next step is wired from: an Input card's, a step's first
 /// output, or a gate's pass.
+/// The card a new step follows: the one being edited when a step can follow
+/// it, else the last step nothing follows yet, else an Input nothing follows.
+fn step_after(m: &Mission, editing: Option<&str>) -> Option<String> {
+    let open = |id: &str| {
+        leaving_port(m, id).is_some_and(|port| !m.connections.iter().any(|c| c.from == port))
+    };
+    editing
+        .filter(|id| leaving_port(m, id).is_some())
+        .map(str::to_owned)
+        .or_else(|| {
+            m.formations
+                .iter()
+                .rev()
+                .find(|f| open(&f.id))
+                .map(|f| f.id.clone())
+        })
+        .or_else(|| {
+            m.input_cards
+                .iter()
+                .find(|c| open(&c.id))
+                .map(|c| c.id.clone())
+        })
+}
+
 fn leaving_port(m: &Mission, card: &str) -> Option<String> {
     if m.input_cards.iter().any(|c| c.id == card) {
         return Some(format!("{card}:out"));
@@ -1914,4 +1852,31 @@ fn leaving_port(m: &Mission, card: &str) -> Option<String> {
         .iter()
         .any(|g| g.id == card)
         .then(|| format!("{card}:pass"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_new_step_follows_the_edited_card_else_the_open_end_of_the_flow() {
+        let mission: Mission = serde_json::from_value(json!({
+            "inputCard": [{"id": "inp"}],
+            "formation": [
+                {"id": "a", "input": [{"id": "in"}], "output": [{"id": "out"}]},
+                {"id": "b", "input": [{"id": "in"}], "output": [{"id": "out"}]}
+            ],
+            "end": [{"id": "end", "outcome": "done"}],
+            "connection": [
+                {"id": "e1", "from": "inp:out", "to": "a:in"},
+                {"id": "e2", "from": "a:out", "to": "b:in"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(step_after(&mission, Some("a")).as_deref(), Some("a"));
+        assert_eq!(step_after(&mission, Some("end")).as_deref(), Some("b"));
+        assert_eq!(step_after(&mission, None).as_deref(), Some("b"));
+        let fresh: Mission = serde_json::from_value(json!({"inputCard": [{"id": "inp"}]})).unwrap();
+        assert_eq!(step_after(&fresh, None).as_deref(), Some("inp"));
+    }
 }
