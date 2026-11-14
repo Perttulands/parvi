@@ -10,6 +10,17 @@ use gpui::{
 };
 use parvi_app_kit::host::Cover;
 
+/// Where everything that opens over the windows lies: Send, the output
+/// search and a view beside them. The one rule: at the right edge of the
+/// terminals, full height, because a terminal's lines and its prompt start
+/// at its left; what it covers is only the ends of lines. No session
+/// changes size for it. Send and the search lie `inset` in from it, at the
+/// left edge of a view beside, so the view stays in sight
+/// ([`Terminals::beside_inset`]).
+pub fn at_edge<E: gpui::Styled>(e: E, inset: f32) -> E {
+    e.absolute().top_0().right(gpui::px(inset))
+}
+
 pub const SEND: &str = "send";
 pub const OVERVIEW: &str = "overview";
 pub const FIND: &str = "find";

@@ -1,5 +1,7 @@
 //! One pane's terminal: alacritty_terminal's grid and parser. The node sends
-//! a whole screen, then the bytes the pane writes; a history is the pane's
+//! a whole screen, then the bytes the pane writes. Reading back, the pane's
+//! lines as the node read them are grown above its live screen, so output
+//! goes on arriving below them; on the alternate screen a history is the
 //! lines read once, shown read-only.
 
 use super::clusters::Clusters;
@@ -74,7 +76,7 @@ impl Screen {
         }
     }
 
-    /// A screen frame: start over at this grid.
+    /// A screen frame: start over at this grid, without lines grown above.
     pub fn reset(&mut self, cols: usize, rows: usize) {
         *self = Self {
             dirty: self.dirty,
@@ -117,6 +119,78 @@ impl Screen {
             s.term.scroll_display(Scroll::Delta(offset as i32));
         }
         s
+    }
+
+    /// Reading back on the live screen: the pane's lines as the node read
+    /// them (`history`'s text) above the screen as it is now, which goes on
+    /// taking output and keeps its modes, cursor and scroll region. False on
+    /// the alternate screen, whose program has no lines above it.
+    pub fn grow_history(&mut self, text: &str) -> bool {
+        if self.mode().contains(TermMode::ALT_SCREEN) {
+            return false;
+        }
+        // tmux ends each line it captures with a newline; one more row
+        // would put the screen's top line in the history as well.
+        let text = text.strip_suffix('\n').unwrap_or(text);
+        let mut read = Self::history(text, self.cols, self.rows, None);
+        {
+            let live = self.term.grid();
+            let grid = read.term.grid_mut();
+            for row in 0..self.rows as i32 {
+                grid[Line(row)] = live[Line(row)].clone();
+            }
+            grid.cursor = live.cursor.clone();
+            grid.saved_cursor = live.saved_cursor.clone();
+        }
+        std::mem::swap(self.term.grid_mut(), read.term.grid_mut());
+        self.term.selection = None;
+        self.history_lines = read.history_lines;
+        true
+    }
+
+    /// Lines grown above the live screen are there to read: a screen frame
+    /// (a resize, or output the app fell behind on) starts over without
+    /// them, and a program that takes the alternate screen hides them.
+    pub fn has_history(&self) -> bool {
+        !self.history_lines.is_empty() && !self.mode().contains(TermMode::ALT_SCREEN)
+    }
+
+    /// No one reads back any more: the grown lines go, from the main screen
+    /// also while a program has the alternate one.
+    pub fn drop_history(&mut self) {
+        self.term.set_options(config(0));
+        self.history_lines.clear();
+    }
+
+    /// The row a reader's view starts at, counted from the oldest line. It
+    /// stays put as output arrives below.
+    pub fn top(&self) -> usize {
+        let grid = self.term.grid();
+        grid.history_size() - grid.display_offset()
+    }
+
+    /// Shows the view starting at row `top`, for one reader's paint or
+    /// scroll; `live_view` puts it back, so the screen reads as live to
+    /// everyone else.
+    pub fn view(&mut self, top: usize) {
+        let grid = self.term.grid();
+        let offset = grid.history_size().saturating_sub(top) as i32;
+        let now = grid.display_offset() as i32;
+        self.term.scroll_display(Scroll::Delta(offset - now));
+    }
+
+    pub fn live_view(&mut self) {
+        self.term.scroll_display(Scroll::Bottom);
+    }
+
+    /// Scrolls a reader's view from `top` by `n` lines (up is positive):
+    /// where it starts now, or `None` at the live end.
+    pub fn scroll_view(&mut self, top: usize, n: i32) -> Option<usize> {
+        self.view(top);
+        self.term.scroll_display(Scroll::Delta(n));
+        let at = self.scrolled_back().then(|| self.top());
+        self.live_view();
+        at
     }
 
     pub fn history_rows(&self, line: usize) -> Option<(usize, usize)> {
@@ -291,5 +365,69 @@ mod tests {
         assert!(shown.contains(&"line 40".to_string()), "{shown:?}");
         let bottom = Screen::history(&text.join("\n"), 20, 10, None);
         assert_eq!(row_text(&bottom, 9), "line 99");
+    }
+
+    #[test]
+    fn reading_back_on_the_live_screen_keeps_its_place_as_output_arrives() {
+        // The pane as the node reads it: 40 lines of history, then the
+        // screen; the live screen has moved on by the time it arrives.
+        let text: Vec<String> = (0..50).map(|i| format!("line {i}")).collect();
+        let shown: Vec<&str> = text[40..].iter().map(String::as_str).collect();
+        let mut s = live(&shown, 20, 10);
+        s.feed(b"\r\nline 50\r\n$ ");
+        // As tmux captures it: every line ends in a newline.
+        assert!(s.grow_history(&format!("{}\n", text.join("\n"))));
+        assert!(s.has_history());
+        // The history runs on into the screen without a line twice.
+        s.view(0);
+        let all: Vec<String> = (0..s.term.grid().history_size() as i32 + 10)
+            .map(|r| row_text(&s, r))
+            .collect();
+        s.live_view();
+        let at = all.iter().position(|l| l == "line 39").unwrap();
+        assert_eq!(all[at + 1], "line 42", "{all:?}");
+        // A reader opens three lines up; the screen still reads as live.
+        let top = s.scroll_view(s.top(), 3).unwrap();
+        assert_eq!(row_text(&s, 9), "$");
+        s.view(top);
+        let before: Vec<String> = (0..10).map(|r| row_text(&s, r)).collect();
+        s.live_view();
+        // Output arrives below what is being read, which stays where it is.
+        s.feed(b"\r\nnew 1\r\nnew 2\r\n$ ");
+        s.view(top);
+        let after: Vec<String> = (0..10).map(|r| row_text(&s, r)).collect();
+        assert_eq!(before, after);
+        s.live_view();
+        assert_eq!(row_text(&s, 9), "$");
+        assert_eq!(row_text(&s, 8), "new 2");
+        // The input the dock shows is the live screen's, and scrolling down
+        // past it reaches the live end.
+        assert_eq!(s.input_rows(3), 9..10);
+        assert_eq!(s.scroll_view(top, -100), None);
+        // Nobody reads back: the lines go.
+        s.drop_history();
+        assert!(!s.has_history());
+        assert_eq!(s.term.grid().history_size(), 0);
+        s.feed(b"\r\nmore");
+        assert_eq!(s.term.grid().history_size(), 0);
+    }
+
+    #[test]
+    fn a_screen_frame_drops_the_lines_grown_above() {
+        let mut s = live(&["a", "$ "], 20, 4);
+        assert!(s.grow_history("x\ny\nz\na\n$ "));
+        s.reset(20, 4);
+        assert!(!s.has_history());
+        // The alternate screen has no lines above it to read, and hides
+        // those grown before it; they go from the main screen when dropped.
+        s.feed(b"\x1b[?1049h");
+        assert!(!s.grow_history("x"));
+        s.feed(b"\x1b[?1049l");
+        assert!(s.grow_history("x\ny\nz\na\n$ "));
+        s.feed(b"\x1b[?1049h");
+        assert!(!s.has_history());
+        s.drop_history();
+        s.feed(b"\x1b[?1049l");
+        assert_eq!(s.term.grid().history_size(), 0);
     }
 }

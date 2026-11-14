@@ -13,8 +13,9 @@ use parvi_app_kit::widgets::pane;
 use parvi_files_contract::{Changed, Match};
 
 /// Under each of these widths a file's header leaves out one more of its
-/// least needed words.
-const HEAD_NARROW: [f32; 3] = [600., 460., 380.];
+/// least needed words. A view beside the terminals opens about 420 wide,
+/// where the name needs the room the zoom steps would take.
+const HEAD_NARROW: [f32; 3] = [640., 520., 440.];
 /// JetBrains Mono's advance, as a share of its size: how many letters of a
 /// name fit a width.
 const ADVANCE: f32 = 0.6;

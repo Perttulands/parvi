@@ -1,8 +1,9 @@
-//! Send to Session, the one hand-off (CHROTE's `SendDrawer`): a drawer that
-//! lies over the windows, on the side away from its target's window, so no
-//! session changes size for it. Every surface opens it through
-//! [`Terminals::handoff`] with a reference to what it was showing; the reference is shown, not edited, and
-//! the note under it is the operator's. Enter sends (paste and submit),
+//! Send to Session, the one hand-off (CHROTE's `SendDrawer`): a drawer over
+//! the windows by the one rule ([`surface::at_edge`]), so no session changes
+//! size for it; when it covers its target's window it shows that session's
+//! last lines. Every surface opens it through [`Terminals::handoff`] with a
+//! reference to what it was showing; the reference is shown, not edited,
+//! and the note under it is the operator's. Enter sends (paste and submit),
 //! Shift+Enter breaks the line, Ctrl+Enter or Paste only pastes. Files
 //! dropped on the drawer or attached land on the target's node and their
 //! paths follow the note. "New agent…" launches one and pastes the message
@@ -61,9 +62,6 @@ pub struct Draft {
     pub launch_grid: Option<super::page::Grid>,
     /// The inner edge is being dragged.
     pub resizing: bool,
-    /// The drawer opened on the left, clear of its target's window. Chosen
-    /// once as it opens, so it never jumps under the pointer.
-    pub left: bool,
 }
 
 /// A local file or a clipboard image kept in memory until sent.
@@ -76,16 +74,27 @@ pub enum Attachment {
 impl Terminals {
     /// Opens Send with the focused terminal as the source, aimed at `target`.
     pub fn open_send(&mut self, target: Option<Key>, window: &mut Window, cx: &mut Context<Self>) {
-        let reference = self
-            .focused_key()
-            .map(|key| format!("session {}", key.text()));
+        let reference = self.focused_key().map(|key| self.session_reference(&key));
         self.handoff(reference, target, window, cx);
     }
 
     /// Sends the named window's session as the source to a different target.
     pub fn send_from(&mut self, source: Key, window: &mut Window, cx: &mut Context<Self>) {
-        let reference = Some(format!("session {}", source.text()));
+        let reference = Some(self.session_reference(&source));
         self.handoff_from(reference, None, Some(source), window, cx);
+    }
+
+    /// The line naming session `key` in a message: its name and where it
+    /// runs.
+    fn session_reference(&self, key: &Key) -> String {
+        let place = self.where_is(&key.node);
+        send::session_reference(
+            &key.name,
+            place
+                .as_ref()
+                .map(|p| (p.device.as_str(), p.environment.as_str())),
+            &key.node,
+        )
     }
 
     pub(super) fn send_targets(&self, query: &str) -> Vec<&parvi_terminals_contract::Session> {
@@ -138,13 +147,6 @@ impl Terminals {
         self.send_query.update(cx, |f, cx| f.set("", false, cx));
         self.send_note.update(cx, |f, cx| f.set("", false, cx));
         self.open(Surface::Send, window, cx);
-        // It lies over the windows, on the side away from the target.
-        let room = window.viewport_size().width / px(1.);
-        self.send.left = send::drawer_left(
-            self.aimed_span(),
-            send::width(self.settings.send_width, room),
-            room,
-        );
     }
 
     /// The drawer closed: the keyboard goes back to the terminal, whichever
@@ -401,7 +403,9 @@ impl Terminals {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = theme(cx).clone();
-        let room = window.viewport_size().width / px(1.);
+        // The room left of a view beside, which the drawer lies against.
+        let inset = self.beside_inset(window, cx);
+        let room = window.viewport_size().width / px(1.) - inset;
         let width = send::width(self.settings.send_width, room);
         let busy =
             self.send.sending.is_some() || self.send.uploading || self.send.waiting.is_some();
@@ -415,21 +419,9 @@ impl Terminals {
             .flex()
             .flex_col()
             .gap(px(8.))
-            .child(kit::label(&t, "Target"))
             .child(self.render_send_aimed(&t))
             .child(self.send_query.clone())
             .child(self.render_send_targets(cx));
-        // The list shows whole rows; say what lies past its end.
-        let query = self.send_query.read(cx).text.clone();
-        let past =
-            (self.send_targets(&query).len() + 1).saturating_sub(size::SEND_TARGET_ROWS as usize);
-        if past > 0 {
-            body = body.child(kit::note(
-                &t,
-                format!("{past} more below; scroll, or type to find one"),
-                Some(t.dim),
-            ));
-        }
         if !self.send.new_agent
             && let Some(key) = self.send_target.as_ref()
             && let Some(session) = self.fleet.session(key)
@@ -556,57 +548,47 @@ impl Terminals {
                         })),
                 ),
         );
-        let left = self.send.left;
-        let drawer = div()
-            .id("send")
-            .debug_selector(move || {
-                if left {
-                    "send-drawer-left"
-                } else {
-                    "send-drawer"
-                }
-                .into()
-            })
-            .absolute()
-            .top_0()
-            .bottom_0()
-            .when(left, |d| d.left_0().border_r_1().flex_row_reverse())
-            .when(!left, |d| d.right_0().border_l_1())
-            .w(px(width))
-            .flex()
-            .bg(t.surface)
-            .border_color(t.divider)
-            .shadow_lg()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .drag_over::<ExternalPaths>(move |d, _, _, _| d.bg(alpha(t.accent, 0.08)))
-            .on_drop(
-                cx.listener(|s, paths: &ExternalPaths, _, cx| s.send_attach(paths.paths(), cx)),
-            )
-            .child(
-                div()
-                    .id("send-grip")
-                    .flex_none()
-                    .w(px(size::DRAWER_GRIP))
-                    .h_full()
-                    .cursor_col_resize()
-                    .hover(|d| d.bg(t.accent_soft()))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|s, _, _, cx| {
-                            s.send.resizing = true;
-                            cx.stop_propagation();
-                        }),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .child(self.render_send_head(&t, cx))
-                    .child(body),
-            );
+        // Below the actions, so coming and going it never moves them.
+        body = body.children(self.render_send_covered(&t, room - width));
+        let drawer = surface::at_edge(
+            div().id("send").debug_selector(|| "send-drawer".into()),
+            inset,
+        )
+        .bottom_0()
+        .border_l_1()
+        .w(px(width))
+        .flex()
+        .bg(t.surface)
+        .border_color(t.divider)
+        .shadow_lg()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .drag_over::<ExternalPaths>(move |d, _, _, _| d.bg(alpha(t.accent, 0.08)))
+        .on_drop(cx.listener(|s, paths: &ExternalPaths, _, cx| s.send_attach(paths.paths(), cx)))
+        .child(
+            div()
+                .id("send-grip")
+                .flex_none()
+                .w(px(size::DRAWER_GRIP))
+                .h_full()
+                .cursor_col_resize()
+                .hover(|d| d.bg(t.accent_soft()))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|s, _, _, cx| {
+                        s.send.resizing = true;
+                        cx.stop_propagation();
+                    }),
+                ),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(self.render_send_head(&t, cx))
+                .child(body),
+        );
         let resizing = self.send.resizing;
         div()
             .absolute()
@@ -616,8 +598,7 @@ impl Terminals {
             .when(resizing, |d| {
                 d.cursor_col_resize()
                     .on_mouse_move(cx.listener(move |s, e: &MouseMoveEvent, _, cx| {
-                        let x = e.position.x / px(1.);
-                        let w = if left { x } else { room - x };
+                        let w = room - e.position.x / px(1.);
                         s.settings.send_width = Some(send::width(Some(w), room));
                         cx.notify();
                     }))
@@ -633,23 +614,44 @@ impl Terminals {
             .into_any_element()
     }
 
-    /// The left and right edge of the window showing the session Send aims
-    /// at, else the one it sends from, as last painted.
-    fn aimed_span(&self) -> Option<(f32, f32)> {
-        let k = self
-            .send_target
-            .as_ref()
-            .filter(|_| !self.send.new_agent)
-            .or(self.send.source.as_ref())?;
-        let geo = self.geo.borrow();
+    /// The aimed session's last lines, when its window lies under the
+    /// drawer, whose left edge is at `edge`: the drawer stays where it is
+    /// (it never moves under the pointer) and shows what it covers.
+    fn render_send_covered(&self, t: &crate::theme::Theme, edge: f32) -> Option<gpui::Div> {
+        let k = self.send_target.as_ref().filter(|_| !self.send.new_agent)?;
         let ws = &self.settings.workspace;
-        (0..ws.windows().len())
-            .find(|&i| ws.shown(i).is_some_and(|b| &b.key == k))
-            .and_then(|i| geo.get(i).and_then(|g| g.body))
-            .map(|b| {
-                let l = f32::from(b.origin.x);
-                (l, l + f32::from(b.size.width))
-            })
+        let i = (0..ws.windows().len()).find(|&i| ws.shown(i).is_some_and(|b| &b.key == k))?;
+        let body = self.geo.borrow().get(i).and_then(|g| g.body)?;
+        if f32::from(body.origin.x + body.size.width) <= edge {
+            return None;
+        }
+        let pane = self.window_panes().get(i).cloned().flatten()?;
+        let text = self.fleet.screen(&pane.node, pane.pane)?.lock().text();
+        let mut lines: Vec<&str> = text
+            .lines()
+            .rev()
+            .filter(|l| !l.trim().is_empty())
+            .collect();
+        lines.truncate(size::SEND_TAIL);
+        lines.reverse();
+        Some(
+            div()
+                .debug_selector(|| "send-covered".into())
+                .flex_none()
+                .mt(px(8.))
+                .flex()
+                .flex_col()
+                .child(kit::label(t, format!("{}, last lines", k.name)))
+                .text_size(px(size::SMALL))
+                .text_color(t.dim)
+                .children(lines.into_iter().map(|l| {
+                    div()
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(l.to_string())
+                })),
+        )
     }
 
     /// The target, named where the drawer starts: what Enter sends to.
@@ -690,11 +692,10 @@ impl Terminals {
             None if self.send.new_agent => {
                 line.child(div().text_color(t.text2).child("To a new agent"))
             }
-            None => line.debug_selector(|| "send-aimed-none".into()).child(
-                div()
-                    .text_color(t.text2)
-                    .child("No target yet: pick one below"),
-            ),
+            None => line
+                .debug_selector(|| "send-aimed-none".into())
+                .child(div().text_color(t.text2).child("To"))
+                .child(div().text_color(t.dim).child("pick a session")),
         }
     }
 

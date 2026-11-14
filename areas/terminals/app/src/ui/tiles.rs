@@ -10,9 +10,9 @@ use crate::store::sessions::{self, Key};
 use crate::store::workspace::{Binding, MAX_WINDOWS, TileState};
 use crate::term::links::{self, Link};
 use crate::term::paint::{self, Look};
+use crate::term::screen::Screen;
 use crate::term::{keys, mouse};
 use crate::theme::{Theme, alpha, size, theme};
-use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::index::{Column, Line, Point as GridPoint, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::TermMode;
@@ -27,6 +27,7 @@ use parvi_app_kit::host::Request;
 use parvi_app_kit::widgets::kit::{self, Kind};
 use parvi_core::NodeId;
 use std::ops::Range;
+use std::sync::Arc;
 
 mod beside;
 mod drag;
@@ -92,12 +93,16 @@ struct Source {
     screen: SharedScreen,
     /// This window sets the pane's grid.
     sizing: Option<PaneAt>,
-    /// Reading a history: the live pane, whose input stays in view below.
+    /// Reading back: the live pane, whose input stays in view below; the
+    /// same screen as `screen` unless on the alternate screen.
     live: Option<SharedScreen>,
+    /// Reading back: the row the view starts at (`Screen::view`).
+    top: Option<usize>,
 }
 
 impl Terminals {
     pub fn render_terminals(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        self.tidy_histories();
         let mut row = div()
             .size_full()
             .flex()
@@ -294,6 +299,7 @@ impl Terminals {
                 screen: h.screen.clone(),
                 sizing: None,
                 live: self.fleet.screen(&at.node, pane),
+                top: Some(h.top),
             });
         }
         let screen = self.fleet.screen(&at.node, pane)?;
@@ -309,6 +315,7 @@ impl Terminals {
             screen,
             sizing,
             live: None,
+            top: None,
         })
     }
 
@@ -1092,6 +1099,7 @@ impl Terminals {
             screen,
             sizing,
             live,
+            top,
         } = src;
         let history = live.is_some() || self.histories.contains_key(&i);
         let place = self
@@ -1126,6 +1134,11 @@ impl Terminals {
                     entity.update(cx, |sh, cx| sh.want_grid(at, grid, cx));
                 }
                 let mut s = screen.lock();
+                if let Some(top) = top {
+                    s.view(top);
+                }
+                // Reading back on the live screen, the dock is its own rows.
+                let same = live.as_ref().is_some_and(|l| Arc::ptr_eq(l, &screen));
                 let m = if settling {
                     paint::metrics(window, font)
                 } else {
@@ -1137,9 +1150,14 @@ impl Terminals {
                 // below its view, so it runs on into the live input.
                 let mut stale = 0;
                 let dock = live.as_ref().map(|l| {
-                    let l = l.lock();
-                    let rows = l.input_rows((s.rows * 2 / 5).max(3));
-                    stale = l.rows.saturating_sub(rows.start).min(s.rows - 1);
+                    let most = (s.rows * 2 / 5).max(3);
+                    let (rows, all) = if same {
+                        (s.input_rows(most), s.rows)
+                    } else {
+                        let l = l.lock();
+                        (l.input_rows(most), l.rows)
+                    };
+                    stale = all.saturating_sub(rows.start).min(s.rows - 1);
                     let h = (m.cell.height * rows.len() as f32).min(bounds.size.height / 2.);
                     let top = bounds.bottom() - h;
                     let b =
@@ -1185,30 +1203,6 @@ impl Terminals {
                         cx,
                     );
                 });
-                if let (Some((d, at)), Some(l)) = (dock, live.as_ref()) {
-                    let rule = Bounds::new(
-                        point(bounds.left(), d.top() - px(size::DOCK_GAP / 2.)),
-                        gpui::size(bounds.size.width, px(1.)),
-                    );
-                    window.paint_quad(gpui::fill(rule, theme_t.divider));
-                    let mut l = l.lock();
-                    window.with_content_mask(Some(ContentMask { bounds: d }), |window| {
-                        paint::paint(
-                            &l,
-                            m,
-                            at,
-                            Look {
-                                theme: &theme_t,
-                                cursor: true,
-                                focused,
-                                link: &[],
-                            },
-                            window,
-                            cx,
-                        );
-                    });
-                    l.dirty = false;
-                }
                 s.dirty = false;
                 // The way back to live sits above the dock, laid out from
                 // this geometry: a dock that changed height lays it out again.
@@ -1222,6 +1216,7 @@ impl Terminals {
                     cols: s.cols,
                     display_offset: s.term.grid().display_offset(),
                     dock: dock.map(|d| d.0),
+                    dock_origin: dock.filter(|_| same).map(|d| d.1),
                 };
                 let drawn = place.as_ref().map(|place| {
                     window.with_content_mask(Some(ContentMask { bounds }), |window| {
@@ -1242,6 +1237,43 @@ impl Terminals {
                     })
                 });
                 chips.borrow_mut()[i] = drawn.unwrap_or_default();
+                if let (Some((d, at)), Some(l)) = (dock, live.as_ref()) {
+                    let rule = Bounds::new(
+                        point(bounds.left(), d.top() - px(size::DOCK_GAP / 2.)),
+                        gpui::size(bounds.size.width, px(1.)),
+                    );
+                    window.paint_quad(gpui::fill(rule, theme_t.divider));
+                    // The live rows, also when the view above is the same
+                    // screen scrolled back.
+                    let mut other = (!same).then(|| l.lock());
+                    let l: &mut Screen = match other.as_mut() {
+                        Some(l) => l,
+                        None => {
+                            s.live_view();
+                            &mut s
+                        }
+                    };
+                    window.with_content_mask(Some(ContentMask { bounds: d }), |window| {
+                        paint::paint(
+                            l,
+                            m,
+                            at,
+                            Look {
+                                theme: &theme_t,
+                                cursor: true,
+                                focused,
+                                link: &[],
+                            },
+                            window,
+                            cx,
+                        );
+                    });
+                    l.dirty = false;
+                }
+                // Outside its paint a screen reads as live to everyone.
+                if top.is_some() {
+                    s.live_view();
+                }
                 if moved {
                     let entity = entity.clone();
                     cx.defer(move |cx| entity.update(cx, |_, cx| cx.notify()));
@@ -1349,7 +1381,15 @@ impl Terminals {
     /// The screen a window shows now: its history, or its live pane.
     /// What window `i` shows now, line by line, as the operator reads it.
     pub fn window_text(&self, i: usize) -> Option<String> {
-        Some(self.shown_screen(i)?.0.lock().text())
+        let (screen, _) = self.shown_screen(i)?;
+        let mut s = screen.lock();
+        let Some(h) = self.histories.get(&i) else {
+            return Some(s.text());
+        };
+        s.view(h.top);
+        let text = s.text();
+        s.live_view();
+        Some(text)
     }
 
     fn shown_screen(&self, i: usize) -> Option<(SharedScreen, Option<PaneAt>)> {
@@ -1374,11 +1414,7 @@ impl Terminals {
             return;
         };
         if let Some(s) = self.fleet.screen(&pane.node, pane.pane) {
-            let mut s = s.lock();
-            s.term.selection = None;
-            if s.scrolled_back() {
-                s.term.scroll_display(Scroll::Bottom);
-            }
+            s.lock().term.selection = None;
         }
         self.fleet.input(&pane.node, pane.pane, bytes);
         self.flush(cx);
@@ -1689,7 +1725,7 @@ impl Terminals {
         let (col, row, _) = self.cell_at(i, p)?;
         let (screen, _) = self.shown_screen(i)?;
         let s = screen.lock();
-        let line = Line(row as i32) - s.term.grid().display_offset();
+        let line = Line(row as i32) - g.display_offset;
         links::at(&s.term, GridPoint::new(line, Column(col))).map(|l| (col, row, l))
     }
 
@@ -1854,6 +1890,23 @@ impl Terminals {
         self.scroll_window(i, n, cx);
     }
 
+    /// A window reading back on a live screen that lost its grown lines
+    /// shows it live again; a live screen nobody reads back drops them.
+    fn tidy_histories(&mut self) {
+        self.histories.retain(|_, h| {
+            let grown = self.grown.iter().any(|g| Arc::ptr_eq(g, &h.screen));
+            !grown || h.screen.lock().has_history()
+        });
+        let histories = &self.histories;
+        self.grown.retain(|g| {
+            let read = histories.values().any(|h| Arc::ptr_eq(g, &h.screen));
+            if !read {
+                g.lock().drop_history();
+            }
+            read
+        });
+    }
+
     /// Shows window `i`'s live pane again in place of its history.
     pub fn leave_history(&mut self, i: usize, cx: &mut Context<Self>) {
         if self.histories.remove(&i).is_some() {
@@ -1870,13 +1923,15 @@ impl Terminals {
     fn scroll_window(&mut self, i: usize, n: i32, cx: &mut Context<Self>) {
         match self.histories.get(&i) {
             Some(h) => {
-                let at_bottom = {
-                    let mut s = h.screen.lock();
-                    s.term.scroll_display(Scroll::Delta(n));
-                    s.term.grid().display_offset() == 0
-                };
-                if at_bottom && n < 0 {
-                    self.leave_history(i, cx);
+                let top = h.screen.lock().scroll_view(h.top, n);
+                match top {
+                    Some(top) => {
+                        if let Some(h) = self.histories.get_mut(&i) {
+                            h.top = top;
+                        }
+                    }
+                    None if n < 0 => self.leave_history(i, cx),
+                    None => {}
                 }
                 cx.notify();
             }

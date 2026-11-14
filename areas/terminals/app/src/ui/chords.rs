@@ -60,7 +60,7 @@ fn chords(page: &WeakEntity<Terminals>, tabs: usize) -> Vec<Chord> {
         // Parvi's own, on letters CHROTE leaves free: V for view, H for
         // history (Alt+F is the shell's forward-word).
         chord("v", "Overview of every session", Action::Overview).alt("v", Some(false)),
-        chord("h", "Search every scrollback", Action::Find).alt("h", Some(false)),
+        chord("h", "Search every session's output", Action::Find).alt("h", Some(false)),
         // J for jump: answering a toast without finding its row.
         chord(
             "j",

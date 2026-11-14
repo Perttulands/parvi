@@ -28,6 +28,18 @@ pub fn message(reference: Option<&str>, note: &str, files: &[String]) -> String 
     parts.join("\n\n")
 }
 
+/// The line naming a session handed over, in words the receiving agent can
+/// act on: `parvi session read <name> --node <device/environment>` reads
+/// it. Where the device is not known the node's id stands in, which
+/// `--node` takes as well.
+pub fn session_reference(name: &str, place: Option<(&str, &str)>, node: &str) -> String {
+    match place.filter(|(device, _)| !device.is_empty()) {
+        Some((device, "")) => format!("session {name} on {device}"),
+        Some((device, environment)) => format!("session {name} on {device}/{environment}"),
+        None => format!("session {name} on node {node}"),
+    }
+}
+
 /// What the drawer says when a send to `name` did not simply arrive. An
 /// unknown outcome is not sent again from the drawer: the pane may hold it.
 pub fn said(outcome: Outcome, name: &str) -> Option<String> {
@@ -106,19 +118,6 @@ pub fn first_target(all: &[Session], named: Option<&Key>, focused: Option<&Key>)
     named.filter(live).or(focused.filter(live)).cloned()
 }
 
-/// Whether the drawer, `width` wide over a page `room` wide, opens on the
-/// left, clear of the target's window, which spans `span` (left and right
-/// edge). On the right unless only the left leaves that window uncovered:
-/// a terminal's lines start at its left, so its left edge is the last to
-/// cover.
-pub fn drawer_left(span: Option<(f32, f32)>, width: f32, room: f32) -> bool {
-    let Some((l, r)) = span else {
-        return false;
-    };
-    let covered = |from: f32, to: f32| (r.min(to) - l.max(from)).max(0.);
-    covered(0., width) == 0. && covered(room - width, room) > 0.
-}
-
 /// The drawer's width: the one remembered on this device, else the
 /// default; never under the least, and never so wide that it leaves less
 /// of `room` uncovered than its share.
@@ -179,16 +178,19 @@ mod tests {
     }
 
     #[test]
-    fn the_drawer_opens_away_from_the_target_window() {
-        // Three windows across 1440, the drawer 380 wide.
-        assert!(drawer_left(Some((1100., 1440.)), 380., 1440.));
-        assert!(!drawer_left(Some((260., 620.)), 380., 1440.));
-        assert!(!drawer_left(None, 380., 1440.));
-        // One window across the page: its lines start at the left, so the
-        // drawer covers its right.
-        assert!(!drawer_left(Some((260., 1440.)), 380., 1440.));
-        // The middle of three: the right leaves it clear.
-        assert!(!drawer_left(Some((653., 1047.)), 380., 1440.));
+    fn a_session_is_named_by_its_name_and_where_it_runs() {
+        assert_eq!(
+            session_reference("claude", Some(("landmass", "wsl")), "4cb9"),
+            "session claude on landmass/wsl"
+        );
+        assert_eq!(
+            session_reference("claude", Some(("pi", "")), "4cb9"),
+            "session claude on pi"
+        );
+        assert_eq!(
+            session_reference("claude", None, "4cb9"),
+            "session claude on node 4cb9"
+        );
     }
 
     #[test]

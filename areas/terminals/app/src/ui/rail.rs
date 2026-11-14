@@ -25,15 +25,9 @@ impl Terminals {
     pub fn render_rail(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let t = theme(cx).clone();
         // The list's head as every page has it: the filter, then the acts.
+        // Searching what sessions printed starts from the same words, as
+        // the list's first row, so the head holds one search.
         let header = pane::list_head(&t, Some(self.rail_search.clone().into_any_element()))
-            .child(
-                kit::button(&t, "rail-find", "Find", Kind::Quiet)
-                    .debug_selector(|| "search-scrollback".into())
-                    .tooltip(kit::tip("Search what every session printed  Alt+H"))
-                    .on_click(cx.listener(|s, _, window, cx| {
-                        s.run(super::chords::Action::Find, window, cx);
-                    })),
-            )
             .child(
                 kit::button(&t, "rail-new", "New", Kind::Quiet)
                     .tooltip(kit::tip("Start a session"))
@@ -49,32 +43,15 @@ impl Terminals {
                     })),
             );
         let query = self.rail_search.read(cx).text.clone();
-        // It matches names; what sessions printed is searched elsewhere,
-        // and one click carries the words there.
-        let inside = (!query.trim().is_empty()).then(|| {
+        // The filter matches names; the same words search what every
+        // session printed, one click away.
+        let search = (!query.trim().is_empty()).then(|| {
             let words = query.clone();
-            div()
-                .id("rail-search-inside")
+            pane::row(&t, "rail-search-inside", false)
                 .debug_selector(|| "rail-search-inside".into())
-                .pt(px(6.))
-                .text_size(px(11.))
-                .text_color(t.dim)
-                .cursor_pointer()
-                .hover(|d| d.text_color(t.accent))
-                .child(format!(
-                    "Names only. Search inside sessions (Alt+H) for “{}”",
-                    query.trim()
-                ))
+                .tooltip(kit::tip("Alt+H"))
+                .child(pane::cell(format!("Search output for “{}”", query.trim())))
                 .on_click(cx.listener(move |s, _, window, cx| s.search_inside(&words, window, cx)))
-        });
-        let search = inside.map(|inside| {
-            div()
-                .flex_none()
-                .px(px(8.))
-                .pb(px(8.))
-                .border_b_1()
-                .border_color(t.divider)
-                .child(inside)
         });
         let fleet = &self.fleet;
         let devices =

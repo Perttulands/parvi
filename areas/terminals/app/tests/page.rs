@@ -512,8 +512,40 @@ fn nothing_opened_on_the_page_resizes_a_session(cx: &mut TestAppContext) {
     let note = cx.update(|_, cx| cx.new(|cx| Note(cx.focus_handle())));
     cx.update(|_, cx| toy.show_beside("terminals", note.into(), cx));
     cx.run_until_parked();
-    assert!(cx.debug_bounds("terminals-beside").is_some(), "drawn over");
+    let beside = cx.debug_bounds("terminals-beside").expect("drawn over");
+    let right = cx.update(|window, _| window.viewport_size().width);
+    assert!(
+        (beside.right() - right).abs() < px(1.),
+        "at the right edge, where lines end: {beside:?}"
+    );
     unchanged(cx, "with a view beside");
+    // Send and the search lie against the view's left edge, leaving it in
+    // sight; Esc closes them and leaves the view.
+    for (keys, drawn, what) in [
+        ("alt-s", "send-drawer", "Send"),
+        ("alt-h", "find-drawer", "the scrollback search"),
+    ] {
+        cx.simulate_keystrokes(keys);
+        cx.run_until_parked();
+        let drawer = cx.debug_bounds(drawn).expect(drawn);
+        assert!(
+            (drawer.right() - beside.left()).abs() < px(1.),
+            "{what} beside the view: {drawer:?} {beside:?}"
+        );
+        unchanged(cx, &format!("with {what} and a view beside open"));
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(cx.debug_bounds(drawn).is_none(), "Esc closed {what}");
+        assert!(
+            cx.debug_bounds("terminals-beside").is_some(),
+            "the view stays"
+        );
+    }
+    // Closing a drawer gives the keyboard to the terminal; back to the view.
+    cx.update(|window, cx| {
+        let focus = page.read(cx).beside_focus.clone();
+        window.focus(&focus, cx);
+    });
 
     let grip = cx.debug_bounds("beside-grip").expect("its edge").center();
     cx.simulate_mouse_down(grip, gpui::MouseButton::Left, Modifiers::none());
@@ -2498,9 +2530,10 @@ fn terminal_send_carries_source_reference_to_another_session(cx: &mut TestAppCon
     until(cx, "beta target", |cx| cx.debug_bounds(selector).is_some());
     click(cx, beta);
     click(cx, "send-go".into());
-    let expected = format!("session {}::alpha", running.node);
+    // Named by its name and where it runs, never by the node's id.
     until(cx, "source reference delivered to beta", |_| {
-        std::fs::read_to_string(&received).is_ok_and(|s| s.contains(&expected))
+        std::fs::read_to_string(&received)
+            .is_ok_and(|s| s.contains("session alpha on ") && !s.contains("::alpha"))
     });
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }
@@ -2540,9 +2573,13 @@ fn window_send_uses_the_clicked_window_as_source(cx: &mut TestAppContext) {
         cx.debug_bounds("send-go").is_some()
     });
     page.read_with(cx, |p, _| {
-        assert_eq!(
-            p.send.reference.as_deref(),
-            Some(format!("session {}::alpha", running.node).as_str())
+        assert!(
+            p.send
+                .reference
+                .as_deref()
+                .is_some_and(|r| r.starts_with("session alpha on ")),
+            "the source named by its name and where it runs: {:?}",
+            p.send.reference
         );
         assert!(
             p.send_target.is_none(),
@@ -2558,9 +2595,8 @@ fn window_send_uses_the_clicked_window_as_source(cx: &mut TestAppContext) {
     let target = format!("send-target-{}::beta", running.node);
     click(cx, target);
     click(cx, "send-go".into());
-    let expected = format!("session {}::alpha", running.node);
     until(cx, "source reference reaches beta", |_| {
-        std::fs::read_to_string(&received).is_ok_and(|s| s.contains(&expected))
+        std::fs::read_to_string(&received).is_ok_and(|s| s.contains("session alpha on "))
     });
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }
@@ -2692,9 +2728,10 @@ fn search_shows_and_marks_a_wrapped_history_match(cx: &mut TestAppContext) {
             p.histories
                 .get(&p.settings.workspace.focus)
                 .is_some_and(|h| {
-                    let screen = h.screen.lock();
-                    screen.text().contains("matchneedle")
-                        && screen
+                    p.window_text(p.settings.workspace.focus)
+                        .is_some_and(|text| text.contains("matchneedle"))
+                        && h.screen
+                            .lock()
                             .term
                             .selection_to_string()
                             .is_some_and(|text| text.contains("matchneedle"))
@@ -2704,6 +2741,8 @@ fn search_shows_and_marks_a_wrapped_history_match(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }
 
+/// Reading back is live: what arrives goes on below the lines being read,
+/// which stay where they are, and the input stays docked below them.
 #[gpui::test]
 fn typing_while_reading_history_reaches_the_program_and_keeps_the_history(cx: &mut TestAppContext) {
     let Some(running) = start("history-dock") else {
@@ -2722,15 +2761,28 @@ fn typing_while_reading_history_reaches_the_program_and_keeps_the_history(cx: &m
             p.histories.contains_key(&0) && p.geo.borrow()[0].dock.is_some()
         })
     });
+    // The lines being read: the view's top, which the prompt being typed
+    // on does not reach.
+    let read = |cx: &mut VisualTestContext| {
+        page.read_with(cx, |p, _| {
+            let text = p.window_text(0).unwrap();
+            text.lines().take(5).collect::<Vec<_>>().join("\n")
+        })
+    };
+    let before = read(cx);
     cx.simulate_input("echo docked-$((6*7))");
     cx.simulate_keystrokes("enter");
     until(cx, "the program ran what was typed", |_| {
         tmux(&running, &["capture-pane", "-p", "-t", "alpha"]).contains("docked-42")
     });
-    assert!(
-        page.read_with(cx, |p, _| p.histories.contains_key(&0)),
-        "typing left the history"
-    );
+    until(cx, "the output arrived below the history, live", |cx| {
+        page.read_with(cx, |p, _| {
+            p.histories
+                .get(&0)
+                .is_some_and(|h| h.screen.lock().text().contains("docked-42"))
+        })
+    });
+    assert_eq!(read(cx), before, "the lines being read moved");
     cx.simulate_keystrokes("shift-end");
     until(cx, "back at the live screen", |cx| {
         page.read_with(cx, |p, _| p.histories.is_empty()) && shown(cx).contains("docked-42")

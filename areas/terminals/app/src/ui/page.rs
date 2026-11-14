@@ -170,10 +170,14 @@ impl MenuItem {
     }
 }
 
-/// A window's read-only view of its pane's history, while scrolled back.
+/// A window reading back: on the pane's live screen, with its lines grown
+/// above it, or on the alternate screen a read-only copy of them.
 pub struct History {
     pub pane: PaneAt,
     pub screen: Arc<Mutex<Screen>>,
+    /// Where the view starts, counted from the oldest line: it stays as
+    /// output arrives below (`Screen::view`).
+    pub top: usize,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -206,6 +210,9 @@ pub struct Geo {
     pub display_offset: usize,
     /// Below a history: where the live input is docked.
     pub dock: Option<Bounds<Pixels>>,
+    /// Reading back on the live screen: where its row 0 would lie, so a
+    /// selection reaches the docked rows.
+    pub dock_origin: Option<Point<Pixels>>,
 }
 
 /// A launch awaiting its node's answer, including the status it started with.
@@ -268,6 +275,9 @@ pub struct Terminals {
     /// a link is drawn there.
     pub link_hover: Option<(usize, usize, usize)>,
     pub histories: HashMap<usize, History>,
+    /// Live screens with lines grown above them, dropped when no window
+    /// reads them back any more (`tidy_histories`).
+    pub grown: Vec<Arc<Mutex<Screen>>>,
     /// Grids waiting to be sent for panes this app sizes, by pane: the grid
     /// and the wait's number, so only the last wait sends.
     pub resizing: HashMap<PaneAt, ((u16, u16), u64)>,
@@ -371,7 +381,7 @@ impl Terminals {
                 .attachments()
         });
         let send_query = field(cx, "Find a session…");
-        let find_query = field(cx, "Search every scrollback…");
+        let find_query = field(cx, "Search every session's output…");
         let rename_field = field(cx, "Name");
         let weak = cx.weak_entity();
         // One per window, and the Send drawer's last.
@@ -420,6 +430,7 @@ impl Terminals {
             mouse_down_in: None,
             link_hover: None,
             histories: HashMap::new(),
+            grown: Vec::new(),
             resizing: HashMap::new(),
             resize_seq: 0,
             history_wanted: HashMap::new(),
@@ -1580,22 +1591,36 @@ impl Terminals {
                 if self.window_panes().get(w).and_then(Option::as_ref) != Some(&pane) {
                     return;
                 }
-                let mut screen = Screen::history(&text, cols, rows, line);
-                if let Some(line) = line {
-                    select_line(&mut screen, line, &query);
-                } else {
-                    // Open one screen up from the bottom: the wheel asked to go back.
-                    screen
-                        .term
-                        .scroll_display(alacritty_terminal::grid::Scroll::Delta(3));
-                }
-                self.histories.insert(
-                    w,
-                    History {
-                        pane,
-                        screen: Arc::new(Mutex::new(screen)),
-                    },
-                );
+                // On the live screen, so output goes on arriving below;
+                // a window already reading it back keeps the lines it has,
+                // unless a search result needs its line counted afresh.
+                let live = self.fleet.screen(&pane.node, pane.pane).filter(|l| {
+                    let mut l = l.lock();
+                    (l.has_history() && line.is_none()) || l.grow_history(&text)
+                });
+                let screen = match live {
+                    Some(l) => {
+                        if !self.grown.iter().any(|g| Arc::ptr_eq(g, &l)) {
+                            self.grown.push(l.clone());
+                        }
+                        l
+                    }
+                    None => Arc::new(Mutex::new(Screen::history(&text, cols, rows, None))),
+                };
+                let top = {
+                    let mut s = screen.lock();
+                    if let Some(line) = line {
+                        select_line(&mut s, line, &query);
+                    } else {
+                        // One screen up from the bottom: the wheel asked to go back.
+                        s.term
+                            .scroll_display(alacritty_terminal::grid::Scroll::Delta(3));
+                    }
+                    let top = s.top();
+                    s.live_view();
+                    top
+                };
+                self.histories.insert(w, History { pane, screen, top });
             }
             HistoryTarget::Peek => {
                 if let Some(p) = &mut self.peek {

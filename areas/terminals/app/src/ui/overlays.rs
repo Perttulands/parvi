@@ -488,18 +488,16 @@ impl Terminals {
             .flex()
             .flex_col();
         let found = self.fleet.found();
-        let summary = match &found {
-            None => "Type to search every pane's history.".to_string(),
-            Some((matches, done)) => match *done {
-                None => format!("Searching… {} found", matches.len()),
-                Some((m, p, trunc)) => format!(
-                    "{m} {}, {p} {} searched{}",
-                    if m == 1 { "match" } else { "matches" },
-                    if p == 1 { "pane" } else { "panes" },
-                    if trunc { ", stopped early" } else { "" }
-                ),
-            },
-        };
+        // Nothing searched yet says nothing: the field says what it does.
+        let summary = found.as_ref().map(|(matches, done)| match *done {
+            None => format!("Searching… {} found", matches.len()),
+            Some((m, p, trunc)) => format!(
+                "{m} {}, {p} {} searched{}",
+                if m == 1 { "match" } else { "matches" },
+                if p == 1 { "pane" } else { "panes" },
+                if trunc { ", stopped early" } else { "" }
+            ),
+        });
         // It lies over the windows, so once a hit is shown it keeps only
         // its query and that hit.
         let compact = self.find_shown.is_some();
@@ -570,79 +568,78 @@ impl Terminals {
                 );
             }
         }
-        let drawer = div()
-            .id("find")
-            .debug_selector(|| "find-drawer".into())
-            .absolute()
-            .top_0()
-            .when(!compact, |d| d.bottom_0())
-            .right_0()
-            // Shift+Enter steps back; the field would take it as Enter.
-            .capture_action(cx.listener(
-                |s, _: &parvi_app_kit::widgets::field::ShiftEnter, window, cx| {
-                    s.step_match(false, window, cx);
-                    cx.stop_propagation();
-                },
-            ))
-            .w(px(crate::store::send::width(
-                Some(size::FIND_DRAWER),
-                window.viewport_size().width / px(1.),
-            )))
-            .flex()
-            .flex_col()
-            .bg(t.surface)
-            .border_l_1()
-            .border_color(t.divider)
-            .shadow_lg()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(
+        let inset = self.beside_inset(window, cx);
+        let drawer = surface::at_edge(
+            div().id("find").debug_selector(|| "find-drawer".into()),
+            inset,
+        )
+        .when(!compact, |d| d.bottom_0())
+        // Shift+Enter steps back; the field would take it as Enter.
+        .capture_action(cx.listener(
+            |s, _: &parvi_app_kit::widgets::field::ShiftEnter, window, cx| {
+                s.step_match(false, window, cx);
+                cx.stop_propagation();
+            },
+        ))
+        .w(px(crate::store::send::width(
+            Some(size::FIND_DRAWER),
+            window.viewport_size().width / px(1.) - inset,
+        )))
+        .flex()
+        .flex_col()
+        .bg(t.surface)
+        .border_l_1()
+        .border_color(t.divider)
+        .shadow_lg()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(
+            div()
+                .h(px(size::STRIP))
+                .px(px(12.))
+                .flex()
+                .items_center()
+                .border_b_1()
+                .border_color(t.divider)
+                .child(
+                    div()
+                        .flex_1()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("Search output"),
+                )
+                .child(
+                    kit::button(&t, "find-close", "Close", Kind::Quiet)
+                        .tooltip(kit::tip("Esc"))
+                        .on_click(cx.listener(|s, _, _, cx| s.close(surface::FIND, cx))),
+                ),
+        )
+        .child(
+            div()
+                .p(px(12.))
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .child(self.find_query.clone())
+                .children(summary.map(|s| kit::note(&t, s, Some(t.dim)))),
+        )
+        .child(kit::rule(&t))
+        .map(|d| match (compact, shown_hit) {
+            (true, Some((i, n, name, line, text))) => d.child(
                 div()
-                    .h(px(size::STRIP))
+                    .debug_selector(|| "find-shown".into())
                     .px(px(12.))
-                    .flex()
-                    .items_center()
-                    .border_b_1()
-                    .border_color(t.divider)
-                    .child(
-                        div()
-                            .flex_1()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Search scrollback"),
-                    )
-                    .child(
-                        kit::button(&t, "find-close", "Close", Kind::Quiet)
-                            .tooltip(kit::tip("Esc"))
-                            .on_click(cx.listener(|s, _, _, cx| s.close(surface::FIND, cx))),
-                    ),
-            )
-            .child(
-                div()
-                    .p(px(12.))
+                    .py(px(8.))
                     .flex()
                     .flex_col()
-                    .gap(px(6.))
-                    .child(self.find_query.clone())
-                    .child(kit::note(&t, summary, Some(t.dim))),
-            )
-            .child(kit::rule(&t))
-            .map(|d| match (compact, shown_hit) {
-                (true, Some((i, n, name, line, text))) => d.child(
-                    div()
-                        .debug_selector(|| "find-shown".into())
-                        .px(px(12.))
-                        .py(px(8.))
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.))
-                        .child(div().text_size(px(11.)).text_color(t.dim).child(format!(
-                            "{} of {n} · {name}, line {}",
-                            i + 1,
-                            line + 1
-                        )))
-                        .child(hit_line(&t, &text, &query)),
-                ),
-                _ => d.child(results),
-            });
+                    .gap(px(2.))
+                    .child(div().text_size(px(11.)).text_color(t.dim).child(format!(
+                        "{} of {n} · {name}, line {}",
+                        i + 1,
+                        line + 1
+                    )))
+                    .child(hit_line(&t, &text, &query)),
+            ),
+            _ => d.child(results),
+        });
         div()
             .absolute()
             .inset_0()

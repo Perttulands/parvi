@@ -1,11 +1,13 @@
 //! A view another page (or this one) opens beside the windows: a picture,
-//! a file, a diagram. It lies over the windows from the rail's edge, so no
-//! session changes size for it; whatever it covers is simply covered. It
+//! a file, a diagram, a work item, a brain page. It lies over the windows
+//! by the one rule ([`surface::at_edge`]): at their right edge, its grip on
+//! its left, so no session changes size for it. It
 //! opens as wide as its content asks, up to half the room; its edge (a
 //! grip) is dragged to size it and the width is kept; the view's Expand
 //! gives it the whole area and back; Esc or Close takes it away.
 
 use super::super::page::Terminals;
+use super::super::surface;
 use crate::store::beside;
 use crate::theme::{size, theme};
 use gpui::{
@@ -26,6 +28,17 @@ impl Terminals {
             wish,
             self.workspace_room(window) - size::BESIDE_SEAM,
         )
+    }
+
+    /// How far in from the right a drawer lies to leave the view beside in
+    /// sight: its width with its edge, or nothing when there is none or it
+    /// has the whole area.
+    pub(in crate::ui) fn beside_inset(&self, window: &Window, cx: &App) -> f32 {
+        let whole = self.host.whole_beside(crate::NAME, cx) == Some(true);
+        if self.host.beside(cx).is_none() || whole {
+            return 0.;
+        }
+        self.beside_width(window, cx) + size::BESIDE_SEAM
     }
 
     /// The view beside with its edge, over the windows; `None` when nothing
@@ -81,32 +94,32 @@ impl Terminals {
                 }),
             );
         Some(
-            div()
-                .id("terminals-beside")
-                .debug_selector(|| "terminals-beside".into())
-                .track_focus(&self.beside_focus)
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left_0()
-                .map(|d| {
-                    if whole {
-                        d.right_0()
-                    } else {
-                        d.w(px(width + size::BESIDE_SEAM))
-                    }
-                })
-                .flex()
-                .shadow_lg()
-                .on_key_down(cx.listener(|s, e: &KeyDownEvent, _, cx| {
-                    if e.keystroke.key == "escape" && !e.keystroke.modifiers.modified() {
-                        s.host.close_beside(crate::NAME, cx);
-                        cx.stop_propagation();
-                    }
-                }))
-                .child(div().flex_1().min_w_0().h_full().child(view))
-                .when(!whole, |d| d.child(grip))
-                .into_any_element(),
+            surface::at_edge(
+                div()
+                    .id("terminals-beside")
+                    .debug_selector(|| "terminals-beside".into())
+                    .track_focus(&self.beside_focus),
+                0.,
+            )
+            .bottom_0()
+            .map(|d| {
+                if whole {
+                    d.left_0()
+                } else {
+                    d.w(px(width + size::BESIDE_SEAM))
+                }
+            })
+            .flex()
+            .shadow_lg()
+            .on_key_down(cx.listener(|s, e: &KeyDownEvent, _, cx| {
+                if e.keystroke.key == "escape" && !e.keystroke.modifiers.modified() {
+                    s.host.close_beside(crate::NAME, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .when(!whole, |d| d.child(grip))
+            .child(div().flex_1().min_w_0().h_full().child(view))
+            .into_any_element(),
         )
     }
 
@@ -116,11 +129,6 @@ impl Terminals {
         if !self.beside_resizing {
             return None;
         }
-        let left = if self.settings.sessions_open {
-            size::RAIL
-        } else {
-            size::RAIL_SHUT
-        };
         Some(
             div()
                 .id("beside-drag")
@@ -133,7 +141,10 @@ impl Terminals {
                         s.save(cx);
                     } else {
                         let room = s.workspace_room(window) - size::BESIDE_SEAM;
-                        let w = e.position.x / px(1.) - left - size::BESIDE_SEAM / 2.;
+                        // The grip is on its left: the width runs from the
+                        // pointer to the right edge.
+                        let right = window.viewport_size().width / px(1.);
+                        let w = right - e.position.x / px(1.) - size::BESIDE_SEAM / 2.;
                         s.settings.beside_width = Some(beside::width(Some(w), None, room));
                     }
                     cx.notify();

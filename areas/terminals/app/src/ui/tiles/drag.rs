@@ -5,9 +5,9 @@
 
 use super::super::page::Terminals;
 use crate::term::{drag, mouse};
-use alacritty_terminal::grid::Scroll;
+use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point as GridPoint, Side};
-use gpui::{Context, MouseButton, MouseMoveEvent, Pixels, Window, point, px};
+use gpui::{Context, MouseButton, MouseMoveEvent, Pixels, Point, Window, point, px};
 
 impl Terminals {
     /// The pointer moved anywhere in the app while a press from a window is
@@ -21,6 +21,14 @@ impl Terminals {
             return;
         };
         if e.pressed_button != Some(MouseButton::Left) {
+            return;
+        }
+        // Reading back on the live screen, a selection runs on into the
+        // docked input: it is the same screen's rows.
+        if let Some((p, side)) = self.dock_point(i, e.position) {
+            self.extend_selection(i, p, side, 0);
+            self.end_drag();
+            cx.notify();
             return;
         }
         let Some((top, bottom)) = self.view_span(i) else {
@@ -68,11 +76,14 @@ impl Terminals {
             return false;
         }
         let screen = h.screen.clone();
-        let (offset, rows, cols) = {
+        let (top, offset, rows, cols) = {
             let mut s = screen.lock();
-            s.term.scroll_display(Scroll::Delta(-amount));
-            (s.term.grid().display_offset(), s.rows, s.cols)
+            let top = s.scroll_view(h.top, -amount).unwrap_or(s.top());
+            (top, s.term.grid().history_size() - top, s.rows, s.cols)
         };
+        if let Some(h) = self.histories.get_mut(&i) {
+            h.top = top;
+        }
         let row = if amount > 0 { rows - 1 } else { 0 };
         let p = GridPoint::new(Line(row as i32) - offset, Column(cols - 1));
         self.extend_selection(i, p, Side::Right, amount);
@@ -97,6 +108,26 @@ impl Terminals {
         if let Some(sel) = s.term.selection.as_mut() {
             sel.update(p, side);
         }
+    }
+
+    /// The live row and column under a pointer at or below the docked
+    /// input, when the view above is the same screen.
+    fn dock_point(&self, i: usize, p: Point<Pixels>) -> Option<(GridPoint, Side)> {
+        let g = self.geo.borrow()[i];
+        let (dock, o, cell) = (g.dock?, g.dock_origin?, g.cell?);
+        if p.y < dock.top() {
+            return None;
+        }
+        let x = f32::from(p.x - o.x) / f32::from(cell.width);
+        let y = f32::from(p.y.min(dock.bottom() - px(0.5)) - o.y) / f32::from(cell.height);
+        let col = (x.max(0.) as usize).min(g.cols.saturating_sub(1));
+        let row = (y.max(0.) as usize).min(g.rows.saturating_sub(1));
+        let side = if x.fract() < 0.5 {
+            Side::Left
+        } else {
+            Side::Right
+        };
+        Some((GridPoint::new(Line(row as i32), Column(col)), side))
     }
 
     /// The top and bottom of window `i`'s grid where it is on screen: a grid
