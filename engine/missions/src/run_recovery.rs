@@ -59,7 +59,7 @@ impl Coordinator {
             }) {
                 self.append(id, crate::RunEvent {
                     kind: "run_blocked".into(), node_id: pending.node_id.clone(), actor: "archond".into(), timestamp: crate::run_storage::now(),
-                    data: serde_json::json!({"code":"coordinator_shutdown","reason":"coordinator stopped while keeping outputs; resume to copy them again","blockedNodeId":pending.node_id,"resumeAllowed":true,"resumePolicy":"explicit","pendingOutput":{"nodeId":pending.node_id,"attempt":pending.attempt,"output":pending.data}}).as_object().unwrap().clone(),
+                    data: serde_json::json!({"code":"coordinator_shutdown","reason":"Parvi stopped while keeping the step's outputs; resume to keep them","blockedNodeId":pending.node_id,"resumeAllowed":true,"resumePolicy":"explicit","pendingOutput":{"nodeId":pending.node_id,"attempt":pending.attempt,"output":pending.data}}).as_object().unwrap().clone(),
                     ..Default::default()
                 })?;
                 interrupted.push(id.to_owned());
@@ -147,7 +147,7 @@ impl Coordinator {
                 self.append(id, crate::RunEvent {
                     kind: "run_blocked".into(),
                     timestamp: crate::run_storage::now(),
-                    data: serde_json::json!({"code":code,"reason":recovery_error.unwrap_or_else(|| if open.is_empty() {"coordinator restarted between steps; resume to continue".into()} else {"coordinator restarted; completed-turn evidence required".into()}),"resumeAllowed":true,"resumePolicy":"explicit","openDispatches":open.iter().map(|e| &e.data).collect::<Vec<_>>(),"pendingOutput":pending}).as_object().unwrap().clone(),
+                    data: serde_json::json!({"code":code,"reason":recovery_error.unwrap_or_else(|| if open.is_empty() {"Parvi restarted between steps; resume to continue".into()} else {"Parvi restarted while a step was working; resume to pick it up".into()}),"resumeAllowed":true,"resumePolicy":"explicit","openDispatches":open.iter().map(|e| &e.data).collect::<Vec<_>>(),"pendingOutput":pending}).as_object().unwrap().clone(),
                     ..Default::default()
                 })?;
                 if restarted {

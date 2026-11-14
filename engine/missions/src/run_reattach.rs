@@ -388,9 +388,18 @@ fn block_reason(reasons: &[String]) -> (&'static str, String) {
             };
             (code, detail.to_owned())
         }
+        // Each reason without the step id in front; the block names the
+        // step when there is one.
         _ => (
             "dispatch_reattach_failed",
-            format!("dispatch reattach failed: {}", reasons.join("; ")),
+            format!(
+                "could not go on after resuming: {}",
+                reasons
+                    .iter()
+                    .map(|one| one.split_once(": ").map_or(one.as_str(), |(_, rest)| rest))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
         ),
     }
 }

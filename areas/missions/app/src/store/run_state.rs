@@ -521,13 +521,13 @@ mod tests {
 
     #[test]
     fn a_resumed_block_no_longer_asks_for_a_resume() {
-        let reason = "coordinator shut down; resume to continue";
+        let reason = "Parvi shut down while the run was going; resume to continue";
         let blocked = vec![ev(1, "run_started", ""), ev(4, "run_blocked", "")];
         assert_eq!(problem_now(&blocked, 4, reason), reason);
         let resumed = [blocked, vec![ev(5, "run_resumed", "")]].concat();
         assert_eq!(
             problem_now(&resumed, 4, reason),
-            "coordinator shut down; resumed"
+            "Parvi shut down while the run was going; resumed"
         );
     }
 

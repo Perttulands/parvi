@@ -157,6 +157,9 @@ pub fn project_run(events: &[RunEvent], run_id: &str) -> Result<RunProjection, c
                     "human_verdict_recorded" | "run_canceled"
                 ) {
                     string(event, "reason")
+                } else if event.kind == "run_blocked" && string(event, "detail").is_empty() {
+                    // A block says why in its reason when it has no detail.
+                    string(event, "reason")
                 } else {
                     string(event, "detail")
                 },

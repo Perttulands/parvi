@@ -185,11 +185,27 @@ pub fn plain_reason(detail: &str) -> String {
             && word.contains('_')
             && word.chars().all(|c| c.is_ascii_lowercase() || c == '_')
     };
+    // An id a person never sees: `fmn_6d758e032bde0bb7`.
+    let id = |word: &str| {
+        word.split_once('_').is_some_and(|(kind, rest)| {
+            !kind.is_empty()
+                && kind.chars().all(|c| c.is_ascii_lowercase())
+                && rest.len() >= 6
+                && rest.chars().any(|c| c.is_ascii_digit())
+                && rest
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        })
+    };
     let mut text = detail.trim();
     loop {
         let before = text;
+        // Older ledgers put the engine's words in front of the reason.
+        if let Some(rest) = text.strip_prefix("dispatch reattach failed: ") {
+            text = rest.trim_start();
+        }
         if let Some((head, rest)) = text.split_once(": ")
-            && code(head)
+            && (code(head) || id(head))
         {
             text = rest.trim_start();
         }
@@ -249,6 +265,20 @@ mod tests {
         assert_eq!(
             super::plain_reason(silent),
             "Blocked: the poem needs a reader."
+        );
+    }
+
+    #[test]
+    fn a_reason_reads_without_ids_or_engine_words() {
+        assert_eq!(
+            super::plain_reason(
+                "dispatch reattach failed: fmn_6d758e032bde0bb7: the agent's session ended before it finished"
+            ),
+            "The agent's session ended before it finished"
+        );
+        assert_eq!(
+            super::plain_reason("fmn_work: kept as written"),
+            "Kept as written"
         );
     }
 

@@ -78,7 +78,7 @@ pub fn execute(
                 .as_deref()
                 .map(crate::run_open_dispatch::unresolved)
                 .unwrap_or_default();
-            if let Err(e) = c.append(&id, RunEvent { kind:"run_blocked".into(), timestamp:now(), data:json!({"code":"coordinator_shutdown","reason":"coordinator shut down; resume to continue","resumeAllowed":true,"resumePolicy":"explicit","openDispatches":open.iter().map(|e| &e.data).collect::<Vec<_>>()}).as_object().unwrap().clone(), ..Default::default() }) { eprintln!("parvi: cannot record shutdown of run {id}: {e}"); }
+            if let Err(e) = c.append(&id, RunEvent { kind:"run_blocked".into(), timestamp:now(), data:json!({"code":"coordinator_shutdown","reason":"Parvi shut down while the run was going; resume to continue","resumeAllowed":true,"resumePolicy":"explicit","openDispatches":open.iter().map(|e| &e.data).collect::<Vec<_>>()}).as_object().unwrap().clone(), ..Default::default() }) { eprintln!("parvi: cannot record shutdown of run {id}: {e}"); }
         }
         *done = true;
         control.finished.notify_all();
@@ -122,7 +122,7 @@ pub fn execute(
                 kind: "run_blocked".into(),
                 node_id,
                 timestamp: now(),
-                data: json!({"reason":"escalation","resumeAllowed":true})
+                data: json!({"reason":"the agent asked for help","resumeAllowed":true})
                     .as_object()
                     .unwrap()
                     .clone(),
@@ -131,10 +131,10 @@ pub fn execute(
             Ok(Outcome::Starved(nodes)) => {
                 let (node, _, missing) = &nodes[0];
                 let waiting: Vec<_> = nodes.iter().map(|(id, title, missing)| json!({"nodeId":id,"title":title,"missingInputs":missing})).collect();
-                RunEvent { kind: "run_blocked".into(), node_id: node.clone(), timestamp: now(), data: json!({"code":"reachable_node_starved","reason":format!("formation {node:?} is waiting on inputs {missing:?} that no upstream node produces; wire a producer to those ports and start a new run"),"blockedNodeId":node,"blockedGateId":"","boundary":"wiring","waitingNodes":waiting,"recoverable":false,"resumeAllowed":false,"resumePolicy":"authoring","openDispatches":[],"nextEpoch":1}).as_object().unwrap().clone(), ..Default::default() }
+                RunEvent { kind: "run_blocked".into(), node_id: node.clone(), timestamp: now(), data: json!({"code":"reachable_node_starved","reason":if missing.len() == 1 { "it waits on an input no earlier step produces; wire one to it and start a new run".to_owned() } else { format!("it waits on {} inputs no earlier step produces; wire them and start a new run", missing.len()) },"blockedNodeId":node,"blockedGateId":"","boundary":"wiring","waitingNodes":waiting,"recoverable":false,"resumeAllowed":false,"resumePolicy":"authoring","openDispatches":[],"nextEpoch":1}).as_object().unwrap().clone(), ..Default::default() }
             },
             Ok(Outcome::Unfinished(nodes)) => {
-                let reason = format!("run has unfinished work at {nodes:?}; resume to continue it");
+                let reason = "the run has unfinished work here; resume to continue it".to_owned();
                 if let Err(error) = c.append(&id, RunEvent { kind: "error".into(), node_id: nodes[0].clone(), timestamp: now(), data: json!({"code":"run_work_unfinished","message":reason,"reason":reason,"boundary":"engine","nodeId":nodes[0],"recoverable":true}).as_object().unwrap().clone(), ..Default::default() }) { eprintln!("parvi: cannot record run {id} unfinished work: {error}"); }
                 RunEvent { kind: "run_blocked".into(), node_id: nodes[0].clone(), timestamp: now(), data: json!({"code":"run_work_unfinished","reason":reason,"blockedNodeId":nodes[0],"resumeAllowed":true,"resumePolicy":"explicit"}).as_object().unwrap().clone(), ..Default::default() }
             },
