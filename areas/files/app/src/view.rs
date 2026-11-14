@@ -58,7 +58,8 @@ fn letters(width: f32) -> usize {
 #[derive(Clone, Debug)]
 pub enum Line {
     Label(String),
-    Recent(Changed),
+    /// What changed; `true` for a file under the folder line opened above it.
+    Recent(Changed, bool),
     More(usize),
     /// A word in place of rows: still reading, nothing, or why not.
     Note {
@@ -75,7 +76,7 @@ impl Line {
     /// The pick this line is, when it can be picked.
     pub fn pick(&self) -> Option<Pick> {
         match self {
-            Line::Recent(c) => Some(Pick::Recent(c.path.clone())),
+            Line::Recent(c, _) => Some(Pick::Recent(c.path.clone())),
             Line::More(_) => Some(Pick::More),
             Line::Node(r) => Some(Pick::Node(r.path.clone())),
             Line::Hit(i, _) => Some(Pick::Hit(*i)),
@@ -131,7 +132,28 @@ pub fn lines(p: &FilesPage) -> Vec<Line> {
         } else {
             RECENT_FIRST.min(recent.len())
         };
-        out.extend(recent[..shown].iter().cloned().map(Line::Recent));
+        for changed in &recent[..shown] {
+            out.push(Line::Recent(changed.clone(), false));
+            let Some((_, inside)) = p
+                .recent_inside
+                .as_ref()
+                .filter(|(folder, _)| changed.files.is_some() && *folder == changed.path)
+            else {
+                continue;
+            };
+            let note = |text: String, error: bool| Line::Note {
+                text,
+                depth: 0,
+                error,
+            };
+            match inside {
+                None => out.push(note("Reading\u{2026}".into(), false)),
+                Some(Err(why)) => out.push(note(why.clone(), true)),
+                Some(Ok(files)) => {
+                    out.extend(files.iter().cloned().map(|c| Line::Recent(c, true)));
+                }
+            }
+        }
         if shown < recent.len() {
             out.push(Line::More(recent.len() - shown));
         }
@@ -259,7 +281,7 @@ impl FilesPage {
                     p.activate(w, cx);
                 }))
                 .into_any_element(),
-            Line::Recent(c) => {
+            Line::Recent(c, inside) => {
                 let mut name = paths::base_name(&c.path).to_owned();
                 let mut folder = paths::base_name(&paths::parent(&c.path)).to_owned();
                 // A folder in which many files changed together.
@@ -267,7 +289,8 @@ impl FilesPage {
                     name.push('/');
                     folder = format!("{n} files, in {folder}");
                 }
-                let room = self.row_letters(0.).saturating_sub(AGE + 1);
+                let indent = if inside { INDENT + DISCLOSURE } else { 0. };
+                let room = self.row_letters(indent).saturating_sub(AGE + 1);
                 let path = c.path.clone();
                 let selector = format!("recent-{name}");
                 self.file_row(
@@ -280,6 +303,7 @@ impl FilesPage {
                     Some(format::ago(c.modified)),
                     cx,
                 )
+                .pl(px(size::ROW_PAD - size::ROW_INSET + indent))
                 .debug_selector(move || selector.clone())
                 .tooltip(kit::tip(c.path.clone()))
                 .on_mouse_down(
@@ -1070,6 +1094,9 @@ impl FilesPage {
 impl Render for FilesPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.release_pictures(window);
+        if self.newest_due {
+            cx.defer_in(window, |page, window, cx| page.open_newest(window, cx));
+        }
         let t = theme(cx).clone();
         let root = div()
             .debug_selector(|| "files-page".into())

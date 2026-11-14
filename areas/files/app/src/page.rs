@@ -77,6 +77,9 @@ pub enum Pick {
     InText,
 }
 
+/// What changed, as the node answered, or why it could not say.
+pub type Changes = Result<Vec<Changed>, String>;
+
 pub struct FilesPage {
     pub host: Host,
     pub focus: FocusHandle,
@@ -85,8 +88,11 @@ pub struct FilesPage {
     pub find: Option<Find>,
     find_revision: u64,
     pub pick: Option<Pick>,
-    pub recent: Option<Result<Vec<Changed>, String>>,
+    pub recent: Option<Changes>,
     pub recent_more: bool,
+    /// The Recent folder line opened to the files changed in it; none
+    /// while the node is looking.
+    pub recent_inside: Option<(String, Option<Changes>)>,
     recent_asked: bool,
     recent_at: Option<std::time::Instant>,
     pub opened: Option<Opened>,
@@ -110,6 +116,17 @@ pub struct FilesPage {
     pub list_scroll: UniformListScrollHandle,
     /// A row to scroll to once its folder is read.
     scroll_pending: bool,
+    /// The pick is a folder shown for what is in it: it scrolls to the
+    /// list's top, its rows under it.
+    pick_at_top: bool,
+    /// The first Recent arrived with no file open: the newest opens at the
+    /// next draw, where there is a window to open it in.
+    pub(crate) newest_due: bool,
+    /// The open file is the newest, shown unasked: not kept as the file
+    /// to come back to.
+    shown_newest: bool,
+    /// The pick and the list's place when a find began, to go back to.
+    before_find: Option<(Option<Pick>, gpui::Point<gpui::Pixels>)>,
     /// A path to open the tree down to once the roots are known.
     reveal_pending: Option<String>,
     /// Folders asked for and not answered yet.
@@ -355,6 +372,7 @@ impl FilesPage {
             pick: None,
             recent: None,
             recent_more: false,
+            recent_inside: None,
             recent_asked: false,
             recent_at: None,
             opened: None,
@@ -375,6 +393,10 @@ impl FilesPage {
             list_room: Default::default(),
             list_scroll: UniformListScrollHandle::new(),
             scroll_pending: false,
+            pick_at_top: false,
+            newest_due: false,
+            shown_newest: false,
+            before_find: None,
             reveal_pending: None,
             listing: Default::default(),
             beside: false,
@@ -612,10 +634,60 @@ impl FilesPage {
                 if first && matches!(p.pick, Some(Pick::Node(_))) {
                     p.scroll_to_pick();
                 }
+                p.newest_due = first && !p.beside && p.opened.is_none();
+                match p.recent_inside.as_ref().map(|(folder, _)| folder.clone()) {
+                    Some(folder) if p.recent_folder(&folder) => p.read_recent_inside(folder, cx),
+                    _ => p.recent_inside = None,
+                }
                 cx.notify();
             },
             cx,
         );
+    }
+    /// Whether `path` is a Recent line standing for many files of a folder.
+    fn recent_folder(&self, path: &str) -> bool {
+        matches!(&self.recent, Some(Ok(r)) if r.iter().any(|c| c.path == path && c.files.is_some()))
+    }
+    /// Reads the files changed under a Recent folder line.
+    fn read_recent_inside(&mut self, folder: String, cx: &mut Context<Self>) {
+        let node = self.tree.node.clone();
+        self.request(
+            Request::get(NodeId(node.clone()), route("recent", &folder)),
+            move |p, s, b, cx| {
+                let Some((open, found)) = p.recent_inside.as_mut() else {
+                    return;
+                };
+                if p.tree.node != node || *open != folder {
+                    return;
+                }
+                *found = Some(if s == 200 {
+                    serde_json::from_slice::<parvi_files_contract::Recent>(&b)
+                        .map(|r| r.files)
+                        .map_err(|e| e.to_string())
+                } else {
+                    Err(message(s, &b))
+                });
+                cx.notify();
+            },
+            cx,
+        );
+    }
+    /// With nothing open, the page shows the file changed last: the first
+    /// screen answers what just changed with the file itself.
+    pub(crate) fn open_newest(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.newest_due) || self.opened.is_some() || self.find.is_some() {
+            return;
+        }
+        let newest = match &self.recent {
+            Some(Ok(recent)) => recent.iter().find(|c| c.files.is_none()),
+            _ => None,
+        };
+        if let Some(path) = newest.map(|c| c.path.clone()) {
+            self.pick = Some(Pick::Recent(path.clone()));
+            self.open(path, window, cx);
+            self.shown_newest = true;
+            self.keep(cx);
+        }
     }
     /// A path asked for from elsewhere: a folder opens in the tree, a file
     /// opens.
@@ -649,7 +721,9 @@ impl FilesPage {
         self.reveal_in_tree(&paths::join(&folder, "x"), cx);
         self.tree.select(&folder);
         self.pick = Some(Pick::Node(folder));
-        self.scroll_pending = !self.scroll_to_pick();
+        self.pick_at_top = true;
+        // Rows landing above it move it: follow it until they have.
+        self.scroll_pending = !self.scroll_to_pick() || !self.listing.is_empty();
         self.keep(cx);
         cx.notify();
     }
@@ -724,18 +798,23 @@ impl FilesPage {
         self.find_revision += 1;
         if query.trim().is_empty() {
             self.find = None;
-            self.pick = None;
+            self.back_from_find();
             return;
+        }
+        if self.find.is_none() {
+            let place = self.list_scroll.0.borrow().base_handle.offset();
+            self.before_find = Some((self.pick.take(), place));
         }
         let revision = self.find_revision;
         self.find = Some(Find::new(&query, revision));
         self.pick = Some(Pick::Hit(0));
         let node = self.tree.node.clone();
+        let near = self.text_scope().unwrap_or_default();
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(TYPED).await;
             let _ = this.update(cx, |page, cx| {
                 if page.find_revision == revision {
-                    let uri = format!("/api/files/find?q={}", enc(&query));
+                    let uri = format!("/api/files/find?q={}&near={}", enc(&query), enc(&near));
                     page.ask_find(Request::get(NodeId(node), uri), revision, false, cx);
                 }
             });
@@ -793,7 +872,17 @@ impl FilesPage {
             self.query.update(cx, |field, cx| field.set("", false, cx));
             self.find = None;
             self.find_revision += 1;
+            self.back_from_find();
         }
+    }
+    /// The find is over: the list is where it was when the find began.
+    fn back_from_find(&mut self) {
+        let Some((pick, place)) = self.before_find.take() else {
+            self.pick = None;
+            return;
+        };
+        self.pick = pick;
+        self.list_scroll.0.borrow().base_handle.set_offset(place);
     }
 
     /// The rows the keyboard steps through, as the list shows them.
@@ -821,6 +910,7 @@ impl FilesPage {
         self.set_pick(picks[next].clone(), cx);
     }
     pub fn set_pick(&mut self, pick: Pick, cx: &mut Context<Self>) {
+        self.pick_at_top = false;
         if let Pick::Node(path) = &pick {
             self.tree.select(path);
             self.keep(cx);
@@ -838,8 +928,13 @@ impl FilesPage {
         else {
             return false;
         };
-        self.list_scroll
-            .scroll_to_item(at, gpui::ScrollStrategy::Nearest);
+        if self.pick_at_top {
+            self.list_scroll
+                .scroll_to_item_strict(at, gpui::ScrollStrategy::Top);
+        } else {
+            self.list_scroll
+                .scroll_to_item(at, gpui::ScrollStrategy::Nearest);
+        }
         true
     }
     /// Enter on the picked row, or a click on it.
@@ -850,14 +945,18 @@ impl FilesPage {
             None => return,
         };
         match pick {
-            Pick::Recent(path) => {
-                let folder = matches!(&self.recent, Some(Ok(r)) if r.iter().any(|c| c.path == path && c.files.is_some()));
-                if folder {
-                    self.show_folder(path, cx);
-                } else {
-                    self.open(path, window, cx)
+            // A folder line opens to the files changed in it, and closes.
+            Pick::Recent(path) if self.recent_folder(&path) => {
+                if self
+                    .recent_inside
+                    .take()
+                    .is_none_or(|(open, _)| open != path)
+                {
+                    self.recent_inside = Some((path.clone(), None));
+                    self.read_recent_inside(path, cx);
                 }
             }
+            Pick::Recent(path) => self.open(path, window, cx),
             Pick::More => {
                 self.recent_more = true;
                 cx.notify();
@@ -898,6 +997,7 @@ impl FilesPage {
         self.pending_line = None;
         self.confirm_discard = false;
         self.conflict = false;
+        self.shown_newest = false;
         self.code
             .update(cx, |code, cx| code.edit(false, window, cx));
         let node = self.tree.node.clone();
@@ -1258,7 +1358,6 @@ impl FilesPage {
     pub fn search_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if e.keystroke.key == "escape" && self.query.read(cx).is_focused(window) {
             self.clear_find(cx);
-            self.pick = None;
             window.focus(&self.focus, cx);
             cx.stop_propagation();
             cx.notify();
@@ -1310,7 +1409,6 @@ impl FilesPage {
             "escape" => {
                 if self.find.is_some() {
                     self.clear_find(cx);
-                    self.pick = None;
                 } else {
                     return;
                 }
@@ -1916,7 +2014,11 @@ impl FilesPage {
             k.beside_file = self.opened.as_ref().map(|o| o.path.clone());
         } else {
             k.tree = self.tree.kept();
-            k.file = self.opened.as_ref().map(|o| o.path.clone());
+            k.file = self
+                .opened
+                .as_ref()
+                .filter(|_| !self.shown_newest)
+                .map(|o| o.path.clone());
         }
         if k != self.host.setting(cx).unwrap_or_default() {
             let _ = self.host.set_setting(&k, cx);

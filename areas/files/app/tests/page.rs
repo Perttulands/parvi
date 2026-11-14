@@ -498,6 +498,89 @@ fn browse_find_edit_save_and_send_to_a_session(cx: &mut TestAppContext) {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// Many files changed in one folder stand as one Recent line; a click
+/// opens it to those files, newest first, and each opens in one more. A
+/// find from a folder under a hidden one covers that folder, and Esc goes
+/// back to where the list was.
+#[gpui::test]
+fn a_recent_folder_opens_to_its_files_and_a_find_covers_where_you_stand(cx: &mut TestAppContext) {
+    let root = parvi_testkit::fresh_dir("files-recent-folder");
+    std::fs::create_dir_all(root.join("batch")).unwrap();
+    std::fs::create_dir_all(root.join(".cache/walk")).unwrap();
+    for n in 0..5u64 {
+        let name = format!("batch/render-{n}.txt");
+        std::fs::write(root.join(&name), &name).unwrap();
+        modified(&root.join(&name), 100 + n * 10);
+    }
+    std::fs::write(root.join(".cache/walk/pic.txt"), "picture").unwrap();
+    let running = start(root.clone());
+    cx.executor().allow_parking();
+    cx.update(parvi_app_shell::prepare);
+    let url = running.url.clone();
+    let (shell, cx) = cx.add_window_view(move |w, cx| {
+        parvi_app_shell::start(&[parvi_files_app::build], Some(url), None, w, cx)
+    });
+    until(cx, "the folder's line", |cx| {
+        cx.debug_bounds("recent-batch/").is_some()
+    });
+    assert!(cx.debug_bounds("recent-render-0.txt").is_none());
+    click(cx, "recent-batch/");
+    until(cx, "the files changed in it", |cx| {
+        cx.debug_bounds("recent-render-4.txt").is_some()
+    });
+    let newest = cx.debug_bounds("recent-render-0.txt").unwrap();
+    let oldest = cx.debug_bounds("recent-render-4.txt").unwrap();
+    assert!(newest.top() < oldest.top());
+    click(cx, "recent-render-0.txt");
+    until(cx, "one of them open", |cx| {
+        cx.debug_bounds("file-view-render-0.txt").is_some()
+    });
+    // A second click on the line closes it.
+    click(cx, "recent-batch/");
+    until(cx, "the line closed", |cx| {
+        cx.debug_bounds("recent-render-4.txt").is_none()
+    });
+
+    // Standing in a folder under a hidden one, a find covers it; from
+    // elsewhere the hidden folder stays out.
+    click(cx, "files-search");
+    cx.simulate_input("pic");
+    cx.executor().advance_clock(Duration::from_millis(300));
+    until(cx, "nothing from elsewhere", |cx| {
+        cx.debug_bounds("files-note-No file name has \u{201c}pic\u{201d}")
+            .is_some()
+    });
+    cx.simulate_keystrokes("escape");
+    let walk = root.join(".cache/walk");
+    let host = shell.read_with(cx, |s, _| {
+        parvi_app_kit::Host::new(s.hub()).for_page("files", &[])
+    });
+    let reveal = parvi_app_kit::Ask::Reveal {
+        what: "path".into(),
+        id: walk.to_string_lossy().into_owned(),
+        node: None,
+        part: None,
+        beside: false,
+    };
+    cx.update(|_, cx| host.ask(reveal, cx).unwrap());
+    until(cx, "the hidden folder shown", |cx| {
+        cx.debug_bounds("picked-walk").is_some()
+    });
+    click(cx, "files-search");
+    cx.simulate_input("pic");
+    cx.executor().advance_clock(Duration::from_millis(300));
+    until(cx, "the file beside you", |cx| {
+        cx.debug_bounds("hit-pic.txt").is_some()
+    });
+    // Esc ends the find where it began: on the folder.
+    cx.simulate_keystrokes("escape");
+    until(cx, "back on the folder", |cx| {
+        cx.debug_bounds("picked-walk").is_some() && cx.debug_bounds("hit-pic.txt").is_none()
+    });
+    drop(running);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// What changed most recently comes first, newest at the top, and opens
 /// in one click; the files it names show where they are only when asked.
 #[gpui::test]
@@ -537,9 +620,15 @@ fn recent_changes_come_first_and_open_in_one_click(cx: &mut TestAppContext) {
     tree(cx, "file-row-deep");
     let folders = cx.debug_bounds("file-row-deep").unwrap();
     assert!(old.bottom() <= folders.top());
+    // With nothing open the newest shows unasked, and is not kept as the
+    // file to come back to.
+    until(cx, "the newest file shown", |cx| {
+        cx.debug_bounds("file-view-report.md").is_some()
+    });
+    assert_eq!(kept(&shell, cx).file, None);
     click(cx, "recent-report.md");
     until(cx, "opened from recent", |cx| {
-        cx.debug_bounds("file-view-report.md").is_some()
+        kept(&shell, cx).file.is_some()
     });
     assert!(
         cx.debug_bounds("file-row-report.md").is_none(),
@@ -808,7 +897,6 @@ fn page_renders_node_data(cx: &mut TestAppContext) {
         shell.read_with(cx, |s, _| s.shown_page()) == Some("files")
     });
     tree(cx, "file-row-note.txt");
-    assert!(cx.debug_bounds("empty-No file open").is_some());
     click(cx, "file-row-note.txt");
     until(cx, "file viewer", |cx| {
         cx.debug_bounds("files-edit").is_some()
@@ -1081,7 +1169,7 @@ fn escape_or_a_click_elsewhere_closes_the_menu(cx: &mut TestAppContext) {
         cx.debug_bounds("menu-label-Copy path").is_none()
     });
     menu_on(cx, "file-row-note.txt");
-    click(cx, "empty-No file open");
+    click(cx, "files-viewer");
     until(cx, "menu closed", |cx| {
         cx.debug_bounds("menu-label-Copy path").is_none()
     });

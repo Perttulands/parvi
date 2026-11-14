@@ -27,6 +27,7 @@ pub struct Files {
     node: String,
     events: Arc<Log>,
     roots: roots::Roots,
+    home: Option<PathBuf>,
     jobs: bridge::Jobs,
     receiving: Mutex<()>,
     index: Arc<index::Index>,
@@ -38,6 +39,7 @@ impl Files {
             node,
             events: Arc::default(),
             roots: roots::Roots::new(roots, home)?,
+            home: home.map(Path::to_path_buf),
             jobs: Mutex::default(),
             receiving: Mutex::default(),
             index: Arc::default(),
@@ -75,19 +77,38 @@ impl Files {
     pub fn delete(&self, path: &str) -> Result<(), FilesError> {
         disk::delete(&self.roots, path)
     }
-    /// Names (or, with `content`, text) under `path`; a name find with no
-    /// path looks under every root.
+    /// Names (or, with `content`, text) under `path`.
     pub fn find(&self, path: &str, query: &str, content: bool) -> Result<Matches, FilesError> {
-        if path.is_empty() && !content {
-            return Ok(self.index.find(&self.roots, query));
-        }
         find::search(&self.roots, path, query, content)
     }
-    /// The files changed most recently under the roots.
-    pub fn recent(&self) -> parvi_files_contract::Recent {
-        parvi_files_contract::Recent {
-            files: self.index.recent(&self.roots),
+    /// Files under every root by the words of `query` in their path. A
+    /// query that is itself a path (absolute, or from `~`) answers the file
+    /// it names, or the files it could go on to name. `near` is the folder
+    /// the asker stands in: it is covered even where the roots' walk
+    /// leaves it out.
+    pub fn locate(&self, query: &str, near: Option<&str>) -> Matches {
+        if let Some(named) = find::named(&self.roots, self.home.as_deref(), query) {
+            return named;
         }
+        let near = near
+            .and_then(|folder| self.roots.existing(folder).ok())
+            .filter(|folder| folder.is_dir());
+        self.index.find(&self.roots, query, near.as_deref())
+    }
+    /// The files changed most recently under the roots, or with a folder
+    /// the files changed most recently under it, each as itself.
+    pub fn recent(&self, under: Option<&str>) -> Result<parvi_files_contract::Recent, FilesError> {
+        let files = match under {
+            Some(folder) => {
+                let folder = self.roots.existing(folder)?;
+                if !folder.is_dir() {
+                    return Err(FilesError::NotFolder);
+                }
+                self.index.recent_under(&self.roots, &folder)
+            }
+            None => self.index.recent(&self.roots),
+        };
+        Ok(parvi_files_contract::Recent { files })
     }
     pub fn stat(&self, paths: &[String]) -> Vec<Option<u64>> {
         disk::stat(&self.roots, paths)

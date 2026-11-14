@@ -6,17 +6,23 @@
 //! no generated ones and no other mounted filesystem. Nothing walks on its
 //! own: a request builds the index (or refreshes a stale one), and the
 //! index is let go once nobody has asked for it a while.
+//!
+//! A find also takes the folder its asker stands in. When the walk of the
+//! roots left that folder out (it lies under a hidden or generated one),
+//! it is walked for this find alone, so what is beside you is always found.
 
 use super::roots::Roots;
 use parvi_files_contract::{Changed, Match, Matches};
 use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 /// The most files one walk takes in.
 const MOST: usize = 2_000_000;
+/// The most files the walk of the folder a find stands in takes in.
+const MOST_NEAR: usize = 100_000;
 /// Results a name find answers.
 const RESULTS: usize = 50;
 /// What changed answers this many lines at most.
@@ -58,8 +64,9 @@ impl Index {
     }
 
     /// Files whose path holds every word of `query`, those whose name does
-    /// first.
-    pub fn find(self: &Arc<Self>, roots: &Roots, query: &str) -> Matches {
+    /// first: under every root, and under `near` when the roots' walk
+    /// leaves that folder out.
+    pub fn find(self: &Arc<Self>, roots: &Roots, query: &str, near: Option<&Path>) -> Matches {
         let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
         if words.is_empty() {
             return Matches {
@@ -68,7 +75,46 @@ impl Index {
             };
         }
         let items = self.items(roots, USABLE, true);
-        find_in(&items, &words)
+        let beside = match near {
+            Some(folder) if left_out(roots, folder) => {
+                let mut items = Vec::new();
+                walk_into(
+                    folder.to_path_buf(),
+                    &super::find::mount_points(),
+                    &mut HashSet::new(),
+                    &mut items,
+                    MOST_NEAR,
+                );
+                items
+            }
+            _ => Vec::new(),
+        };
+        find_in(beside.iter().chain(items.iter()), &words)
+    }
+
+    /// The files changed most recently under `folder`, newest first, each
+    /// as itself: what one line of [`Self::recent`] stands for.
+    pub fn recent_under(self: &Arc<Self>, roots: &Roots, folder: &Path) -> Vec<Changed> {
+        let items = self.items(roots, FRESH, false);
+        let mut inside: Vec<&Item> = items
+            .iter()
+            .filter(|i| Path::new(&i.path).starts_with(folder))
+            .filter(|i| !super::recent::machine_state(&i.path[i.name..]))
+            .collect();
+        inside.sort_unstable_by(|a, b| b.modified.cmp(&a.modified).then(a.path.cmp(&b.path)));
+        inside.truncate(super::recent::CANDIDATES);
+        let paths: Vec<&str> = inside.iter().map(|i| i.path.as_str()).collect();
+        let ignored = super::recent::ignored(&paths);
+        inside
+            .into_iter()
+            .filter(|i| !ignored.contains(&i.path))
+            .take(RECENT)
+            .map(|i| Changed {
+                path: i.path.clone(),
+                modified: i.modified,
+                files: None,
+            })
+            .collect()
     }
 
     fn items(self: &Arc<Self>, roots: &Roots, age: Duration, behind: bool) -> Arc<Vec<Item>> {
@@ -132,46 +178,87 @@ fn walk(roots: &Roots) -> Vec<Item> {
     let mut seen = HashSet::new();
     let mut items = Vec::new();
     for root in roots.list() {
-        let mut pending = vec![PathBuf::from(&root.path)];
-        while let Some(dir) = pending.pop() {
-            let Ok(entries) = fs::read_dir(&dir) else {
+        walk_into(
+            PathBuf::from(&root.path),
+            &mounts,
+            &mut seen,
+            &mut items,
+            MOST,
+        );
+    }
+    items
+}
+
+/// Every file under `start` joins `items`, until they are `most`. `start`
+/// itself is always entered; under it the walk's rules hold.
+fn walk_into(
+    start: PathBuf,
+    mounts: &[PathBuf],
+    seen: &mut HashSet<String>,
+    items: &mut Vec<Item>,
+    most: usize,
+) {
+    let mut pending = vec![start];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if items.len() >= most {
+                return;
+            }
+            let Ok(kind) = entry.file_type() else {
                 continue;
             };
-            for entry in entries.flatten() {
-                if items.len() >= MOST {
-                    return items;
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            let path = entry.path();
+            if kind.is_dir() {
+                if !super::find::skipped(&name) && !mounts.contains(&path) {
+                    pending.push(path);
                 }
-                let Ok(kind) = entry.file_type() else {
-                    continue;
-                };
-                let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-                    continue;
-                };
-                let path = entry.path();
-                if kind.is_dir() {
-                    if !super::find::skipped(&name) && !mounts.contains(&path) {
-                        pending.push(path);
-                    }
-                } else if kind.is_file()
-                    && let Some(text) = path.to_str()
-                    && seen.insert(text.to_owned())
-                {
-                    let modified = entry
-                        .metadata()
-                        .ok()
-                        .and_then(|m| m.modified().ok())
-                        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                        .map_or(0, |d| d.as_millis() as u64);
-                    items.push(Item {
-                        name: text.len() - name.len(),
-                        path: text.to_owned(),
-                        modified,
-                    });
-                }
+            } else if kind.is_file()
+                && let Some(text) = path.to_str()
+                && seen.insert(text.to_owned())
+            {
+                let modified = entry
+                    .metadata()
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map_or(0, |d| d.as_millis() as u64);
+                items.push(Item {
+                    name: text.len() - name.len(),
+                    path: text.to_owned(),
+                    modified,
+                });
             }
         }
     }
-    items
+}
+
+/// Whether the walk of the roots never enters `folder` (canonical, under a
+/// root): a folder on the way down to it is skipped or is another mount.
+fn left_out(roots: &Roots, folder: &Path) -> bool {
+    let mounts = super::find::mount_points();
+    let Some(root) = roots
+        .list()
+        .into_iter()
+        .map(|r| PathBuf::from(r.path))
+        .filter(|r| folder.starts_with(r))
+        .max_by_key(|r| r.as_os_str().len())
+    else {
+        return false;
+    };
+    let Ok(below) = folder.strip_prefix(&root) else {
+        return false;
+    };
+    let mut at = root;
+    below.components().any(|part| {
+        at.push(part);
+        part.as_os_str().to_str().is_none_or(super::find::skipped) || mounts.contains(&at)
+    })
 }
 
 fn recent_of(items: &[Item], roots: &Roots, most: usize) -> Vec<Changed> {
@@ -196,7 +283,7 @@ fn recent_of(items: &[Item], roots: &Roots, most: usize) -> Vec<Changed> {
     recent::summarize(&files, &roots, most)
 }
 
-fn find_in(items: &[Item], words: &[String]) -> Matches {
+fn find_in<'a>(items: impl Iterator<Item = &'a Item>, words: &[String]) -> Matches {
     // Rank: every word in the name, the name starting with the first word,
     // then the shorter path, then the newer.
     let mut hits: Vec<(u8, usize, u64, &Item)> = Vec::new();
@@ -252,7 +339,7 @@ mod tests {
 
     #[test]
     fn find_takes_every_word_and_ranks_names_first() {
-        let items = vec![
+        let items = [
             item("/r/terrain/notes.md", 1),
             item("/r/src/world/terrain_generator.rs", 1),
             item("/r/src/terrain.rs", 1),
@@ -260,7 +347,7 @@ mod tests {
         ];
         let found = |q: &str| -> Vec<String> {
             let words: Vec<String> = q.split_whitespace().map(str::to_lowercase).collect();
-            find_in(&items, &words)
+            find_in(items.iter(), &words)
                 .matches
                 .into_iter()
                 .map(|m| m.path)
@@ -293,8 +380,73 @@ mod tests {
         let recent = index.recent(&roots);
         assert_eq!(recent.len(), 1);
         assert!(recent[0].path.ends_with("/src/a.rs"));
-        let found = index.find(&roots, "a.rs");
+        let found = index.find(&roots, "a.rs", None);
         assert_eq!(found.matches.len(), 1);
         assert_eq!(found.matches[0].name, "a.rs");
+    }
+
+    #[test]
+    fn a_find_covers_the_folder_it_stands_in_under_a_hidden_one() {
+        let scratch = Scratch::new();
+        let root = scratch.dir("root");
+        let here = root.join(".cache/walk/work");
+        fs::create_dir_all(here.join("deep")).unwrap();
+        fs::create_dir_all(root.join(".cache/other")).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(here.join("pic.png"), "p").unwrap();
+        fs::write(here.join("deep/pic-two.png"), "p").unwrap();
+        fs::write(root.join(".cache/other/pic.png"), "p").unwrap();
+        fs::write(root.join("src/pic.rs"), "p").unwrap();
+        let roots = Roots::new(std::slice::from_ref(&root), None).unwrap();
+        let index = Arc::new(Index::default());
+        let names = |near: Option<&Path>, q: &str| -> Vec<String> {
+            let root = root.to_str().unwrap();
+            index
+                .find(&roots, q, near)
+                .matches
+                .into_iter()
+                .map(|m| m.path[root.len()..].replace('\\', "/"))
+                .collect()
+        };
+        // From nowhere the hidden folder stays out of the broad walk.
+        assert_eq!(names(None, "pic"), ["/src/pic.rs"]);
+        // Standing in it, its files are found, by name or by words of the
+        // path; its hidden neighbour still is not.
+        assert_eq!(
+            names(Some(&here), "pic"),
+            [
+                "/src/pic.rs",
+                "/.cache/walk/work/pic.png",
+                "/.cache/walk/work/deep/pic-two.png"
+            ]
+        );
+        assert_eq!(
+            names(Some(&here), "walk pic.png"),
+            ["/.cache/walk/work/pic.png"]
+        );
+        // A folder the broad walk covers is not walked twice.
+        assert_eq!(names(Some(&root.join("src")), "pic"), ["/src/pic.rs"]);
+    }
+
+    #[test]
+    fn what_changed_under_a_folder_lists_its_files_newest_first() {
+        let scratch = Scratch::new();
+        let root = scratch.dir("root");
+        fs::create_dir_all(root.join("a/b")).unwrap();
+        fs::create_dir_all(root.join("c")).unwrap();
+        for (path, at) in [("a/one.md", 10), ("a/b/two.md", 30), ("c/three.md", 20)] {
+            let file = fs::File::create(root.join(path)).unwrap();
+            file.set_modified(UNIX_EPOCH + Duration::from_secs(at))
+                .unwrap();
+        }
+        fs::write(root.join("a/x.lock"), "x").unwrap();
+        let roots = Roots::new(std::slice::from_ref(&root), None).unwrap();
+        let index = Arc::new(Index::default());
+        let under = index.recent_under(&roots, &root.join("a"));
+        let names: Vec<&str> = under
+            .iter()
+            .map(|c| c.path.rsplit(['/', '\\']).next().unwrap())
+            .collect();
+        assert_eq!(names, ["two.md", "one.md"]);
     }
 }

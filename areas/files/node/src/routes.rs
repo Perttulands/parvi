@@ -58,11 +58,20 @@ struct NodeQuery {
     node: String,
 }
 
+/// What changed under the roots, or with `path` under that folder.
+#[derive(serde::Deserialize)]
+struct RecentQuery {
+    #[serde(default)]
+    node: String,
+    path: Option<String>,
+}
+
 async fn recent(
     State(files): Shared,
-    Query(at): Query<NodeQuery>,
+    Query(at): Query<RecentQuery>,
 ) -> Result<Json<parvi_files_contract::Recent>, FilesError> {
-    Ok(Json(blocking(&files, &at.node, |f| Ok(f.recent())).await?))
+    let result = blocking(&files, &at.node, move |f| f.recent(at.path.as_deref())).await?;
+    Ok(Json(result))
 }
 
 async fn stat(
@@ -134,7 +143,15 @@ async fn find(
     State(files): Shared,
     Query(at): Query<Search>,
 ) -> Result<Json<super::find::Matches>, FilesError> {
-    let result = blocking(&files, &at.node, move |f| f.find(&at.path, &at.q, false)).await?;
+    let result = blocking(&files, &at.node, move |f| {
+        if at.path.is_empty() {
+            let near = (!at.near.is_empty()).then_some(at.near.as_str());
+            Ok(f.locate(&at.q, near))
+        } else {
+            f.find(&at.path, &at.q, false)
+        }
+    })
+    .await?;
     Ok(Json(result))
 }
 

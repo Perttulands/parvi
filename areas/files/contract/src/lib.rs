@@ -124,6 +124,10 @@ pub struct Search {
     /// The folder searched; a name find without one looks under every root.
     #[serde(default)]
     pub path: String,
+    /// For a find under every root, the folder the asker stands in: it is
+    /// covered even where the roots' walk leaves it out.
+    #[serde(default)]
+    pub near: String,
     pub q: String,
 }
 

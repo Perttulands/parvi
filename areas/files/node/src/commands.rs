@@ -46,8 +46,8 @@ pub fn commands(files: Arc<Files>, home: Option<PathBuf>) -> Vec<Command> {
         ),
         (
             "file_recent",
-            "List the files changed most recently under the roots.",
-            &[],
+            "List what changed most recently under the roots (many files of one folder as one line), or each file changed under --path.",
+            &["path"],
             &[],
         ),
         (
@@ -89,8 +89,8 @@ pub fn commands(files: Arc<Files>, home: Option<PathBuf>) -> Vec<Command> {
         ),
         (
             "file_locate",
-            "Find files under every root by words in their path, names first.",
-            &["query"],
+            "Find files under every root by words in their path, names first; a query that is a path names its file. --near is a folder also looked in when it is hidden.",
+            &["query", "near"],
             &["query"],
         ),
         (
@@ -213,11 +213,19 @@ fn work(name: &str, files: &Files, home: Option<&Path>, args: &Value) -> Result<
         return Ok(json!({"node":node,"roots":files.roots()}));
     }
     if name == "file_recent" {
-        return serde_json::to_value(files.recent()).map_err(bad);
+        let under = match maybe_text(args, "path").map_err(bad)? {
+            Some(_) => Some(path(args, "path", home)?),
+            None => None,
+        };
+        return serde_json::to_value(files.recent(under.as_deref())?).map_err(bad);
     }
     if name == "file_locate" {
         let query = text(args, "query").map_err(bad)?;
-        return serde_json::to_value(files.find("", query, false)?).map_err(bad);
+        let near = match maybe_text(args, "near").map_err(bad)? {
+            Some(_) => Some(path(args, "near", home)?),
+            None => None,
+        };
+        return serde_json::to_value(files.locate(query, near.as_deref())).map_err(bad);
     }
     let at = path(args, "path", home)?;
     match name {

@@ -48,6 +48,68 @@ pub fn search(
     })
 }
 
+/// What a query that is a path names: the file itself; or, for a folder or
+/// a path still being typed, the files there whose names go on from it.
+/// None when the query is not a path, or names nothing under the roots.
+pub fn named(roots: &Roots, home: Option<&Path>, query: &str) -> Option<Matches> {
+    let query = query.trim();
+    let typed = Path::new(query);
+    let path = match (typed.strip_prefix("~"), home) {
+        (Ok(rest), Some(home)) => home.join(rest),
+        _ if typed.is_absolute() => typed.to_path_buf(),
+        _ => return None,
+    };
+    let hit = |path: &Path| {
+        Some(Match {
+            path: path.to_str()?.to_owned(),
+            name: path.file_name()?.to_str()?.to_owned(),
+            line: None,
+            text: None,
+        })
+    };
+    let whole = path.to_str().and_then(|p| roots.existing(p).ok());
+    if let Some(file) = whole.as_ref().filter(|p| p.is_file()) {
+        return Some(Matches {
+            matches: vec![hit(file)?],
+            truncated: false,
+        });
+    }
+    // A folder offers its files; a path that stops mid-name offers the
+    // files of its folder that the name so far is part of.
+    let (folder, start) = match whole {
+        Some(folder) => (folder, String::new()),
+        None => (
+            roots.existing(path.parent()?.to_str()?).ok()?,
+            path.file_name()?.to_str()?.to_lowercase(),
+        ),
+    };
+    let mut names: Vec<String> = fs::read_dir(&folder)
+        .ok()?
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|kind| kind.is_file()))
+        .filter_map(|e| e.file_name().to_str().map(str::to_owned))
+        .filter(|name| name.to_lowercase().contains(&start))
+        .collect();
+    if names.is_empty() {
+        return None;
+    }
+    names.sort_by_key(|name| {
+        (
+            !name.to_lowercase().starts_with(&start),
+            name.to_lowercase(),
+        )
+    });
+    let truncated = names.len() > RESULTS;
+    names.truncate(RESULTS);
+    Some(Matches {
+        matches: names
+            .iter()
+            .filter_map(|name| hit(&folder.join(name)))
+            .collect(),
+        truncated,
+    })
+}
+
 fn walk(root: &Path, needle: &str, content: bool) -> Result<(Vec<Match>, bool), FilesError> {
     let mounts = mount_points();
     let mut found = Vec::new();
@@ -192,6 +254,45 @@ mod tests {
         let contents = search(&roots, path, "world", true).unwrap();
         assert_eq!(contents.matches.len(), 1);
         assert_eq!(contents.matches[0].line, Some(2));
+    }
+    #[test]
+    fn a_typed_path_names_its_file_wherever_it_is() {
+        let scratch = Scratch::new();
+        let home = scratch.dir("home");
+        let here = home.join(".cache/work");
+        fs::create_dir_all(&here).unwrap();
+        fs::write(here.join("pic.png"), "p").unwrap();
+        fs::write(here.join("pictures.txt"), "p").unwrap();
+        fs::write(here.join("epic.md"), "p").unwrap();
+        scratch.file("outside.txt", "x");
+        let roots = Roots::new(std::slice::from_ref(&home), Some(&home)).unwrap();
+        let names = |query: &str| -> Option<Vec<String>> {
+            named(&roots, Some(&home), query)
+                .map(|m| m.matches.into_iter().map(|m| m.name).collect())
+        };
+        let whole = here.join("pic.png");
+        let found = named(&roots, Some(&home), whole.to_str().unwrap()).unwrap();
+        assert_eq!(found.matches.len(), 1);
+        assert_eq!(
+            Path::new(&found.matches[0].path),
+            whole.canonicalize().unwrap()
+        );
+        assert_eq!(names("~/.cache/work/pic.png").unwrap(), ["pic.png"]);
+        // A folder offers its files; a name half typed, those it is part of.
+        assert_eq!(
+            names("~/.cache/work").unwrap(),
+            ["epic.md", "pic.png", "pictures.txt"]
+        );
+        assert_eq!(
+            names("~/.cache/work/pic").unwrap(),
+            ["pic.png", "pictures.txt", "epic.md"]
+        );
+        // Words, a path that names nothing and one outside the roots are
+        // not answered here.
+        assert!(names("pic.png").is_none());
+        assert!(names("~/.cache/work/none").is_none());
+        let outside = scratch.path().join("outside.txt");
+        assert!(names(outside.to_str().unwrap()).is_none());
     }
     #[test]
     fn limits_and_ranks_results_and_rejects_outside() {
