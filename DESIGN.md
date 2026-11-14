@@ -25,7 +25,9 @@ So every page is judged by three questions, in this order:
 ## The question each page answers
 
 - **Terminal.** What are my agents doing, and let me talk to one. Sessions
-  are shared with other places, so nothing here resizes or disturbs one.
+  are shared with other places. A session fits the window it is shown in;
+  nothing opened over it resizes or disturbs it, and nothing over it lets a
+  click or a key through to it.
 - **Files.** Show me this file, and what just changed. A tree and a viewer:
   reach any file by typing part of its name, see recent changes first, read
   code, Markdown and pictures comfortably, edit and save safely. Not a
