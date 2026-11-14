@@ -35,6 +35,8 @@ const APP: &[Setting] = &[
         .note("The node this app talks to, as http://host:port. Enter connects."),
     Setting::toggle("keys", "Shortcuts", true)
         .note("Parvi's shortcuts take their keys before the terminal does."),
+    Setting::toggle("show_keys", "Show shortcut keys", false)
+        .note("Each shortcut's keys show at the foot of the window for a moment."),
 ];
 
 /// Whose a setting is: the shell's, or a page's.
@@ -306,6 +308,7 @@ impl SettingsPage {
         match owner {
             Owner::App => match key {
                 "node" => Value::from(hub.settings.node.clone()),
+                "show_keys" => Value::from(hub.settings.show_keys),
                 _ => Value::from(hub.settings.keys),
             },
             Owner::Page(id) => {
@@ -342,6 +345,8 @@ impl SettingsPage {
                         node.into()
                     };
                     h.connect(cx);
+                } else if key == "show_keys" {
+                    h.settings.show_keys = value.as_bool().unwrap_or(false);
                 } else {
                     h.settings.keys = value.as_bool().unwrap_or(true);
                 }

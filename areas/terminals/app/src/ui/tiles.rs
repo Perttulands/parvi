@@ -19,8 +19,8 @@ use alacritty_terminal::term::TermMode;
 use gpui::{
     AnyElement, Bounds, ClipboardItem, ContentMask, Context, DispatchPhase, ElementInputHandler,
     EntityInputHandler, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    Pixels, ScrollDelta, ScrollEvent, UTF16Selection, Window, canvas, deferred, div, point,
-    prelude::*, px, relative,
+    Pixels, ScrollDelta, ScrollEvent, UTF16Selection, Window, anchored, canvas, deferred, div,
+    point, prelude::*, px, relative,
 };
 use parvi_app_kit::Ask;
 use parvi_app_kit::host::Request;
@@ -98,6 +98,38 @@ struct Source {
     live: Option<SharedScreen>,
     /// Reading back: the row the view starts at (`Screen::view`).
     top: Option<usize>,
+}
+
+/// A window's launcher room as last painted, and the height that room
+/// needs for the whole launcher, learnt when it was short of it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LauncherFit {
+    pub room: Option<Bounds<Pixels>>,
+    pub need: Option<f32>,
+}
+
+impl LauncherFit {
+    /// Whether the launcher lies over the windows: its room is shorter
+    /// than it needs.
+    pub fn over(&self) -> bool {
+        self.room
+            .zip(self.need)
+            .is_some_and(|(room, need)| f32::from(room.size.height) < need)
+    }
+
+    /// After a paint in `room`; `hidden` is how much of the fields a scroll
+    /// hid, when the launcher was drawn in the window.
+    fn measured(self, room: Bounds<Pixels>, hidden: Option<f32>) -> Self {
+        let need = match hidden {
+            Some(h) if h >= 1. => Some(f32::from(room.size.height) + h),
+            Some(_) => None,
+            None => self.need,
+        };
+        Self {
+            room: Some(room),
+            need,
+        }
+    }
 }
 
 impl Terminals {
@@ -330,6 +362,7 @@ impl Terminals {
         let drop_over = self.dragging_over == Some(i) && self.seam_over.is_none();
         let frame = div()
             .id(("tile", i))
+            .debug_selector(move || format!("window-{i}"))
             .flex_1()
             .min_w_0()
             .h_full()
@@ -382,6 +415,59 @@ impl Terminals {
                 .into_any_element(),
             TileState::Empty => {
                 let launcher = self.launchers[i].clone();
+                let fit = self.launcher_fit.borrow()[i];
+                let over = fit.over();
+                // A window too short for the whole launcher has it lie over
+                // the windows at full size, as everything opened over them
+                // does, rather than hiding its fields below a scroll.
+                let measure = {
+                    let fits = self.launcher_fit.clone();
+                    let scroll = launcher.read(cx).fields_scroll.clone();
+                    let entity = cx.entity();
+                    canvas(
+                        |_, _, _| (),
+                        move |b, _, _, cx| {
+                            let hidden = f32::from(scroll.max_offset().y);
+                            let was = fits.borrow()[i];
+                            let now = was.measured(b, (!over).then_some(hidden));
+                            if now != was {
+                                fits.borrow_mut()[i] = now;
+                                cx.defer(move |cx| entity.update(cx, |_, cx| cx.notify()));
+                            }
+                        },
+                    )
+                    .absolute()
+                    .inset_0()
+                };
+                let slot = match fit.room.filter(|_| over) {
+                    Some(room) => deferred(
+                        anchored()
+                            .position(point(
+                                room.center().x - px(size::LAUNCHER / 2.),
+                                room.top() + px(size::TILE_GAP),
+                            ))
+                            .snap_to_window_with_margin(px(size::TILE_GAP))
+                            .child(
+                                div()
+                                    .id(("launcher-over", i))
+                                    .debug_selector(move || format!("launcher-over-{i}"))
+                                    .occlude()
+                                    .w(px(size::LAUNCHER))
+                                    .shadow_lg()
+                                    .child(launcher),
+                            ),
+                    )
+                    .with_priority(1)
+                    .into_any_element(),
+                    None => div()
+                        .flex()
+                        .flex_col()
+                        .flex_shrink_1()
+                        .min_h_0()
+                        .max_w_full()
+                        .child(launcher)
+                        .into_any_element(),
+                };
                 div()
                     .flex_1()
                     .min_h_0()
@@ -403,16 +489,9 @@ impl Terminals {
                             // the node it targets lists more or fewer harnesses.
                             // In a short window that room goes first, then the
                             // panel's fields scroll under its pinned button.
+                            .child(measure)
                             .child(div().flex_1().max_h(relative(size::LAUNCHER_TOP)))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .flex_shrink_1()
-                                    .min_h_0()
-                                    .max_w_full()
-                                    .child(launcher),
-                            )
+                            .child(slot)
                             .child(
                                 div()
                                     .flex_none()
@@ -1281,12 +1360,13 @@ impl Terminals {
             },
         )
         .size_full();
-        // Reading back: a way to the live end, just above the docked input.
+        // Reading back: a way to the live end, on the rule above the docked
+        // input, where it covers no text.
         let hint = history.then(|| {
             let g = self.geo.borrow()[i];
-            let above = g
-                .dock
-                .map_or(px(0.), |d| d.size.height + px(size::DOCK_GAP));
+            let above = g.dock.map_or(px(0.), |d| {
+                d.size.height + px((size::DOCK_GAP - size::LIVE_PILL_H) / 2.)
+            });
             div()
                 .id(("live", i))
                 .absolute()

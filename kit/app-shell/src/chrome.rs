@@ -469,6 +469,7 @@ impl Shell {
             div()
                 .absolute()
                 .inset_0()
+                .occlude()
                 .on_mouse_down(MouseButton::Left, close)
                 .on_mouse_down(MouseButton::Right, close_right)
                 .child(
@@ -518,6 +519,7 @@ impl Shell {
                     .justify_center()
                     .child(
                         kit::panel(t)
+                            .debug_selector(|| "key-echo".into())
                             .px(px(10.))
                             .py(px(6.))
                             .child(kit::caps(t, caps)),

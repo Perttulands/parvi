@@ -547,12 +547,30 @@ fn two_toy_pages_plug_in_through_their_host(cx: &mut TestAppContext) {
     assert_eq!(refused.code, "published_twice");
     assert_eq!(b.read_with(cx, |b, cx| b.heard.read(cx).0), 1);
 
-    // Its chord, by Alt and by the leader.
+    // Its chord, by Alt and by the leader; quietly, unless the operator
+    // asked to see the keys.
     cx.simulate_keystrokes("alt-t");
     cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("key-echo").is_none(),
+        "no keys shown by default"
+    );
     cx.simulate_keystrokes("ctrl-shift-space t");
     cx.run_until_parked();
     assert_eq!(a.read_with(cx, |a, _| a.chord), 2);
+    shell.update(cx, |s, cx| {
+        s.hub().update(cx, |h, _| h.settings.show_keys = true)
+    });
+    cx.simulate_keystrokes("alt-t");
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("key-echo").is_some(),
+        "the keys shown when asked"
+    );
+    assert_eq!(a.read_with(cx, |a, _| a.chord), 3);
+    shell.update(cx, |s, cx| {
+        s.hub().update(cx, |h, _| h.settings.show_keys = false)
+    });
 
     // Its menu row.
     click(cx, "toy-menu");

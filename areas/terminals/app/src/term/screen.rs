@@ -13,6 +13,10 @@ use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::Processor;
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 
+/// The live rows the dock shows below a history when the program has no
+/// input block of its own (a shell): its prompt and the output just above.
+const SHELL_TAIL: usize = 3;
+
 /// Responses the terminal would write back (device attributes and the
 /// like) are dropped: tmux is the pane's terminal and has answered already.
 #[derive(Clone, Copy)]
@@ -244,7 +248,9 @@ impl Screen {
     /// a history: the block the cursor is in, from the blank row above it
     /// (Claude Code's rule, Codex's shaded composer) down to the last row
     /// with anything on it. A block with no blank row above it within
-    /// `most` rows (a shell's output) gives the cursor's line alone.
+    /// `most` rows (a shell's output) gives the cursor's line and the rows
+    /// just above it ([`SHELL_TAIL`]), so what a command typed while
+    /// reading back printed is in sight.
     pub fn input_rows(&self, most: usize) -> std::ops::Range<usize> {
         let grid = self.term.grid();
         let rows = self.rows;
@@ -269,7 +275,9 @@ impl Screen {
                     at(self.cols - 1).flags.contains(Flags::WRAPLINE)
                         || (self.cols - 2..self.cols).any(|c| !matches!(at(c).c, ' ' | '\0'))
                 };
-                let mut top = cursor;
+                // With the output above it, from where its first line
+                // starts: what a command typed while reading back printed.
+                let mut top = cursor.min(end.saturating_sub(SHELL_TAIL.min(most)));
                 while top > 0 && end - top < most && wraps(top - 1) {
                     top -= 1;
                 }
@@ -331,16 +339,48 @@ mod tests {
         );
         s.feed(b"\x1b[5;5H");
         assert_eq!(s.input_rows(5), 3..7);
-        // A shell: no blank row near, so the prompt's row alone.
+        // A shell: no blank row near, so the prompt's row and the output
+        // just above it.
         let s = live(&["a", "b", "c", "d", "e", "f", "$ "], 20, 12);
-        assert_eq!(s.input_rows(4), 6..7);
+        assert_eq!(s.input_rows(4), 4..7);
+        assert_eq!(s.input_rows(2), 5..7, "never over the most");
         // ...with the rows a long prompt wraps from.
         let s = live(
             &["a", "b", "c", "d", "e", "f", "user@host:~/a/long/path$ x"],
             20,
             12,
         );
-        assert_eq!(s.input_rows(4), 6..8);
+        assert_eq!(s.input_rows(4), 5..8);
+        let s = live(
+            &[
+                "a",
+                "b",
+                "c",
+                "d",
+                "e",
+                "f",
+                "user@host:~/a/long/path/that/wraps/twice$ x",
+            ],
+            20,
+            12,
+        );
+        assert_eq!(s.input_rows(4), 6..9, "a prompt longer than the tail");
+        // A command line the tail starts inside shows whole.
+        let s = live(
+            &[
+                "a",
+                "b",
+                "c",
+                "d",
+                "e",
+                "$ echo a-long-command",
+                "output",
+                "$ ",
+            ],
+            10,
+            12,
+        );
+        assert_eq!(s.input_rows(8), 5..10);
         // ...also when the shell broke the line itself, at its prompt's
         // last space.
         let mut s = live(
@@ -349,7 +389,7 @@ mod tests {
             12,
         );
         s.feed(b"\x1b[8;2H");
-        assert_eq!(s.input_rows(4), 6..8);
+        assert_eq!(s.input_rows(4), 5..8);
         // Codex: blank rows inside the shaded composer belong to it.
         let mut s = live(&["out", "", ""], 20, 12);
         s.feed(b"\x1b[48;5;236m \x1b[K\r\n> ask\x1b[K\r\n \x1b[K\x1b[0m\r\n\r\n  status");
@@ -400,9 +440,9 @@ mod tests {
         s.live_view();
         assert_eq!(row_text(&s, 9), "$");
         assert_eq!(row_text(&s, 8), "new 2");
-        // The input the dock shows is the live screen's, and scrolling down
-        // past it reaches the live end.
-        assert_eq!(s.input_rows(3), 9..10);
+        // The input the dock shows is the live screen's, with what was
+        // printed above it, and scrolling down past it reaches the live end.
+        assert_eq!(s.input_rows(3), 7..10);
         assert_eq!(s.scroll_view(top, -100), None);
         // Nobody reads back: the lines go.
         s.drop_history();

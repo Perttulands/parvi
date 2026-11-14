@@ -323,12 +323,23 @@ impl Terminals {
         }
     }
 
-    /// A diagram drawn whole beside the terminals.
+    /// A diagram drawn whole beside the terminals, as a picture opens; the
+    /// same diagram's chip takes it away again.
     pub(in crate::ui) fn open_diagram(&mut self, source: String, cx: &mut Context<Self>) {
+        let shown = self
+            .host
+            .beside(cx)
+            .and_then(|v| v.downcast::<DiagramView>().ok())
+            .is_some_and(|v| v.read(cx).source == source);
+        if shown {
+            self.host.close_beside(crate::NAME, cx);
+            return;
+        }
         let colours = self.diagram_colours(cx);
         let density = size::DIAGRAM_START;
+        let text = source.clone();
         let task = cx.background_executor().spawn(async move {
-            let svg = diagram::svg(&source, colours)?;
+            let svg = diagram::svg(&text, colours)?;
             let drawn = diagram::paint(&svg, density)?;
             Ok::<_, String>((svg, drawn))
         });
@@ -340,13 +351,7 @@ impl Terminals {
                     Ok((svg, d)) => (Arc::from(svg), Ok(panel::Painted::of(d, density))),
                     Err(why) => (Arc::from(""), Err(why)),
                 };
-                // The panel opens as wide as the diagram at 1:1, room round it.
-                let wish = drawn
-                    .as_ref()
-                    .ok()
-                    .map(|d| d.natural.w + 2. * size::DIAGRAM_PAD + 2.);
-                let view = cx.new(|cx| DiagramView::new(host.clone(), svg, drawn, cx));
-                p.beside_wish = wish.map(|w| (view.entity_id(), w));
+                let view = cx.new(|cx| DiagramView::new(host.clone(), source, svg, drawn, cx));
                 host.show_beside(crate::NAME, view.into(), cx);
             });
         })

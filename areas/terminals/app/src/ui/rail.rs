@@ -614,6 +614,7 @@ impl Terminals {
             div()
                 .absolute()
                 .inset_0()
+                .occlude()
                 .track_focus(&self.peek_focus)
                 .flex()
                 .items_center()
@@ -626,6 +627,7 @@ impl Terminals {
                 .child(
                     div()
                         .id("peek")
+                        .debug_selector(|| "peek".into())
                         .w(gpui::relative(size::PEEK_SHARE))
                         .h(gpui::relative(size::PEEK_SHARE))
                         .flex()

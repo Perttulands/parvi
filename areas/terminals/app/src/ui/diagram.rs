@@ -1,6 +1,7 @@
-//! A mermaid diagram a session printed, drawn whole beside the terminals:
-//! fit to the panel's width at first, Fit / 1:1 / − / + as the picture
-//! viewer has them, and a drag (or the wheel) moves it about.
+//! A mermaid diagram a session printed, drawn whole beside the terminals
+//! as a picture is: Send hands it to a session, fit to the panel's width at
+//! first, Fit / 1:1 / − / + as the picture viewer has them, and a drag (or
+//! the wheel) moves it about.
 
 use crate::store::zoom::{self, Level, Px};
 use crate::theme::{size, theme};
@@ -11,6 +12,7 @@ use gpui::{
 };
 use parvi_app_kit::host::Host;
 use parvi_app_kit::widgets::kit::{self, Kind};
+use parvi_app_kit::widgets::pane;
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -25,6 +27,8 @@ pub struct Painted {
 
 pub struct DiagramView {
     host: Host,
+    /// The mermaid text the session printed: what Send hands over.
+    pub source: String,
     /// The SVG, painted again at the density the zoom wants.
     svg: Arc<str>,
     drawn: Result<Painted, String>,
@@ -60,6 +64,7 @@ impl Painted {
 impl DiagramView {
     pub fn new(
         host: Host,
+        source: String,
         svg: Arc<str>,
         drawn: Result<Painted, String>,
         cx: &mut Context<Self>,
@@ -72,6 +77,7 @@ impl DiagramView {
         .detach();
         Self {
             host,
+            source,
             svg,
             drawn,
             painting: false,
@@ -112,6 +118,11 @@ impl DiagramView {
             });
         })
         .detach();
+    }
+
+    /// The diagram as a session reads it: its mermaid block.
+    fn reference(&self) -> String {
+        format!("```mermaid\n{}\n```", self.source.trim_end())
     }
 
     fn room_px(&self) -> Option<Px> {
@@ -266,6 +277,10 @@ impl Render for DiagramView {
                             .flex_1()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child("Diagram"),
+                    )
+                    .child(
+                        pane::send(&t, "diagram-send", &self.host, self.reference())
+                            .debug_selector(|| "diagram-send".into()),
                     )
                     .when(self.drawn.is_ok(), |d| d.child(self.controls(cx)))
                     .children(self.host.whole_beside(crate::NAME, cx).map(|whole| {

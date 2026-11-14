@@ -1,10 +1,11 @@
 //! A view another page (or this one) opens beside the windows: a picture,
 //! a file, a diagram, a work item, a brain page. It lies over the windows
 //! by the one rule ([`surface::at_edge`]): at their right edge, its grip on
-//! its left, so no session changes size for it. It
-//! opens as wide as its content asks, up to half the room; its edge (a
-//! grip) is dragged to size it and the width is kept; the view's Expand
-//! gives it the whole area and back; Esc or Close takes it away.
+//! its left, so no session changes size for it. Every view opens at half
+//! the room; its edge (a grip) is dragged to size it and the width is kept;
+//! the view's Expand gives it the whole area and back. Its Close, Esc once
+//! it has the keyboard (a click in it gives it that) and the key that
+//! opened it take it away.
 
 use super::super::page::Terminals;
 use super::super::surface;
@@ -17,15 +18,9 @@ use gpui::{
 
 impl Terminals {
     /// The width the view beside takes, its edge left out.
-    pub(super) fn beside_width(&self, window: &Window, cx: &App) -> f32 {
-        let shown = self.host.beside(cx).map(|v| v.entity_id());
-        let wish = self
-            .beside_wish
-            .filter(|(id, _)| Some(*id) == shown)
-            .map(|(_, w)| w);
+    pub(super) fn beside_width(&self, window: &Window) -> f32 {
         beside::width(
             self.settings.beside_width,
-            wish,
             self.workspace_room(window) - size::BESIDE_SEAM,
         )
     }
@@ -38,7 +33,7 @@ impl Terminals {
         if self.host.beside(cx).is_none() || whole {
             return 0.;
         }
-        self.beside_width(window, cx) + size::BESIDE_SEAM
+        self.beside_width(window) + size::BESIDE_SEAM
     }
 
     /// The view beside with its edge, over the windows; `None` when nothing
@@ -62,7 +57,7 @@ impl Terminals {
         }
         let t = theme(cx).clone();
         let whole = self.host.whole_beside(crate::NAME, cx) == Some(true);
-        let width = self.beside_width(window, cx);
+        let width = self.beside_width(window);
         let grip = div()
             .id("beside-grip")
             .debug_selector(|| "beside-grip".into())
@@ -145,7 +140,7 @@ impl Terminals {
                         // pointer to the right edge.
                         let right = window.viewport_size().width / px(1.);
                         let w = right - e.position.x / px(1.) - size::BESIDE_SEAM / 2.;
-                        s.settings.beside_width = Some(beside::width(Some(w), None, room));
+                        s.settings.beside_width = Some(beside::width(Some(w), room));
                     }
                     cx.notify();
                 }))

@@ -27,6 +27,9 @@ pub struct Settings {
     pub node: String,
     /// Keys on: chords and the leader are intercepted.
     pub keys: bool,
+    /// A shortcut's keys show at the foot of the window as it runs: for
+    /// showing someone the app, so off unless turned on.
+    pub show_keys: bool,
     /// The fleet as last seen: each node's device and environment, so an
     /// away device keeps its name until it answers again, across restarts
     /// too, and an address to serve through while the configured node is
@@ -58,6 +61,7 @@ impl Default for Settings {
         Self {
             node: DEFAULT_NODE.into(),
             keys: true,
+            show_keys: false,
             places: Default::default(),
             sections: Map::new(),
         }

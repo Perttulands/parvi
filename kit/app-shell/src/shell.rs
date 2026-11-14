@@ -547,7 +547,12 @@ impl Shell {
         }));
     }
 
+    /// Shows a shortcut's keys for a moment, when the operator asked to
+    /// see them (`show_keys`).
     fn show_echo(&mut self, caps: Vec<String>, cx: &mut Context<Self>) {
+        if !self.hub.read(cx).settings.show_keys {
+            return;
+        }
         self.echo = Some(caps);
         self.echo_task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(ECHO).await;

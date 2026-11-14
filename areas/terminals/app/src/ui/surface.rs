@@ -17,8 +17,12 @@ use parvi_app_kit::host::Cover;
 /// changes size for it. Send and the search lie `inset` in from it, at the
 /// left edge of a view beside, so the view stays in sight
 /// ([`Terminals::beside_inset`]).
-pub fn at_edge<E: gpui::Styled>(e: E, inset: f32) -> E {
-    e.absolute().top_0().right(gpui::px(inset))
+///
+/// What lies over the windows takes every pointer event inside it: a click,
+/// a wheel or a hover there never reaches a window under it, so a click in
+/// a panel can neither type into nor focus a session the operator cannot see.
+pub fn at_edge<E: gpui::Styled + gpui::InteractiveElement>(e: E, inset: f32) -> E {
+    e.absolute().top_0().right(gpui::px(inset)).occlude()
 }
 
 pub const SEND: &str = "send";

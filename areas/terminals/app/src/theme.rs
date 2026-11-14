@@ -74,11 +74,13 @@ pub mod size {
     pub const THUMB_LINE: f32 = 12.;
     /// Space between a window's edge and its terminal grid.
     pub const TERM_PAD: f32 = 4.;
-    /// Between a history and the live input docked below it; the rule
-    /// between them runs through the middle.
-    pub const DOCK_GAP: f32 = 9.;
-    /// The way back to the live end, just above that rule.
+    /// The way back to the live end, on the rule between a history and
+    /// the live input docked below it.
     pub const LIVE_PILL_H: f32 = 20.;
+    /// Between a history and the live input docked below it: room for the
+    /// way back to live, so it covers neither; the rule runs through the
+    /// middle.
+    pub const DOCK_GAP: f32 = LIVE_PILL_H + 4.;
     /// A picture a session names: a chip after its row's text saying what
     /// it is (a thumbnail and "image", or "diagram"), inset from the row's
     /// edges, its word a share of the row's height; the picture bigger while

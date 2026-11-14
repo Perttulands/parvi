@@ -240,8 +240,6 @@ pub struct Terminals {
     put_away: Vec<Surface>,
     /// A view was beside the page when it last drew.
     beside_open: bool,
-    /// The width the view beside asked for (a diagram's own), by view.
-    pub beside_wish: Option<(gpui::EntityId, f32)>,
     /// The view beside as last drawn, to give it the keyboard when it
     /// comes.
     pub beside_seen: Option<gpui::EntityId>,
@@ -261,6 +259,9 @@ pub struct Terminals {
     /// The grid each window's body would hold at the terminal font,
     /// as last painted: what a launch into it asks the node for (#161).
     pub launch_grids: Rc<RefCell<[Option<Grid>; 4]>>,
+    /// Each window's launcher room as last painted, and the height its
+    /// launcher needs whole: shorter, it lies over the windows instead.
+    pub launcher_fit: Rc<RefCell<[super::tiles::LauncherFit; 4]>>,
     /// The window a drag selection started in.
     pub selecting: Option<usize>,
     /// Lines a selection drag held outside its grid scrolls each tick, and
@@ -413,7 +414,6 @@ impl Terminals {
             shown: false,
             put_away: vec![],
             beside_open: false,
-            beside_wish: None,
             beside_seen: None,
             beside_focus: cx.focus_handle(),
             beside_resizing: false,
@@ -423,6 +423,7 @@ impl Terminals {
             chips: Rc::default(),
             pictures: Default::default(),
             launch_grids: Rc::default(),
+            launcher_fit: Rc::default(),
             selecting: None,
             drag_scroll: 0,
             scroll_rest: (0, 0.),

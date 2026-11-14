@@ -605,8 +605,25 @@ fn nothing_opened_on_the_page_resizes_a_session(cx: &mut TestAppContext) {
             && cx.debug_bounds("file-view-plan.svg").is_some()
     });
     unchanged(cx, "with a printed path open beside");
-    click(cx, "files-close-beside".into());
-    until(cx, "the printed path closed", |cx| {
+    // Back in the terminal, Esc is the terminal's (agents need it) and the
+    // picture stays; the key that opens Files takes it away.
+    let window = cx.debug_bounds("window-0").expect("the window");
+    cx.simulate_click(
+        gpui::point(window.left() + px(20.), window.bottom() - px(20.)),
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    assert!(cx.update(|window, cx| page.read(cx).term_focus.is_focused(window)));
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("file-view-plan.svg").is_some(),
+        "Esc in the terminal leaves the picture"
+    );
+    // The shell took the Esc as a prefix; a fresh line for what follows.
+    cx.simulate_keystrokes("ctrl-c");
+    cx.simulate_keystrokes("alt-o");
+    until(cx, "the printed path closed by Alt+O", |cx| {
         cx.debug_bounds("terminals-beside").is_none()
     });
 
@@ -696,6 +713,160 @@ fn nothing_opened_on_the_page_resizes_a_session(cx: &mut TestAppContext) {
         });
         unchanged(cx, &format!("with the terminals back from {page_id}"));
     }
+    let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
+}
+
+/// What lies over the windows takes every pointer event inside it: a
+/// click, a middle click (a paste in a terminal), a wheel and the keys
+/// typed after them reach no session under it, no window under it takes
+/// the focus or starts reading back, and Esc after such a click closes
+/// what was clicked. Held for a view beside, Send, the output search,
+/// Overview, Peek and a launcher too big for its window, each over a live
+/// session.
+#[gpui::test]
+fn what_lies_over_the_windows_takes_every_click_inside_it(cx: &mut TestAppContext) {
+    let Some(running) = start("terminals-over") else {
+        return;
+    };
+    let (shell, cx, settings) = open_with_alpha(&running, "over", cx);
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    let page = PAGE.with(|p| p.borrow().clone()).expect("the page");
+    let beta = Key {
+        node: running.node.clone(),
+        user: String::new(),
+        name: "beta".into(),
+    };
+    // Alpha focused on the left, beta on the right where things open.
+    cx.update(|_, cx| {
+        page.update(cx, |p, cx| {
+            p.settings.workspace.set_windows(0, 2);
+            p.settings.workspace.bind_in(0, 1, beta.clone(), None);
+            p.settings.workspace.focus = 0;
+            cx.notify();
+        })
+    });
+    until(cx, "beta's screen in the right window", |cx| {
+        page.read_with(cx, |p, _| {
+            p.window_text(1).is_some_and(|t| !t.trim().is_empty())
+        })
+    });
+    let toy = shell.read_with(cx, |s, _| Host::new(s.hub()).for_page("toy", &[]));
+    const MARK: &str = "overmark";
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string(format!("{MARK}-paste")));
+    let untouched = |cx: &mut VisualTestContext, what: &str, focus: usize| {
+        cx.run_until_parked();
+        for session in ["alpha", "beta"] {
+            let screen = tmux(&running, &["capture-pane", "-p", "-t", session]);
+            assert!(
+                !screen.contains(MARK),
+                "{session} took input through {what}:\n{screen}"
+            );
+        }
+        page.read_with(cx, |p, _| {
+            assert_eq!(
+                p.settings.workspace.focus, focus,
+                "focused window after {what}"
+            );
+            assert!(p.histories.is_empty(), "no window reads back after {what}");
+        });
+        assert!(
+            !cx.update(|window, cx| page.read(cx).term_focus.is_focused(window)),
+            "the terminals took the keyboard through {what}"
+        );
+    };
+    // Every kind of pointer event at `at`, then typing.
+    let poke = |cx: &mut VisualTestContext, at: gpui::Point<gpui::Pixels>, under: &'static str| {
+        let over = cx.debug_bounds(under).expect(under);
+        assert!(over.contains(&at), "{at:?} lies over {under} {over:?}");
+        cx.simulate_click(at, Modifiers::none());
+        cx.simulate_mouse_down(at, gpui::MouseButton::Middle, Modifiers::none());
+        cx.simulate_mouse_up(at, gpui::MouseButton::Middle, Modifiers::none());
+        cx.simulate_event(gpui::ScrollEvent {
+            position: at,
+            delta: gpui::ScrollDelta::Lines(gpui::point(0., 5.)),
+            modifiers: Modifiers::none(),
+            touch_phase: gpui::TouchPhase::Moved,
+            source: gpui::ScrollSource::Pointer,
+        });
+        cx.simulate_input(MARK);
+    };
+    let inside =
+        |b: gpui::Bounds<gpui::Pixels>| gpui::point(b.right() - px(24.), b.bottom() - px(24.));
+
+    // A view beside: the click gives it the keyboard, and Esc closes it.
+    let note = cx.update(|_, cx| cx.new(|cx| Note(cx.focus_handle())));
+    cx.update(|_, cx| toy.show_beside("terminals", note.into(), cx));
+    cx.run_until_parked();
+    let beside = cx.debug_bounds("terminals-beside").expect("drawn over");
+    poke(cx, beside.center(), "window-1");
+    untouched(cx, "a view beside", 0);
+    assert!(
+        cx.update(|window, cx| page.read(cx).beside_focus.contains_focused(window, cx)),
+        "a click in the view gives it the keyboard"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("terminals-beside").is_none(),
+        "Esc after a click in the view closes it"
+    );
+
+    // The layers, opened from the keyboard with the terminal focused.
+    cx.update(|window, cx| {
+        let focus = page.read(cx).term_focus.clone();
+        window.focus(&focus, cx);
+    });
+    for (keys, drawn) in [
+        ("alt-s", "send-drawer"),
+        ("alt-h", "find-drawer"),
+        ("alt-v", "overview-grid"),
+    ] {
+        cx.simulate_keystrokes(keys);
+        cx.run_until_parked();
+        let over = cx.debug_bounds(drawn).expect(drawn);
+        poke(cx, inside(over), "window-1");
+        untouched(cx, drawn, 0);
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(cx.debug_bounds(drawn).is_none(), "Esc closed {drawn}");
+        cx.update(|window, cx| {
+            let focus = page.read(cx).term_focus.clone();
+            window.focus(&focus, cx);
+        });
+    }
+
+    click(cx, format!("row-{}::beta", running.node));
+    until(cx, "the peek", |cx| cx.debug_bounds("peek").is_some());
+    let over = cx.debug_bounds("peek").expect("peek");
+    poke(cx, inside(over), "window-1");
+    untouched(cx, "Peek", 0);
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("peek").is_none(), "Esc closed Peek");
+
+    // A launcher too big for its window lies over the others whole.
+    cx.update(|_, cx| {
+        page.update(cx, |p, cx| {
+            p.settings.workspace.set_windows(0, 4);
+            p.settings.workspace.focus = 3;
+            cx.notify();
+        })
+    });
+    until(cx, "the launcher over the windows", |cx| {
+        cx.debug_bounds("launcher-over-3").is_some()
+    });
+    let over = cx.debug_bounds("launcher-over-3").expect("the launcher");
+    let under = cx.debug_bounds("window-1").expect("beta's window");
+    assert!(
+        over.intersects(&under),
+        "{over:?} lies over beta's window {under:?}"
+    );
+    poke(
+        cx,
+        gpui::point(over.right() - px(4.), over.top() + px(4.)),
+        "window-1",
+    );
+    untouched(cx, "the launcher", 3);
     let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
 }
 
@@ -816,13 +987,22 @@ fn launches_use_each_tile_grid(cx: &mut TestAppContext) {
         until(cx, &format!("launcher ready in tile {i}"), |cx| {
             cx.debug_bounds(selector).is_some()
         });
-        scroll_to_launch(cx, &format!("launcher-scroll-{i}"));
-        let viewport: &'static str = Box::leak(format!("launcher-scroll-{i}").into_boxed_str());
-        until(cx, &format!("visible launch button in tile {i}"), |cx| {
-            cx.debug_bounds(selector)
-                .zip(cx.debug_bounds(viewport))
-                .is_some_and(|(button, viewport)| viewport.contains(&button.center()))
+        // A quarter of the window is too short for the whole launcher: it
+        // lies over the windows at full size, its button in sight.
+        let over: &'static str = Box::leak(format!("launcher-over-{i}").into_boxed_str());
+        let app = cx.update(|window, _| {
+            gpui::Bounds::new(gpui::point(px(0.), px(0.)), window.viewport_size())
         });
+        until(
+            cx,
+            &format!("the whole launcher over the windows in tile {i}"),
+            |cx| {
+                cx.debug_bounds(over).is_some()
+                    && cx
+                        .debug_bounds(selector)
+                        .is_some_and(|button| app.contains(&button.center()))
+            },
+        );
         click(cx, button);
         until(cx, &format!("session bound in tile {i}"), |cx| {
             page.read_with(cx, |p, _| p.settings.workspace.shown(i).is_some())
@@ -2277,6 +2457,31 @@ fn a_mermaid_diagram_a_session_prints_draws_small_and_opens_beside(cx: &mut Test
     cx.simulate_click(chip.center(), Modifiers::none());
     until(cx, "the diagram drawn beside", |cx| {
         cx.debug_bounds("diagram-beside").is_some()
+    });
+    // It opens as a picture does: at half the room, however small the
+    // diagram, and Send hands it to a session as its mermaid block.
+    let beside = cx.debug_bounds("terminals-beside").expect("beside");
+    let whole = cx.update(|window, _| window.viewport_size().width);
+    assert!(
+        beside.size.width > whole * 0.35,
+        "a small diagram opens at half the room: {beside:?} of {whole:?}"
+    );
+    click(cx, "diagram-send".into());
+    until(cx, "Send with the diagram", |cx| {
+        page.read_with(cx, |p, _| {
+            p.send.reference.as_deref().is_some_and(|r| {
+                r.starts_with("```mermaid\n") && r.contains("A[Build] --> B[Test]")
+            })
+        })
+    });
+    cx.simulate_keystrokes("escape");
+    until(cx, "Send closed", |cx| {
+        cx.debug_bounds("send-drawer").is_none()
+    });
+    // Its chip, clicked again, takes it away.
+    cx.simulate_click(chip.center(), Modifiers::none());
+    until(cx, "the diagram closed by its chip", |cx| {
+        cx.debug_bounds("diagram-beside").is_none()
     });
     let _ = std::fs::remove_dir_all(settings.parent().unwrap());
 }

@@ -217,9 +217,10 @@ pub(super) fn tab_menu(ws: &Workspace, i: usize) -> Vec<MenuItem> {
 }
 
 impl Terminals {
-    /// A transparent layer under a surface: a click outside closes it.
+    /// A transparent layer under a surface: a click outside closes it, and
+    /// reaches nothing under it.
     pub(super) fn scrim(&self, name: &'static str, cx: &mut Context<Self>) -> gpui::Div {
-        div().absolute().inset_0().on_mouse_down(
+        div().absolute().inset_0().occlude().on_mouse_down(
             MouseButton::Left,
             cx.listener(move |s, _, _, cx| s.close(name, cx)),
         )
@@ -412,6 +413,7 @@ impl Terminals {
         div()
             .absolute()
             .inset_0()
+            .occlude()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::overview_key))
             .flex()

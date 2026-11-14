@@ -10,7 +10,7 @@ use crate::store::settings::launched_in;
 use crate::store::workspace::LinkState;
 use crate::store::{devices, launch, launch_flags, sessions};
 use crate::theme::{size, theme};
-use gpui::{Context, Entity, WeakEntity, Window, div, prelude::*, px};
+use gpui::{Context, Entity, FocusHandle, ScrollHandle, WeakEntity, Window, div, prelude::*, px};
 use parvi_app_kit::host::{Host, Request};
 use parvi_app_kit::widgets::field::{FieldEvent, TextField};
 use parvi_app_kit::widgets::kit::{self, Kind};
@@ -46,6 +46,10 @@ pub struct Launcher {
     search: Entity<TextField>,
     draft: Entity<TextField>,
     editing: Option<launch_flags::Flag>,
+    /// The fields' scroll: how much of them a short window would hide.
+    pub fields_scroll: ScrollHandle,
+    /// A click anywhere in the launcher gives it the keyboard.
+    focus: FocusHandle,
 }
 
 impl Launcher {
@@ -117,6 +121,8 @@ impl Launcher {
             search,
             draft,
             editing: None,
+            fields_scroll: ScrollHandle::new(),
+            focus: cx.focus_handle(),
         }
     }
 
@@ -788,6 +794,7 @@ impl Render for Launcher {
             .flex_auto()
             .min_h_0()
             .overflow_y_scroll()
+            .track_scroll(&self.fields_scroll)
             .p(px(16.))
             .pb(px(8.))
             .flex()
@@ -867,6 +874,7 @@ impl Render for Launcher {
             // launch button stays where it was across harnesses.
             .child(div().min_h(px(NOTIFY_ROW)).children(notify));
         kit::panel(&t)
+            .track_focus(&self.focus)
             .w(px(size::LAUNCHER))
             .max_w_full()
             .min_h_0()
