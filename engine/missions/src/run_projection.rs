@@ -152,7 +152,10 @@ pub fn project_run(events: &[RunEvent], run_id: &str) -> Result<RunProjection, c
                     String::new()
                 },
                 state: string(event, "state"),
-                detail: if event.kind == "human_verdict_recorded" {
+                detail: if matches!(
+                    event.kind.as_str(),
+                    "human_verdict_recorded" | "run_canceled"
+                ) {
                     string(event, "reason")
                 } else {
                     string(event, "detail")

@@ -308,7 +308,7 @@ fn a_step_limit_stops_at_its_rounds_and_a_grant_gives_one_more() {
         block["data"]["limit"],
         json!({"kind":"rounds","limitId":"lim_cap","nodeId":"fmn_work","used":2,"max":2})
     );
-    assert_eq!(block["data"]["reason"], "Work used 2 of 2 rounds");
+    assert_eq!(block["data"]["reason"], "Work ran out of rounds (2)");
     let error = run.of_type("error").pop().unwrap();
     assert_eq!(
         (
@@ -337,7 +337,7 @@ fn a_step_limit_stops_at_its_rounds_and_a_grant_gives_one_more() {
     assert_eq!(block["data"]["limit"]["granted"], 1);
     assert_eq!(
         block["data"]["reason"],
-        "Work used 3 of 3 rounds, 1 of them granted"
+        "Work ran out of rounds (3, 1 of them granted)"
     );
     assert_eq!(lab.calls_of("fmn_work").len(), 3);
 }
@@ -361,7 +361,7 @@ fn a_mission_limit_stops_the_whole_run_at_its_rounds() {
     );
     let block = run.of_type("run_blocked").pop().unwrap();
     assert_eq!(block["nodeId"], "fmn_j1");
-    assert_eq!(block["data"]["reason"], "The mission used 4 of 4 rounds");
+    assert_eq!(block["data"]["reason"], "The mission ran out of rounds (4)");
     // A mission card never picks.
     refused(run.resume(resume_with(false, true)), "nothing to pick");
 }
@@ -431,7 +431,10 @@ fn a_fail_token_limit_cuts_off_the_working_attempt() {
         failed["data"]["limit"],
         json!({"kind":"tokens","limitId":"lim_cap","nodeId":"fmn_work","used":150,"max":100})
     );
-    assert_eq!(failed["data"]["reason"], "Work used 150 of 100 tokens");
+    assert_eq!(
+        failed["data"]["reason"],
+        "Work ran out of tokens (150 of 100)"
+    );
     let usage = run.of_type("token_usage");
     assert_eq!(
         (usage.len(), usage[0]["data"]["tokens"].as_i64()),
@@ -458,7 +461,7 @@ fn a_fail_time_limit_warns_then_cuts_off_the_working_attempt() {
     assert_eq!(p.status, "failed");
     let failed = run.of_type("run_failed").pop().unwrap();
     assert_eq!(failed["data"]["limit"]["kind"], "time");
-    assert_eq!(failed["data"]["reason"], "Work used 2 s of 2 s");
+    assert_eq!(failed["data"]["reason"], "Work ran out of time (2 s)");
     let warnings = run.of_type("limit_warning");
     assert_eq!(warnings.len(), 1, "{}", run.ledger_text());
     assert_eq!(warnings[0]["slotId"], "slot_fmn_work");
@@ -1119,7 +1122,7 @@ fn a_seat_reattached_after_a_restart_is_cut_off_by_the_time_it_worked_before() {
     );
     let failed = run.of_type("run_failed").pop().unwrap();
     assert_eq!(failed["data"]["limit"]["kind"], "time");
-    assert_eq!(failed["data"]["reason"], "Work used 5 s of 5 s");
+    assert_eq!(failed["data"]["reason"], "Work ran out of time (5 s)");
     assert!(run.abandoned("dsp_lost"), "{}", run.ledger_text());
     assert!(
         run.of_type("node_output")

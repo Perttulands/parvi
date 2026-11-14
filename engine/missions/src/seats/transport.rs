@@ -151,7 +151,7 @@ pub(super) async fn stage_guarded(
             .iter()
             .any(|session| session.panes.iter().any(|p| p.0 == pane))
         {
-            return Err("owned seat exited while submitting its brief".into());
+            return Err("the agent's session ended before it took its brief".into());
         }
         let state = if staged {
             "brief_not_taken"

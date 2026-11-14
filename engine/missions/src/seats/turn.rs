@@ -122,7 +122,7 @@ impl TurnWatch<'_> {
                     .iter()
                     .any(|session| session.panes.iter().any(|p| p.0 == pane))
             {
-                return Err("owned seat exited before its turn completed".into());
+                return Err("the agent's session ended before it finished".into());
             }
             let idle = turn.consumed
                 && !matches!(turn.state, TurnState::BackgroundWork)

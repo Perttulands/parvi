@@ -378,47 +378,36 @@ fn warning_text(mission: &Mission, limit: &Limit, left: i64) -> String {
     )
 }
 
-/// What a spent limit used, plainly: "Review used 3 of 3 rounds", "The
-/// mission used 20 of 20 rounds, 1 of them granted", "Review used 30 min of
-/// 30 min", "Review used 51,230 of 50,000 tokens".
+/// What a spent limit stopped, plainly: "Review ran out of rounds (3)",
+/// "The mission ran out of rounds (20, 1 of them granted)", "Review ran
+/// out of time (30 min)", "Review ran out of tokens (51,230 of 50,000)".
 pub(crate) fn reason(mission: &Mission, use_: &LimitUse) -> String {
     let who = if mission.has_input_card(&use_.node_id) {
         "The mission"
     } else {
         mission.node_name(&use_.node_id)
     };
-    match use_.kind.as_str() {
-        TIME => {
-            let mut reason = format!(
-                "{who} used {} of {}",
-                duration_words(use_.used),
-                duration_words(use_.max)
-            );
-            if use_.granted > 0 {
-                reason += &format!(", {} of it granted", duration_words(use_.granted));
-            }
-            reason
-        }
-        TOKENS => {
-            let mut reason = format!(
-                "{who} used {} of {}",
-                thousands(use_.used),
-                token_words(use_.max)
-            );
-            if use_.granted > 0 {
-                reason += &format!(", {} of them granted", thousands(use_.granted));
-            }
-            reason
-        }
-        _ => {
-            let noun = if use_.max == 1 { "round" } else { "rounds" };
-            let mut reason = format!("{who} used {} of {} {noun}", use_.used, use_.max);
-            if use_.granted > 0 {
-                reason += &format!(", {} of them granted", use_.granted);
-            }
-            reason
-        }
+    let (what, mut amount, granted) = match use_.kind.as_str() {
+        TIME => (
+            "time",
+            duration_words(use_.max),
+            format!("{} of it granted", duration_words(use_.granted)),
+        ),
+        TOKENS => (
+            "tokens",
+            format!("{} of {}", thousands(use_.used), thousands(use_.max)),
+            format!("{} of them granted", thousands(use_.granted)),
+        ),
+        _ => (
+            "rounds",
+            use_.max.to_string(),
+            format!("{} of them granted", use_.granted),
+        ),
+    };
+    if use_.granted > 0 {
+        amount = format!("{amount}, {granted}");
     }
+    format!("{who} ran out of {what} ({amount})")
 }
 
 /// What a grant gives a spent limit: one round, or the card's time or tokens
@@ -466,12 +455,6 @@ fn thousands(count: i64) -> String {
     }
 }
 
-/// A token count said plainly: "1 token", "50,000 tokens".
-fn token_words(count: i64) -> String {
-    let noun = if count == 1 { "token" } else { "tokens" };
-    format!("{} {noun}", thousands(count))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -503,9 +486,8 @@ mod tests {
         assert_eq!(duration_words(300), "5 min");
         assert_eq!(duration_words(5400), "1 h 30 min");
         assert_eq!(duration_words(90), "1 min 30 s");
-        assert_eq!(token_words(1), "1 token");
-        assert_eq!(token_words(50_000), "50,000 tokens");
-        assert_eq!(token_words(1_234_567), "1,234,567 tokens");
+        assert_eq!(thousands(50_000), "50,000");
+        assert_eq!(thousands(1_234_567), "1,234,567");
         let m =
             mission("[[limit]]\nid = \"lim\"\ntitle = \"Cap\"\ntarget = \"inp\"\nrounds = 20\n");
         let use_ = LimitUse {
@@ -518,7 +500,7 @@ mod tests {
         };
         assert_eq!(
             reason(&m, &use_),
-            "The mission used 20 of 20 rounds, 1 of them granted"
+            "The mission ran out of rounds (20, 1 of them granted)"
         );
         let tokens = LimitUse {
             kind: TOKENS.into(),
@@ -528,7 +510,10 @@ mod tests {
             granted: 0,
             ..use_
         };
-        assert_eq!(reason(&m, &tokens), "Review used 51,230 of 50,000 tokens");
+        assert_eq!(
+            reason(&m, &tokens),
+            "Review ran out of tokens (51,230 of 50,000)"
+        );
     }
 
     #[test]
