@@ -56,6 +56,7 @@ impl Store {
             .into_iter()
             .map(|slug| match self.read_mission(&slug) {
                 Ok(mission) => MissionListing {
+                    steps: mission.formations.len() + mission.gates.len(),
                     id: mission.id,
                     title: mission.title,
                     rev: Some(mission.rev),
@@ -67,6 +68,7 @@ impl Store {
                     id: String::new(),
                     title: String::new(),
                     rev: None,
+                    steps: 0,
                     broken: Some(if err.code == "broken_link" {
                         err.message
                     } else {

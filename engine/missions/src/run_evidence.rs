@@ -107,7 +107,32 @@ impl Coordinator {
                 &time::format_description::well_known::Rfc3339,
             )
         {
-            changed(Path::new(cwd), started.into(), 0, &mut written);
+            // A finished run wrote nothing after it ended: what changed
+            // later in its folder is another run's or the operator's.
+            let ended = events
+                .iter()
+                .rev()
+                .find(|e| {
+                    matches!(
+                        e.kind.as_str(),
+                        "run_started"
+                            | "run_resumed"
+                            | "run_succeeded"
+                            | "run_failed"
+                            | "run_picked"
+                            | "run_canceled"
+                    )
+                })
+                .filter(|e| !matches!(e.kind.as_str(), "run_started" | "run_resumed"))
+                .and_then(|e| {
+                    time::OffsetDateTime::parse(
+                        &e.timestamp,
+                        &time::format_description::well_known::Rfc3339,
+                    )
+                    .ok()
+                })
+                .map(|at| std::time::SystemTime::from(at) + SETTLE);
+            changed(Path::new(cwd), started.into(), ended, 0, &mut written);
         }
         Ok(
             json!({"runId":id,"problems":problems,"briefs":briefs,"files":files,"written":written,"truncated":truncated}),
@@ -128,9 +153,19 @@ fn problem(event: &RunEvent) -> bool {
         _ => false,
     }
 }
-/// Files under `dir` changed since `since`, leaving out hidden ones (a
-/// checkout's .git among them), a few levels deep and at most a page.
-fn changed(dir: &Path, since: std::time::SystemTime, depth: usize, out: &mut Vec<Value>) {
+/// How long after a run ends a file it wrote may still be landing.
+const SETTLE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Files under `dir` changed since `since` (and before `until`, when the
+/// run has ended), leaving out hidden ones (a checkout's .git among them),
+/// a few levels deep and at most a page.
+fn changed(
+    dir: &Path,
+    since: std::time::SystemTime,
+    until: Option<std::time::SystemTime>,
+    depth: usize,
+    out: &mut Vec<Value>,
+) {
     const MOST: usize = 200;
     if depth > 4 || out.len() >= MOST {
         return;
@@ -148,10 +183,12 @@ fn changed(dir: &Path, since: std::time::SystemTime, depth: usize, out: &mut Vec
             continue;
         };
         if kind.is_dir() {
-            changed(&entry.path(), since, depth + 1, out);
+            changed(&entry.path(), since, until, depth + 1, out);
         } else if kind.is_file()
             && let Ok(meta) = entry.metadata()
-            && meta.modified().is_ok_and(|m| m >= since)
+            && meta
+                .modified()
+                .is_ok_and(|m| m >= since && until.is_none_or(|end| m <= end))
         {
             out.push(json!({"path":entry.path(),"size":meta.len()}));
         }
@@ -220,7 +257,7 @@ mod tests {
         fs::write(dir.join(".git/HEAD"), "ref").unwrap();
         let started = SystemTime::now() - Duration::from_secs(60);
         let mut written = Vec::new();
-        changed(&dir, started, 0, &mut written);
+        changed(&dir, started, None, 0, &mut written);
         let paths: Vec<_> = written
             .iter()
             .map(|w| w["path"].as_str().unwrap())
@@ -236,9 +273,20 @@ mod tests {
         changed(
             &dir,
             SystemTime::now() + Duration::from_secs(60),
+            None,
             0,
             &mut later,
         );
         assert!(later.is_empty());
+        // A run that ended before the files were written did not write them.
+        let mut ended = Vec::new();
+        changed(
+            &dir,
+            started,
+            Some(SystemTime::now() - Duration::from_secs(30)),
+            0,
+            &mut ended,
+        );
+        assert!(ended.is_empty());
     }
 }

@@ -90,7 +90,9 @@ fn patch_and_frames_round_trip() {
         assert_eq!(Watch::decode(&Watch(value).encode()), Some(Watch(value)));
     }
     assert_eq!(Watch::decode(&[]), None);
-    round::<MissionSnapshot>(json!({"missions":[{"slug":"demo","id":"m","title":"Demo","rev":1}]}));
+    round::<MissionSnapshot>(
+        json!({"missions":[{"slug":"demo","id":"m","title":"Demo","rev":1,"steps":3}]}),
+    );
     round::<RunsSnapshot>(json!([]));
 }
 
