@@ -400,8 +400,11 @@ impl Host {
 
     /// Answers a beside ask ([`Ask::beside`]): `view` opens beside page
     /// `asker`, which draws it where its layout has room, and stays shown.
+    /// While it is open this page's channels stay on, so its frames keep
+    /// arriving while another page shows.
     pub fn show_beside(&self, asker: &'static str, view: AnyView, cx: &mut App) {
-        self.update(cx, |h, cx| h.set_beside(asker, Some(view), cx));
+        let page = self.page;
+        self.update(cx, |h, cx| h.set_beside(asker, page, Some(view), cx));
     }
 
     /// This page can give what is beside it its whole room
@@ -425,31 +428,12 @@ impl Host {
 
     /// Closes what is beside page `page` (its asker, or the answerer).
     pub fn close_beside(&self, page: &'static str, cx: &mut App) {
-        self.update(cx, |h, cx| h.set_beside(page, None, cx));
+        let from = self.page;
+        self.update(cx, |h, cx| h.set_beside(page, from, None, cx));
     }
 
-    /// Opens this page's dock: `view` stays beside whichever page shows,
-    /// at the window's side, until [`Host::close_dock`]; a dock already
-    /// open shows `view` instead. While it is open the page's channels stay
-    /// on, so its frames keep arriving while another page shows.
-    pub fn show_dock(&self, view: AnyView, cx: &mut App) {
-        let page = self.page;
-        self.update(cx, |h, cx| h.set_dock(page, Some(view), cx));
-    }
-
-    /// Closes this page's dock; its channels go off unless it shows.
-    pub fn close_dock(&self, cx: &mut App) {
-        let page = self.page;
-        self.update(cx, |h, cx| h.set_dock(page, None, cx));
-    }
-
-    /// Whether this page's dock is open.
-    pub fn docked(&self, cx: &App) -> bool {
-        self.read(cx, |h| h.docked(self.page)).unwrap_or(false)
-    }
-
-    /// Guards `view` (this page, or a view it shows beside another page or
-    /// in a dock) against the window closing over its unsaved work: while
+    /// Guards `view` (this page, or a view it shows beside another page)
+    /// against the window closing over its unsaved work: while
     /// `view` lives, closing the window asks `unsaved`, which names what it
     /// holds unsaved (a file's name) or is `None` when all is saved. While
     /// any guarded view names something, the window stays open until the

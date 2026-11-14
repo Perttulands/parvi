@@ -16,10 +16,18 @@ use parvi_app_kit::{
 use parvi_core::NodeId;
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
+/// The page the Brain panel opens beside.
+const PANEL_BESIDE: &str = "terminals";
+
 pub struct BrainPage {
     pub(crate) host: Host,
     me: WeakEntity<BrainPage>,
-    dock_return_focus: Option<FocusHandle>,
+    /// This is the Brain panel over the terminals: one column, the list or
+    /// the page read; where the focus was before it opened.
+    pub(crate) beside: bool,
+    return_focus: Option<FocusHandle>,
+    /// The page's panel, made the first time it opens.
+    panel: Option<Entity<BrainPage>>,
     pub(crate) state: Brain,
     pub(crate) field: Entity<TextField>,
     pub(crate) editor: Entity<Code>,
@@ -46,7 +54,7 @@ impl Page for BrainPage {
         let me = self.me.clone();
         vec![
             parvi_app_kit::chords::Chord::new("l", "Brain", move |window, cx| {
-                let _ = me.update(cx, |page, cx| page.toggle_dock(window, cx));
+                let _ = me.update(cx, |page, cx| page.toggle_panel(window, cx));
             })
             .alt("l", Some(false))
             .everywhere(),
@@ -69,11 +77,15 @@ impl Page for BrainPage {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if (self.shown || self.host.docked(cx))
-            && state == Some(LinkState::Open)
-            && (self.node.as_str().is_empty() || &self.node == node)
+        if state != Some(LinkState::Open) || !(self.node.as_str().is_empty() || &self.node == node)
         {
+            return;
+        }
+        if self.shown {
             self.brain_read_arrivals(cx);
+        }
+        if let Some(panel) = self.panel.clone().filter(|p| self.panel_open(p, cx)) {
+            panel.update(cx, |panel, cx| panel.brain_read_arrivals(cx));
         }
     }
     fn answer(&mut self, ask: Ask, _: &'static str, _: &mut Window, cx: &mut Context<Self>) {
@@ -124,7 +136,9 @@ impl BrainPage {
         Self {
             host,
             me: cx.weak_entity(),
-            dock_return_focus: None,
+            beside: false,
+            return_focus: None,
+            panel: None,
             state: Brain::default(),
             field,
             editor,
@@ -139,32 +153,58 @@ impl BrainPage {
             shown: false,
         }
     }
-    pub(crate) fn close_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let in_dock = self.field.read(cx).is_focused(window)
+    /// Closes this panel, the focus going back where it was if it was in
+    /// the panel.
+    pub(crate) fn close_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let in_panel = self.field.read(cx).is_focused(window)
             || self.summary.read(cx).is_focused(window)
             || self.editor.read(cx).is_focused(window)
             || self.reader_focus.contains_focused(window, cx);
-        self.host.close_dock(cx);
-        if let Some(focus) = self.dock_return_focus.take()
-            && in_dock
-            && !self.shown
+        self.host.close_beside(PANEL_BESIDE, cx);
+        if let Some(focus) = self.return_focus.take()
+            && in_panel
         {
             window.focus(&focus, cx);
         }
     }
-    fn toggle_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.host.docked(cx) {
-            self.close_dock(window, cx);
-        } else if let Some(page) = self.me.upgrade() {
-            self.dock_return_focus = window.focused(cx);
-            self.brain_read_arrivals(cx);
-            let dock = cx.new(|cx| crate::view::Dock::new(page, cx));
-            self.host.show_dock(dock.into(), cx);
-        }
+    fn panel_open(&self, panel: &Entity<BrainPage>, cx: &App) -> bool {
+        self.host
+            .beside_of(PANEL_BESIDE, cx)
+            .is_some_and(|b| b.entity_id() == panel.entity_id())
     }
-    /// Reads what arrived lately: on showing the page or its dock, and
-    /// after a save. The newest opens when nothing has been asked for yet,
-    /// so the first screen reads something.
+    /// The Brain panel (Alt+L): over the terminals as anything beside them
+    /// is, so no session changes size; or away again.
+    fn toggle_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.panel.clone().filter(|p| self.panel_open(p, cx)) {
+            panel.update(cx, |panel, cx| panel.close_panel(window, cx));
+            return;
+        }
+        let panel = match self.panel.clone() {
+            Some(panel) => panel,
+            None => {
+                let host = self.host.clone();
+                let panel = cx.new(|cx| {
+                    let mut panel = BrainPage::new(host, window, cx);
+                    panel.beside = true;
+                    panel
+                });
+                self.panel = Some(panel.clone());
+                panel
+            }
+        };
+        let back = window.focused(cx);
+        let field = panel.update(cx, |panel, cx| {
+            panel.return_focus = back;
+            panel.brain_read_arrivals(cx);
+            panel.field.read(cx).focus_handle(cx)
+        });
+        self.host.show_beside(PANEL_BESIDE, panel.into(), cx);
+        self.host.for_page(PANEL_BESIDE, &[]).show(cx);
+        window.focus(&field, cx);
+    }
+    /// Reads what arrived lately: on showing the page or its panel, and
+    /// after a save. On the page the newest opens when nothing has been
+    /// asked for yet, so the first screen reads something.
     pub(crate) fn brain_read_arrivals(&mut self, cx: &mut Context<Self>) {
         self.node_request(
             "",
@@ -174,6 +214,7 @@ impl BrainPage {
             |page, status, body, cx| {
                 page.state.changes_read(status, &body);
                 if page.state.reading == 0
+                    && !page.beside
                     && let Some(newest) = page.state.arrivals.first()
                 {
                     let path = newest.page.path.clone();
@@ -231,10 +272,11 @@ impl BrainPage {
                     &path,
                     None,
                     move |page, status, body, cx| {
-                        // The best result opens as it lands, unless an edit
-                        // is in hand.
+                        // On the page the best result opens as it lands,
+                        // unless an edit is in hand.
                         if page.state.found(asked, status, &body)
                             && page.state.edit.is_none()
+                            && !page.beside
                             && let Some(best) = page.state.results.first()
                         {
                             let path = best.path.clone();
@@ -255,12 +297,16 @@ impl BrainPage {
             self.brain_open(&path, cx);
         }
     }
-    /// Goes back one page along the trail, if there is one to go back to.
+    /// Goes back one page along the trail, if there is one to go back to;
+    /// in the panel, from the trail's first page back to the list.
     pub(crate) fn brain_back(&mut self, cx: &mut Context<Self>) {
         let trail = &self.state.trail;
         if let Some((path, _)) = trail.len().checked_sub(2).and_then(|at| trail.get(at)) {
             let path = path.clone();
             self.brain_follow(&path, None, cx);
+        } else if self.beside {
+            self.state.close();
+            cx.notify();
         }
     }
     /// Opens a page chosen from the list: it starts a new trail.

@@ -1,10 +1,10 @@
 //! The Work page (DESIGN.md, Work): one project's open work as a tree with
 //! the item beside it, the whole store a search away, an item handed to a
 //! session in one action; the same item beside a terminal that named it,
-//! and the project's tree in a dock beside any page.
+//! and the project's tree in a panel over the terminals.
 mod beside;
-mod dock;
 mod natural;
+mod panel;
 mod report;
 pub mod store;
 #[cfg(test)]
@@ -88,8 +88,10 @@ pub struct Work {
     reveal: bool,
     /// The item's finished family shows, not one line saying how many.
     show_finished: bool,
-    /// The item the dock shows instead of its tree.
-    dock_item: Option<RowKey>,
+    /// The panel over the terminals, made the first time it opens, and the
+    /// item it shows instead of its tree.
+    panel: Option<Entity<panel::Panel>>,
+    panel_item: Option<RowKey>,
 }
 
 impl Page for Work {
@@ -160,7 +162,7 @@ impl Page for Work {
             .alt("i", Some(false))
             .everywhere(),
             parvi_app_kit::chords::Chord::new("b", "Work beside", move |_, cx| {
-                let _ = me.update(cx, |work, cx| work.toggle_dock(cx));
+                let _ = me.update(cx, |work, cx| work.toggle_panel(cx));
             })
             .alt("b", Some(false))
             .everywhere(),
@@ -208,7 +210,8 @@ impl Work {
             prose: Rc::default(),
             wanted: None,
             sessions,
-            dock_item: None,
+            panel: None,
+            panel_item: None,
             show_finished: false,
             list_scroll: gpui::ScrollHandle::new(),
             reveal: false,
@@ -367,7 +370,7 @@ impl Work {
 
     /// The project beside a terminal: the focused session's, else the
     /// page's.
-    fn dock_project(&self, cx: &App) -> Option<usize> {
+    fn panel_project(&self, cx: &App) -> Option<usize> {
         self.session_project(cx).or_else(|| self.project(cx))
     }
 

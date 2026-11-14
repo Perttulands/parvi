@@ -85,6 +85,11 @@ fn until(
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+fn click(cx: &mut VisualTestContext, selector: &str) {
+    let selector = Box::leak(selector.to_string().into_boxed_str());
+    let at = cx.debug_bounds(selector).expect(selector).center();
+    cx.simulate_click(at, Modifiers::none());
+}
 #[gpui::test]
 fn search_open_and_follow_a_link_in_the_reader(cx: &mut TestAppContext) {
     let running = start();
@@ -186,10 +191,13 @@ thread_local! {
     static SENT: std::cell::RefCell<Option<parvi_app_kit::Ask>> = const { std::cell::RefCell::new(None) };
 }
 
-struct Toy;
+/// A stand-in for the terminals: it draws what is beside it.
+struct Toy {
+    host: parvi_app_kit::Host,
+}
 impl parvi_app_kit::Page for Toy {
-    const ID: &'static str = "toy";
-    const TITLE: &'static str = "Toy";
+    const ID: &'static str = "terminals";
+    const TITLE: &'static str = "Terminals";
     const ANSWERS: &'static [parvi_app_kit::Answers] = &[parvi_app_kit::Answers::Send];
     fn answer(
         &mut self,
@@ -205,13 +213,20 @@ impl gpui::Render for Toy {
     fn render(
         &mut self,
         _: &mut gpui::Window,
-        _: &mut gpui::Context<Self>,
+        cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
         use gpui::prelude::*;
         gpui::div()
             .size_full()
+            .flex()
             .debug_selector(|| "toy-page".into())
             .child("Toy")
+            .children(self.host.beside(cx).map(|view| {
+                gpui::div()
+                    .debug_selector(|| "toy-beside".into())
+                    .size_full()
+                    .child(view)
+            }))
     }
 }
 fn toy(
@@ -219,13 +234,13 @@ fn toy(
     window: &mut gpui::Window,
     cx: &mut gpui::App,
 ) -> parvi_app_kit::Mounted {
-    parvi_app_kit::mount(host, window, cx, |_, _, _| Toy)
+    parvi_app_kit::mount(host, window, cx, |host, _, _| Toy { host })
 }
 
 #[gpui::test]
-fn dock_search_send_and_toggle_from_another_page(cx: &mut TestAppContext) {
+fn the_panel_searches_reads_sends_and_toggles_beside_the_terminals(cx: &mut TestAppContext) {
     let running = start();
-    let settings = fresh_dir("brain-dock-settings");
+    let settings = fresh_dir("brain-panel-settings");
     SENT.with(|sent| *sent.borrow_mut() = None);
     cx.executor().allow_parking();
     cx.update(parvi_app_shell::prepare);
@@ -243,20 +258,26 @@ fn dock_search_send_and_toggle_from_another_page(cx: &mut TestAppContext) {
             s.hub().read(cx).fleet.here().state == LinkState::Open
         })
     });
-    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy"));
+    assert_eq!(
+        shell.read_with(cx, |s, _| s.shown_page()),
+        Some("terminals")
+    );
     let chords = shell.update_in(cx, |shell, _, cx| shell.chords(cx));
     assert!(
         parvi_app_kit::chords::rows(&chords)
             .iter()
             .any(|row| row.label == "Brain")
     );
+    // Alt+L opens the panel beside the terminals: the list, the field
+    // taking the keys.
     cx.simulate_keystrokes("alt-l");
-    until(cx, "brain dock", |cx| {
-        cx.debug_bounds("dock-brain").is_some()
+    until(cx, "the Brain panel", |cx| {
+        cx.debug_bounds("toy-beside").is_some() && cx.debug_bounds("brain-arrival-0").is_some()
     });
-    assert!(cx.debug_bounds("toy-page").is_some());
-    let search = cx.debug_bounds("brain-search").unwrap().center();
-    cx.simulate_click(search, Modifiers::none());
+    assert!(
+        cx.debug_bounds("brain-page-title").is_none(),
+        "the list first"
+    );
     cx.simulate_input("first");
     cx.executor().advance_clock(Duration::from_millis(250));
     until(cx, "search result", |cx| {
@@ -264,52 +285,51 @@ fn dock_search_send_and_toggle_from_another_page(cx: &mut TestAppContext) {
     });
     assert!(cx.debug_bounds("brain-result-kind-note").is_some());
     cx.simulate_keystrokes("down");
-    until(cx, "down opens second hit", |cx| {
+    until(cx, "down opens the second hit in place of the list", |cx| {
         cx.debug_bounds("brain-reading-notes/second.md").is_some()
     });
-    cx.simulate_keystrokes("up");
-    until(cx, "up opens first hit", |cx| {
-        cx.debug_bounds("brain-reading-notes/first.md").is_some()
-    });
-    cx.simulate_keystrokes("escape");
-    until(cx, "search cleared", |cx| {
-        cx.debug_bounds("brain-result-0").is_none()
-    });
-    assert!(cx.debug_bounds("dock-brain").is_some());
-    cx.simulate_keystrokes("escape");
-    until(cx, "dock closed by Escape", |cx| {
-        cx.debug_bounds("dock-brain").is_none()
-    });
-    assert!(cx.debug_bounds("toy-page").is_some());
-    cx.simulate_keystrokes("alt-l");
-    until(cx, "dock reopened", |cx| {
-        cx.debug_bounds("brain-search").is_some()
-    });
-    let search = cx.debug_bounds("brain-search").unwrap().center();
-    cx.simulate_click(search, Modifiers::none());
-    cx.simulate_input("first");
-    cx.executor().advance_clock(Duration::from_millis(250));
-    until(cx, "search result again", |cx| {
+    assert!(cx.debug_bounds("brain-result-0").is_none(), "one column");
+    click(cx, "brain-back");
+    until(cx, "Back to the list", |cx| {
         cx.debug_bounds("brain-result-0").is_some()
     });
-    let result = cx.debug_bounds("brain-result-0").unwrap().center();
-    cx.simulate_click(result, Modifiers::none());
-    until(cx, "page in dock", |cx| {
+    click(cx, "brain-result-0");
+    until(cx, "page in the panel", |cx| {
         cx.debug_bounds("brain-reading-notes/first.md").is_some()
     });
-    let send = cx.debug_bounds("brain-send").unwrap().center();
-    cx.simulate_click(send, Modifiers::none());
+    click(cx, "brain-send");
     let sent = SENT.with(|sent| sent.borrow().clone());
     assert!(
         matches!(&sent, Some(parvi_app_kit::Ask::Send { reference, target: None })
             if reference.starts_with("brain page /") && reference.ends_with("/notes/first.md")),
         "{sent:?}"
     );
-    cx.simulate_keystrokes("alt-l");
-    until(cx, "dock closed", |cx| {
-        cx.debug_bounds("dock-brain").is_none()
+    click(cx, "brain-back");
+    until(cx, "the list again", |cx| {
+        cx.debug_bounds("brain-result-0").is_some()
     });
-    assert!(cx.debug_bounds("toy-page").is_some());
-    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy"));
+    // Esc clears the search, then closes the panel.
+    let search = cx.debug_bounds("brain-search").unwrap().center();
+    cx.simulate_click(search, Modifiers::none());
+    cx.simulate_keystrokes("escape");
+    until(cx, "search cleared", |cx| {
+        cx.debug_bounds("brain-result-0").is_none()
+    });
+    cx.simulate_keystrokes("escape");
+    until(cx, "panel closed by Escape", |cx| {
+        cx.debug_bounds("toy-beside").is_none()
+    });
+    cx.simulate_keystrokes("alt-l");
+    until(cx, "panel reopened", |cx| {
+        cx.debug_bounds("toy-beside").is_some()
+    });
+    cx.simulate_keystrokes("alt-l");
+    until(cx, "panel closed by Alt+L", |cx| {
+        cx.debug_bounds("toy-beside").is_none()
+    });
+    assert_eq!(
+        shell.read_with(cx, |s, _| s.shown_page()),
+        Some("terminals")
+    );
     std::fs::remove_dir_all(settings).unwrap();
 }

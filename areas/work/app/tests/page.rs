@@ -250,7 +250,9 @@ fn work_column_and_terminal_links_open_cards_and_hand_off(cx: &mut TestAppContex
     cx.simulate_keystrokes("alt-i");
     let failure = std::path::Path::new(&running.store).join("fail");
     std::fs::write(&failure, "").unwrap();
-    cx.update(|_, cx| toy_host.ask(reveal("fixture-1", true), cx))
+    // An item the page's board does not hold is asked of the node, whose
+    // tracker fails now.
+    cx.update(|_, cx| toy_host.ask(reveal("fixture-405", true), cx))
         .unwrap();
     until(cx, "tracker failure", |cx| {
         cx.debug_bounds("work-beside-error-tracker unavailable")
@@ -346,15 +348,15 @@ fn work_column_and_terminal_links_open_cards_and_hand_off(cx: &mut TestAppContex
             cx.debug_bounds("work-beside").is_none()
         });
     }
-    // Alt+B docks Work while Terminals stays open; the dock alone watches
-    // the Work channel and a row opens its item in the dock.
+    // Alt+B opens the Work panel over the terminals; it alone keeps the
+    // Work channel on, and a row opens its item in the panel.
     cx.simulate_keystrokes("alt-b");
-    until(cx, "fixture in dock", |cx| {
-        cx.debug_bounds("work-column-row-fixture-1").is_some()
+    until(cx, "fixture in the panel", |cx| {
+        cx.debug_bounds("work-panel-row-fixture-1").is_some()
     });
-    assert!(cx.debug_bounds("dock-work").is_some());
-    click(cx, "work-column-row-fixture-1");
-    until(cx, "item in the dock", |cx| {
+    assert!(cx.debug_bounds("terminals-beside").is_some());
+    click(cx, "work-panel-row-fixture-1");
+    until(cx, "item in the panel", |cx| {
         cx.debug_bounds("work-card-title-Read the fixture")
             .is_some()
     });
@@ -362,7 +364,7 @@ fn work_column_and_terminal_links_open_cards_and_hand_off(cx: &mut TestAppContex
         shell.read_with(cx, |s, _| s.shown_page()),
         Some("terminals")
     );
-    // Send in the dock hands the item to a session.
+    // Send in the panel hands the item to a session.
     click(cx, "work-send");
     until(cx, "send drawer", |cx| cx.debug_bounds("send-go").is_some());
     click(cx, "send-go");
@@ -373,8 +375,8 @@ fn work_column_and_terminal_links_open_cards_and_hand_off(cx: &mut TestAppContex
         cx.debug_bounds("send-go").is_none()
     });
     cx.simulate_keystrokes("alt-b");
-    until(cx, "dock closed", |cx| {
-        cx.debug_bounds("dock-work").is_none()
+    until(cx, "panel closed", |cx| {
+        cx.debug_bounds("work-panel").is_none()
     });
     click(cx, "tab-work");
     until(cx, "item menu", |cx| cx.debug_bounds("work-more").is_some());

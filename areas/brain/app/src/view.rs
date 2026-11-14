@@ -4,8 +4,8 @@ use crate::page::BrainPage;
 use crate::state::PageRef;
 use crate::tokens::*;
 use gpui::{
-    AnyElement, ClickEvent, Context, Div, Entity, FontWeight, HighlightStyle, KeyDownEvent,
-    MouseButton, SharedString, StyledText, Window, div, prelude::*, px,
+    AnyElement, ClickEvent, Context, Div, FontWeight, HighlightStyle, KeyDownEvent, MouseButton,
+    SharedString, StyledText, Window, div, prelude::*, px,
 };
 use parvi_app_kit::menu::MenuRow;
 use parvi_app_kit::theme::{FAMILY, Theme, alpha, size, theme};
@@ -13,31 +13,6 @@ use parvi_app_kit::widgets::{
     kit::{self, Kind},
     markdown, pane, select,
 };
-
-pub(crate) struct Dock {
-    page: Entity<BrainPage>,
-}
-
-impl Dock {
-    pub(crate) fn new(page: Entity<BrainPage>, cx: &mut Context<Self>) -> Self {
-        cx.observe(&page, |_, _, cx| cx.notify()).detach();
-        Self { page }
-    }
-}
-
-impl Render for Dock {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .w(px(DOCK_WIDTH))
-            .h_full()
-            .border_l_1()
-            .border_color(theme(cx).divider)
-            .child(
-                self.page
-                    .update(cx, |page, cx| page.render(window, cx).into_any_element()),
-            )
-    }
-}
 
 impl Render for BrainPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -57,12 +32,29 @@ impl Render for BrainPage {
             .flex()
             .flex_col()
             .children(rows);
-        let list = pane::list_wide_frame(&t, self.list_head(&t), body);
-        let reader = self.reader(&t, window, cx);
+        let shown = if !self.beside {
+            let list = pane::list_wide_frame(&t, self.list_head(&t), body);
+            pane::page(&t, list, self.reader(&t, window, cx))
+        } else if self.state.page.is_some() {
+            // The panel is one column: the page read, with Back to the list.
+            div()
+                .size_full()
+                .bg(t.bg)
+                .child(self.reader(&t, window, cx))
+        } else {
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .bg(t.surface)
+                .child(self.list_head(&t).child(self.close(&t, cx)))
+                .child(body)
+        };
         let selected = self.select.clone();
         let can_copy = self.state.edit.is_none();
-        pane::page(&t, list, reader)
+        shown
             .id("brain")
+            .debug_selector(|| "brain".into())
             .font_family(FAMILY)
             .text_color(t.text)
             .on_key_down(cx.listener(move |page, event: &KeyDownEvent, window, cx| {
@@ -74,8 +66,8 @@ impl Render for BrainPage {
                         page.field.update(cx, |field, cx| field.set("", false, cx));
                         page.state.typed("");
                         cx.notify();
-                    } else if page.host.docked(cx) {
-                        page.close_dock(window, cx);
+                    } else if page.beside {
+                        page.close_panel(window, cx);
                     } else {
                         window.focus(&page.reader_focus, cx);
                     }
@@ -250,9 +242,11 @@ impl BrainPage {
     /// The page read: its head (Back, title, Send, Edit, more), then the
     /// page; or the editor while an edit is in hand.
     fn reader(&mut self, t: &Theme, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        let docked = self.host.docked(cx);
+        let beside = self.beside;
         let mut head = pane::head(t);
-        if self.state.trail.len() > 1 && self.state.edit.is_none() {
+        // Back along the trail; in the panel, from its first page to the
+        // list.
+        if (self.state.trail.len() > 1 || self.beside) && self.state.edit.is_none() {
             head = head.child(
                 pane::act(t, "brain-back", "Back")
                     .debug_selector(|| "brain-back".into())
@@ -270,7 +264,7 @@ impl BrainPage {
             });
             let head = head
                 .child(div().flex_1())
-                .children(docked.then(|| self.close(t, cx)));
+                .children(beside.then(|| self.close(t, cx)));
             return pane::detail(t, "brain-reader", head, pane::empty(t, why, None).p_0());
         };
         head = head
@@ -339,7 +333,7 @@ impl BrainPage {
                                 page.host.menu(more.clone(), e.position(), cx)
                             })),
                     )
-                    .children(docked.then(|| self.close(t, cx)));
+                    .children(beside.then(|| self.close(t, cx)));
             }
         }
         let body = self.page_body(t, &page, window, cx);
@@ -354,7 +348,8 @@ impl BrainPage {
     fn close(&self, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
         pane::act(t, "brain-close", "Close")
             .tooltip(kit::tip("Alt+L"))
-            .on_click(cx.listener(|page, _, window, cx| page.close_dock(window, cx)))
+            .debug_selector(|| "brain-close-beside".into())
+            .on_click(cx.listener(|page, _, window, cx| page.close_panel(window, cx)))
             .into_any_element()
     }
 

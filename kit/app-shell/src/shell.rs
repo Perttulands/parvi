@@ -36,7 +36,8 @@ pub struct Shell {
     /// Pages whose drawing failed, and why, until Try again.
     pub(crate) failed: HashMap<&'static str, String>,
     pub(crate) view: ViewControl,
-    /// Pages whose channels are on: the one shown, and those docked.
+    /// Pages whose channels are on: the one shown, and those that lent a
+    /// view beside a page.
     channels_on: HashSet<&'static str>,
     /// The operator chose to close the window over unsaved work.
     leaving: bool,
@@ -215,7 +216,7 @@ impl Shell {
     }
 
     /// Shows page `i`: the one shown before hides and turns its channels
-    /// off unless its dock is open, this one turns its on.
+    /// off unless it lent a view beside a page, this one turns its on.
     pub fn show(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
         if self.shown == Some(i) {
             return;
@@ -231,11 +232,11 @@ impl Shell {
         cx.notify();
     }
 
-    /// Turns page `i`'s channels on while it shows or its dock is open,
-    /// and off otherwise.
+    /// Turns page `i`'s channels on while it shows or a view it lent is
+    /// beside a page, and off otherwise.
     fn sync_channels(&mut self, i: usize, cx: &mut Context<Self>) {
         let meta = self.pages[i].meta;
-        let wanted = self.shown == Some(i) || self.hub.read(cx).docked(meta.id);
+        let wanted = self.shown == Some(i) || self.hub.read(cx).lends(meta.id);
         let on = self.channels_on.contains(meta.id);
         if wanted == on {
             return;
@@ -289,7 +290,7 @@ impl Shell {
             HubEvent::Show(id) => {
                 self.show_id(id, window, cx);
             }
-            HubEvent::Dock(id) => {
+            HubEvent::Lent(id) => {
                 if let Some(i) = self.index_of(id) {
                     self.sync_channels(i, cx);
                 }

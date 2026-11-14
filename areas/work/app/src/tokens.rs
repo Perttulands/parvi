@@ -12,5 +12,3 @@ pub const INDENT: f32 = 16.;
 pub const MAX_DEPTH: usize = 5;
 /// The most the project's name takes in the list's head.
 pub const PROJECT_ACT_W: f32 = 160.;
-/// The dock beside any page.
-pub const DOCK_WIDTH: f32 = 360.;

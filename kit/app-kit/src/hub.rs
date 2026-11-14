@@ -78,8 +78,8 @@ pub enum HubEvent {
     /// `app.json` was edited outside the app and read again: these pages'
     /// sections changed.
     SettingsReloaded(Vec<&'static str>),
-    /// Page `page` opened or closed its dock.
-    Dock(&'static str),
+    /// A view page `page` lent beside a page opened or closed.
+    Lent(&'static str),
     /// The link to `node` changed state; `None` when the app no longer
     /// follows that node. Every page hears it.
     Link {
@@ -116,15 +116,13 @@ pub struct Hub {
     clicks: HashMap<String, Run>,
     /// The read models pages share, by type.
     models: HashMap<TypeId, Model>,
-    /// What an answer opened beside each page, by the page.
-    beside: HashMap<&'static str, AnyView>,
+    /// What is open beside each page, by the page, with the page that lent
+    /// it.
+    beside: HashMap<&'static str, (&'static str, AnyView)>,
     /// The pages that can give what is beside them their whole room, and
     /// those doing so now.
     widens: HashSet<&'static str>,
     whole: HashSet<&'static str>,
-    /// The docks open beside every page, by the page that supplies each,
-    /// in the order they opened.
-    docks: Vec<(&'static str, AnyView)>,
     /// The views that may hold unsaved work, each with the page it is from.
     guards: Vec<Guard>,
 }
@@ -192,7 +190,6 @@ impl Hub {
             beside: HashMap::new(),
             widens: HashSet::new(),
             whole: HashSet::new(),
-            docks: vec![],
             guards: vec![],
         }
     }
@@ -692,21 +689,34 @@ impl Hub {
 
     /// What is open beside `page`.
     pub fn beside(&self, page: &str) -> Option<AnyView> {
-        self.beside.get(page).cloned()
+        self.beside.get(page).map(|(_, view)| view.clone())
     }
 
-    /// Opens `view` beside `page`, or closes what is there.
+    /// Whether a view page `page` lent is open beside a page.
+    pub fn lends(&self, page: &str) -> bool {
+        self.beside.values().any(|(from, _)| *from == page)
+    }
+
+    /// Opens `view`, lent by page `from`, beside `page`, or closes what is
+    /// there.
     pub fn set_beside(
         &mut self,
         page: &'static str,
+        from: &'static str,
         view: Option<AnyView>,
         cx: &mut Context<Self>,
     ) {
-        match view {
-            Some(view) => self.beside.insert(page, view),
+        let old = match view {
+            Some(view) => self.beside.insert(page, (from, view)),
             None => self.beside.remove(page),
         };
         self.whole.remove(page);
+        if let Some((lender, _)) = old {
+            cx.emit(HubEvent::Lent(lender));
+        }
+        if self.beside.contains_key(page) {
+            cx.emit(HubEvent::Lent(from));
+        }
         cx.notify();
     }
 
@@ -727,33 +737,6 @@ impl Hub {
     pub fn toggle_whole(&mut self, page: &'static str, cx: &mut Context<Self>) {
         if self.widens.contains(page) && !self.whole.remove(page) {
             self.whole.insert(page);
-        }
-        cx.notify();
-    }
-
-    /// The docks open, in the order they opened, by the page each is from.
-    pub fn docks(&self) -> Vec<(&'static str, AnyView)> {
-        self.docks.clone()
-    }
-
-    pub fn docked(&self, page: &str) -> bool {
-        self.docks.iter().any(|(p, _)| *p == page)
-    }
-
-    /// Opens `view` as `page`'s dock, in place of one it had, or closes it.
-    pub fn set_dock(&mut self, page: &'static str, view: Option<AnyView>, cx: &mut Context<Self>) {
-        let at = self.docks.iter().position(|(p, _)| *p == page);
-        match (at, view) {
-            (Some(i), Some(view)) => self.docks[i].1 = view,
-            (None, Some(view)) => {
-                self.docks.push((page, view));
-                cx.emit(HubEvent::Dock(page));
-            }
-            (Some(i), None) => {
-                self.docks.remove(i);
-                cx.emit(HubEvent::Dock(page));
-            }
-            (None, None) => return,
         }
         cx.notify();
     }

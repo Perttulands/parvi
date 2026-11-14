@@ -447,7 +447,12 @@ fn nothing_opened_on_the_page_resizes_a_session(cx: &mut TestAppContext) {
     let (shell, cx, settings) = open_pages_with_alpha(
         &running,
         "opened-size",
-        &[terminals, parvi_files_app::build],
+        &[
+            terminals,
+            parvi_files_app::build,
+            parvi_work_app::build,
+            parvi_brain_app::build,
+        ],
         cx,
     );
     // Wide enough that a drawer could have moved the window aside.
@@ -573,39 +578,92 @@ fn nothing_opened_on_the_page_resizes_a_session(cx: &mut TestAppContext) {
         cx.debug_bounds("terminals-beside").is_none()
     });
 
-    // ... and an agent's `parvi view open`, which brings Files forward;
-    // the windows are as they were when the terminals come back.
+    // Work and Brain lie over the windows the same way: their panels
+    // (Alt+B, Alt+L), ...
+    for (keys, drawn, what) in [
+        ("alt-b", "work-panel", "the Work panel"),
+        ("alt-l", "brain-search", "the Brain panel"),
+    ] {
+        cx.simulate_keystrokes(keys);
+        until(cx, what, |cx| {
+            cx.debug_bounds("terminals-beside").is_some() && cx.debug_bounds(drawn).is_some()
+        });
+        unchanged(cx, &format!("with {what} open"));
+        cx.simulate_keystrokes(keys);
+        until(cx, "the panel closed", |cx| {
+            cx.debug_bounds("terminals-beside").is_none()
+        });
+        unchanged(cx, &format!("after {what} closed"));
+    }
+
+    // ... and a work item the session printed, clicked.
+    tmux(
+        &running,
+        &[
+            "send-keys",
+            "-t",
+            "alpha",
+            "printf '\\033[2J\\033[Hparvi-pnu.7\\n'",
+            "Enter",
+        ],
+    );
+    let item = |cx: &mut VisualTestContext| {
+        page.read_with(cx, |p, _| {
+            let text = p.window_text(0)?;
+            let row = text.lines().position(|l| l.trim() == "parvi-pnu.7")?;
+            let geo = p.geo.borrow()[0];
+            let (origin, cell) = (geo.origin?, geo.cell?);
+            Some(gpui::point(
+                origin.x + cell.width * 3. + px(2.),
+                origin.y + cell.height * row as f32 + px(2.),
+            ))
+        })
+    };
+    until(cx, "the work item printed", |cx| item(cx).is_some());
+    let at = item(cx).expect("printed");
+    cx.simulate_click(at, Modifiers::none());
+    until(cx, "the item beside the windows", |cx| {
+        cx.debug_bounds("terminals-beside").is_some() && cx.debug_bounds("work-beside").is_some()
+    });
+    unchanged(cx, "with a printed work item open beside");
+    cx.simulate_keystrokes("alt-i");
+    until(cx, "the item closed", |cx| {
+        cx.debug_bounds("terminals-beside").is_none()
+    });
+    unchanged(cx, "after the work item closed");
+
+    // An agent's `parvi view open` brings the page forward; the windows
+    // are as they were when the terminals come back.
     let rt = tokio::runtime::Runtime::new().expect("a runtime");
     let path = picture.display().to_string();
-    let args: Vec<String> = [
-        "open",
-        "--page",
-        "files",
-        "--path",
-        &path,
-        "--json",
-        "--node",
-        &running.url,
-    ]
-    .iter()
-    .map(|a| a.to_string())
-    .collect();
-    let opened = rt.spawn(async move {
-        let mut out = Vec::new();
-        parvi_node_kit::cli::run("view", &args, &mut out)
-            .await
-            .expect("the command runs")
-    });
-    until(cx, "parvi view open answered", |_| opened.is_finished());
-    assert_eq!(rt.block_on(opened).expect("its task"), 0);
-    assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("files"));
-    unchanged(cx, "with Files shown by parvi view open");
-    let terminals = shell.read_with(cx, |s, _| Host::new(s.hub()).for_page("terminals", &[]));
-    cx.update(|_, cx| terminals.show(cx));
-    until(cx, "the terminals back", |cx| {
-        shell.read_with(cx, |s, _| s.shown_page()) == Some("terminals")
-    });
-    unchanged(cx, "with the terminals back");
+    for (page_id, thing) in [
+        ("files", vec!["--path", path.as_str()]),
+        ("work", vec!["--item", "parvi-pnu.7"]),
+        ("brain", vec![]),
+    ] {
+        let args: Vec<String> = ["open", "--page", page_id]
+            .into_iter()
+            .chain(thing)
+            .chain(["--json", "--node", &running.url])
+            .map(str::to_string)
+            .collect();
+        let opened = rt.spawn(async move {
+            let mut out = Vec::new();
+            parvi_node_kit::cli::run("view", &args, &mut out)
+                .await
+                .expect("the command runs")
+        });
+        until(cx, "parvi view open answered", |_| opened.is_finished());
+        assert_eq!(rt.block_on(opened).expect("its task"), 0, "{page_id}");
+        assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some(page_id));
+        unchanged(cx, &format!("with {page_id} shown by parvi view open"));
+        let terminals = shell.read_with(cx, |s, _| Host::new(s.hub()).for_page("terminals", &[]));
+        cx.update(|_, cx| terminals.show(cx));
+        until(cx, "the terminals back", |cx| {
+            shell.read_with(cx, |s, _| s.shown_page()) == Some("terminals")
+        });
+        unchanged(cx, &format!("with the terminals back from {page_id}"));
+    }
     let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
 }
 

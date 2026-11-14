@@ -8,7 +8,7 @@ use std::{
 };
 
 #[gpui::test]
-fn page_renders_a_collection_from_a_node(cx: &mut TestAppContext) {
+fn reads_edits_and_saves_a_page_from_a_node(cx: &mut TestAppContext) {
     let (ready, wait) = mpsc::channel();
     let (stop, stopped) = mpsc::channel();
     let (saved, saved_text) = mpsc::channel();

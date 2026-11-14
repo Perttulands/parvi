@@ -1,7 +1,7 @@
 //! Pages plug into the shell through `Page` and `Host` alone: two toy
 //! pages, made here, each reach the node, the status line, menus, layers,
 //! chords and each other through their Host (asks, a view beside the
-//! asker, a read model, a dock beside every page), against a fake node
+//! asker, a read model, a lent view keeping its page's channel on), against a fake node
 //! this test starts. A third,
 //! whose area every node turned off, has no tab.
 
@@ -639,10 +639,10 @@ fn toy_channel(heard: &Mutex<Vec<Vec<u8>>>, on: bool) -> usize {
 }
 
 #[gpui::test]
-fn a_dock_stays_beside_every_page_with_its_pages_channel_on(cx: &mut TestAppContext) {
+fn a_view_lent_beside_a_page_keeps_its_pages_channel_on(cx: &mut TestAppContext) {
     let heard = Arc::new(Mutex::new(vec![]));
     let node = fake_node(heard.clone());
-    let settings = settings_path("dock");
+    let settings = settings_path("lent");
     // The fake node and the link run on their own threads.
     cx.executor().allow_parking();
     cx.update(parvi_app_shell::prepare);
@@ -656,33 +656,29 @@ fn a_dock_stays_beside_every_page_with_its_pages_channel_on(cx: &mut TestAppCont
         toy_channel(&heard, false) == 1
     });
 
-    // Alpha docks a view while Beta shows: it is drawn, and Alpha's channel
+    // Alpha lends a view beside Beta while Beta shows: Alpha's channel
     // comes on and brings its frames.
     let a = alpha();
     let before = a.read_with(cx, |a, _| a.heard.len());
     let alpha_host = shell.read_with(cx, |s, _| Host::new(s.hub()).for_page("toy-a", &[]));
-    cx.update(|_, cx| alpha_host.show_dock(cx.new(|_| Note).into(), cx));
-    until(cx, "the dock's channel and frame", |cx| {
+    cx.update(|_, cx| alpha_host.show_beside("toy-b", cx.new(|_| Note).into(), cx));
+    until(cx, "the lent view's channel and frame", |cx| {
         toy_channel(&heard, true) == 2 && a.read_with(cx, |a, _| a.heard.len()) > before
     });
     assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy-b"));
-    assert!(
-        cx.debug_bounds("dock-toy-a").is_some(),
-        "docked beside Beta"
-    );
-    assert!(cx.update(|_, cx| alpha_host.docked(cx)));
+    assert!(cx.update(|_, cx| alpha_host.beside_of("toy-b", cx).is_some()));
 
     // Across page switches it stays, and its channel is never turned off.
     click(cx, "tab-toy-a");
     click(cx, "tab-toy-b");
-    assert!(cx.debug_bounds("dock-toy-a").is_some(), "still docked");
+    assert!(cx.update(|_, cx| alpha_host.beside_of("toy-b", cx).is_some()));
     assert_eq!(toy_channel(&heard, false), 1);
     assert_eq!(toy_channel(&heard, true), 2);
 
     // Closed while Beta shows: gone, and the channel goes off.
-    cx.update(|_, cx| alpha_host.close_dock(cx));
+    cx.update(|_, cx| alpha_host.close_beside("toy-b", cx));
     until(cx, "the channel off", |_| toy_channel(&heard, false) == 2);
-    assert!(cx.debug_bounds("dock-toy-a").is_none(), "closed");
+    assert!(cx.update(|_, cx| alpha_host.beside_of("toy-b", cx).is_none()));
     let _ = std::fs::remove_dir_all(settings.parent().expect("its folder"));
 }
 

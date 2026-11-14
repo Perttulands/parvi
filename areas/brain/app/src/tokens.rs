@@ -7,7 +7,6 @@ pub const SECTION_TOP: f32 = 16.;
 pub const RESULT_PAD_Y: f32 = 6.;
 pub const SNIPPET_GAP: f32 = 2.;
 
-pub const DOCK_WIDTH: f32 = 760.;
 pub const EDITOR_HEIGHT: f32 = 320.;
 
 pub const MARK: f32 = 0.25;

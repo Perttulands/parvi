@@ -1,7 +1,7 @@
 //! Drawing the Work page on the kit's skeleton (DESIGN.md, Work): the
 //! project's open work as a tree in the list, or a search's matches, or the
 //! projects to choose from; the item beside it, read as a page reads. The
-//! same item view stands beside a terminal and in the dock.
+//! same item view stands beside a terminal and in the panel.
 
 use crate::store::work::{Row, Status, Tracker, prose, when};
 use crate::tokens::*;
@@ -19,12 +19,12 @@ use parvi_app_kit::widgets::select;
 use std::rc::Rc;
 
 /// Where an item view stands: on the page, beside the page that named it,
-/// or in the dock beside any page.
+/// or in the Work panel over the terminals.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Place {
     Page,
     Beside,
-    Dock,
+    Panel,
 }
 
 /// A status as the operator needs to see it: under way and blocked are
@@ -278,7 +278,7 @@ impl Work {
         let r = &self.board.rows[row];
         let mut head = pane::head(t);
         let back = match place {
-            Place::Dock => true,
+            Place::Panel => true,
             _ => !self.trail.is_empty(),
         };
         if back {
@@ -287,8 +287,8 @@ impl Work {
                     .debug_selector(|| "w-back".into())
                     .tooltip(kit::tip("Alt+Left"))
                     .on_click(cx.listener(move |w, _, _, cx| {
-                        if place == Place::Dock {
-                            w.dock_item = None;
+                        if place == Place::Panel {
+                            w.panel_item = None;
                             cx.notify();
                         } else {
                             w.back(cx);
@@ -317,14 +317,14 @@ impl Work {
         if place != Place::Page {
             head = head.child(
                 pane::act(t, "work-close", "Close")
-                    .tooltip(kit::tip(if place == Place::Dock {
+                    .tooltip(kit::tip(if place == Place::Panel {
                         "Alt+B"
                     } else {
                         "Alt+I"
                     }))
                     .on_click(cx.listener(move |w, _, _, cx| {
-                        if place == Place::Dock {
-                            w.toggle_dock(cx);
+                        if place == Place::Panel {
+                            w.close_panel(cx);
                         } else if let Some(from) = w.beside_from {
                             w.host.close_beside(from, cx);
                         }
@@ -335,7 +335,7 @@ impl Work {
         let id = match place {
             Place::Page => "work-detail",
             Place::Beside => "work-beside-detail",
-            Place::Dock => "work-dock-detail",
+            Place::Panel => "work-panel-detail",
         };
         pane::detail(t, id, head, body)
     }
@@ -542,11 +542,11 @@ impl Work {
         Some(section.child(list))
     }
 
-    /// Shows a row reached from the item in `place`: in the dock it
-    /// replaces the dock's item, elsewhere it joins the trail.
+    /// Shows a row reached from the item in `place`: in the panel it
+    /// replaces the panel's item, elsewhere it joins the trail.
     pub(crate) fn go(&mut self, row: usize, place: Place, cx: &mut Context<Self>) {
-        if place == Place::Dock {
-            self.dock_item = self.board.rows.get(row).map(crate::store::work::RowKey::of);
+        if place == Place::Panel {
+            self.panel_item = self.board.rows.get(row).map(crate::store::work::RowKey::of);
             cx.notify();
         } else {
             self.follow_row(row, cx);
@@ -554,7 +554,7 @@ impl Work {
     }
 
     fn follow_link_in(&mut self, link: &str, project: usize, place: Place, cx: &mut Context<Self>) {
-        if place != Place::Dock {
+        if place != Place::Panel {
             return self.follow_link(link, project, cx);
         }
         if let Some(id) = link.strip_prefix(prose::BEAD_LINK) {

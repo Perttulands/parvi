@@ -144,12 +144,14 @@ reserves, or whose `everywhere` chords share a key, naming both;
   hands it a view (`Host::show_beside`), which the asker draws where its
   layout has room (`Host::beside`), as the terminals draw a file a link
   named.
-- **Docks.** A page may keep a view of its own beside every page, at the
-  window's side (`Host::show_dock`, `close_dock`, `docked`), toggled by an
-  `everywhere` chord it declares. While its dock is open the page's channels
-  stay on, as while it shows.
+- **Panels.** A page may also open a view of its own beside the terminals
+  without being asked (Files, Work and Brain each have one, toggled by an
+  `everywhere` chord): the same `Host::show_beside`, so it lies over the
+  terminal windows and no shared session changes size. While a view a page
+  lent is open beside another, that page's channels stay on, as while it
+  shows. There is no column at the window's side that narrows the page.
 - **Unsaved work.** The shell owns the window's one close handler. A page
-  guards itself, or a view it shows beside another page or in a dock, with
+  guards itself, or a view it shows beside another page, with
   `Host::guard_close`, which names what that view holds unsaved; while any
   guarded view names something, closing the window brings its page forward
   and asks over the window whether to leave it or keep editing. A view that

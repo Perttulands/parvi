@@ -40,6 +40,8 @@ parvi-app-shell = { path = "../../../kit/app-shell" }
 parvi-terminals = { path = "../node" }
 parvi-files = { path = "../../files/node" }
 parvi-files-app = { path = "../../files/app" }
+parvi-work-app = { path = "../../work/app" }
+parvi-brain-app = { path = "../../brain/app" }
 parvi-testkit = { path = "../../../kit/testkit" }
 parvi-node-kit = { path = "../../../kit/node-kit" }
 parvi-term = { path = "../../../engine/term" }
