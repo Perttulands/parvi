@@ -23,6 +23,8 @@ const END_PAD: f32 = 12.;
 const OWN_TABS_LEAST: f32 = 130.;
 /// The tab that holds the pages the bar has no room for.
 const MORE: &str = "More";
+/// What follows the shown page's name when More's place carries it.
+const MORE_MARK: &str = " …";
 /// How long words that are not a failure stay up.
 const NOTICE_SHOWN_S: u64 = 8;
 /// What the leader says with keys off.
@@ -33,6 +35,26 @@ pub(crate) const KEYS_OFF_HINT: &str =
 struct Fit {
     compact: bool,
     more: Vec<usize>,
+}
+
+/// How many tabs of these widths stand on a bar with this much room, in
+/// order, when not all fit. The last place is More's; it carries the shown
+/// page's name and More's mark while that page waits under it, so it is
+/// kept as wide as the widest tab left out and the mark.
+fn standing(widths: &[f32], more_w: f32, mark_w: f32, room: f32) -> usize {
+    let mut used = 0.;
+    for (n, w) in widths.iter().enumerate() {
+        let last = widths[n..]
+            .iter()
+            .map(|w| w + mark_w)
+            .fold(more_w, f32::max);
+        if used + last > room {
+            // This many no longer leave room for that place: one fewer.
+            return n.saturating_sub(1);
+        }
+        used += w;
+    }
+    widths.len().saturating_sub(1)
 }
 
 impl Shell {
@@ -47,56 +69,38 @@ impl Shell {
     }
 
     /// Spaced tabs where every page's fits; else close together; else as
-    /// many as fit in order, the shown page's always among them, and the
-    /// rest under More.
+    /// many as fit in order, and the rest under More. Which stand depends
+    /// on the width alone, never on the page shown, so no tab moves when
+    /// the page changes.
     fn fit_tabs(&self, visible: &[(usize, bool)], end_w: f32, window: &mut Window) -> Fit {
         let room = f32::from(window.viewport_size().width) - end_w;
         let own = visible.iter().filter(|(_, own)| *own).count() as f32 * OWN_TABS_LEAST;
-        let width = |i: usize, pad: f32, window: &mut Window| {
-            Self::words_w(window, self.pages[i].meta.title) + pad * 2.
-        };
-        let need = |pad: f32, window: &mut Window| -> f32 {
-            own + visible
+        let pages: Vec<usize> = visible
+            .iter()
+            .filter(|(_, own)| !own)
+            .map(|(i, _)| *i)
+            .collect();
+        let widths = |pad: f32, window: &mut Window| -> Vec<f32> {
+            pages
                 .iter()
-                .filter(|(_, own)| !own)
-                .map(|(i, _)| width(*i, pad, window))
-                .sum::<f32>()
+                .map(|&i| Self::words_w(window, self.pages[i].meta.title) + pad * 2.)
+                .collect()
         };
-        if need(kit::TAB_PAD, window) <= room {
-            return Fit {
-                compact: false,
-                more: vec![],
-            };
-        }
-        if need(kit::TAB_PAD_COMPACT, window) <= room {
-            return Fit {
-                compact: true,
-                more: vec![],
-            };
+        for (pad, compact) in [(kit::TAB_PAD, false), (kit::TAB_PAD_COMPACT, true)] {
+            if own + widths(pad, window).iter().sum::<f32>() <= room {
+                return Fit {
+                    compact,
+                    more: vec![],
+                };
+            }
         }
         let pad = kit::TAB_PAD_COMPACT;
-        let mut left = room - own - (Self::words_w(window, MORE) + pad * 2.);
-        let shown = self
-            .shown
-            .filter(|s| visible.iter().any(|(i, own)| i == s && !own));
-        if let Some(s) = shown {
-            left -= width(s, pad, window);
-        }
-        let mut more = vec![];
-        for &(i, own) in visible {
-            if own || Some(i) == shown {
-                continue;
-            }
-            let w = width(i, pad, window);
-            if more.is_empty() && w <= left {
-                left -= w;
-            } else {
-                more.push(i);
-            }
-        }
+        let more_w = Self::words_w(window, MORE) + pad * 2.;
+        let mark_w = Self::words_w(window, MORE_MARK);
+        let stand = standing(&widths(pad, window), more_w, mark_w, room - own);
         Fit {
             compact: true,
-            more,
+            more: pages[stand..].to_vec(),
         }
     }
 
@@ -157,10 +161,15 @@ impl Shell {
         }
         if !fit.more.is_empty() {
             let more = fit.more.clone();
+            // The shown page, when it waits here: More's place carries its
+            // name, and the tabs before it stay where they were.
+            let shown = self.shown.filter(|s| more.contains(s));
             bar = bar.child(
-                kit::tab(&t, "more-pages", false, cx)
+                kit::tab(&t, "more-pages", shown.is_some(), cx)
                     .debug_selector(|| "tab-more".into())
-                    .child(kit::tab_label(MORE))
+                    .child(kit::tab_label(&shown.map_or(MORE.to_string(), |i| {
+                        format!("{}{MORE_MARK}", self.pages[i].meta.title)
+                    })))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |s, e: &MouseDownEvent, _, cx| {
@@ -172,6 +181,7 @@ impl Shell {
                                     MenuRow::new(s.pages[i].meta.title, move |window, cx| {
                                         let _ = shell.update(cx, |s, cx| s.show(i, window, cx));
                                     })
+                                    .checked(s.shown == Some(i))
                                 })
                                 .collect();
                             // Under the bar, so the tabs stay in sight.
@@ -583,5 +593,27 @@ impl Render for Shell {
             .children(self.render_notices(cx))
             .children(self.render_layers(Cover::Window, cx))
             .children(self.render_echo(cx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::standing;
+
+    #[test]
+    fn the_tabs_that_stand_follow_from_the_width_alone() {
+        // Six tabs and More; the widest left out is what More's place holds.
+        let widths = [60., 80., 50., 90., 70., 60.];
+        let fit = |room| standing(&widths, 40., 0., room);
+        assert_eq!(fit(280.), 3, "60 + 80 + 50, and 90 at the end");
+        assert_eq!(fit(279.), 2, "no room for the third and a 90");
+        assert_eq!(fit(350.), 4, "the fourth, then 70 at the end");
+        assert_eq!(fit(30.), 0, "More alone");
+        // More's own words are the least its place takes.
+        assert_eq!(standing(&[60., 20., 20.], 40., 0., 99.), 0);
+        assert_eq!(standing(&[60., 20., 20.], 40., 0., 100.), 1);
+        // The mark that follows a page's name there has room too.
+        assert_eq!(standing(&widths, 40., 10., 289.), 2);
+        assert_eq!(standing(&widths, 40., 10., 290.), 3);
     }
 }
