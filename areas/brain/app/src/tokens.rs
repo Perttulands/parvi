@@ -1,12 +1,11 @@
 //! Measures carried by the Brain page.
 pub const GAP_TINY: f32 = 4.;
 pub const GAP: f32 = 8.;
-pub const PAD: f32 = 12.;
-pub const READER_PAD: f32 = 24.;
-pub const NESTED_INDENT: f32 = 30.;
-pub const ROW_PAD: f32 = 6.;
-pub const HOVER: f32 = 0.04;
-pub const SELECTED: f32 = 0.08;
+/// Above a section after the page's prose.
+pub const SECTION_TOP: f32 = 16.;
+/// A result row's room above and below, and between its title and words.
+pub const RESULT_PAD_Y: f32 = 6.;
+pub const SNIPPET_GAP: f32 = 2.;
 
 pub const DOCK_WIDTH: f32 = 760.;
 pub const EDITOR_HEIGHT: f32 = 320.;

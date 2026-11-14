@@ -1,19 +1,15 @@
-//! The Brain page's state: the search as you type, the collections and
-//! what arrived lately, the page in the reader with its history, the trail
-//! that leads back, and an edit in hand (CHROTE `useBrainSearch`,
-//! `PageReader`, `LibraryView`; Parvi `ui/src/brain/store.ts`). Plain data;
-//! the page draws it and makes the requests.
-
-use std::collections::BTreeSet;
+//! The Brain page's state: the search as you type, what arrived lately,
+//! the page in the reader with its history, the trail that leads back, and
+//! an edit in hand. Plain data; the page draws it and makes the requests.
 
 /// How long typing must rest before a search goes out (CHROTE `SETTLE_MS`).
 pub const SETTLE_MS: u64 = 200;
 /// From this many results the list says it is the best of more.
 pub const LIMIT: usize = 50;
 
-pub use parvi_brain_contract::{Collection, Commit, Found as Hit, Link, Listed, Page, PageRef};
+pub use parvi_brain_contract::{Commit, Found as Hit, Link, Listed, Page, PageRef};
 
-use parvi_brain_contract::{Changes, Collections, Listing, Results};
+use parvi_brain_contract::{Changes, Results};
 
 /// An edit in hand: the reader shows the editor instead of the page.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -35,29 +31,24 @@ pub struct Brain {
     pub results: Vec<Hit>,
     pub selected: usize,
     pub search_error: Option<String>,
-    /// The way back: (path, title) of every page read since the trail
-    /// began, the reader's last.
+    /// The way back: (path, title) of every page reached by a link since a
+    /// page was opened from the list, the reader's last.
     pub trail: Vec<(String, String)>,
     pub page: Option<Page>,
     pub reading: u32,
+    /// The page asked for was chosen from the list: it starts a new trail.
+    fresh: bool,
     pub page_error: Option<String>,
     /// The page's history unfolded under its head.
     pub history_open: bool,
     pub edit: Option<Edit>,
     next_edit: u64,
-    /// The collections, None until read.
-    pub collections: Option<Vec<Collection>>,
-    pub collections_error: Option<String>,
-    /// The collection drawn open in the rail, and its pages: None while
-    /// they are read, so an empty collection and an unread one differ.
-    pub open_collection: Option<String>,
-    pub listing: Option<Vec<Listed>>,
-    /// Each page that arrived lately, once, newest first.
+    /// Each page that arrived lately, once, newest first, and whether the
+    /// node has answered yet.
     pub arrivals: Vec<Listed>,
+    pub arrivals_read: bool,
     /// What git said when it would not read the corpus.
     pub git_error: Option<String>,
-    /// Collections left out of the search and the arrivals, kept per device.
-    pub hidden: BTreeSet<String>,
 }
 
 impl Brain {
@@ -93,56 +84,44 @@ impl Brain {
         true
     }
 
-    /// The results shown: a hidden collection's are left out.
-    pub fn shown(&self) -> Vec<&Hit> {
-        self.results
-            .iter()
-            .filter(|h| !self.hidden.contains(&h.collection))
-            .collect()
+    /// The pages the list shows: the results while searching, else what
+    /// arrived lately.
+    pub fn listed(&self) -> Vec<&str> {
+        if self.query.is_empty() {
+            self.arrivals.iter().map(|a| a.page.path.as_str()).collect()
+        } else {
+            self.results.iter().map(|h| h.path.as_str()).collect()
+        }
     }
 
-    /// Up or Down: the result to open, clamped to the list.
-    pub fn step(&mut self, by: isize) -> Option<String> {
-        let shown = self.shown();
-        if shown.is_empty() {
-            return None;
+    /// The listed page the list marks: the chosen result, or the arrival
+    /// in the reader.
+    pub fn chosen(&self) -> Option<usize> {
+        if self.query.is_empty() {
+            let open = self.page.as_ref()?;
+            self.listed().iter().position(|p| *p == open.path)
+        } else {
+            (self.selected < self.results.len()).then_some(self.selected)
         }
-        let last = shown.len() as isize - 1;
-        let at = (self.selected as isize + by).clamp(0, last) as usize;
-        let path = shown[at].path.clone();
+    }
+
+    /// Up or Down: the listed page to open, clamped to the list; from the
+    /// top when none is marked.
+    pub fn step(&mut self, by: isize) -> Option<String> {
+        let listed = self.listed();
+        let last = listed.len().checked_sub(1)? as isize;
+        let at = match self.chosen() {
+            Some(from) => (from as isize + by).clamp(0, last) as usize,
+            None => 0,
+        };
+        let path = listed[at].to_string();
         self.selected = at;
         Some(path)
     }
 
-    /// Hides a shown collection or shows a hidden one.
-    pub fn toggle_hidden(&mut self, name: &str) {
-        if !self.hidden.remove(name) {
-            self.hidden.insert(name.to_string());
-        }
-        self.selected = 0;
-    }
-
-    /// The arrivals shown: a hidden collection's are left out.
-    pub fn arrivals_shown(&self) -> Vec<&Listed> {
-        self.arrivals
-            .iter()
-            .filter(|a| !self.hidden.contains(collection_of(&a.page.path)))
-            .collect()
-    }
-
-    /// The collections answered.
-    pub fn collections_read(&mut self, status: u16, body: &[u8]) {
-        match serde_json::from_slice::<Collections>(body) {
-            Ok(c) if status == 200 => {
-                self.collections = Some(c.collections);
-                self.collections_error = None;
-            }
-            _ => self.collections_error = Some(words(status, body)),
-        }
-    }
-
     /// The recent changes answered: each page once, at its newest change.
     pub fn changes_read(&mut self, status: u16, body: &[u8]) {
+        self.arrivals_read = true;
         match serde_json::from_slice::<Changes>(body) {
             Ok(c) if status == 200 => {
                 let mut arrivals: Vec<Listed> = vec![];
@@ -161,37 +140,6 @@ impl Brain {
                 self.git_error = c.error;
             }
             _ => self.git_error = Some(words(status, body)),
-        }
-    }
-
-    /// Opens a collection in the rail, or closes it if it is open: Some
-    /// when its pages are to be read.
-    pub fn toggle_collection(&mut self, name: &str) -> Option<String> {
-        self.listing = None;
-        if self.open_collection.as_deref() == Some(name) {
-            self.open_collection = None;
-            return None;
-        }
-        self.open_collection = Some(name.to_string());
-        self.open_collection.clone()
-    }
-
-    /// A collection's pages answered; dropped if another is open now.
-    pub fn listing_read(&mut self, name: &str, status: u16, body: &[u8]) {
-        if self.open_collection.as_deref() != Some(name) {
-            return;
-        }
-        match serde_json::from_slice::<Listing>(body) {
-            Ok(l) if status == 200 => {
-                self.listing = Some(l.pages);
-                if l.error.is_some() {
-                    self.git_error = l.error;
-                }
-            }
-            _ => {
-                self.listing = Some(vec![]);
-                self.git_error = Some(words(status, body));
-            }
         }
     }
 
@@ -263,9 +211,11 @@ impl Brain {
         Ok(commit)
     }
 
-    /// Asking for a page: the number its answer must carry. It ends an
-    /// edit and folds the history, as CHROTE's reader does.
-    pub fn open(&mut self) -> u32 {
+    /// Asking for a page, `fresh` from the list or else by a link: the
+    /// number its answer must carry. It ends an edit and folds the history,
+    /// as CHROTE's reader does.
+    pub fn open(&mut self, fresh: bool) -> u32 {
+        self.fresh = fresh;
         self.edit = None;
         self.history_open = false;
         self.reading += 1;
@@ -273,13 +223,17 @@ impl Brain {
     }
 
     /// A page answered. False if another page was asked for since. A page
-    /// read joins the trail, or the trail goes back to it.
+    /// from the list starts the trail; one reached by a link joins it, or
+    /// the trail goes back to it.
     pub fn read(&mut self, reading: u32, status: u16, body: &[u8]) -> bool {
         if reading != self.reading {
             return false;
         }
         match serde_json::from_slice::<Page>(body) {
             Ok(p) if status == 200 => {
+                if self.fresh {
+                    self.trail.clear();
+                }
                 match self.trail.iter().position(|(path, _)| *path == p.path) {
                     Some(at) => self.trail.truncate(at + 1),
                     None => self.trail.push((p.path.clone(), p.title.clone())),
@@ -306,7 +260,7 @@ impl Brain {
         if self.searching {
             return "Searching…".into();
         }
-        match self.shown().len() {
+        match self.results.len() {
             0 => "Nothing found".into(),
             1 => "1 page".into(),
             n if n >= LIMIT => format!("{n} pages, best first"),
@@ -323,11 +277,6 @@ impl Brain {
             None => "the brain".into(),
         }
     }
-}
-
-/// The collection a page sits in: the first folder of its path.
-pub fn collection_of(path: &str) -> &str {
-    path.split_once('/').map_or("", |(top, _)| top)
 }
 
 /// How long the body after `text`'s front matter is, read as the node reads
@@ -382,14 +331,6 @@ pub fn encode(value: &str) -> String {
     out
 }
 
-/// Where a link leads, among the page's resolved links.
-pub fn resolve<'a>(page: &'a Page, target: &str) -> Option<&'a PageRef> {
-    page.links
-        .iter()
-        .find(|l| l.target == target)
-        .and_then(|l| l.page.as_ref())
-}
-
 /// A snippet's parts: (text, marked) with `»…«` marking the match.
 pub fn marks(snippet: &str) -> Vec<(String, bool)> {
     let mut out = vec![];
@@ -434,6 +375,17 @@ pub fn snippet_parts(snippet: &str) -> Vec<(String, bool)> {
             if end > hashes && end < chars.len() && chars[end].0 == ' ' {
                 i = end + 1;
                 line_start = false;
+                continue;
+            }
+        }
+        // A heading's marks the snippet ran onto one line: `text ## Heading`.
+        if chars[i].0 == '#' && i > 0 && chars[i - 1].0 == ' ' {
+            let end = (i..chars.len().min(i + 6))
+                .take_while(|&j| chars[j].0 == '#')
+                .last()
+                .map_or(i, |j| j + 1);
+            if chars.get(end).is_some_and(|c| c.0 == ' ') {
+                i = end + 1;
                 continue;
             }
         }
@@ -538,10 +490,36 @@ mod tests {
     }
 
     #[test]
-    fn the_trail_goes_back_to_a_page_already_on_it() {
+    fn with_nothing_typed_the_keys_walk_the_arrivals_from_the_page_read() {
         let mut b = Brain::default();
-        for p in ["a", "b", "c", "b"] {
-            let r = b.open();
+        b.changes_read(
+            200,
+            br#"{"changes":[{"hash":"1","time":"t","author":"L","message":"m",
+                "pages":[{"path":"a","title":"A"},{"path":"b","title":"B"},{"path":"c","title":"C"}]}],"error":null}"#,
+        );
+        assert_eq!(b.chosen(), None);
+        assert_eq!(
+            b.step(1).as_deref(),
+            Some("a"),
+            "from the top when none is read"
+        );
+        let r = b.open(true);
+        b.read(r, 200, br#"{"path":"b","title":"B"}"#);
+        assert_eq!(b.chosen(), Some(1));
+        assert_eq!(b.step(1).as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn the_trail_goes_back_to_a_page_already_on_it_and_the_list_starts_a_new_one() {
+        let mut b = Brain::default();
+        for (p, fresh) in [
+            ("z", true),
+            ("a", true),
+            ("b", false),
+            ("c", false),
+            ("b", false),
+        ] {
+            let r = b.open(fresh);
             b.read(
                 r,
                 200,
@@ -550,7 +528,7 @@ mod tests {
         }
         let paths: Vec<&str> = b.trail.iter().map(|(p, _)| p.as_str()).collect();
         assert_eq!(paths, vec!["a", "b"]);
-        let r = b.open();
+        let r = b.open(false);
         assert!(!b.read(r - 1, 200, br#"{"path":"c","title":"C"}"#));
         assert!(b.read(
             r,
@@ -564,12 +542,15 @@ mod tests {
             "a failed read keeps the page"
         );
         assert_eq!(encode("self/pace & me"), "self/pace%20%26%20me");
+        let r = b.open(true);
+        b.read(r, 200, br#"{"path":"d","title":"D"}"#);
+        assert_eq!(b.trail, vec![("d".to_string(), "D".to_string())]);
     }
 
     #[test]
     fn closing_a_dive_folds_history_and_rejects_an_in_flight_page() {
         let mut b = Brain::default();
-        let first = b.open();
+        let first = b.open(true);
         b.read(
             first,
             200,
@@ -577,7 +558,7 @@ mod tests {
         );
         assert_eq!(b.reference(), "brain page preferences/workflow.md");
         b.history_open = true;
-        let pending = b.open();
+        let pending = b.open(true);
         b.close();
         assert!(!b.read(
             pending,
@@ -588,7 +569,7 @@ mod tests {
         assert!(b.trail.is_empty());
         assert!(!b.history_open);
         assert_eq!(b.reference(), "the brain");
-        let page = b.open();
+        let page = b.open(true);
         b.read(
             page,
             200,
@@ -614,15 +595,9 @@ mod tests {
     }
 
     #[test]
-    fn a_hidden_collection_leaves_the_search_and_the_arrivals() {
+    fn each_arrival_shows_once_at_its_newest_change() {
         let mut b = Brain::default();
-        let n = b.typed("x").unwrap();
-        b.found(
-            n,
-            200,
-            br#"{"results":[{"path":"self/a.md","title":"A","collection":"self"},
-                {"path":"knowledge/b.md","title":"B","collection":"knowledge"}]}"#,
-        );
+        assert!(!b.arrivals_read);
         b.changes_read(
             200,
             br#"{"changes":[
@@ -631,53 +606,19 @@ mod tests {
                 {"hash":"1","time":"2026-11-01T00:00:00Z","author":"L","message":"m",
                  "pages":[{"path":"self/a.md","title":"A"}]}],"error":null}"#,
         );
+        assert!(b.arrivals_read);
         assert_eq!(b.arrivals.len(), 2, "each page once");
         assert_eq!(
             b.arrivals[0].updated, "2026-11-02T00:00:00Z",
             "at its newest"
         );
-        b.toggle_hidden("self");
-        assert_eq!(b.count(), "1 page");
-        assert_eq!(b.step(1).as_deref(), Some("knowledge/b.md"));
-        let arrived: Vec<&str> = b
-            .arrivals_shown()
-            .iter()
-            .map(|a| a.page.path.as_str())
-            .collect();
-        assert_eq!(arrived, ["knowledge/b.md"]);
-        b.toggle_hidden("self");
-        assert_eq!(b.shown().len(), 2);
-    }
-
-    #[test]
-    fn a_collection_opens_once_and_a_late_listing_is_dropped() {
-        let mut b = Brain::default();
-        assert_eq!(b.toggle_collection("self").as_deref(), Some("self"));
-        assert_eq!(
-            b.toggle_collection("knowledge").as_deref(),
-            Some("knowledge")
-        );
-        b.listing_read(
-            "self",
-            200,
-            br#"{"pages":[{"path":"self/a.md","title":"A"}]}"#,
-        );
-        assert_eq!(b.listing, None, "self is no longer open");
-        b.listing_read(
-            "knowledge",
-            200,
-            br#"{"pages":[{"path":"knowledge/b.md","title":"B","updated":"x","author":"L"}],"error":null}"#,
-        );
-        assert_eq!(b.listing.as_ref().unwrap()[0].page.title, "B");
-        assert_eq!(b.toggle_collection("knowledge"), None);
-        assert_eq!(b.open_collection, None);
     }
 
     #[test]
     fn an_edit_is_discarded_on_the_second_press_and_a_save_lands_on_top() {
         let mut b = Brain::default();
         assert!(!b.start_edit(), "no page, no edit");
-        let r = b.open();
+        let r = b.open(true);
         b.read(
             r,
             200,
@@ -730,11 +671,11 @@ mod tests {
     #[test]
     fn a_late_save_does_not_change_another_page_or_a_new_draft() {
         let mut b = Brain::default();
-        let r = b.open();
+        let r = b.open(true);
         b.read(r, 200, br##"{"path":"a.md","title":"A","body":"# A\n"}"##);
         b.start_edit();
         let old = b.edit.as_ref().unwrap().id;
-        let r = b.open();
+        let r = b.open(true);
         b.read(r, 200, br##"{"path":"b.md","title":"B","body":"# B\n"}"##);
         b.start_edit();
         let current = b.edit.clone();
@@ -784,7 +725,7 @@ mod tests {
     #[test]
     fn a_save_lands_on_its_page_after_the_draft_was_discarded() {
         let mut b = Brain::default();
-        let r = b.open();
+        let r = b.open(true);
         b.read(r, 200, br##"{"path":"a.md","title":"A","body":"# A\n"}"##);
         b.start_edit();
         let id = b.edit.as_ref().unwrap().id;
@@ -806,7 +747,7 @@ mod tests {
     #[test]
     fn a_save_keeps_a_draft_changed_while_the_commit_was_pending() {
         let mut b = Brain::default();
-        let r = b.open();
+        let r = b.open(true);
         b.read(r, 200, br##"{"path":"a.md","title":"A","body":"# A\n"}"##);
         b.start_edit();
         let id = b.edit.as_ref().unwrap().id;
@@ -850,6 +791,10 @@ mod tests {
         );
         let plain = |s: &str| -> String { snippet_parts(s).into_iter().map(|(t, _)| t).collect() };
         assert_eq!(plain("and [[resource …"), "and resource …");
+        assert_eq!(
+            plain("pacing ## Current understanding, C# and #1"),
+            "pacing Current understanding, C# and #1"
+        );
         assert_eq!(plain("page]] and more"), "page and more");
         assert_eq!(
             plain("its [installer](/srv/tools/heavy/install.sh) for"),

@@ -14,13 +14,7 @@ use parvi_app_kit::{
     },
 };
 use parvi_core::NodeId;
-use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, rc::Rc, time::Duration};
-
-#[derive(Default, Serialize, Deserialize)]
-struct Settings {
-    hidden: Vec<String>,
-}
 
 pub struct BrainPage {
     pub(crate) host: Host,
@@ -33,6 +27,9 @@ pub struct BrainPage {
     pub(crate) select: Rc<RefCell<Selectable>>,
     pub(crate) anchor: Rc<RefCell<Option<String>>>,
     pub(crate) scroll: ScrollHandle,
+    /// The list's scroll, and that the keys moved its mark out of sight.
+    pub(crate) list_scroll: ScrollHandle,
+    pub(crate) reveal: bool,
     pub(crate) reader_focus: FocusHandle,
     node: NodeId,
     shown: bool,
@@ -62,7 +59,7 @@ impl Page for BrainPage {
     fn shown(&mut self, shown: bool, _: &mut Window, cx: &mut Context<Self>) {
         self.shown = shown;
         if shown {
-            self.brain_read_rail(cx);
+            self.brain_read_arrivals(cx);
         }
     }
     fn link(
@@ -76,7 +73,7 @@ impl Page for BrainPage {
             && state == Some(LinkState::Open)
             && (self.node.as_str().is_empty() || &self.node == node)
         {
-            self.brain_read_rail(cx);
+            self.brain_read_arrivals(cx);
         }
     }
     fn answer(&mut self, ask: Ask, _: &'static str, _: &mut Window, cx: &mut Context<Self>) {
@@ -86,11 +83,10 @@ impl Page for BrainPage {
                 self.state.close();
                 self.state.typed("");
                 self.field.update(cx, |f, cx| f.set("", false, cx));
-                self.state.collections = None;
                 self.state.arrivals.clear();
-                self.state.open_collection = None;
+                self.state.arrivals_read = false;
                 self.node = next;
-                self.brain_read_rail(cx);
+                self.brain_read_arrivals(cx);
             }
             self.brain_open(&id, cx);
         }
@@ -125,20 +121,19 @@ impl BrainPage {
             }
         })
         .detach();
-        let settings: Settings = host.setting(cx).unwrap_or_default();
-        let mut state = Brain::default();
-        state.hidden = settings.hidden.into_iter().collect();
         Self {
             host,
             me: cx.weak_entity(),
             dock_return_focus: None,
-            state,
+            state: Brain::default(),
             field,
             editor,
             summary,
             select: Rc::default(),
             anchor: Rc::default(),
             scroll: ScrollHandle::new(),
+            list_scroll: ScrollHandle::new(),
+            reveal: false,
             reader_focus: cx.focus_handle(),
             node: NodeId(String::new()),
             shown: false,
@@ -162,18 +157,31 @@ impl BrainPage {
             self.close_dock(window, cx);
         } else if let Some(page) = self.me.upgrade() {
             self.dock_return_focus = window.focused(cx);
-            self.brain_read_rail(cx);
+            self.brain_read_arrivals(cx);
             let dock = cx.new(|cx| crate::view::Dock::new(page, cx));
             self.host.show_dock(dock.into(), cx);
         }
     }
-    pub(crate) fn save_hidden(&self, cx: &mut Context<Self>) {
-        let settings = Settings {
-            hidden: self.state.hidden.iter().cloned().collect(),
-        };
-        if let Err(error) = self.host.set_setting(&settings, cx) {
-            self.host.toast(&error.message, cx);
-        }
+    /// Reads what arrived lately: on showing the page or its dock, and
+    /// after a save. The newest opens when nothing has been asked for yet,
+    /// so the first screen reads something.
+    pub(crate) fn brain_read_arrivals(&mut self, cx: &mut Context<Self>) {
+        self.node_request(
+            "",
+            "GET",
+            "/api/brain/changes",
+            None,
+            |page, status, body, cx| {
+                page.state.changes_read(status, &body);
+                if page.state.reading == 0
+                    && let Some(newest) = page.state.arrivals.first()
+                {
+                    let path = newest.page.path.clone();
+                    page.brain_open(&path, cx);
+                }
+            },
+            cx,
+        );
     }
     pub(crate) fn node_request(
         &mut self,
@@ -222,8 +230,17 @@ impl BrainPage {
                     "GET",
                     &path,
                     None,
-                    move |page, status, body, _| {
-                        page.state.found(asked, status, &body);
+                    move |page, status, body, cx| {
+                        // The best result opens as it lands, unless an edit
+                        // is in hand.
+                        if page.state.found(asked, status, &body)
+                            && page.state.edit.is_none()
+                            && let Some(best) = page.state.results.first()
+                        {
+                            let path = best.path.clone();
+                            page.reveal = true;
+                            page.brain_open(&path, cx);
+                        }
                     },
                     cx,
                 );
@@ -234,6 +251,7 @@ impl BrainPage {
     }
     fn brain_step(&mut self, by: isize, cx: &mut Context<Self>) {
         if let Some(path) = self.state.step(by) {
+            self.reveal = true;
             self.brain_open(&path, cx);
         }
     }
@@ -242,19 +260,30 @@ impl BrainPage {
         let trail = &self.state.trail;
         if let Some((path, _)) = trail.len().checked_sub(2).and_then(|at| trail.get(at)) {
             let path = path.clone();
-            self.brain_open(&path, cx);
+            self.brain_follow(&path, None, cx);
         }
     }
+    /// Opens a page chosen from the list: it starts a new trail.
     pub(crate) fn brain_open(&mut self, path: &str, cx: &mut Context<Self>) {
-        self.brain_open_at(path, None, cx);
+        self.brain_read_page(path, true, None, cx);
     }
-    pub(crate) fn brain_open_at(
+    /// Opens a page a link leads to, at `anchor`: it joins the trail.
+    pub(crate) fn brain_follow(
         &mut self,
         path: &str,
         anchor: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        let reading = self.state.open();
+        self.brain_read_page(path, false, anchor, cx);
+    }
+    fn brain_read_page(
+        &mut self,
+        path: &str,
+        fresh: bool,
+        anchor: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let reading = self.state.open(fresh);
         let path = format!("/api/brain/page?path={}", state::encode(path));
         self.node_request(
             "",
@@ -341,7 +370,7 @@ impl BrainPage {
                     Ok(commit) => {
                         page.host
                             .toast(&format!("Shelved {path} · {}", commit.message), cx);
-                        page.brain_read_rail(cx);
+                        page.brain_read_arrivals(cx);
                     }
                     Err(why) if status == 0 => page.host.toast(
                         &format!("{path}: save unconfirmed; check before retrying: {why}"),

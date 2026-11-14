@@ -1,4 +1,4 @@
-//! The Brain rail draws collections read from a testkit node.
+//! The Brain reads, edits and saves a page from a testkit node.
 use gpui::{Modifiers, TestAppContext, VisualTestContext};
 use parvi_app_kit::link::client::LinkState;
 use parvi_testkit::{fresh_dir, node::Node};
@@ -94,46 +94,40 @@ fn page_renders_a_collection_from_a_node(cx: &mut TestAppContext) {
             s.hub().read(cx).fleet.here().state == LinkState::Open
         })
     });
-    until(cx, "Brain collection", |cx| {
-        cx.debug_bounds("brain-collection-0").is_some()
+    until(cx, "the page among the arrivals", |cx| {
+        cx.debug_bounds("brain-arrived-notes/page.md").is_some()
     });
-    let collection = cx.debug_bounds("brain-collection-0").unwrap().center();
-    cx.simulate_click(collection, Modifiers::none());
-    until(cx, "collection listing", |cx| {
-        cx.debug_bounds("brain-shelf-0").is_some()
-    });
-    let page = cx.debug_bounds("brain-shelf-0").unwrap().center();
+    let page = cx
+        .debug_bounds("brain-arrived-notes/page.md")
+        .unwrap()
+        .center();
     cx.simulate_click(page, Modifiers::none());
     until(cx, "page reader", |cx| {
-        cx.debug_bounds("brain-page-title").is_some()
+        cx.debug_bounds("brain-reading-notes/page.md").is_some()
     });
     let when = parvi_brain_app::state::when("2020-02-03T04:05:06Z", jiff::Timestamp::now());
     let meta =
         Box::leak(format!("brain-meta-notes · changed {when} by Corpus Owner").into_boxed_str());
-    let head = cx
-        .debug_bounds(meta)
-        .expect("subject, time and author on the metadata line");
-    let history = cx.debug_bounds("brain-history").expect("History button");
-    assert_eq!(
-        head.origin.y,
-        history.origin.y + (history.size.height - head.size.height) / 2.
+    assert!(
+        cx.debug_bounds(meta).is_some(),
+        "subject, time and author on the metadata line"
     );
     assert!(cx.debug_bounds("brain-history-open").is_none());
-    assert!(cx.debug_bounds("brain-links").is_some());
-    assert!(cx.debug_bounds("brain-link-notes/zlink.md").is_some());
-    assert!(cx.debug_bounds("brain-backlinks").is_some());
+    assert!(cx.debug_bounds("brain-backlink-section").is_some());
     assert!(cx.debug_bounds("brain-backlink-notes/zback.md").is_some());
-    assert!(cx.debug_bounds("brain-related").is_some());
+    assert!(cx.debug_bounds("brain-related-section").is_some());
     assert!(cx.debug_bounds("brain-related-notes/ztag.md").is_some());
-    let history = history.center();
-    cx.simulate_click(history, Modifiers::none());
-    until(cx, "history unfolded", |cx| {
-        cx.debug_bounds("brain-history-open").is_some()
-    });
-    cx.simulate_click(history, Modifiers::none());
-    until(cx, "history folded", |cx| {
-        cx.debug_bounds("brain-history-open").is_none()
-    });
+    // History waits behind "…".
+    for open in [true, false] {
+        let more = cx.debug_bounds("brain-more").unwrap().center();
+        cx.simulate_click(more, Modifiers::none());
+        until(cx, "the menu", |cx| cx.debug_bounds("menu-row-0").is_some());
+        let history = cx.debug_bounds("menu-row-0").unwrap().center();
+        cx.simulate_click(history, Modifiers::none());
+        until(cx, "history unfolded or folded", |cx| {
+            cx.debug_bounds("brain-history-open").is_some() == open
+        });
+    }
     let edit = cx.debug_bounds("brain-edit").unwrap().center();
     cx.simulate_click(edit, Modifiers::none());
     until(cx, "editor", |cx| cx.debug_bounds("brain-save").is_some());

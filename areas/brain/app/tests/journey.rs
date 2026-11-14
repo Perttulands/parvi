@@ -109,67 +109,76 @@ fn search_open_and_follow_a_link_in_the_reader(cx: &mut TestAppContext) {
         cx.debug_bounds("brain-search").is_some()
     });
     until(cx, "long arrival", |cx| {
-        cx.debug_bounds("brain-rail-page-notes/long.md").is_some()
+        cx.debug_bounds("brain-arrived-notes/long.md").is_some()
     });
-    let title = cx.debug_bounds("brain-rail-page-notes/long.md").unwrap();
-    let date = cx.debug_bounds("brain-rail-date-notes/long.md").unwrap();
+    let title = cx.debug_bounds("brain-arrived-notes/long.md").unwrap();
+    let date = cx.debug_bounds("brain-arrived-date-notes/long.md").unwrap();
     assert!(
         title.right() <= date.left(),
         "arrival title leaves room for its date"
     );
+    // Before anything is typed, the newest arrival is read.
+    until(cx, "the newest arrival in the reader", |cx| {
+        cx.debug_bounds("brain-page-title").is_some()
+    });
     let search = cx.debug_bounds("brain-search").unwrap().center();
     cx.simulate_click(search, Modifiers::none());
     cx.simulate_input("first");
     cx.executor().advance_clock(Duration::from_millis(250));
-    until(cx, "search result", |cx| {
-        cx.debug_bounds("brain-result-0").is_some()
+    until(cx, "the best result read as it lands", |cx| {
+        cx.debug_bounds("brain-result-selected-0").is_some()
+            && cx.debug_bounds("brain-reading-notes/first.md").is_some()
     });
-    assert!(cx.debug_bounds("brain-result-selected-0").is_some());
-    cx.simulate_keystrokes("enter");
-    until(cx, "Enter opens the marked result", |cx| {
-        cx.debug_bounds("brain-reading-notes/first.md").is_some()
-    });
+    assert!(cx.debug_bounds("brain-count-3 pages").is_some());
     let second = cx.debug_bounds("brain-result-1").unwrap().center();
     cx.simulate_click(second, Modifiers::none());
     until(cx, "selected second result", |cx| {
-        cx.debug_bounds("brain-result-selected-1").is_some()
+        cx.debug_bounds("brain-reading-notes/second.md").is_some()
     });
+    assert!(cx.debug_bounds("brain-result-selected-1").is_some());
     assert!(cx.debug_bounds("brain-result-selected-0").is_none());
     let result = cx.debug_bounds("brain-result-0").unwrap().center();
     cx.simulate_click(result, Modifiers::none());
     until(cx, "first page", |cx| {
         cx.debug_bounds("brain-reading-notes/first.md").is_some()
     });
+    assert!(
+        cx.debug_bounds("brain-back").is_none(),
+        "a page from the list starts the trail"
+    );
     let prose = cx.debug_bounds("brain-prose").unwrap();
     cx.simulate_click(prose.origin + point(px(8.), px(8.)), Modifiers::none());
     until(cx, "linked page", |cx| {
         cx.debug_bounds("brain-reading-notes/second.md").is_some()
-    });
-    until(cx, "the trail back to the first page", |cx| {
-        cx.debug_bounds("brain-trail-notes/first.md").is_some()
     });
     let back = cx.debug_bounds("brain-back").unwrap().center();
     cx.simulate_click(back, Modifiers::none());
     until(cx, "back along trail", |cx| {
         cx.debug_bounds("brain-reading-notes/first.md").is_some()
     });
-    // With nothing left to go back to, the trail steps aside.
-    assert!(cx.debug_bounds("brain-trail-notes/second.md").is_none());
     assert!(cx.debug_bounds("brain-back").is_none());
-    // The trail's own entries lead back too.
+    // Alt+Left goes back from the reader too.
     let prose = cx.debug_bounds("brain-prose").unwrap();
     cx.simulate_click(prose.origin + point(px(8.), px(8.)), Modifiers::none());
     until(cx, "linked page again", |cx| {
         cx.debug_bounds("brain-reading-notes/second.md").is_some()
     });
-    let first = cx
-        .debug_bounds("brain-trail-notes/first.md")
-        .unwrap()
-        .center();
-    cx.simulate_click(first, Modifiers::none());
-    until(cx, "back by the trail", |cx| {
+    cx.simulate_keystrokes("alt-left");
+    until(cx, "back by Alt+Left", |cx| {
         cx.debug_bounds("brain-reading-notes/first.md").is_some()
     });
+    // Another result starts a new trail.
+    let prose = cx.debug_bounds("brain-prose").unwrap();
+    cx.simulate_click(prose.origin + point(px(8.), px(8.)), Modifiers::none());
+    until(cx, "linked page once more", |cx| {
+        cx.debug_bounds("brain-back").is_some()
+    });
+    let third = cx.debug_bounds("brain-result-2").unwrap().center();
+    cx.simulate_click(third, Modifiers::none());
+    until(cx, "third page", |cx| {
+        cx.debug_bounds("brain-reading-other/third.md").is_some()
+    });
+    assert!(cx.debug_bounds("brain-back").is_none());
     std::fs::remove_dir_all(settings).unwrap();
 }
 
@@ -254,10 +263,6 @@ fn dock_search_send_and_toggle_from_another_page(cx: &mut TestAppContext) {
         cx.debug_bounds("brain-result-0").is_some()
     });
     assert!(cx.debug_bounds("brain-result-kind-note").is_some());
-    assert!(
-        cx.debug_bounds("brain-result-summary-A fixture summary")
-            .is_some()
-    );
     cx.simulate_keystrokes("down");
     until(cx, "down opens second hit", |cx| {
         cx.debug_bounds("brain-reading-notes/second.md").is_some()
@@ -306,47 +311,5 @@ fn dock_search_send_and_toggle_from_another_page(cx: &mut TestAppContext) {
     });
     assert!(cx.debug_bounds("toy-page").is_some());
     assert_eq!(shell.read_with(cx, |s, _| s.shown_page()), Some("toy"));
-    std::fs::remove_dir_all(settings).unwrap();
-}
-
-#[gpui::test]
-fn hiding_a_collection_removes_its_arrivals_and_search_hits(cx: &mut TestAppContext) {
-    let running = start();
-    let settings = fresh_dir("brain-hide-journey-settings");
-    cx.executor().allow_parking();
-    cx.update(parvi_app_shell::prepare);
-    let (shell, cx) = cx.add_window_view(|window, cx| {
-        parvi_app_shell::start(
-            &[parvi_brain_app::build],
-            Some(running.url.clone()),
-            Some(settings.join("app.json")),
-            window,
-            cx,
-        )
-    });
-    until(cx, "node link", |cx| {
-        shell.read_with(cx, |s, cx| {
-            s.hub().read(cx).fleet.here().state == LinkState::Open
-        })
-    });
-    until(cx, "notes arrival", |cx| {
-        cx.debug_bounds("brain-rail-page-notes/first.md").is_some()
-    });
-    assert!(cx.debug_bounds("brain-rail-page-other/third.md").is_some());
-    let hide = cx.debug_bounds("brain-hide-0").unwrap().center();
-    cx.simulate_click(hide, Modifiers::none());
-    until(cx, "hidden arrivals removed", |cx| {
-        cx.debug_bounds("brain-rail-page-notes/first.md").is_none()
-    });
-    assert!(cx.debug_bounds("brain-rail-page-other/third.md").is_some());
-    let search = cx.debug_bounds("brain-search").unwrap().center();
-    cx.simulate_click(search, Modifiers::none());
-    cx.simulate_input("first");
-    cx.executor().advance_clock(Duration::from_millis(250));
-    until(cx, "other search hit", |cx| {
-        cx.debug_bounds("brain-hit-other/third.md").is_some()
-    });
-    assert!(cx.debug_bounds("brain-hit-notes/first.md").is_none());
-    assert!(cx.debug_bounds("brain-hit-notes/second.md").is_none());
     std::fs::remove_dir_all(settings).unwrap();
 }

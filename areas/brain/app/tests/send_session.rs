@@ -46,6 +46,26 @@ fn start() -> Option<Running> {
                 let corpus = fresh_dir("brain-send-corpus");
                 std::fs::create_dir(corpus.join("notes")).unwrap();
                 std::fs::write(corpus.join("notes/page.md"), "# Page\n").unwrap();
+                // A page arrives by a commit.
+                for args in [
+                    &["init", "-q"][..],
+                    &["config", "user.name", "Fixture"],
+                    &["config", "user.email", "fixture@example.org"],
+                    &["add", "."],
+                    &["commit", "-qm", "Fixture"],
+                ] {
+                    let done = std::process::Command::new("git")
+                        .arg("-C")
+                        .arg(&corpus)
+                        .args(args)
+                        .output()
+                        .unwrap();
+                    assert!(
+                        done.status.success(),
+                        "{}",
+                        String::from_utf8_lossy(&done.stderr)
+                    );
+                }
                 let config = format!(
                     "[brain]\ncorpus = {:?}\n[terminals]\nsocket = {:?}\n",
                     corpus,
@@ -132,14 +152,10 @@ fn brain_send_reaches_a_real_session(cx: &mut TestAppContext) {
     click(cx, "peek-attach");
     until(cx, "session screen", |cx| !shown(cx).trim().is_empty());
     click(cx, "tab-brain");
-    until(cx, "collection", |cx| {
-        cx.debug_bounds("brain-collection-0").is_some()
+    until(cx, "the page among the arrivals", |cx| {
+        cx.debug_bounds("brain-arrived-notes/page.md").is_some()
     });
-    click(cx, "brain-collection-0");
-    until(cx, "page listing", |cx| {
-        cx.debug_bounds("brain-shelf-0").is_some()
-    });
-    click(cx, "brain-shelf-0");
+    click(cx, "brain-arrived-notes/page.md");
     until(cx, "reader", |cx| {
         cx.debug_bounds("brain-reading-notes/page.md").is_some()
     });

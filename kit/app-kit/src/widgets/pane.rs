@@ -21,8 +21,8 @@ use crate::ask::Ask;
 use crate::host::{Host, Status};
 use crate::theme::{Theme, size};
 use gpui::{
-    AnyElement, Div, ElementId, FontWeight, Hsla, SharedString, Stateful, div, prelude::*, px,
-    relative,
+    AnyElement, Div, ElementId, FontWeight, Hsla, ScrollHandle, SharedString, Stateful, div,
+    prelude::*, px, relative,
 };
 
 /// The page: the list beside the detail, filling the page's area.
@@ -93,6 +93,22 @@ fn frame(t: &Theme, width: f32, head: Div, body: impl IntoElement) -> Div {
 /// what they act on however wide the window; the rule under the head
 /// still spans the detail. `id` names its scroll.
 pub fn detail(t: &Theme, id: impl Into<ElementId>, head: Div, body: impl IntoElement) -> Div {
+    reading(t, head, div().id(id), body)
+}
+
+/// [`detail`] whose scroll the page holds, to go back to the top or to a
+/// heading.
+pub fn detail_scrolled(
+    t: &Theme,
+    id: impl Into<ElementId>,
+    scroll: &ScrollHandle,
+    head: Div,
+    body: impl IntoElement,
+) -> Div {
+    reading(t, head, div().id(id).track_scroll(scroll), body)
+}
+
+fn reading(t: &Theme, head: Div, scroller: Stateful<Div>, body: impl IntoElement) -> Div {
     div()
         .flex_1()
         .min_w_0()
@@ -115,7 +131,7 @@ pub fn detail(t: &Theme, id: impl Into<ElementId>, head: Div, body: impl IntoEle
                 ),
         )
         .child(
-            div().id(id).flex_1().min_h_0().overflow_y_scroll().child(
+            scroller.flex_1().min_h_0().overflow_y_scroll().child(
                 div()
                     .w_full()
                     .max_w(px(size::READING))
