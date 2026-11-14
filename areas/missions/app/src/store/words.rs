@@ -57,33 +57,25 @@ pub fn harness_name(harness: &str) -> String {
     }
 }
 
-/// A slot's line on a card: `Claude · default · xhigh`.
+/// What works a slot, the same wherever it is shown: `Claude haiku · low`,
+/// `Codex · medium` when the harness's own model is used.
 pub fn slot_line(s: &Slot) -> String {
-    let model = if s.model.is_empty() {
-        "default"
+    let harness = harness_name(&s.harness);
+    let mut parts = vec![if s.model.is_empty() || s.model == "default" {
+        harness
     } else {
-        &s.model
-    };
-    let mut parts = vec![harness_name(&s.harness), model.to_string()];
+        format!("{harness} {}", s.model)
+    }];
     if !s.effort.is_empty() {
         parts.push(s.effort.clone());
     }
     parts.join(" · ")
 }
 
-/// Who does a step, as a line: `Builder · Claude haiku · low`.
+/// Who works a step: its role, then what works it, `Builder · Claude haiku
+/// · low`.
 pub fn who(s: &Slot) -> String {
-    let mut parts = vec![role_name(&s.agent_id)];
-    let harness = harness_name(&s.harness);
-    parts.push(if s.model.is_empty() || s.model == "default" {
-        harness
-    } else {
-        format!("{harness} {}", s.model)
-    });
-    if !s.effort.is_empty() {
-        parts.push(s.effort.clone());
-    }
-    parts.join(" · ")
+    format!("{} · {}", role_name(&s.agent_id), slot_line(s))
 }
 
 /// A role id as its card's name: `planner` reads Planner.
@@ -112,7 +104,7 @@ pub fn slot_label(slot: &Slot) -> &str {
 }
 
 /// Flow's staffing sentence for one slot: `Plan (controller) is Planner on
-/// Claude · default · xhigh.`
+/// Claude · xhigh.`
 pub fn staffing(s: &Slot) -> String {
     let role = if s.controller { " (controller)" } else { "" };
     format!(
@@ -430,7 +422,7 @@ mod tests {
         };
         assert_eq!(
             staffing(&s),
-            "Plan (controller) is Planner on Claude · default · xhigh."
+            "Plan (controller) is Planner on Claude · xhigh."
         );
     }
 

@@ -22,6 +22,9 @@ use std::collections::BTreeMap;
 pub struct Feed {
     pub missions: Option<Vec<MissionListing>>,
     pub runs: BTreeMap<String, RunProjection>,
+    /// The node has sent its runs at least once, so an empty `runs` means
+    /// none rather than not yet read.
+    pub runs_read: bool,
 }
 #[derive(Default)]
 pub struct Store {
@@ -78,6 +81,7 @@ impl Store {
             }
             RUNS_SNAPSHOT => {
                 if let Ok(runs) = serde_json::from_slice::<Vec<RunProjection>>(body) {
+                    feed.runs_read = true;
                     for run in runs {
                         if feed
                             .runs

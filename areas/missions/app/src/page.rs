@@ -1693,7 +1693,7 @@ impl Render for MissionsPage {
                             d
                         })
                         .when(matches!(ed.kind, EditKind::Step) && self.slot.is_some(), |d| d.child(self.slot_pickers(&t, cx)))
-                        .when(matches!(ed.kind, EditKind::Step) && !self.editor_more, |d| d.child(left(kit::button(&t, "step-more", "Team, device, repository, ports, limits, notes…", Kind::Quiet).debug_selector(|| "step-more".into()).on_click(cx.listener(|p, _, _, cx| { p.editor_more = true; cx.notify(); })))))
+                        .when(matches!(ed.kind, EditKind::Step) && !self.editor_more, |d| d.child(left(kit::button(&t, "step-more", "More…", Kind::Quiet).debug_selector(|| "step-more".into()).on_click(cx.listener(|p, _, _, cx| { p.editor_more = true; cx.notify(); })))))
                         .when(matches!(ed.kind, EditKind::Step) && self.editor_more, |d| d.child(kit::label(&t, "Team"))
                             .child({ let current = self.state.mission.as_ref().and_then(|m| m.formations.iter().find(|f| f.id == ed.id)).map(|f| f.kind.as_str()); let pick = |id: &'static str, text: &'static str, ty: &'static str| kit::button(&t, id, text, if current == Some(ty) { Kind::Plain } else { Kind::Quiet }).on_click(cx.listener(move |p, _, _, cx| p.set_type(ty, cx))); div().flex().gap(px(TAB_GAP)).child(pick("type-solo", "Solo", "solo")).child(pick("type-peer", "Peer", "peer")).child(pick("type-orchestrated", "Orchestrated", "orchestrated")) })
                             .child(kit::label(&t, "Device")).child(div().flex().gap(px(TAB_GAP)).child(div().flex_1().child(self.extra.clone()))

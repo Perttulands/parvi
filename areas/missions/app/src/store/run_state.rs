@@ -423,7 +423,7 @@ pub fn phrase(point: &Point, title: &str) -> String {
         PointKind::Failed if at.is_empty() => String::new(),
         PointKind::Failed => format!("failed at {at}"),
         PointKind::Canceled if at.is_empty() => String::new(),
-        PointKind::Canceled => format!("canceled at {at}"),
+        PointKind::Canceled => format!("stopped at {at}"),
     }
 }
 

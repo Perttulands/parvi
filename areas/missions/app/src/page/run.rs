@@ -1268,17 +1268,12 @@ impl MissionsPage {
             if !more {
                 form = form.child(
                     div().flex().pt(px(TAB_GAP)).child(
-                        kit::button(
-                            t,
-                            "run-start-more",
-                            "Repository, work item, context…",
-                            Kind::Quiet,
-                        )
-                        .debug_selector(|| "run-start-more".into())
-                        .on_click(cx.listener(|p, _, _, cx| {
-                            p.run.start_more = true;
-                            cx.notify();
-                        })),
+                        kit::button(t, "run-start-more", "More…", Kind::Quiet)
+                            .debug_selector(|| "run-start-more".into())
+                            .on_click(cx.listener(|p, _, _, cx| {
+                                p.run.start_more = true;
+                                cx.notify();
+                            })),
                     ),
                 );
             } else {

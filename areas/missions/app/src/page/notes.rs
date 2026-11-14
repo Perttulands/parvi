@@ -302,6 +302,7 @@ impl MissionsPage {
         };
         let (fill, edge) = paper(t, false);
         let target = card.id.clone();
+        let chosen = self.editor.as_ref().is_some_and(|ed| ed.id == card.id);
         let selector = format!("canvas-note-pin-{target}");
         div()
             .id(SharedString::from(selector.clone()))
@@ -320,7 +321,9 @@ impl MissionsPage {
             .items_center()
             .justify_center()
             .cursor_pointer()
-            .opacity(if has { 1. } else { 0.4 })
+            // An empty pin shows on its own card while that card is open,
+            // and under the pointer; otherwise the card stays plain.
+            .opacity(if has || chosen { 1. } else { 0. })
             .hover(|d| d.opacity(1.))
             .tooltip(kit::tip(if has {
                 "Open the note thread"

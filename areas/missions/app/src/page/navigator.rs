@@ -128,10 +128,26 @@ impl MissionsPage {
             _ if !row.run.r#final => (words::run_span(&row.run, now), Some(t.accent)),
             _ => (words::short_time(&row.run.updated_at, now), None),
         };
+        // What the run was given tells two runs of one mission apart.
+        let given = row.about.trim().to_owned();
+        let name = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .child(pane::cell(title.to_owned()))
+            .when(!given.is_empty(), |d| {
+                d.child(
+                    pane::cell(given)
+                        .text_size(px(size::SMALL))
+                        .text_color(t.dim)
+                        .font_weight(gpui::FontWeight::NORMAL),
+                )
+            });
         pane::row(t, SharedString::from(format!("nav-{node}-{id}")), chosen)
             .debug_selector(move || selector.clone())
-            .tooltip(kit::tip(format!("Run {} · {}", row.number, row.about)))
-            .child(pane::cell(title.to_owned()))
+            .py(px(size::ROW_INSET))
+            .child(name)
             .child(pane::meta(t, meta, colour))
             .on_click(cx.listener(move |page, _, _, cx| {
                 page.choose_run(node.clone(), slug.clone(), id.clone(), cx)
@@ -164,6 +180,11 @@ impl MissionsPage {
             || self.manage_is_open()
             || self.state.error.is_some()
         {
+            return;
+        }
+        // Missions and runs arrive apart; choosing before every node's runs
+        // are read would open a mission over its newest run.
+        if self.state.nodes.values().any(|feed| !feed.runs_read) {
             return;
         }
         let query = self.navigator.filter.read(cx).text.trim().to_lowercase();

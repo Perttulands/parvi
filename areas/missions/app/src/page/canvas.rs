@@ -1316,7 +1316,8 @@ fn card_face(
                         .flex_col()
                         .items_end()
                         .gap(px(CHIP_PAD * z))
-                        .child(chip(z, &f.kind, t.text2)),
+                        // A step is worked by one agent unless it says otherwise.
+                        .when(f.kind != "solo", |d| d.child(chip(z, &f.kind, t.text2))),
                 );
             face = face.child(head);
             let mut body = div()
@@ -1630,11 +1631,6 @@ fn slot_row(t: &parvi_app_kit::theme::Theme, slot: &parvi_missions_contract::Slo
         .items_center()
         .justify_center()
         .children(mark);
-    let model = if slot.model.is_empty() {
-        "default"
-    } else {
-        &slot.model
-    };
     div()
         .h(px(board::SLOT_H * z))
         .debug_selector(move || selector.clone())
@@ -1669,12 +1665,7 @@ fn slot_row(t: &parvi_app_kit::theme::Theme, slot: &parvi_missions_contract::Slo
                         .text_size(px(size::SMALL * z))
                         .text_color(t.text2)
                         .truncate()
-                        .child(format!(
-                            "{} · {} · {}",
-                            crate::store::words::harness_name(&slot.harness),
-                            model,
-                            slot.effort
-                        )),
+                        .child(crate::store::words::slot_line(slot)),
                 ),
         )
 }

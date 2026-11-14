@@ -133,6 +133,7 @@ mod tests {
                     .into_iter()
                     .map(|run| (run.run_id.clone(), run))
                     .collect(),
+                runs_read: true,
             },
         );
         let groups = groups(&store);

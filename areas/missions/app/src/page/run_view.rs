@@ -176,7 +176,6 @@ impl MissionsPage {
             head = head.child(
                 pane::act(t, "run-next", "Start next")
                     .debug_selector(|| "run-next".into())
-                    .tooltip(kit::tip("Start a mission from what this run produced"))
                     .on_click(cx.listener(move |page, e: &ClickEvent, _, cx| {
                         let rows = page.next_menu(&node, &value, &folder, cx);
                         page.host.menu(rows, e.position(), cx);
@@ -607,6 +606,8 @@ impl MissionsPage {
                     problem.seq,
                     &problem.reason.text,
                 ));
+                // Under the step's own name the reason need not name it again.
+                let reason = without_name(&reason, mission.node_name(&step.id));
                 let selector = format!("run-problem-{}-{}", problem.seq, problem.reason.text);
                 let colour = if status == Some(run_state::NodeState::Failed) {
                     t.error
@@ -794,9 +795,26 @@ fn standing(
                     "stopped".into()
                 }
             });
-            let reason = page.last_reason(run, name_of);
+            // A reason that names its step says it all: "Write tests ran out
+            // of time (8 s)"; one that does not follows where it stopped.
+            // A stop says why when it was given a reason of its own.
+            let stopped_for = run
+                .events
+                .iter()
+                .rfind(|e| e.kind == "run_canceled")
+                .map(|e| e.detail.trim())
+                .filter(|why| !why.is_empty() && *why != "operator abort")
+                .map(|why| (sentence(why).trim_end_matches('.').to_owned(), false));
+            let reason = if run.status == "canceled" {
+                stopped_for
+            } else {
+                page.last_reason(run, name_of)
+            };
             let words = match reason {
-                Some(reason) => format!("{}: {reason}", sentence(&lead).trim_end_matches('.')),
+                Some((reason, true)) => reason,
+                Some((reason, false)) => {
+                    format!("{}: {reason}", sentence(&lead).trim_end_matches('.'))
+                }
                 None => sentence(&lead),
             };
             let colour = if run.status == "failed" {
@@ -825,9 +843,13 @@ fn standing(
 }
 
 impl MissionsPage {
-    /// Why a failed or stopped run ended, in plain words: the last problem
-    /// its evidence records, without its step's name in front.
-    fn last_reason(&self, run: &RunProjection, name_of: &dyn Fn(&str) -> String) -> Option<String> {
+    /// Why a failed or stopped run ended, in plain words, and whether
+    /// those words begin with the step they are about.
+    fn last_reason(
+        &self,
+        run: &RunProjection,
+        name_of: &dyn Fn(&str) -> String,
+    ) -> Option<(String, bool)> {
         let problem = self.run.evidence.evidence.as_ref()?.problems.last()?;
         let reason = parvi_missions_contract::plain_reason(&run_state::problem_now(
             &run.events,
@@ -835,13 +857,26 @@ impl MissionsPage {
             &problem.reason.text,
         ));
         let name = name_of(&problem.node_id);
-        let reason = reason
-            .strip_prefix(&name)
-            .map(str::trim_start)
-            .unwrap_or(&reason)
-            .to_owned();
-        (!reason.is_empty()).then_some(reason)
+        let named = !name.is_empty() && reason.starts_with(&format!("{name} "));
+        (!reason.is_empty()).then_some((reason, named))
     }
+}
+
+/// `reason` without `name` in front, its first word made a capital:
+/// "Write tests ran out of time" under Write tests reads "Ran out of time".
+fn without_name(reason: &str, name: &str) -> String {
+    let Some(rest) = reason
+        .strip_prefix(name)
+        .filter(|rest| !name.is_empty() && rest.starts_with(' '))
+    else {
+        return reason.to_owned();
+    };
+    let rest = rest.trim_start();
+    let mut chars = rest.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
 }
 
 /// The value a next mission starts from: the run's first file, else its
@@ -1107,5 +1142,25 @@ impl MissionsPage {
             out.push(row.child(actions));
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_reason_under_its_step_drops_the_steps_name() {
+        assert_eq!(
+            super::without_name("Write tests ran out of time (8 s)", "Write tests"),
+            "Ran out of time (8 s)"
+        );
+        // Only a whole name comes off, and a reason about something else stays.
+        assert_eq!(
+            super::without_name("Writers stopped", "Write"),
+            "Writers stopped"
+        );
+        assert_eq!(
+            super::without_name("The agent stopped", "Write tests"),
+            "The agent stopped"
+        );
     }
 }
