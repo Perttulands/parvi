@@ -191,6 +191,10 @@ fn until(
     }
 }
 fn click(cx: &mut VisualTestContext, selector: &str) {
+    // Aim at the frame the click lands on: draw what changed since the
+    // last frame first, so a head that just grew is not aimed at stale.
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
     let at = cx
         .debug_bounds(Box::leak(selector.to_owned().into_boxed_str()))
         .expect(selector)
@@ -246,11 +250,9 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
     until(cx, "mission flow", |cx| {
         cx.debug_bounds("flow-step-fmn_work").is_some()
     });
-    click(cx, "mission-mode-canvas");
-    until(cx, "mission opened by role ask", |cx| {
-        cx.debug_bounds("mission-card-fmn_work").is_some()
-    });
-    click(cx, "mission-card-fmn_work");
+    // A step's Edit opens its editor beside the mission as read, where
+    // Start stays in the head.
+    click(cx, "flow-edit-fmn_work");
     until(cx, "step editor", |cx| {
         cx.debug_bounds("step-goal").is_some()
     });
@@ -348,6 +350,9 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
     });
     cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
     cx.run_until_parked();
+    // Context paths wait behind one line with the other rarely needed fields.
+    click(cx, "run-start-more");
+    cx.run_until_parked();
     let footer = cx.debug_bounds("run-start-actions").unwrap();
     let start = cx.debug_bounds("run-start").unwrap();
     let cancel = cx.debug_bounds("run-cancel").unwrap();
@@ -396,36 +401,6 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
     click(cx, "stop-keep");
     until(cx, "stop dismissed", |cx| {
         cx.debug_bounds("stop-run").is_none()
-    });
-    for _ in 0..8 {
-        let y = f32::from(cx.debug_bounds("run-mode-canvas").unwrap().center().y);
-        if (100. ..800.).contains(&y) {
-            break;
-        }
-        cx.simulate_event(gpui::ScrollEvent {
-            position: point(px(700.), px(500.)),
-            delta: gpui::ScrollDelta::Pixels(point(px(0.), px((500. - y).clamp(-400., 400.)))),
-            modifiers: Default::default(),
-            touch_phase: gpui::TouchPhase::Moved,
-            source: gpui::ScrollSource::Pointer,
-        });
-        cx.run_until_parked();
-    }
-    click(cx, "run-mode-canvas");
-    until(cx, "run canvas", |cx| {
-        cx.debug_bounds("mission-canvas").is_some()
-    });
-    click(cx, "run-mode-flow");
-    until(cx, "run flow", |cx| {
-        cx.debug_bounds("run-step-fmn_work-running").is_some()
-    });
-    click(cx, "run-events");
-    until(cx, "events drawer", |cx| {
-        cx.debug_bounds("run-events-drawer").is_some()
-    });
-    click(cx, "run-events");
-    until(cx, "events closed", |cx| {
-        cx.debug_bounds("run-events-drawer").is_none()
     });
     let run_id = client_runtime.block_on(async {
         let client = NodeClient::new(Some(&format!("{}/", running.url))).unwrap();
@@ -540,11 +515,11 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
         cx.debug_bounds("run-step-end_done-done").is_some()
             || cx.debug_bounds("run-finished-succeeded").is_some()
     });
+    // No repository, so nothing to land; a finished run can still be sent.
     assert!(cx.debug_bounds("run-land").is_none());
-    assert!(cx.debug_bounds("run-send").is_none());
-    click(cx, "run-events");
-    until(cx, "gate response in run history", |cx| {
-        cx.debug_bounds("run-event-human_verdict_recorded-Approved after review")
+    assert!(cx.debug_bounds("run-send").is_some());
+    until(cx, "gate response under its step", |cx| {
+        cx.debug_bounds("run-verdict-Approved after review")
             .is_some()
     });
     until(cx, "gate response saved", |cx| {
@@ -581,14 +556,17 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
             )
             .unwrap();
     });
-    until(cx, "the run's output", |cx| {
-        cx.debug_bounds("use-output-result").is_some()
+    // Start next offers the missions to start from what the run produced.
+    // The head settles once the mission has loaded (Run again joins it).
+    until(cx, "the run's next", |cx| {
+        cx.debug_bounds("run-next").is_some() && cx.debug_bounds("run-again").is_some()
     });
-    click(cx, "use-output-result");
+    click(cx, "run-next");
+    cx.run_until_parked();
     until(cx, "missions to use it in", |cx| {
-        cx.debug_bounds("use-in-gated").is_some()
+        cx.debug_bounds("menu-label-Gated").is_some()
     });
-    click(cx, "use-in-gated");
+    click(cx, "menu-label-Gated");
     until(cx, "start form holding the output", |cx| {
         cx.debug_bounds("run-start").is_some()
     });
@@ -618,13 +596,22 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
             .unwrap();
     });
     until(cx, "mission after run", |cx| {
-        cx.debug_bounds("mission-mode-flow").is_some()
+        cx.debug_bounds("mission-mode-canvas").is_some()
     });
-    click(cx, "mission-mode-flow");
-    until(cx, "mission notes in Flow", |cx| {
-        cx.debug_bounds("mission-note-draft").is_some()
+    // A note on the whole mission is written while editing it.
+    click(cx, "mission-mode-canvas");
+    until(cx, "the editor's menu", |cx| {
+        cx.debug_bounds("edit-more").is_some()
     });
-    click(cx, "mission-note-draft");
+    click(cx, "edit-more");
+    until(cx, "mission note", |cx| {
+        cx.debug_bounds("menu-label-Note on the mission").is_some()
+    });
+    click(cx, "menu-label-Note on the mission");
+    until(cx, "mission note paper", |cx| {
+        cx.debug_bounds("canvas-note-field").is_some()
+    });
+    click(cx, "canvas-note-field");
     cx.simulate_input("A note");
     cx.run_until_parked();
     assert!(
@@ -632,17 +619,16 @@ fn starts_a_run_sees_active_step_answers_gate_and_shows_admission_findings(
             .read_with(cx, |s, cx| s.hub().read(cx).unsaved(cx))
             .is_empty()
     );
-    click(cx, "mission-add-note");
+    click(cx, "canvas-note-save-mission");
     until(cx, "note saved", |cx| {
         shell
             .read_with(cx, |s, cx| s.hub().read(cx).unsaved(cx))
             .is_empty()
     });
-    click(cx, "mission-mode-canvas");
     let bad = format!("mission-{}-admission-findings", running.id);
     click(cx, &bad);
     until(cx, "bad mission", |cx| {
-        cx.debug_bounds("mission-card-empty").is_some()
+        cx.debug_bounds("flow-step-empty").is_some()
     });
     click(cx, "prepare-run");
     until(cx, "start form", |cx| {

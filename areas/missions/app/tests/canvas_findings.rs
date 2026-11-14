@@ -198,6 +198,13 @@ fn canvas_shows_exact_findings_on_cards_and_edges_and_clears_them(cx: &mut TestA
     until(cx, "clean listing", |cx| cx.debug_bounds(clean).is_some());
     let position = cx.debug_bounds(clean).unwrap().center();
     cx.simulate_click(position, Modifiers::none());
+    // Another mission opens to be read; its canvas is one click away.
+    until(cx, "clean mission", |cx| {
+        cx.debug_bounds("mission-validation-complete").is_some()
+            && cx.debug_bounds("mission-mode-canvas").is_some()
+    });
+    let edit = cx.debug_bounds("mission-mode-canvas").unwrap().center();
+    cx.simulate_click(edit, Modifiers::none());
     until(cx, "clean validation", |cx| {
         cx.debug_bounds("mission-validation-complete").is_some()
             && cx.debug_bounds("mission-card-step_work").is_some()

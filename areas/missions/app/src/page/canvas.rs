@@ -174,7 +174,16 @@ impl View {
             .min((h - FIT_MARGIN) / bh)
             .clamp(ZOOM_MIN, 1.);
         self.zoom = z;
-        self.pan = ((w - bw * z) / 2. - x * z, (h - bh * z) / 2. - y * z);
+        // Centred when it fits; a board too big even at the least zoom shows
+        // its start, where the Input is, rather than cutting it off.
+        let place = |room: f32, size: f32, at: f32| {
+            if size * z <= room {
+                (room - size * z) / 2. - at * z
+            } else {
+                FIT_MARGIN / 2. - at * z
+            }
+        };
+        self.pan = (place(w, bw, x), place(h, bh, y));
         // An empty board fits again once its first card lands.
         self.fitted = !board.cards.is_empty();
     }
@@ -1391,7 +1400,10 @@ fn card_face(
                             )
                             .flex_1(),
                         )
-                        .child(chip(z, output, state_words(t, state).1)),
+                        // A step's output has a state only while a run is shown.
+                        .when(state.is_some(), |d| {
+                            d.child(chip(z, output, state_words(t, state).1))
+                        }),
                 );
             }
             face

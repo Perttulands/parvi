@@ -108,6 +108,7 @@ mod tests {
                 id: title.into(),
                 title: title.into(),
                 rev: Some(1),
+                steps: 0,
                 broken: None,
             }]
         };

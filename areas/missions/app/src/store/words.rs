@@ -71,6 +71,21 @@ pub fn slot_line(s: &Slot) -> String {
     parts.join(" · ")
 }
 
+/// Who does a step, as a line: `Builder · Claude haiku · low`.
+pub fn who(s: &Slot) -> String {
+    let mut parts = vec![role_name(&s.agent_id)];
+    let harness = harness_name(&s.harness);
+    parts.push(if s.model.is_empty() || s.model == "default" {
+        harness
+    } else {
+        format!("{harness} {}", s.model)
+    });
+    if !s.effort.is_empty() {
+        parts.push(s.effort.clone());
+    }
+    parts.join(" · ")
+}
+
 /// A role id as its card's name: `planner` reads Planner.
 pub fn role_name(agent: &str) -> String {
     if agent.is_empty() {
@@ -236,6 +251,15 @@ pub fn input_excerpt(run: &Run) -> String {
     let Some(i) = first else {
         return String::new();
     };
+    if matches!(i.kind.as_str(), "file" | "folder") {
+        return i
+            .value
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or(&i.value)
+            .to_owned();
+    }
     let text = i.value.split_whitespace().collect::<Vec<_>>().join(" ");
     if text.chars().count() > 90 {
         format!("{}…", text.chars().take(89).collect::<String>())

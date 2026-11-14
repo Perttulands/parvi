@@ -1,8 +1,7 @@
 //! Run controls and views; the channel projection remains in the store.
 use super::*;
 use crate::store::run_state;
-use gpui::{FocusHandle, KeyDownEvent, SharedString, Stateful, Subscription, rgb};
-use parvi_app_kit::theme::board;
+use gpui::{FocusHandle, KeyDownEvent, SharedString, Subscription};
 use parvi_app_kit::{ask::Ask, theme::Theme};
 use parvi_missions_contract::{
     AdmissionRejection, AttemptsResponse, Mission, RunId, RunProjection, RunStart,
@@ -10,43 +9,41 @@ use parvi_missions_contract::{
 use std::collections::BTreeMap;
 
 pub(super) struct RunUi {
-    selected: Option<String>,
-    reveal_step: Option<String>,
-    frozen: Option<Mission>,
-    starting: bool,
-    start_keys_ready: bool,
-    start_subs: Vec<Subscription>,
-    target: Option<String>,
-    start_card: Option<String>,
-    start_definition: Option<(Mission, String)>,
-    request_id: String,
-    uncertain: Option<(serde_json::Value, String)>,
-    cwd: Entity<TextField>,
-    repository: Entity<TextField>,
-    base: Entity<TextField>,
-    work: Entity<TextField>,
-    paths: Entity<TextField>,
-    busy: bool,
-    abort_armed: bool,
-    stop_reason: Entity<TextField>,
-    events_open: bool,
+    pub(super) selected: Option<String>,
+    pub(super) reveal_step: Option<String>,
+    pub(super) frozen: Option<Mission>,
+    pub(super) starting: bool,
+    pub(super) start_keys_ready: bool,
+    pub(super) start_subs: Vec<Subscription>,
+    pub(super) target: Option<String>,
+    pub(super) start_card: Option<String>,
+    pub(super) start_definition: Option<(Mission, String)>,
+    pub(super) request_id: String,
+    pub(super) uncertain: Option<(serde_json::Value, String)>,
+    pub(super) cwd: Entity<TextField>,
+    pub(super) repository: Entity<TextField>,
+    pub(super) base: Entity<TextField>,
+    pub(super) work: Entity<TextField>,
+    pub(super) paths: Entity<TextField>,
+    pub(super) busy: bool,
+    pub(super) abort_armed: bool,
+    pub(super) stop_reason: Entity<TextField>,
+    /// The start form shows its rarely needed fields.
+    pub(super) start_more: bool,
     /// A one-second redraw is pending so a shown running run's clock moves.
-    ticking: bool,
-    /// The output whose list of missions to use it in is open.
-    using: Option<String>,
-    canvas_mode: bool,
-    fields: BTreeMap<String, Entity<TextField>>,
-    responses: BTreeMap<String, Entity<TextField>>,
-    pub error: Option<String>,
-    pub findings: Vec<String>,
-    attempts: Option<AttemptsResponse>,
-    attempt_window: Option<crate::store::attempts::AttemptsWindow>,
-    attempts_focus: FocusHandle,
-    attempt_reason: Entity<TextField>,
-    attempts_at: Option<usize>,
-    pending_attempt: Option<(String, bool)>,
-    evidence: crate::store::evidence::Store,
-    gates: BTreeMap<
+    pub(super) ticking: bool,
+    pub(super) fields: BTreeMap<String, Entity<TextField>>,
+    pub(super) responses: BTreeMap<String, Entity<TextField>>,
+    pub(super) error: Option<String>,
+    pub(super) findings: Vec<String>,
+    pub(super) attempts: Option<AttemptsResponse>,
+    pub(super) attempt_window: Option<crate::store::attempts::AttemptsWindow>,
+    pub(super) attempts_focus: FocusHandle,
+    pub(super) attempt_reason: Entity<TextField>,
+    pub(super) attempts_at: Option<usize>,
+    pub(super) pending_attempt: Option<(String, bool)>,
+    pub(super) evidence: crate::store::evidence::Store,
+    pub(super) gates: BTreeMap<
         String,
         (
             u64,
@@ -79,10 +76,8 @@ impl RunUi {
             busy: false,
             abort_armed: false,
             stop_reason: cx.new(|cx| TextField::new(cx, "Why (optional)")),
-            events_open: false,
+            start_more: false,
             ticking: false,
-            using: None,
-            canvas_mode: false,
             fields: BTreeMap::new(),
             responses: BTreeMap::new(),
             error: None,
@@ -164,8 +159,6 @@ impl MissionsPage {
         self.run.selected = Some(run.clone());
         self.run.reveal_step = None;
         self.run.abort_armed = false;
-        self.run.events_open = false;
-        self.run.canvas_mode = false;
         self.run.starting = false;
         self.run.frozen = None;
         self.run.attempts = None;
@@ -350,7 +343,8 @@ impl MissionsPage {
             );
         }
         if !folder.is_empty() {
-            return format!("Files go to {folder}.");
+            // The folder field already says where.
+            return String::new();
         }
         // Parvi makes a folder named after the run; where earlier ones are
         // shows where.
@@ -437,9 +431,17 @@ impl MissionsPage {
         self.run.starting = true;
         cx.notify();
     }
-    /// Open another mission with a run's output as its first input.
-    fn use_output(&mut self, node: String, slug: String, value: String, cx: &mut Context<Self>) {
-        self.carry = Some(value);
+    /// Open another mission with a run's output as its first input and
+    /// the run's folder as where it works.
+    pub(super) fn use_output(
+        &mut self,
+        node: String,
+        slug: String,
+        value: String,
+        folder: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.carry = Some((value, folder));
         let target = (node.clone(), slug.clone());
         self.open(node, slug, cx);
         if self.state.selected.as_ref() != Some(&target) {
@@ -447,8 +449,13 @@ impl MissionsPage {
         }
     }
     /// The start form of the open mission, its first input holding `value`.
-    pub(super) fn start_with(&mut self, value: &str, cx: &mut Context<Self>) {
+    pub(super) fn start_with(&mut self, value: &str, folder: &str, cx: &mut Context<Self>) {
         self.prepare_run(cx);
+        if !folder.is_empty() {
+            self.run
+                .cwd
+                .update(cx, |field, cx| field.set(folder, false, cx));
+        }
         let first = self
             .state
             .mission
@@ -462,7 +469,12 @@ impl MissionsPage {
         }
     }
     /// The start form for a finished run's mission, holding its inputs.
-    fn run_again(&mut self, card: &str, inputs: &[(String, String)], cx: &mut Context<Self>) {
+    pub(super) fn run_again(
+        &mut self,
+        card: &str,
+        inputs: &[(String, String)],
+        cx: &mut Context<Self>,
+    ) {
         let known = self
             .state
             .mission
@@ -584,11 +596,6 @@ impl MissionsPage {
         }
         if self.run.abort_armed {
             self.run.abort_armed = false;
-            cx.notify();
-            return true;
-        }
-        if self.run.events_open {
-            self.run.events_open = false;
             cx.notify();
             return true;
         }
@@ -773,7 +780,12 @@ impl MissionsPage {
         .detach();
         cx.notify();
     }
-    fn run_post(&mut self, suffix: String, body: serde_json::Value, cx: &mut Context<Self>) {
+    pub(super) fn run_post(
+        &mut self,
+        suffix: String,
+        body: serde_json::Value,
+        cx: &mut Context<Self>,
+    ) {
         if self.run.busy {
             return;
         }
@@ -808,15 +820,21 @@ impl MissionsPage {
         .detach();
         cx.notify();
     }
-    fn verdict(&mut self, gate: &str, seq: u64, verdict: &str, cx: &mut Context<Self>) {
+    pub(super) fn verdict(&mut self, gate: &str, seq: u64, verdict: &str, cx: &mut Context<Self>) {
         let body = json!({"requestedSeq":seq, "verdict":verdict, "reason":self.run.responses.get(gate).map(|f| f.read(cx).text.clone()).unwrap_or_default(), "actor":"human:operator"});
         self.run_post(format!("/gates/{}/verdict", segment(gate)), body, cx);
     }
-    fn pick(&mut self, gate: &str, seq: u64, attempt: i64, cx: &mut Context<Self>) {
+    pub(super) fn pick(&mut self, gate: &str, seq: u64, attempt: i64, cx: &mut Context<Self>) {
         let body = json!({"requestedSeq":seq, "attempt":attempt, "reason":self.run.responses.get(gate).map(|f| f.read(cx).text.clone()).unwrap_or_default(), "actor":"human:operator"});
         self.run_post(format!("/gates/{}/pick", segment(gate)), body, cx);
     }
-    fn read_evidence(&mut self, node: &str, run: &str, at: usize, cx: &mut Context<Self>) {
+    pub(super) fn read_evidence(
+        &mut self,
+        node: &str,
+        run: &str,
+        at: usize,
+        cx: &mut Context<Self>,
+    ) {
         self.run.evidence.read_at = Some(at);
         let node = node.to_owned();
         let run = run.to_owned();
@@ -920,7 +938,7 @@ impl MissionsPage {
             .detach();
         }
     }
-    fn attempts(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn attempts(&mut self, cx: &mut Context<Self>) {
         let (Some((node, _)), Some(run)) = (self.state.selected.clone(), self.run.selected.clone())
         else {
             return;
@@ -1055,57 +1073,6 @@ impl MissionsPage {
         cx.stop_propagation();
         cx.notify();
     }
-    pub(super) fn seat_control(
-        &self,
-        t: &Theme,
-        seat: crate::store::seats::Seat,
-        scope: &str,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        use crate::store::seats::State;
-        let state = match seat.state {
-            State::Live => "live",
-            State::Ended => "ended",
-            State::Unavailable => "unavailable",
-        };
-        let selector = format!(
-            "{scope}-seat-{}-{}-{state}-{}",
-            seat.run, seat.seq, seat.name
-        );
-        let text = match seat.state {
-            State::Live => "Open terminal",
-            State::Ended => "Session ended",
-            State::Unavailable => "Session unavailable",
-        };
-        let kind = if seat.state == State::Live {
-            Kind::Plain
-        } else {
-            Kind::Quiet
-        };
-        let button = kit::button(t, SharedString::from(selector.clone()), text, kind)
-            .debug_selector(move || selector.clone())
-            .tooltip(kit::tip(seat.name.clone()));
-        let button = if seat.state == State::Live {
-            button.on_click(cx.listener(move |page, _, _, cx| {
-                if let Err(error) = page.host.ask(
-                    Ask::Reveal {
-                        what: "session".into(),
-                        id: seat.session.clone(),
-                        node: Some(NodeId(seat.node.clone())),
-                        part: None,
-                        beside: false,
-                    },
-                    cx,
-                ) {
-                    page.state.error = Some(error.message);
-                    cx.notify();
-                }
-            }))
-        } else {
-            button.cursor_default().text_color(t.dim)
-        };
-        div().child(button)
-    }
     /// Where an input's value can come from besides typing: a file picked
     /// on this device, or what an earlier run produced.
     fn input_sources(
@@ -1188,12 +1155,26 @@ impl MissionsPage {
         cx: &mut Context<Self>,
     ) -> Option<Div> {
         if self.run.starting {
-            let mut form = div()
-                .p(px(PAD))
-                .flex()
-                .flex_col()
-                .gap(px(PAD))
-                .child("Start mission");
+            let title = self
+                .run
+                .start_definition
+                .as_ref()
+                .map(|(mission, _)| mission)
+                .or(self.state.mission.as_ref())
+                .map(|m| {
+                    if m.title.trim().is_empty() {
+                        m.slug.clone()
+                    } else {
+                        m.title.clone()
+                    }
+                })
+                .unwrap_or_default();
+            let mut form = div().p(px(PAD)).flex().flex_col().gap(px(TAB_GAP)).child(
+                div()
+                    .pb(px(TAB_GAP))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(format!("Start {title}")),
+            );
             let declared = self.run.start_definition.as_ref().and_then(|(mission, _)| {
                 mission
                     .input_cards
@@ -1226,9 +1207,9 @@ impl MissionsPage {
                     .unwrap_or("text");
                 let selector = format!("run-input-{name}");
                 form = form
-                    .child(format!(
-                        "{name}{} · {kind}",
-                        if required { " (required)" } else { "" }
+                    .child(kit::label(
+                        t,
+                        format!("{name}{}", if required { "" } else { " (optional)" }),
                     ))
                     .child(
                         div()
@@ -1242,7 +1223,7 @@ impl MissionsPage {
             }
             let cwd = self.run.cwd.clone();
             form = form
-                .child("Working folder")
+                .child(kit::label(t, "Folder"))
                 .child(
                     div()
                         .flex()
@@ -1272,26 +1253,64 @@ impl MissionsPage {
                 )
                 .child(
                     div()
+                        .when(self.files_go(cx).is_empty(), |d| d.hidden())
                         .debug_selector(|| "run-files-go".into())
-                        .text_color(t.text2)
+                        .text_size(px(size::SMALL))
+                        .text_color(t.dim)
                         .child(self.files_go(cx)),
-                )
-                .child("Repository")
-                .child(self.repository_picker(t, &self.run.repository, "run-repository", cx));
-            // A base names where a repository's branch starts; without one
-            // it means nothing.
-            if !self.run.repository.read(cx).text.trim().is_empty() {
-                form = form.child("Base").child(div().child(self.run.base.clone()));
-            }
-            form = form
-                .child("Work reference")
-                .child(div().child(self.run.work.clone()))
-                .child("Context paths")
-                .child(
-                    div()
-                        .debug_selector(|| "run-context-paths".into())
-                        .child(self.run.paths.clone()),
                 );
+            // What few runs need waits behind one line, open once any of it
+            // holds something.
+            let more = self.run.start_more
+                || !self.run.repository.read(cx).text.trim().is_empty()
+                || !self.run.work.read(cx).text.trim().is_empty()
+                || !self.run.paths.read(cx).text.trim().is_empty();
+            if !more {
+                form = form.child(
+                    div().flex().pt(px(TAB_GAP)).child(
+                        kit::button(
+                            t,
+                            "run-start-more",
+                            "Repository, work item, context…",
+                            Kind::Quiet,
+                        )
+                        .debug_selector(|| "run-start-more".into())
+                        .on_click(cx.listener(|p, _, _, cx| {
+                            p.run.start_more = true;
+                            cx.notify();
+                        })),
+                    ),
+                );
+            } else {
+                if self.repositories.as_ref().is_some_and(|r| !r.is_empty())
+                    || !self.run.repository.read(cx).text.trim().is_empty()
+                {
+                    form = form
+                        .child(kit::label(t, "Repository"))
+                        .child(self.repository_picker(
+                            t,
+                            &self.run.repository,
+                            "run-repository",
+                            cx,
+                        ));
+                }
+                // A base names where a repository's branch starts; without
+                // one it means nothing.
+                if !self.run.repository.read(cx).text.trim().is_empty() {
+                    form = form
+                        .child(kit::label(t, "Base"))
+                        .child(div().child(self.run.base.clone()));
+                }
+                form = form
+                    .child(kit::label(t, "Work item"))
+                    .child(div().child(self.run.work.clone()))
+                    .child(kit::label(t, "Context paths"))
+                    .child(
+                        div()
+                            .debug_selector(|| "run-context-paths".into())
+                            .child(self.run.paths.clone()),
+                    );
+            }
             if self.run.uncertain.is_some() && !self.run.busy {
                 form = form.child("Retry sends the same start request and its original values.");
             }
@@ -1346,7 +1365,7 @@ impl MissionsPage {
                 );
             }
             actions = actions.child(
-                kit::button(t, "run-start", "Start run", Kind::Primary)
+                kit::button(t, "run-start", "Start", Kind::Primary)
                     .debug_selector(|| "run-start".into())
                     .on_click(cx.listener(|p, _, _, cx| p.start_run(cx))),
             );
@@ -1768,1196 +1787,7 @@ impl MissionsPage {
         }
         None
     }
-    /// The run as the operator reads it on coming back: what it is and where
-    /// it stands, what it produced, then each step with its seat, brief and
-    /// attempts, and last the record (problems, files, events).
-    pub(super) fn run_view(&mut self, t: &Theme, cx: &mut Context<Self>) -> Option<Div> {
-        if self.run.starting {
-            return None;
-        }
-        self.run.selected.as_ref()?;
-        let mut view = div().p(px(PAD)).flex().flex_col().gap(px(PAD));
-        let Some(run) = self.selected_run().cloned() else {
-            return Some(view.child(kit::note(t, "Waiting for run state…", None)));
-        };
-        if !run.r#final && !self.run.ticking {
-            // Only a drawn run view asks for the next second; a hidden page
-            // or a finished run draws no more and so stops asking.
-            self.run.ticking = true;
-            cx.spawn(async move |this, cx| {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_secs(1))
-                    .await;
-                let _ = this.update(cx, |page, cx| {
-                    page.run.ticking = false;
-                    cx.notify();
-                });
-            })
-            .detach();
-        }
-        let frozen = self.run.frozen.clone();
-        let mission = frozen.as_ref().or(self.state.mission.as_ref());
-        let title = mission
-            .map(|m| m.title.trim())
-            .filter(|title| !title.is_empty())
-            .unwrap_or(&run.mission_slug)
-            .to_owned();
-        let number = crate::store::navigator::groups(&self.state)
-            .into_iter()
-            .flat_map(|group| group.runs)
-            .find(|row| row.run.run_id == run.run_id)
-            .map(|row| row.number);
-        let node = self
-            .state
-            .selected
-            .as_ref()
-            .map(|(n, _)| n.clone())
-            .unwrap_or_default();
-        let place = self
-            .host
-            .nodes(cx)
-            .into_iter()
-            .find(|n| n.id.as_str() == node)
-            .map(|n| format!("{} ({})", n.device, n.environment))
-            .unwrap_or_else(|| node.clone());
-        let now = time::OffsetDateTime::now_utc();
-        let name_of = |id: &str| -> String {
-            frozen
-                .as_ref()
-                .map(|m| m.node_name(id).to_owned())
-                .filter(|name| !name.is_empty())
-                .unwrap_or_else(|| id.to_owned())
-        };
-
-        // Header: which run, its state, and what can be done to it now.
-        let mut facts = vec![format!(
-            "Started {} by {}",
-            crate::store::words::short_time(&run.started_at, now),
-            crate::store::words::actor_label(&run.started_by)
-        )];
-        facts.push(if run.r#final {
-            format!("took {}", crate::store::words::run_span(&run, now))
-        } else if run.status == "blocked" {
-            format!(
-                "stopped {}, waiting for you",
-                crate::store::words::short_time(&run.updated_at, now)
-            )
-        } else {
-            format!("running {}", crate::store::words::run_span(&run, now))
-        });
-        if !run.work.is_empty() {
-            facts.push(crate::store::words::work_label(&run.work));
-        }
-        if let Some(branch) = crate::store::words::run_branch(&run) {
-            facts.push(format!("branch {branch}"));
-        }
-        let mut actions = div().flex().items_center().gap(px(TAB_GAP));
-        if !run.r#final {
-            let reference = crate::store::words::run_reference(&run, &place);
-            actions = actions
-                .child(
-                    kit::button(t, "run-send", "Send to session", Kind::Quiet)
-                        .debug_selector(|| "run-send".into())
-                        .tooltip(kit::tip("Hand this run to an agent session"))
-                        .on_click(cx.listener(move |p, _, _, cx| {
-                            if let Err(e) = p.host.ask(
-                                Ask::Send {
-                                    reference: reference.clone(),
-                                    target: None,
-                                },
-                                cx,
-                            ) {
-                                p.run.error = Some(e.message);
-                                cx.notify();
-                            }
-                        })),
-                )
-                .child(
-                    kit::button(t, "run-abort", "Stop run", Kind::Plain)
-                        .debug_selector(|| "run-abort".into())
-                        .on_click(cx.listener(|page, _, window, cx| {
-                            page.run
-                                .stop_reason
-                                .update(cx, |field, cx| field.set("", false, cx));
-                            page.run.abort_armed = true;
-                            parvi_app_kit::widgets::field::focus(&page.run.stop_reason, window, cx);
-                            cx.notify();
-                        })),
-                );
-        } else if !run.repository.is_empty() {
-            actions = actions.child(
-                kit::button(t, "run-land", "Land repository run", Kind::Plain)
-                    .debug_selector(|| "run-land".into())
-                    .on_click(cx.listener(|p, _, _, cx| {
-                        p.run_post("/land".into(), json!({"force":false}), cx)
-                    })),
-            );
-        }
-        if run.r#final
-            && self.state.mission.is_some()
-            && self.state.selected.as_ref().map(|(_, slug)| slug) == Some(&run.mission_slug)
-        {
-            let inputs: Vec<(String, String)> = run
-                .inputs
-                .iter()
-                .map(|value| (value.name.clone(), value.value.clone()))
-                .collect();
-            let card = run.input_card_id.clone();
-            actions = actions.child(
-                kit::button(t, "run-again", "Run again…", Kind::Plain)
-                    .debug_selector(|| "run-again".into())
-                    .tooltip(kit::tip("Start this mission again with the same inputs"))
-                    .on_click(cx.listener(move |p, _, _, cx| p.run_again(&card, &inputs, cx))),
-            );
-        }
-        let status_selector = format!("run-finished-{}", run.status);
-        let heading = match number {
-            Some(n) => format!("Run {n} · {title}"),
-            None => format!("Run · {title}"),
-        };
-        view = view.child(
-            div()
-                .flex()
-                .items_start()
-                .justify_between()
-                .gap(px(PAD))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(4.))
-                        .min_w_0()
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(PAD))
-                                .child(
-                                    div()
-                                        .debug_selector({
-                                            let title = title.clone();
-                                            move || format!("run-mission-{title}")
-                                        })
-                                        .text_size(px(board::HEADING))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child(heading),
-                                )
-                                .child(
-                                    chip(
-                                        &crate::store::words::state_chip(&run.status),
-                                        run_colour(t, &run.status),
-                                    )
-                                    .debug_selector(move || status_selector.clone()),
-                                ),
-                        )
-                        .child(kit::note(t, facts.join(" · "), None)),
-                )
-                .child(actions),
-        );
-        if self.run.frozen.is_none() && self.run.error.is_some() {
-            view = view.child(
-                kit::button(t, "retry-run-definition", "Try again", Kind::Plain)
-                    .debug_selector(|| "retry-run-definition".into())
-                    .on_click(cx.listener(|page, _, _, cx| {
-                        if let Some(run) = page.run.selected.clone() {
-                            page.show_run(run, cx);
-                        }
-                    })),
-            );
-        }
-        if let Some(part) = &self.run.reveal_step {
-            let name = name_of(part);
-            let selector = format!("run-reveal-{part}");
-            view = view.child(
-                div()
-                    .debug_selector(move || selector.clone())
-                    .text_color(t.accent)
-                    .child(format!("Showing {name}")),
-            );
-        }
-
-        // Where it is now, in one or two sentences.
-        let points = run_state::points(&run);
-        for point in &points {
-            let phrase = run_state::phrase(point, &name_of(&point.node));
-            if phrase.is_empty() {
-                continue;
-            }
-            let selector = format!("run-sentence-{phrase}");
-            let colour = match point.kind {
-                run_state::PointKind::Blocked | run_state::PointKind::Failed => t.error,
-                run_state::PointKind::Waiting => rgb(t.ansi[3]).into(),
-                _ => t.text,
-            };
-            view = view.child(
-                div()
-                    .debug_selector(move || selector.clone())
-                    .text_color(colour)
-                    .child(sentence(&phrase)),
-            );
-        }
-        let stopped = matches!(run.status.as_str(), "blocked" | "failed");
-        if stopped {
-            view = view.children(self.run_problems(t, &name_of, t.error));
-        }
-        if run.resume_allowed {
-            let mut row = div()
-                .flex()
-                .flex_wrap()
-                .items_center()
-                .gap(px(TAB_GAP))
-                .child(
-                    kit::button(t, "run-resume", "Resume", Kind::Primary).on_click(cx.listener(
-                        |p, _, _, cx| {
-                            p.run_post(
-                                "/resume".into(),
-                                json!({"mode":"reattach", "actor":"human:operator"}),
-                                cx,
-                            )
-                        },
-                    )),
-                );
-            for (id, label, body) in [
-                (
-                    "run-redispatch",
-                    "Run the step again",
-                    json!({"mode":"redispatch", "actor":"human:operator"}),
-                ),
-                (
-                    "run-grant",
-                    "Grant another allowance",
-                    json!({"mode":"reattach", "grant":true, "actor":"human:operator"}),
-                ),
-                (
-                    "run-take-fail",
-                    "Take the fail route",
-                    json!({"mode":"reattach", "takeFail":true, "actor":"human:operator"}),
-                ),
-                (
-                    "run-pick-best",
-                    "Pick the best attempt",
-                    json!({"mode":"reattach", "pickBest":true, "actor":"human:operator"}),
-                ),
-            ] {
-                row = row.child(kit::button(t, id, label, Kind::Quiet).on_click(
-                    cx.listener(move |p, _, _, cx| p.run_post("/resume".into(), body.clone(), cx)),
-                ));
-            }
-            view = view.child(row);
-        }
-        let mission = mission.cloned();
-        let mission = mission.as_ref();
-        for gate in &run.waiting_gates {
-            let gate_id = gate.gate_id.clone();
-            let seq = gate.requested_seq;
-            let gate_title = mission
-                .map(|m| m.node_title(&gate_id))
-                .filter(|title| !title.trim().is_empty())
-                .unwrap_or("Review");
-            let mut row = div()
-                .debug_selector(|| "run-gate".into())
-                .p(px(PAD))
-                .flex()
-                .flex_col()
-                .gap(px(PAD))
-                .border_1()
-                .border_color(t.accent)
-                .child(
-                    div()
-                        .debug_selector({
-                            let title = gate_title.to_owned();
-                            move || format!("gate-title-{title}")
-                        })
-                        .child(format!("Waiting for your answer · {gate_title}")),
-                );
-            if let Some((_, Ok(Some(request)))) = self.run.gates.get(&gate_id) {
-                let source = self
-                    .run
-                    .frozen
-                    .as_ref()
-                    .or(self.state.mission.as_ref())
-                    .map(|mission| crate::store::gate::source(mission, &request.input.from_node_id))
-                    .unwrap_or_else(|| "upstream step".into());
-                let quote = if request.input.text.trim().is_empty() {
-                    "The upstream step sent no text.".to_owned()
-                } else {
-                    request.input.text.clone()
-                };
-                let question = if request.criterion.trim().is_empty() {
-                    "Review the result and decide whether to approve it.".to_owned()
-                } else {
-                    request.criterion.clone()
-                };
-                row = row
-                    .child(
-                        div().debug_selector(|| "gate-request-loaded".into()).child(
-                            div()
-                                .debug_selector({
-                                    let question = question.clone();
-                                    move || format!("gate-question-{question}")
-                                })
-                                .child(question),
-                        ),
-                    )
-                    .child(
-                        kit::label(t, format!("From {source}"))
-                            .debug_selector(move || format!("gate-source-{source}")),
-                    )
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("gate-input-{seq}")))
-                            .debug_selector(|| "gate-input-quote".into())
-                            .max_h(px(size::NOTICE))
-                            .overflow_y_scroll()
-                            .p(px(PAD))
-                            .rounded(px(size::RADIUS))
-                            .border_1()
-                            .border_color(t.divider)
-                            .bg(t.raised)
-                            .text_color(t.text2)
-                            .child(quote),
-                    );
-                if request.input.truncated {
-                    row = row.child("Showing the start of a long input.");
-                }
-            } else if let Some((_, Err(error))) = self.run.gates.get(&gate_id) {
-                let retry_gate = gate_id.clone();
-                row = row
-                    .child(
-                        div()
-                            .text_color(t.error)
-                            .child(format!("Could not load gate input: {error}")),
-                    )
-                    .child(
-                        kit::button(
-                            t,
-                            SharedString::from(format!("gate-retry-{gate_id}")),
-                            "Retry loading gate",
-                            Kind::Plain,
-                        )
-                        .debug_selector(|| "gate-retry".into())
-                        .on_click(cx.listener(move |page, _, _, cx| {
-                            let response = page.run.responses.get(&retry_gate).cloned();
-                            page.run.gates.remove(&retry_gate);
-                            page.sync_gate(cx);
-                            if let Some(response) = response {
-                                page.run.responses.insert(retry_gate.clone(), response);
-                            }
-                        })),
-                    );
-            } else {
-                row = row.child(div().text_color(t.dim).child("Loading the gate input…"));
-            }
-            let gate_reference = crate::store::words::gate_reference(&run, gate, &place);
-            row = row.child(
-                kit::button(
-                    t,
-                    SharedString::from(format!("gate-send-{gate_id}")),
-                    "Send gate to session",
-                    Kind::Quiet,
-                )
-                .on_click(cx.listener(move |p, _, _, cx| {
-                    if let Err(e) = p.host.ask(
-                        Ask::Send {
-                            reference: gate_reference.clone(),
-                            target: None,
-                        },
-                        cx,
-                    ) {
-                        p.run.error = Some(e.message);
-                        cx.notify();
-                    }
-                })),
-            );
-            if let Some(response) = self.run.responses.get(&gate_id) {
-                row = row.child(
-                    div()
-                        .debug_selector(|| "gate-response".into())
-                        .child(response.clone()),
-                );
-            }
-            let mut approve_label = "Approve".to_owned();
-            let mut reject_label = "Send back".to_owned();
-            if let Some(mission) = self.run.frozen.as_ref().or(self.state.mission.as_ref()) {
-                let flow = flow::build(mission);
-                let gate_flow = flow
-                    .sections
-                    .iter()
-                    .flat_map(|s| &s.steps)
-                    .find(|s| s.id == gate_id);
-                if let Some(flow::Step {
-                    kind: flow::StepKind::Gate { pass, fail, .. },
-                    ..
-                }) = gate_flow
-                {
-                    let alone =
-                        !run_state::project(&run.events)
-                            .states
-                            .iter()
-                            .any(|(id, state)| {
-                                id != &gate_id
-                                    && matches!(
-                                        state,
-                                        run_state::NodeState::Running
-                                            | run_state::NodeState::Waiting
-                                    )
-                            });
-                    let (approve_words, approve) =
-                        crate::store::gate::route(pass, "Approve", alone);
-                    let (reject_words, reject) =
-                        crate::store::gate::route(fail, "Send back", alone);
-                    approve_label = approve;
-                    reject_label = reject;
-                    row = row.child(approve_words).child(reject_words);
-                }
-            }
-            if let Some(pick) = &gate.pick {
-                if let Some(step) = pick.get("nodeId").and_then(|v| v.as_str()) {
-                    let step = step.to_owned();
-                    row = row.child(
-                        kit::button(
-                            t,
-                            SharedString::from(format!("gate-compare-{gate_id}")),
-                            "Compare attempts",
-                            Kind::Quiet,
-                        )
-                        .debug_selector(|| "gate-compare".into())
-                        .on_click(cx.listener(
-                            move |page, _, window, cx| {
-                                page.run.pending_attempt = Some((step.clone(), true));
-                                window.focus(&page.run.attempts_focus, cx);
-                                page.attempts(cx);
-                            },
-                        )),
-                    );
-                }
-                for line in crate::store::gate::picking_words(pick, "") {
-                    if !line.is_empty() {
-                        row = row.child(line);
-                    }
-                }
-                if let Some(candidates) = pick.get("candidates").and_then(|v| v.as_array()) {
-                    for candidate in candidates.iter().filter_map(|v| v.as_i64()) {
-                        let gate = gate_id.clone();
-                        row = row.child(
-                            kit::button(
-                                t,
-                                (
-                                    SharedString::from(format!("pick-{}", gate_id)),
-                                    candidate as usize,
-                                ),
-                                format!("Pick {candidate}"),
-                                Kind::Primary,
-                            )
-                            .on_click(
-                                cx.listener(move |p, _, _, cx| p.pick(&gate, seq, candidate, cx)),
-                            ),
-                        );
-                    }
-                }
-            } else {
-                let mut actions = div().flex().gap(px(PAD));
-                for (word, verdict, kind) in [
-                    (approve_label, "pass", Kind::Primary),
-                    (reject_label, "fail", Kind::Plain),
-                ] {
-                    let gate = gate_id.clone();
-                    actions = actions.child(
-                        kit::button(
-                            t,
-                            SharedString::from(format!("gate-{}-{verdict}", gate_id)),
-                            word,
-                            kind,
-                        )
-                        .debug_selector(move || format!("gate-{verdict}"))
-                        .on_click(
-                            cx.listener(move |p, _, _, cx| p.verdict(&gate, seq, verdict, cx)),
-                        ),
-                    );
-                }
-                row = row.child(actions);
-            }
-            view = view.child(row);
-        }
-
-        // What the run produced, first because it is what the operator came
-        // for: its outputs, then the files its agents wrote.
-        let written = self
-            .run
-            .evidence
-            .evidence
-            .as_ref()
-            .map(|e| e.written_outputs(&run.cwd, &run.outputs))
-            .unwrap_or_default();
-        if !run.outputs.is_empty() || !written.is_empty() {
-            let mut list = div()
-                .flex()
-                .flex_col()
-                .gap(px(TAB_GAP))
-                .child(kit::label(t, "Produced"));
-            for output in &run.outputs {
-                list = list.child(self.output_row(t, &run, output, &node, &place, &name_of, cx));
-            }
-            if !written.is_empty() {
-                list = list.child(kit::note(t, "Files it wrote", None));
-            }
-            for output in &written {
-                list = list.child(self.output_row(t, &run, output, &node, &place, &name_of, cx));
-            }
-            view = view.child(list);
-        }
-
-        // Each step: its state, seat, brief, attempts and files.
-        let state = run_state::project(&run.events);
-        let mut modes = div().flex().gap(px(TAB_GAP));
-        for (label, canvas) in [("Flow", false), ("Canvas", true)] {
-            let selector = if canvas {
-                "run-mode-canvas"
-            } else {
-                "run-mode-flow"
-            };
-            modes = modes.child(
-                kit::button(
-                    t,
-                    selector,
-                    label,
-                    if self.run.canvas_mode == canvas {
-                        Kind::Plain
-                    } else {
-                        Kind::Quiet
-                    },
-                )
-                .debug_selector(move || selector.into())
-                .on_click(cx.listener(move |page, _, _, cx| {
-                    page.run.canvas_mode = canvas;
-                    cx.notify();
-                })),
-            );
-        }
-        view = view.child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(kit::label(t, "Steps"))
-                .child(modes),
-        );
-        let evidence = self.run.evidence.evidence.clone();
-        let evidence = evidence.as_ref();
-        if self.run.canvas_mode {
-            if let Some(mission) = mission {
-                view = view.child(
-                    self.render_canvas(t, mission, true, cx)
-                        .h(px(size::NOTICE))
-                        .w_full(),
-                );
-            }
-        } else if let Some(mission) = mission {
-            let flow = flow::build(mission);
-            for section in &flow.sections {
-                if section.input.is_some() {
-                    view = view.child(self.given(t, &run, &node, cx));
-                }
-                for step in &section.steps {
-                    let status = state.states.get(&step.id).copied();
-                    let word = status
-                        .map(|s| format!("{s:?}").to_lowercase())
-                        .unwrap_or_else(|| "pending".into());
-                    let selector = format!("run-step-{}-{word}", step.id);
-                    let revealed = self.run.reveal_step.as_deref() == Some(step.id.as_str());
-                    let mut top = div()
-                        .flex()
-                        .items_center()
-                        .gap(px(TAB_GAP))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_ellipsis()
-                                .child(format!("{}  {}", step.number, mission.node_name(&step.id))),
-                        )
-                        .child(chip(&word.to_uppercase(), step_colour(t, status)));
-                    if let Some(count) = state.attempts.get(&step.id).copied().filter(|n| *n > 0) {
-                        let step_id = step.id.clone();
-                        let selector = format!("run-step-attempts-{step_id}");
-                        let text = if count == 1 {
-                            "Attempt".to_owned()
-                        } else {
-                            format!("{count} attempts")
-                        };
-                        top = top.child(
-                            kit::button(t, SharedString::from(selector.clone()), text, Kind::Quiet)
-                                .debug_selector(move || selector.clone())
-                                .tooltip(kit::tip("What this step's agents made"))
-                                .on_click(cx.listener(move |page, _, window, cx| {
-                                    page.open_canvas_attempts(&step_id, window, cx)
-                                })),
-                        );
-                    }
-                    for brief in evidence
-                        .into_iter()
-                        .flat_map(|e| &e.briefs)
-                        .filter(|brief| brief.node_id == step.id)
-                    {
-                        let selector = format!("run-brief-{}", brief.dispatch_seq);
-                        let path = brief.path.clone();
-                        let owner = node.clone();
-                        top = top.child(
-                            kit::button(
-                                t,
-                                SharedString::from(selector.clone()),
-                                "Brief",
-                                Kind::Quiet,
-                            )
-                            .debug_selector(move || selector.clone())
-                            .tooltip(kit::tip("What this step's agent was told"))
-                            .on_click(
-                                cx.listener(move |p, _, _, cx| p.open_beside(&owner, &path, cx)),
-                            ),
-                        );
-                    }
-                    for seat in crate::store::seats::seats(&run)
-                        .into_iter()
-                        .filter(|seat| seat.step == step.id)
-                    {
-                        top =
-                            top.child(self.seat_control(t, seat, &format!("flow-{}", step.id), cx));
-                    }
-                    let mut card = div()
-                        .debug_selector(move || selector.clone())
-                        .flex()
-                        .flex_col()
-                        .gap(px(4.))
-                        .p(px(PAD))
-                        .rounded(px(size::RADIUS))
-                        .bg(t.surface)
-                        .border_1()
-                        .border_color(if revealed { t.accent } else { t.divider })
-                        .child(top);
-                    let mut about = Vec::new();
-                    if let Some(formation) = mission.formations.iter().find(|f| f.id == step.id) {
-                        about.extend(formation.slots.iter().map(crate::store::words::staffing));
-                        if let Some(brief) = &formation.brief
-                            && !brief.goal.trim().is_empty()
-                        {
-                            card = card.child(
-                                div()
-                                    .text_color(t.text2)
-                                    .line_clamp(2)
-                                    .child(brief.goal.trim().to_owned()),
-                            );
-                        }
-                    }
-                    if let flow::StepKind::Gate {
-                        deciders, judges, ..
-                    } = &step.kind
-                    {
-                        about.push(format!(
-                            "decided by {}",
-                            deciders
-                                .iter()
-                                .map(|d| match d {
-                                    flow::Decider::You => "you",
-                                    flow::Decider::Judge => "a judge",
-                                    flow::Decider::Code => "a check",
-                                })
-                                .collect::<Vec<_>>()
-                                .join(" and ")
-                        ));
-                        about.extend(
-                            judges
-                                .iter()
-                                .map(|judge| format!("judge {}", mission.node_name(judge))),
-                        );
-                        if let Some(gate) = mission.gates.iter().find(|gate| gate.id == step.id)
-                            && !gate.criterion.is_empty()
-                        {
-                            card = card.child(
-                                div()
-                                    .text_color(t.text2)
-                                    .line_clamp(2)
-                                    .child(gate.criterion.clone()),
-                            );
-                        }
-                    }
-                    if step.parallel.len() > 1 {
-                        about.push(format!(
-                            "alongside {}",
-                            step.parallel
-                                .iter()
-                                .filter(|id| **id != step.id)
-                                .map(|id| mission.node_name(id))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ));
-                    }
-                    for limit in mission
-                        .limits
-                        .iter()
-                        .filter(|limit| limit.target == step.id)
-                    {
-                        let mut words = Vec::new();
-                        if let Some(n) = limit.rounds {
-                            words.push(format!("{n} rounds"));
-                        }
-                        if let Some(n) = limit.seconds {
-                            words.push(crate::store::words::duration_text(n));
-                        }
-                        if let Some(n) = limit.tokens {
-                            words.push(format!("{n} tokens"));
-                        }
-                        about.push(format!(
-                            "limit {}, then {}",
-                            words.join(", "),
-                            limit.when_spent
-                        ));
-                    }
-                    if !about.is_empty() {
-                        card = card.child(kit::note(t, about.join(" · "), Some(t.dim)));
-                    }
-                    if let Some(point) = points
-                        .iter()
-                        .find(|point| point.node == step.id && !point.reason.is_empty())
-                    {
-                        // The run bar says why in plain words; the card
-                        // keeps what was recorded, on asking.
-                        if !point.raw.is_empty() {
-                            let open = self.block_details;
-                            card = card.child(
-                                div().flex().child(
-                                    kit::button(
-                                        t,
-                                        SharedString::from(format!("block-details-{}", step.id)),
-                                        if open { "Hide details" } else { "Details" },
-                                        Kind::Quiet,
-                                    )
-                                    .on_click(cx.listener(
-                                        |p, _, _, cx| {
-                                            p.block_details = !p.block_details;
-                                            cx.notify();
-                                        },
-                                    )),
-                                ),
-                            );
-                            if open {
-                                card = card.child(
-                                    div()
-                                        .debug_selector(|| "block-details-text".into())
-                                        .text_color(t.text2)
-                                        .child(point.raw.clone()),
-                                );
-                            }
-                        }
-                    }
-                    if status == Some(run_state::NodeState::Running)
-                        && let Some(note) = run_state::seat_note(&run.events, &step.id)
-                    {
-                        card = card.child(div().text_color(rgb(t.ansi[3])).child(sentence(&note)));
-                    }
-                    if run.waiting_gates.iter().any(|gate| gate.gate_id == step.id) {
-                        card = card.child(
-                            div()
-                                .text_color(rgb(t.ansi[3]))
-                                .child("Your answer is asked for here."),
-                        );
-                    }
-                    for (index, file) in evidence
-                        .into_iter()
-                        .flat_map(|e| e.files.iter().enumerate())
-                        .filter(|(_, file)| file.node_id == step.id)
-                    {
-                        card = card.child(self.file_row(t, index, file, &node, cx));
-                    }
-                    view = view.child(card);
-                }
-            }
-        }
-
-        // The record: what went wrong along the way, files no step owns,
-        // and every event.
-        if !stopped {
-            let problems = self.run_problems(t, &name_of, t.text2);
-            if !problems.is_empty() {
-                view = view
-                    .child(kit::label(t, "Along the way"))
-                    .children(problems);
-            }
-        }
-        if let Some(evidence) = evidence {
-            let steps: Vec<&str> = mission
-                .map(|m| m.formations.iter().map(|f| f.id.as_str()).collect())
-                .unwrap_or_default();
-            let loose: Vec<_> = evidence
-                .files
-                .iter()
-                .enumerate()
-                .filter(|(_, file)| self.run.canvas_mode || !steps.contains(&file.node_id.as_str()))
-                .collect();
-            if !loose.is_empty() {
-                view = view.child(kit::label(t, "Files"));
-                for (index, file) in loose {
-                    view = view.child(self.file_row(t, index, file, &node, cx));
-                }
-            }
-            if evidence.truncated {
-                view = view.child(kit::note(t, "Some files are not shown.", None));
-            }
-            if self.run.canvas_mode {
-                for brief in &evidence.briefs {
-                    let selector = format!("run-brief-{}", brief.dispatch_seq);
-                    let path = brief.path.clone();
-                    let owner = node.clone();
-                    view = view.child(
-                        kit::button(
-                            t,
-                            SharedString::from(selector.clone()),
-                            format!("Brief · {}", name_of(&brief.node_id)),
-                            Kind::Quiet,
-                        )
-                        .debug_selector(move || selector.clone())
-                        .on_click(cx.listener(move |p, _, _, cx| p.open_beside(&owner, &path, cx))),
-                    );
-                }
-            }
-        } else if let Some(error) = &self.run.evidence.error {
-            view = view.child(kit::note(
-                t,
-                format!("Could not load what the run left behind: {error}"),
-                Some(t.error),
-            ));
-        }
-        let events = if self.run.events_open {
-            "Hide events".to_owned()
-        } else {
-            format!("Show all {} events", run.event_count)
-        };
-        view = view.child(
-            div().flex().child(
-                kit::button(t, "run-events", events, Kind::Quiet)
-                    .debug_selector(|| "run-events".into())
-                    .on_click(cx.listener(|page, _, _, cx| {
-                        page.run.events_open = !page.run.events_open;
-                        cx.notify();
-                    })),
-            ),
-        );
-        if self.run.events_open {
-            let mut events = div()
-                .id("run-events-drawer")
-                .debug_selector(|| "run-events-drawer".into())
-                .max_h(px(size::NOTICE))
-                .overflow_y_scroll()
-                .flex()
-                .flex_col()
-                .text_size(px(size::SMALL))
-                .text_color(t.text2);
-            for event in &run.events {
-                let id = if event.node_id.is_empty() {
-                    &event.gate_id
-                } else {
-                    &event.node_id
-                };
-                let detail = [&event.status, &event.verdict, &event.outcome, &event.detail]
-                    .into_iter()
-                    .filter(|s| !s.is_empty())
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(" · ");
-                let node = mission
-                    .map(|m| m.node_title(id))
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or(id);
-                let text = format!("{} · {} · {} {}", event.seq, event.kind, node, detail);
-                let selector = format!("run-event-{}-{}", event.kind, event.detail);
-                events = events.child(div().debug_selector(move || selector.clone()).child(text));
-            }
-            view = view.child(events);
-        }
-        Some(view)
-    }
-
-    /// The problems the run's evidence records, each named by its step.
-    fn run_problems(
-        &self,
-        t: &Theme,
-        name_of: &dyn Fn(&str) -> String,
-        colour: gpui::Hsla,
-    ) -> Vec<Div> {
-        let Some(evidence) = &self.run.evidence.evidence else {
-            return Vec::new();
-        };
-        let events = self
-            .selected_run()
-            .map(|run| run.events.as_slice())
-            .unwrap_or_default();
-        // The error and the block it caused often say the same; each is
-        // said once, in plain words.
-        let mut said: Vec<(String, String)> = events
-            .iter()
-            .rev()
-            .find(|e| e.kind == "run_blocked")
-            .filter(|_| {
-                self.selected_run()
-                    .is_some_and(|run| run.status == "blocked")
-            })
-            .map(|e| {
-                let text = e.detail.as_str();
-                (
-                    e.node_id.clone(),
-                    parvi_missions_contract::plain_reason(text),
-                )
-            })
-            .into_iter()
-            .collect();
-        evidence
-            .problems
-            .iter()
-            .filter(|problem| {
-                let key = (
-                    problem.node_id.clone(),
-                    parvi_missions_contract::plain_reason(&problem.reason.text),
-                );
-                let fresh = !said.contains(&key);
-                said.push(key);
-                fresh
-            })
-            .map(|problem| {
-                let reason = parvi_missions_contract::plain_reason(&run_state::problem_now(
-                    events,
-                    problem.seq,
-                    &problem.reason.text,
-                ));
-                let selector = format!("run-problem-{}-{}", problem.seq, problem.reason.text);
-                let row = div()
-                    .debug_selector(move || selector.clone())
-                    .flex()
-                    .gap(px(TAB_GAP));
-                // A problem of the whole run reads as a sentence of its own;
-                // one of a step is led by the step's name.
-                if problem.node_id.is_empty() {
-                    row.child(div().text_color(colour).child(sentence(&reason)))
-                } else {
-                    row.child(
-                        div()
-                            .flex_none()
-                            .text_color(t.text2)
-                            .child(name_of(&problem.node_id)),
-                    )
-                    .child(div().text_color(colour).child(reason))
-                }
-            })
-            .collect()
-    }
-
-    /// One mission output: its name, where it came from and its value, with
-    /// a way to open it and to hand it to a session.
-    #[allow(clippy::too_many_arguments)]
-    fn output_row(
-        &self,
-        t: &Theme,
-        run: &RunProjection,
-        output: &parvi_missions_contract::RunOutput,
-        node: &str,
-        place: &str,
-        name_of: &dyn Fn(&str) -> String,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let text = format!("{}: {}", output.name, output.value);
-        let reference = format!(
-            "{} from run {} (mission {}) on {}",
-            text, run.run_id, run.mission_slug, place
-        );
-        let mut buttons = div().flex().gap(px(TAB_GAP));
-        if matches!(output.kind.as_str(), "file" | "folder") {
-            let path = output.value.clone();
-            let node = node.to_owned();
-            buttons = buttons.child(
-                kit::button(
-                    t,
-                    SharedString::from(format!("output-{}", output.name)),
-                    "Open",
-                    Kind::Plain,
-                )
-                .on_click(cx.listener(move |p, _, _, cx| {
-                    if let Err(e) = p.host.ask(
-                        Ask::OpenPath {
-                            node: NodeId(node.clone()),
-                            path: path.clone(),
-                            beside: false,
-                        },
-                        cx,
-                    ) {
-                        p.run.error = Some(e.message);
-                        cx.notify();
-                    }
-                })),
-            );
-        }
-        let name = output.name.clone();
-        buttons = buttons.child(
-            kit::button(
-                t,
-                SharedString::from(format!("use-output-{}", output.name)),
-                "Use in a mission…",
-                Kind::Quiet,
-            )
-            .debug_selector({
-                let name = name.clone();
-                move || format!("use-output-{name}")
-            })
-            .on_click(cx.listener(move |p, _, _, cx| {
-                p.run.using = if p.run.using.as_deref() == Some(name.as_str()) {
-                    None
-                } else {
-                    Some(name.clone())
-                };
-                cx.notify();
-            })),
-        );
-        let picker = (self.run.using.as_deref() == Some(output.name.as_str())).then(|| {
-            let mut list = div()
-                .flex()
-                .flex_wrap()
-                .items_center()
-                .gap(px(TAB_GAP))
-                .child(kit::note(t, "Start with it:", None));
-            for group in crate::store::navigator::groups(&self.state)
-                .into_iter()
-                .filter(|group| group.node == node)
-            {
-                let selector = format!("use-in-{}", group.slug);
-                let value = output.value.clone();
-                let (node, slug) = (group.node.clone(), group.slug.clone());
-                list = list.child(
-                    kit::button(
-                        t,
-                        SharedString::from(selector.clone()),
-                        group.title,
-                        Kind::Plain,
-                    )
-                    .debug_selector(move || selector.clone())
-                    .on_click(cx.listener(move |p, _, _, cx| {
-                        p.use_output(node.clone(), slug.clone(), value.clone(), cx)
-                    })),
-                );
-            }
-            list
-        });
-        buttons = buttons.child(
-            kit::button(
-                t,
-                SharedString::from(format!("send-output-{}", output.name)),
-                "Send to session",
-                Kind::Quiet,
-            )
-            .tooltip(kit::tip("Hand this output to an agent session"))
-            .on_click(cx.listener(move |p, _, _, cx| {
-                if let Err(e) = p.host.ask(
-                    Ask::Send {
-                        reference: reference.clone(),
-                        target: None,
-                    },
-                    cx,
-                ) {
-                    p.run.error = Some(e.message);
-                    cx.notify();
-                }
-            })),
-        );
-        let from = if output.node_id.is_empty() {
-            output.kind.clone()
-        } else {
-            format!("{} from {}", output.kind, name_of(&output.node_id))
-        };
-        let value = if output.kind == "text" {
-            div()
-                .id(SharedString::from(format!("output-text-{}", output.name)))
-                .max_h(px(size::NOTICE / 2.))
-                .overflow_y_scroll()
-                .p(px(TAB_GAP))
-                .rounded(px(size::RADIUS))
-                .bg(t.raised)
-                .child(output.value.clone())
-                .into_any_element()
-        } else {
-            div()
-                .flex()
-                .gap(px(TAB_GAP))
-                .min_w_0()
-                .child(crate::store::words::output_excerpt(output))
-                .child(
-                    div()
-                        .min_w_0()
-                        .text_color(t.dim)
-                        .child(crate::store::words::middle(&output.value)),
-                )
-                .into_any_element()
-        };
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(4.))
-            .p(px(PAD))
-            .rounded(px(size::RADIUS))
-            .bg(t.surface)
-            .border_1()
-            .border_color(t.divider)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(TAB_GAP))
-                    .child(
-                        div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(output.name.clone()),
-                    )
-                    .child(div().flex_1().text_color(t.dim).child(from))
-                    .child(buttons),
-            )
-            .child(value)
-            .children(picker)
-    }
-
-    /// A file a step wrote: its name and size, opened beside the run.
-    fn file_row(
-        &self,
-        t: &Theme,
-        index: usize,
-        file: &crate::store::evidence::File,
-        node: &str,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        let selector = format!("run-file-{index}");
-        let path = file.path.clone();
-        let owner = node.to_owned();
-        let name = file
-            .path
-            .rsplit('/')
-            .find(|part| !part.is_empty())
-            .unwrap_or(&file.path)
-            .to_owned();
-        div()
-            .id(SharedString::from(selector.clone()))
-            .debug_selector(move || selector.clone())
-            .flex()
-            .gap(px(TAB_GAP))
-            .min_w_0()
-            .cursor_pointer()
-            .hover(|s| s.bg(t.raised))
-            .tooltip(kit::tip(file.path.clone()))
-            .child(div().flex_none().text_color(t.accent).child(name))
-            .child(
-                div()
-                    .flex_none()
-                    .text_color(t.dim)
-                    .child(crate::store::words::size_text(file.size)),
-            )
-            .on_click(cx.listener(move |p, _, _, cx| p.open_beside(&owner, &path, cx)))
-    }
-
-    fn open_beside(&mut self, node: &str, path: &str, cx: &mut Context<Self>) {
+    pub(super) fn open_beside(&mut self, node: &str, path: &str, cx: &mut Context<Self>) {
         if let Err(error) = self.host.ask(
             Ask::OpenPath {
                 node: NodeId(node.to_owned()),
@@ -2970,91 +1800,9 @@ impl MissionsPage {
             cx.notify();
         }
     }
-
-    /// What the run was given: its inputs and the folder it worked in, the
-    /// folder opening in Files.
-    fn given(&self, t: &Theme, run: &RunProjection, node: &str, cx: &mut Context<Self>) -> Div {
-        let mut card = div()
-            .flex()
-            .flex_col()
-            .gap(px(4.))
-            .p(px(PAD))
-            .rounded(px(size::RADIUS))
-            .border_1()
-            .border_color(t.divider)
-            .child(kit::label(t, "Given"));
-        let row = |name: &str| {
-            div()
-                .flex()
-                .gap(px(PAD))
-                .min_w_0()
-                .child(div().flex_none().text_color(t.text2).child(name.to_owned()))
-        };
-        for value in &run.inputs {
-            card = card.child(row(&value.name).child(div().min_w_0().child(value.value.clone())));
-        }
-        let (name, path) = if !run.repository.is_empty() {
-            ("repository", &run.repository)
-        } else {
-            ("works in", &run.cwd)
-        };
-        if !path.is_empty() {
-            let (owner, open) = (node.to_owned(), path.clone());
-            card = card.child(
-                row(name).child(
-                    div()
-                        .id("run-folder")
-                        .debug_selector(|| "run-folder".into())
-                        .min_w_0()
-                        .cursor_pointer()
-                        .text_color(t.accent)
-                        .hover(|s| s.bg(t.raised))
-                        .tooltip(kit::tip("Open in Files"))
-                        .child(crate::store::words::middle(path))
-                        .on_click(cx.listener(move |p, _, _, cx| p.open_beside(&owner, &open, cx))),
-                ),
-            );
-        }
-        card
-    }
 }
-
-/// A state in a small coloured box.
-fn chip(text: &str, colour: gpui::Hsla) -> Div {
-    div()
-        .flex_none()
-        .px(px(TAB_GAP))
-        .rounded(px(size::RADIUS))
-        .border_1()
-        .border_color(colour)
-        .text_size(px(size::SMALL))
-        .text_color(colour)
-        .child(text.to_owned())
-}
-
-fn run_colour(t: &Theme, status: &str) -> gpui::Hsla {
-    match status {
-        "succeeded" => rgb(t.ansi[2]).into(),
-        "failed" => t.error,
-        "blocked" | "waiting_human" => rgb(t.ansi[3]).into(),
-        "canceled" => t.dim,
-        _ => t.accent,
-    }
-}
-
-fn step_colour(t: &Theme, state: Option<run_state::NodeState>) -> gpui::Hsla {
-    use run_state::NodeState;
-    match state {
-        Some(NodeState::Done) => rgb(t.ansi[2]).into(),
-        Some(NodeState::Running) => t.accent,
-        Some(NodeState::Blocked | NodeState::Waiting) => rgb(t.ansi[3]).into(),
-        Some(NodeState::Failed) => t.error,
-        Some(NodeState::Canceled) | None => t.dim,
-    }
-}
-
 /// A status phrase as a sentence.
-fn sentence(phrase: &str) -> String {
+pub(super) fn sentence(phrase: &str) -> String {
     let mut chars = phrase.chars();
     match chars.next() {
         Some(first) => {
@@ -3068,7 +1816,7 @@ fn sentence(phrase: &str) -> String {
         None => String::new(),
     }
 }
-fn segment(s: &str) -> String {
+pub(super) fn segment(s: &str) -> String {
     s.bytes()
         .map(|b| {
             if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {

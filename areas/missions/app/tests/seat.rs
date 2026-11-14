@@ -278,15 +278,12 @@ fn step_and_run_bar_open_the_owned_session_and_disable_ended_seats(cx: &mut Test
             )
             .unwrap();
     });
-    let ended = format!(
-        "flow-fmn_work-seat-{}-{}-ended-seat-fmn_work",
-        running.run, running.seq
-    );
+    // An ended seat offers no session to open.
     until(cx, "ended seat", |cx| {
-        cx.debug_bounds(Box::leak(ended.clone().into_boxed_str()))
-            .is_some()
+        cx.debug_bounds(Box::leak(bar.clone().into_boxed_str()))
+            .is_none()
+            && cx.debug_bounds("run-step-fmn_work-done").is_some()
     });
-    click(cx, &ended);
     cx.run_until_parked();
     assert_eq!(
         OPENED.lock().unwrap().len(),

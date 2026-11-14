@@ -109,9 +109,16 @@ fn creates_and_renames_a_mission_with_cancel_and_conflict_guard(cx: &mut TestApp
     cx.simulate_input("Release");
     click(cx, "mission-form-submit");
     until(cx, "created", |cx| !has(cx, "mission-form"));
-    let rename = format!("mission-rename-{}-release", running.node);
-    until(cx, "rename command", |cx| has(cx, &rename));
-    click(cx, &rename);
+    // Rename and Delete wait in the mission head's "…" menu.
+    let menu = |cx: &mut VisualTestContext, label: &str| {
+        until(cx, "mission menu", |cx| has(cx, "mission-more"));
+        click(cx, "mission-more");
+        let row = format!("menu-label-{label}");
+        until(cx, "menu row", |cx| has(cx, &row));
+        click(cx, &row);
+    };
+    until(cx, "release shown", |cx| has(cx, "pane-title-Release"));
+    menu(cx, "Rename…");
     until(cx, "rename form", |cx| has(cx, "mission-form-name"));
     cx.simulate_keystrokes("ctrl-a backspace");
     click(cx, "mission-form-submit");
@@ -131,7 +138,7 @@ fn creates_and_renames_a_mission_with_cancel_and_conflict_guard(cx: &mut TestApp
         })
     };
     assert_eq!(read().0["mission"]["title"], "Renamed");
-    click(cx, &rename);
+    menu(cx, "Rename…");
     until(cx, "rename again", |cx| has(cx, "mission-form-name"));
     cx.simulate_input("Draft name");
     runtime.block_on(async {
@@ -170,21 +177,21 @@ fn creates_and_renames_a_mission_with_cancel_and_conflict_guard(cx: &mut TestApp
     cx.simulate_input("Scratch");
     click(cx, "mission-form-submit");
     until(cx, "second mission created", |cx| !has(cx, "mission-form"));
-    let delete = format!("mission-delete-{}-scratch", running.node);
-    until(cx, "delete command", |cx| has(cx, &delete));
-    click(cx, &delete);
+    let listed = format!("mission-{}-scratch", running.node);
+    until(cx, "scratch shown", |cx| has(cx, "pane-title-Scratch"));
+    menu(cx, "Delete…");
     until(cx, "archive confirmation", |cx| {
         has(cx, "mission-archive-explanation")
     });
     click(cx, "mission-form-cancel");
     until(cx, "archive canceled", |cx| !has(cx, "mission-form"));
-    click(cx, &delete);
+    menu(cx, "Delete…");
     until(cx, "archive confirmation reopened", |cx| {
         has(cx, "mission-archive-explanation")
     });
     click(cx, "mission-form-submit");
     until(cx, "mission archived", |cx| {
-        !has(cx, "mission-form") && !has(cx, &delete)
+        !has(cx, "mission-form") && !has(cx, &listed)
     });
     runtime.block_on(async {
         let client = NodeClient::new(Some(&format!("{}/", running.url))).unwrap();
@@ -263,8 +270,15 @@ fn designs_a_multi_gate_mission_and_shows_findings_on_the_canvas(cx: &mut TestAp
     until(cx, "next step open", |cx| has(cx, "step-title"));
     // Once something follows the Input, its + is gone: no wire runs past it.
     until(cx, "+ gone once wired", |cx| !has(cx, &next));
-    for (button, field, count) in [("new-step", "formations", 2), ("new-gate", "gates", 1)] {
+    for (button, field, count) in [
+        ("new-step", "formations", 2),
+        ("menu-label-Add gate", "gates", 1),
+    ] {
         until(cx, "board ready for edit", |cx| has(cx, "undo"));
+        if button != "new-step" {
+            click(cx, "edit-more");
+            until(cx, "the rarer cards", |cx| has(cx, button));
+        }
         click(cx, button);
         until(cx, "card saved", |_| {
             read()[field].as_array().unwrap().len() == count
@@ -304,8 +318,15 @@ fn designs_a_multi_gate_mission_and_shows_findings_on_the_canvas(cx: &mut TestAp
     click(cx, "step-save");
     until(cx, "judge gate saved", |cx| !has(cx, "step-extra"));
     assert_eq!(read()["gates"][0]["kinds"][0], "formation");
-    for (button, field, count) in [("new-gate", "gates", 2), ("new-end", "ends", 1)] {
+    for (button, field, count) in [
+        ("menu-label-Add gate", "gates", 2),
+        ("menu-label-Add end", "ends", 1),
+    ] {
         until(cx, "board ready for edit", |cx| has(cx, "undo"));
+        if button != "new-step" {
+            click(cx, "edit-more");
+            until(cx, "the rarer cards", |cx| has(cx, button));
+        }
         click(cx, button);
         until(cx, "card saved", |_| {
             read()[field].as_array().unwrap().len() == count

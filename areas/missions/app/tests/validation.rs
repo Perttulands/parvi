@@ -95,22 +95,11 @@ fn run_is_only_emphasized_for_a_current_runnable_mission(cx: &mut TestAppContext
             s.hub().read(cx).fleet.here().state == LinkState::Open
         })
     });
-    until(cx, "no selected mission", |cx| {
-        cx.debug_bounds("new-mission").is_some()
-    });
-    assert!(
-        cx.debug_bounds("mission-run-ready").is_none()
-            && cx.debug_bounds("mission-run-quiet").is_none(),
-        "without a mission there is nothing to run"
-    );
+    // With nothing chosen the page opens the first thing in its list, here
+    // the only mission, without a click.
     let selector = Box::leak(format!("mission-{}-hello", running.id).into_boxed_str());
-    until(cx, "mission listing", |cx| {
-        cx.debug_bounds(selector).is_some()
-    });
-    let mission = cx.debug_bounds(selector).unwrap().center();
-    cx.simulate_click(mission, Modifiers::none());
-    until(cx, "unwired mission", |cx| {
-        cx.debug_bounds("flow-input-inp_hello").is_some()
+    until(cx, "the mission opened on its own", |cx| {
+        cx.debug_bounds(selector).is_some() && cx.debug_bounds("flow-input-inp_hello").is_some()
     });
     let rt = tokio::runtime::Runtime::new().unwrap();
     let client = NodeClient::new(Some(&format!("{}/", running.url))).unwrap();
@@ -137,19 +126,12 @@ fn run_is_only_emphasized_for_a_current_runnable_mission(cx: &mut TestAppContext
     assert!(cx.debug_bounds("mission-run-quiet").is_some());
     assert!(cx.debug_bounds("mission-run-ready").is_none());
     let rail = cx.debug_bounds("missions-rail").unwrap();
-    assert_eq!(
-        rail.size.width,
-        gpui::px(parvi_app_kit::theme::size::LABEL_COL)
-    );
-    until(cx, "flow note editor", |cx| {
-        cx.debug_bounds("mission-note-draft").is_some()
-    });
+    assert_eq!(rail.size.width, gpui::px(parvi_app_kit::theme::size::LIST));
     let canvas = cx.debug_bounds("mission-mode-canvas").unwrap().center();
     cx.simulate_click(canvas, Modifiers::none());
     until(cx, "canvas mode", |cx| {
         cx.debug_bounds("mission-canvas").is_some()
     });
-    assert!(cx.debug_bounds("mission-note-draft").is_none());
     rt.block_on(async {
         let (doc, etag) = client.request(http::Method::GET, "/api/missions/hello", None, None).await.unwrap();
         client.request(http::Method::PATCH, "/api/missions/hello", Some(json!({"expectedRev":doc["mission"]["rev"], "wireConnection":{"from":"inp_hello:out","to":"fmn_work:port_in"}})), Some(&etag)).await.unwrap();
@@ -157,6 +139,11 @@ fn run_is_only_emphasized_for_a_current_runnable_mission(cx: &mut TestAppContext
         assert_eq!(valid["errors"].as_array().unwrap().len(), 0, "{valid}");
         assert!(!valid["warnings"].as_array().unwrap().iter().any(|w| w["code"] == "mission_not_runnable"));
     });
+    until(cx, "validation refreshed while editing", |cx| {
+        cx.debug_bounds("mission-validation-complete").is_some()
+    });
+    let done = cx.debug_bounds("mission-mode-flow").unwrap().center();
+    cx.simulate_click(done, Modifiers::none());
     until(cx, "wired mission is runnable", |cx| {
         cx.debug_bounds("mission-run-ready").is_some()
     });

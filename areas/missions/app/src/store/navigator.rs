@@ -14,6 +14,10 @@ pub struct Group {
     pub node: String,
     pub slug: String,
     pub title: String,
+    /// Steps and gates; none marks a mission never filled in.
+    pub steps: usize,
+    /// Why the mission cannot be read, when it cannot.
+    pub broken: Option<String>,
     pub runs: Vec<Row>,
 }
 fn attention(status: &str) -> u8 {
@@ -74,6 +78,8 @@ pub fn groups(store: &Store) -> Vec<Group> {
                 } else {
                     mission.title.clone()
                 },
+                steps: mission.steps,
+                broken: mission.broken.clone(),
                 runs,
             });
         }

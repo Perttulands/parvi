@@ -98,7 +98,7 @@ fn click(cx: &mut VisualTestContext, selector: &str) {
     cx.simulate_click(b.center(), Modifiers::none());
 }
 #[gpui::test]
-fn filters_folds_and_expands_a_missions_run_history(cx: &mut TestAppContext) {
+fn the_list_opens_the_latest_run_and_reaches_every_run_of_a_mission(cx: &mut TestAppContext) {
     let running = start();
     let settings = std::env::temp_dir()
         .join(format!("parvi-nav-{}", std::process::id()))
@@ -116,36 +116,29 @@ fn filters_folds_and_expands_a_missions_run_history(cx: &mut TestAppContext) {
             cx,
         )
     });
-    let group = format!("mission-group-{}/hello", running.node);
     let title = format!("mission-{}-hello", running.node);
-    let fold = format!("mission-fold-{}/hello", running.node);
     let oldest = format!("run-row-{}", running.oldest);
     let latest = format!("run-row-{}", running.latest);
-    let more = format!("mission-more-{}/hello", running.node);
-    until(cx, "navigator history", |cx| {
-        selector(cx, &group)
-            && selector(cx, &title)
-            && selector(cx, &fold)
-            && selector(cx, &more)
+    // Nothing chosen: the page shows the newest finished run without a click.
+    until(cx, "latest run shown", |cx| {
+        selector(cx, &title)
             && selector(cx, &latest)
+            && selector(cx, &oldest)
+            && selector(cx, &format!("run-detail-{}", running.latest))
+            && selector(cx, "run-finished-succeeded")
     });
     click(cx, &title);
     until(cx, "mission opened by its name", |cx| {
         selector(cx, "flow-step-fmn_work")
     });
-    assert!(!selector(cx, &oldest));
-    click(cx, &more);
-    until(cx, "older run", |cx| selector(cx, &oldest));
-    click(cx, &fold);
-    until(cx, "folded mission history", |cx| !selector(cx, &latest));
-    assert!(selector(cx, &title));
-    click(cx, &title);
-    until(cx, "folded mission still opens by name", |cx| {
-        selector(cx, "flow-step-fmn_work")
+    // The mission lists all its runs; the oldest opens from there.
+    let listed = format!("mission-run-{}", running.oldest);
+    until(cx, "the mission's runs", |cx| selector(cx, &listed));
+    click(cx, &listed);
+    until(cx, "older run", |cx| {
+        selector(cx, &format!("run-detail-{}", running.oldest))
+            && !selector(cx, "flow-step-fmn_work")
     });
-    assert!(!selector(cx, &latest));
-    click(cx, &fold);
-    until(cx, "unfolded mission history", |cx| selector(cx, &latest));
     click(cx, "mission-filter");
     cx.simulate_input(&running.oldest);
     until(cx, "filtered run", |cx| {

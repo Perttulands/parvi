@@ -123,7 +123,12 @@ impl MissionsPage {
         })
         .detach();
     }
-    fn open_canvas_note(&mut self, target: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_canvas_note(
+        &mut self,
+        target: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.note_saving
             || self.note.read(cx).text != self.note_base
             || self.editor.is_some() && self.unsaved(cx).is_some()
@@ -252,6 +257,13 @@ impl MissionsPage {
                 })
                 .fold(at.1, |y, card| y.max(card.y + card.h + GAP)),
         );
+        // The mission's own paper appears once it holds something or is
+        // being written; Note in the head opens it.
+        if thread(notes, MISSION_THREAD).is_empty()
+            && self.note_paper.open.as_deref() != Some(MISSION_THREAD)
+        {
+            return out;
+        }
         out.push(self.canvas_sticky(
             t,
             MISSION_THREAD,
@@ -300,8 +312,7 @@ impl MissionsPage {
             .size(px(size))
             .border_1()
             .border_color(edge)
-            .bg(if has { fill } else { edge })
-            .shadow_sm()
+            .when(has, |d| d.bg(fill).shadow_sm())
             .text_size(px((size::TEXT * z).max(size::SMALL)))
             .font_weight(FontWeight::BOLD)
             .text_color(t.bg)
@@ -309,7 +320,7 @@ impl MissionsPage {
             .items_center()
             .justify_center()
             .cursor_pointer()
-            .opacity(if has { 1. } else { 0.8 })
+            .opacity(if has { 1. } else { 0.4 })
             .hover(|d| d.opacity(1.))
             .tooltip(kit::tip(if has {
                 "Open the note thread"

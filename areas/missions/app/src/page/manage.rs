@@ -124,7 +124,7 @@ impl MissionsPage {
         cx: &mut Context<Self>,
     ) {
         let name = cx.new(|cx| {
-            let mut field = TextField::new(cx, "Untitled mission");
+            let mut field = TextField::new(cx, "What it does, such as Write the changelog");
             field.set(title, true, cx);
             field
         });
@@ -177,6 +177,11 @@ impl MissionsPage {
         }
         let title = form.name.read(cx).text.trim().to_owned();
         let doing = form.doing.clone();
+        if matches!(doing, Doing::Create { .. }) && title.is_empty() {
+            self.manage.form.as_mut().unwrap().problem = Some("A mission needs a name.".into());
+            cx.notify();
+            return;
+        }
         if let Doing::Rename {
             title: original, ..
         } = &doing
@@ -274,7 +279,7 @@ impl MissionsPage {
         let action = match &form.doing {
             Doing::Create { .. } => "Create",
             Doing::Rename { .. } => "Rename",
-            Doing::Archive { .. } => "Archive mission",
+            Doing::Archive { .. } => "Delete",
         };
         let mut go = kit::button(
             t,
@@ -312,10 +317,24 @@ impl MissionsPage {
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
                         .when(matches!(form.doing, Doing::Archive { .. }), |d| {
-                            let Doing::Archive { title, .. } = &form.doing else { return d; };
-                            d.child(div().debug_selector(|| "mission-archive-explanation".into()).child(format!("“{title}” will be removed from the mission list. Its definition, layout and notes are archived; run history remains.")))
+                            let Doing::Archive { title, .. } = &form.doing else {
+                                return d;
+                            };
+                            d.child(
+                                div()
+                                    .debug_selector(|| "mission-archive-explanation".into())
+                                    .child(format!(
+                                        "“{title}” leaves the list for good. Its runs stay."
+                                    )),
+                            )
                         })
-                        .when(!matches!(form.doing, Doing::Archive { .. }), |d| d.child(kit::label(t, "Name")).child(div().debug_selector(|| "mission-form-name".into()).child(form.name.clone())).child(kit::note(t, "The mission slug is derived from this name and stays the same when renamed.", Some(t.dim))))
+                        .when(!matches!(form.doing, Doing::Archive { .. }), |d| {
+                            d.child(kit::label(t, "Name")).child(
+                                div()
+                                    .debug_selector(|| "mission-form-name".into())
+                                    .child(form.name.clone()),
+                            )
+                        })
                         .when_some(form.problem.clone(), |d, problem| {
                             d.child(
                                 div()

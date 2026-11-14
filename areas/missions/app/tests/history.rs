@@ -147,6 +147,8 @@ fn undo_and_redo_replay_both_wires_of_a_removed_shared_input(cx: &mut TestAppCon
     });
     click(cx, "mission-card-fmn_work");
     until(cx, "step", |cx| cx.debug_bounds("step-save").is_some());
+    // Ports are among what few steps need, behind one line.
+    click(cx, "step-more");
     scroll(cx, -500.);
     until(cx, "input port", |cx| {
         cx.debug_bounds("port-port_in").is_some()

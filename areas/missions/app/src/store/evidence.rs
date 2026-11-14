@@ -32,7 +32,15 @@ impl Evidence {
         let base = format!("{}/", cwd.trim_end_matches('/'));
         self.written
             .iter()
-            .filter(|w| !outputs.iter().any(|o| o.value == w.path))
+            // An output already names the file, even when the run copied it
+            // into its own store under the same name.
+            .filter(|w| {
+                !outputs.iter().any(|o| {
+                    o.value == w.path
+                        || (matches!(o.kind.as_str(), "file" | "folder")
+                            && file_name(&o.value) == file_name(&w.path))
+                })
+            })
             .map(|w| parvi_missions_contract::RunOutput {
                 name: w.path.strip_prefix(&base).unwrap_or(&w.path).to_owned(),
                 kind: "file".into(),
@@ -50,6 +58,9 @@ impl Evidence {
 pub struct Problem {
     pub seq: u64,
     pub node_id: String,
+    /// The gate whose verdict it was, when a gate's.
+    #[serde(default)]
+    pub gate_id: String,
     pub reason: Text,
 }
 #[derive(Clone, Debug, Deserialize)]
@@ -102,4 +113,11 @@ pub fn image_format(path: &str) -> Option<gpui::ImageFormat> {
         "ico" => gpui::ImageFormat::Ico,
         _ => return None,
     })
+}
+
+fn file_name(path: &str) -> &str {
+    path.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or(path)
 }

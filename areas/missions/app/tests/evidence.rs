@@ -261,7 +261,8 @@ fn evidence_links_and_attempt_images(cx: &mut TestAppContext) {
         .as_array()
         .unwrap()
         .iter()
-        .find(|p| p["reason"]["text"] == "add coverage")
+        // A step shows the latest of its problems.
+        .rfind(|p| p["reason"]["text"] == "add coverage")
         .unwrap();
     let problem_selector = format!(
         "run-problem-{}-add coverage",
@@ -296,7 +297,12 @@ fn evidence_links_and_attempt_images(cx: &mut TestAppContext) {
             beside: true
         }
     );
-    let brief = &e["briefs"][0];
+    // A step offers the brief of its latest attempt.
+    let briefs = e["briefs"].as_array().unwrap();
+    let brief = briefs
+        .iter()
+        .rfind(|b| b["nodeId"] == briefs[0]["nodeId"])
+        .unwrap();
     let brief_selector = format!("run-brief-{}", brief["dispatchSeq"].as_u64().unwrap());
     click(cx, &brief_selector);
     until(cx, "brief ask", |_| OPENED.lock().unwrap().len() >= 2);
@@ -308,24 +314,7 @@ fn evidence_links_and_attempt_images(cx: &mut TestAppContext) {
             beside: true
         }
     );
-    reveal_control(cx, "run-mode-canvas");
-    click(cx, "run-mode-canvas");
-    until(cx, "run canvas attempts", |cx| {
-        cx.debug_bounds("card-attempts-fmn_work").is_some()
-    });
-    reveal_control(cx, "card-attempts-fmn_work");
-    click(cx, "card-attempts-fmn_work");
-    until(cx, "canvas attempts window", |cx| {
-        cx.debug_bounds("attempts-window").is_some()
-    });
-    reveal_control(cx, "attempts-close");
-    click(cx, "attempts-close");
-    until(cx, "canvas attempts closed", |cx| {
-        cx.debug_bounds("attempts-window").is_none()
-    });
-    reveal_control(cx, "run-mode-flow");
-    click(cx, "run-mode-flow");
-    until(cx, "flow view", |cx| {
+    until(cx, "steps", |cx| {
         cx.debug_bounds("run-step-fmn_work-done").is_some()
     });
     reveal_control(cx, "run-step-attempts-fmn_work");

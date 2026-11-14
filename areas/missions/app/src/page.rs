@@ -6,6 +6,7 @@ mod manage;
 mod navigator;
 mod notes;
 mod run;
+mod run_view;
 mod staffing;
 mod validation;
 use crate::store::{Store, canvas as board, flow, undo};
@@ -20,6 +21,7 @@ use parvi_app_kit::{
     widgets::{
         field::{FieldEvent, TextField},
         kit::{self, Kind},
+        pane,
     },
 };
 use parvi_core::NodeId;
@@ -48,6 +50,8 @@ pub struct MissionsPage {
     manage: manage::Manage,
     canvas: canvas::View,
     mission_canvas_mode: bool,
+    /// The step editor shows what few steps need.
+    editor_more: bool,
     note_paper: notes::NotesUi,
     run: run::RunUi,
     generation: u64,
@@ -90,7 +94,7 @@ pub struct MissionsPage {
     note_saving: bool,
     wanted: Option<Wanted>,
     /// A run output on its way into the start form of the mission opening.
-    carry: Option<String>,
+    carry: Option<(String, String)>,
     reveal_card: Option<String>,
     /// A step or End being added: once it exists, wire it from this port
     /// (if any); a step then opens in the editor.
@@ -99,7 +103,6 @@ pub struct MissionsPage {
     /// still lacks now reads as a problem rather than as a to-do.
     run_tried: bool,
     /// The blocked step's recorded output is shown.
-    block_details: bool,
     /// The to-do list over the canvas is open.
     findings_open: bool,
     /// A staffing pick made while another write was in flight.
@@ -167,6 +170,7 @@ impl MissionsPage {
             manage: manage::Manage::default(),
             canvas: canvas::View::default(),
             mission_canvas_mode: false,
+            editor_more: false,
             note_paper: notes::NotesUi::default(),
             run: run::RunUi::new(cx),
             generation: 0,
@@ -211,7 +215,6 @@ impl MissionsPage {
             reveal_card: None,
             new_step: None,
             run_tried: false,
-            block_details: false,
             findings_open: false,
             staff_pending: false,
             seen_run_snapshots: Default::default(),
@@ -530,6 +533,7 @@ impl MissionsPage {
         self.run = run::RunUi::new(cx);
         if self.state.selected.as_ref() != Some(&(node.clone(), slug.clone())) {
             self.canvas = canvas::View::default();
+            self.mission_canvas_mode = false;
             self.run_tried = false;
             self.findings_open = false;
         }
@@ -595,8 +599,8 @@ impl MissionsPage {
                                     Ok(v) => {
                                         page.state.mission_etag = v.mission.etag;
                                         page.state.mission = Some(v.mission.mission);
-                                        if let Some(value) = page.carry.take() {
-                                            page.start_with(&value, cx);
+                                        if let Some((value, folder)) = page.carry.take() {
+                                            page.start_with(&value, &folder, cx);
                                         }
                                     }
                                     Err(e) => page.state.error = Some(e.to_string()),
@@ -1488,143 +1492,105 @@ impl Render for MissionsPage {
         self.setup_start_keys(window, cx);
         self.sync_validation(cx);
         let t = theme(cx).clone();
-        let mut list = self.render_navigator(&t, cx);
-        if self.state.selected.is_some()
-            && (!self.mission_canvas_mode || self.note.read(cx).text != self.note_base)
-            && self.editor.is_none()
-            && self.note_paper.open.is_none()
-            && let Some(notes) = &self.notes
-        {
-            list = list.child(
-                div()
-                    .px(px(PAD))
-                    .pt(px(PAD))
-                    .child(kit::label(&t, "Mission notes")),
-            );
-            for note in &notes.mission {
-                let id = note.id.clone();
-                let selected = id.clone();
-                let text = note.text.clone();
-                if note.author == "human:ui" {
-                    list = list.child(
-                        kit::button(
-                            &t,
-                            gpui::SharedString::from(format!("mission-note-{id}")),
-                            note.text.clone(),
-                            Kind::Quiet,
-                        )
-                        .on_click(cx.listener(move |p, _, _, cx| {
-                            p.select_note(&selected, &text, cx);
-                        })),
-                    );
-                } else {
-                    list = list.child(div().child(note.text.clone()));
-                }
-            }
-            list = list
-                .child(
-                    div()
-                        .debug_selector(|| "mission-note-draft".into())
-                        .child(self.note.clone()),
-                )
-                .child(
-                    kit::button(
-                        &t,
-                        "mission-add-note",
-                        if self.note_id.is_some() {
-                            "Save note"
-                        } else {
-                            "Add note"
-                        },
-                        Kind::Quiet,
-                    )
-                    .debug_selector(|| "mission-add-note".into())
-                    .on_click(cx.listener(|p, _, _, cx| p.add_note(false, cx))),
-                )
-                .when(
-                    self.note_id.is_some() || self.note.read(cx).text != self.note_base,
-                    |d| {
-                        d.child(
-                            kit::button(
-                                &t,
-                                "mission-note-cancel",
-                                "Discard note draft",
-                                Kind::Quiet,
-                            )
-                            .on_click(cx.listener(|p, _, _, cx| p.discard_note(cx))),
-                        )
-                    },
-                )
-                .when(self.note_id.is_some(), |d| {
-                    d.child(
-                        kit::button(&t, "mission-delete-note", "Delete note", Kind::Quiet)
-                            .on_click(cx.listener(|p, _, _, cx| p.add_note(true, cx))),
-                    )
-                });
-        }
-        let content: Div = if let Some(view) = self.run_view(&t, cx) {
-            view
+        self.choose_first(cx);
+        let list = self.render_navigator(&t, cx);
+        let error = self.state.error.clone().map(|e| {
+            div()
+                .debug_selector(|| "missions-error".into())
+                .text_color(t.error)
+                .child(e)
+        });
+        let detail: Div = if let Some((head, body)) = self.run_detail(&t, cx) {
+            pane::detail(&t, "missions-run", head, body.children(error))
         } else if let Some(m) = self.state.mission.clone() {
             if self.mission_canvas_mode {
-                self.render_canvas(&t, &m, false, cx)
+                let head = self.edit_head(&t, &m, cx);
+                pane::detail_frame(
+                    head,
+                    div()
+                        .id("missions-board-scroll")
+                        .size_full()
+                        .overflow_scroll()
+                        .child(self.render_canvas(&t, &m, false, cx))
+                        .when_some(error, |d, e| {
+                            d.child(div().absolute().top(px(PAD)).left(px(PAD)).child(e))
+                        }),
+                )
             } else {
-                self.render_mission_flow(&t, &m, cx)
+                let (head, body) = self.mission_detail(&t, &m, cx);
+                pane::detail(
+                    &t,
+                    "missions-detail",
+                    head,
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(size::SECTION_GAP))
+                        .children(error)
+                        .child(body),
+                )
             }
+        } else if let Some(error) = error {
+            let retry = self.state.selected.is_some().then(|| {
+                pane::act(&t, "retry-mission-definition", "Try again")
+                    .debug_selector(|| "retry-mission-definition".into())
+                    .on_click(cx.listener(|page, _, _, cx| {
+                        if let Some((node, slug)) = page.state.selected.clone() {
+                            page.open(node, slug, cx);
+                        }
+                    }))
+            });
+            pane::detail(
+                &t,
+                "missions-detail",
+                pane::head(&t),
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(size::HEAD_GAP))
+                    .child(error)
+                    .children(retry),
+            )
+        } else if self.state.selected.is_some() {
+            pane::detail(
+                &t,
+                "missions-detail",
+                pane::head(&t),
+                pane::meta(&t, "Reading the mission…", None),
+            )
         } else {
-            let mut empty = div().p(px(PAD)).flex().flex_col().gap(px(TAB_GAP));
-            empty = match self.state.error.clone() {
-                Some(error) => empty.child(div().text_color(t.error).child(error)),
-                None => {
-                    // Before any mission exists there is nothing on the left
-                    // to pick.
-                    let none = !self.state.nodes.is_empty()
-                        && self.state.nodes.values().all(|feed| {
-                            feed.missions.as_ref().is_some_and(Vec::is_empty)
-                                && feed.runs.is_empty()
-                        });
-                    let lead = if none {
-                        "No missions yet. A mission is a plan of steps that agents carry out; + Mission starts one."
-                    } else {
-                        "Pick a mission on the left to see its steps, or a run to see what it did."
-                    };
-                    empty
-                        .child(kit::label(&t, "Missions"))
-                        .child(
-                            div()
-                                .debug_selector(|| "missions-landing".into())
-                                .child(lead),
-                        )
-                        .child(kit::note(
-                            &t,
-                            "From a terminal: parvi mission --help.",
-                            None,
-                        ))
-                }
-            };
-            if self.state.error.is_some() && self.state.selected.is_some() {
-                empty = empty.child(
-                    kit::button(&t, "retry-mission-definition", "Try again", Kind::Plain)
-                        .debug_selector(|| "retry-mission-definition".into())
-                        .on_click(cx.listener(|page, _, _, cx| {
-                            if let Some((node, slug)) = page.state.selected.clone() {
-                                page.open(node, slug, cx);
-                            }
-                        })),
-                );
-            }
-            empty
+            let none = !self.state.nodes.is_empty()
+                && self.state.nodes.values().all(|feed| {
+                    feed.missions.as_ref().is_some_and(Vec::is_empty) && feed.runs.is_empty()
+                });
+            pane::detail(
+                &t,
+                "missions-detail",
+                pane::head(&t),
+                if none {
+                    pane::empty(
+                        &t,
+                        "No missions yet. A mission is steps that agents carry out, one after another.",
+                        Some(
+                            kit::button(&t, "landing-new-mission", "New mission", Kind::Primary)
+                                .on_click(cx.listener(|p, _, window, cx| p.open_mission_create(window, cx)))
+                                .into_any_element(),
+                        ),
+                    )
+                    .debug_selector(|| "missions-landing".into())
+                } else {
+                    div().debug_selector(|| "missions-landing".into())
+                },
+            )
         };
-        let authoring = self.state.mission.is_some() && !self.is_showing_run();
         let form = self.mission_form(&t, cx);
         let start_form = self.run_start_form(&t, window, cx);
         let attempts_form = self.attempts_form(&t, cx);
         let stop_form = self.stop_form(&t, cx);
-        div()
+        pane::page(&t, list, detail)
             .id("missions-root")
             .track_focus(&self.focus)
             .relative()
-            .size_full()
-            .flex()
             .on_mouse_down(MouseButton::Left, cx.listener(|page, _, window, cx| {
                 if window.focused(cx).is_none() { window.focus(&page.focus, cx); }
             }))
@@ -1646,38 +1612,7 @@ impl Render for MissionsPage {
                     cx.stop_propagation();
                 }
             }))
-            .bg(t.bg)
             .text_color(t.text)
-            .child(
-                div()
-                    .id("missions-list")
-                    .debug_selector(|| "missions-rail".into())
-                    .w(px(size::LABEL_COL))
-                    .flex_none()
-                    .overflow_y_scroll()
-                    .child(kit::button(&t, "new-mission", "+ Mission", Kind::Quiet).debug_selector(|| "new-mission".into()).on_click(cx.listener(|p, _, window, cx| p.open_mission_create(window, cx))))
-                    .child(list),
-            )
-            .child(
-                div()
-                    .id("missions-canvas")
-                    .flex_1()
-                    .min_w_0()
-                    .flex().flex_col()
-                    .when(authoring, |d| d.child(div().flex().items_center().px(px(PAD)).py(px(TAB_GAP)).gap(px(TAB_GAP)).border_b_1().border_color(t.divider)
-                        .child(kit::button(&t, "mission-mode-flow", "Flow", if !self.mission_canvas_mode { Kind::Plain } else { Kind::Quiet }).debug_selector(|| "mission-mode-flow".into()).on_click(cx.listener(|p, _, _, cx| { p.mission_canvas_mode = false; cx.notify(); })))
-                        .child(kit::button(&t, "mission-mode-canvas", "Canvas", if self.mission_canvas_mode { Kind::Plain } else { Kind::Quiet }).debug_selector(|| "mission-mode-canvas".into()).on_click(cx.listener(|p, _, _, cx| { p.mission_canvas_mode = true; cx.notify(); })))
-                        .child(div().debug_selector({ let complete = self.validation_complete(); move || if complete { "mission-validation-complete".into() } else { "mission-validation-pending".into() } }).child(div().debug_selector({ let ready = self.mission_run_ready(); move || if ready { "mission-run-ready".into() } else { "mission-run-quiet".into() } }).child(kit::button(&t, "prepare-run", "Run", if self.mission_run_ready() { Kind::Primary } else { Kind::Quiet }).debug_selector(|| "prepare-run".into()).on_click(cx.listener(|p, _, _, cx| p.prepare_run(cx))))))
-                        .when(self.validation_failed(), |d| d.child(kit::button(&t, "retry-validation", "Retry validation", Kind::Quiet).debug_selector(|| "retry-validation".into()).on_click(cx.listener(|p, _, _, cx| { p.validation.clear(); p.sync_validation(cx); cx.notify(); }))))
-                        .child(kit::button(&t, "new-input", "+ Input", Kind::Quiet).debug_selector(|| "new-input".into()).on_click(cx.listener(|p, _, _, cx| p.add_card(board::Kind::Input, cx))))
-                        .child(kit::button(&t, "new-step", "+ Step", Kind::Quiet).debug_selector(|| "new-step".into()).on_click(cx.listener(|p, _, _, cx| p.add_card(board::Kind::Formation, cx))))
-                        .child(kit::button(&t, "new-gate", "+ Gate", Kind::Quiet).debug_selector(|| "new-gate".into()).on_click(cx.listener(|p, _, _, cx| p.add_card(board::Kind::Gate, cx))))
-                        .child(kit::button(&t, "new-end", "+ End", Kind::Quiet).debug_selector(|| "new-end".into()).on_click(cx.listener(|p, _, _, cx| p.add_card(board::Kind::End, cx))))
-                        .child(kit::button(&t, "undo", "Undo", Kind::Quiet).debug_selector({ let busy = self.writing; move || if busy { "undo-busy".into() } else { "undo".into() } }).on_click(cx.listener(|p, _, _, cx| p.undo(false, cx))))
-                        .child(kit::button(&t, "redo", "Redo", Kind::Quiet).debug_selector({ let busy = self.writing; move || if busy { "redo-busy".into() } else { "redo".into() } }).on_click(cx.listener(|p, _, _, cx| p.undo(true, cx))))))
-                    .when_some(self.state.error.clone(), |d, e| d.child(div().text_color(t.error).child(e)))
-                    .child(div().id("missions-board-scroll").flex_1().overflow_scroll().child(content)),
-            )
             // A file a run names opens here, beside the run that made it.
             .when_some(self.host.beside(cx), |root, beside| {
                 root.child(
@@ -1724,7 +1659,7 @@ impl Render for MissionsPage {
                         .when(matches!(ed.kind, EditKind::Step), |mut d| {
                             if let Some((node, slug)) = &self.state.selected && let Some(feed) = self.state.nodes.get(node) {
                                 for seat in feed.runs.values().filter(|run| &run.mission_slug == slug).flat_map(crate::store::seats::seats).filter(|seat| seat.step == ed.id && seat.state == crate::store::seats::State::Live) {
-                                    d = d.child(self.seat_control(&t, seat, "step", cx));
+                                    d = d.children(self.seat_control(&t, seat, "step"));
                                 }
                             }
                             d
@@ -1758,11 +1693,12 @@ impl Render for MissionsPage {
                             d
                         })
                         .when(matches!(ed.kind, EditKind::Step) && self.slot.is_some(), |d| d.child(self.slot_pickers(&t, cx)))
-                        .when(matches!(ed.kind, EditKind::Step), |d| d.child(kit::label(&t, "Team"))
+                        .when(matches!(ed.kind, EditKind::Step) && !self.editor_more, |d| d.child(left(kit::button(&t, "step-more", "Team, device, repository, ports, limits, notes…", Kind::Quiet).debug_selector(|| "step-more".into()).on_click(cx.listener(|p, _, _, cx| { p.editor_more = true; cx.notify(); })))))
+                        .when(matches!(ed.kind, EditKind::Step) && self.editor_more, |d| d.child(kit::label(&t, "Team"))
                             .child({ let current = self.state.mission.as_ref().and_then(|m| m.formations.iter().find(|f| f.id == ed.id)).map(|f| f.kind.as_str()); let pick = |id: &'static str, text: &'static str, ty: &'static str| kit::button(&t, id, text, if current == Some(ty) { Kind::Plain } else { Kind::Quiet }).on_click(cx.listener(move |p, _, _, cx| p.set_type(ty, cx))); div().flex().gap(px(TAB_GAP)).child(pick("type-solo", "Solo", "solo")).child(pick("type-peer", "Peer", "peer")).child(pick("type-orchestrated", "Orchestrated", "orchestrated")) })
                             .child(kit::label(&t, "Device")).child(div().flex().gap(px(TAB_GAP)).child(div().flex_1().child(self.extra.clone()))
                             .child(left(kit::button(&t, "set-device", "Set device", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.set_device(cx)))))))
-                        .when(matches!(ed.kind, EditKind::Step), |d| d.child(kit::label(&t, "Repository")).child(self.repository_picker(&t, &self.repository, "repository", cx))
+                        .when(matches!(ed.kind, EditKind::Step) && self.editor_more, |d| d.child(kit::label(&t, "Repository")).child(self.repository_picker(&t, &self.repository, "repository", cx))
                             .child(kit::label(&t, "Work")).child(div().child(self.work.clone()))
                             .child(kit::label(&t, "Files")).child(div().child(self.files.clone()))
                             .child(kit::label(&t, "Links")).child(div().child(self.links.clone())))
@@ -1775,7 +1711,7 @@ impl Render for MissionsPage {
                             }))
                             .child(div().debug_selector(|| "step-extra".into()).child(self.extra.clone()))
                         })
-                        .when(matches!(ed.kind, EditKind::Step), |mut d| {
+                        .when(matches!(ed.kind, EditKind::Step) && self.editor_more, |mut d| {
                             if let Some(f) = self.state.mission.as_ref().and_then(|m| m.formations.iter().find(|f| f.id == ed.id)) {
                                 d = d.child(kit::label(&t, "Ports"));
                                 for (dir, port) in f.inputs.iter().map(|p| ("in", p)).chain(f.outputs.iter().map(|p| ("out", p))) {
@@ -1790,7 +1726,7 @@ impl Render for MissionsPage {
                             }
                             d
                         })
-                        .when(matches!(ed.kind, EditKind::Step | EditKind::Input), |mut d| {
+                        .when(matches!(ed.kind, EditKind::Input) || (matches!(ed.kind, EditKind::Step) && self.editor_more), |mut d| {
                             d = d.child(kit::label(&t, "Limits"));
                             if let Some(mission) = &self.state.mission { for limit in mission.limits.iter().filter(|l| l.target == ed.id) {
                                 let id = limit.id.clone(); let selected = id.clone();
@@ -1810,7 +1746,7 @@ impl Render for MissionsPage {
                             d.child(left(kit::button(&t, "add-output", "Add output", Kind::Quiet).on_click(cx.listener(|p, _, _, cx| p.add_output(cx)))))
                         })
                         .when(matches!(ed.kind, EditKind::Gate), |d| d.child(kit::label(&t, "Check profile")).child(div().child(self.check.clone())).child(kit::label(&t, "Profile version")).child(div().child(self.check_version.clone())).child(kit::label(&t, "Check value")).child(div().child(self.check_value.clone())).child(kit::label(&t, "Files")).child(div().child(self.files.clone())))
-                        .when_some(self.notes.as_ref(), |mut d, notes| {
+                        .when_some(self.notes.as_ref().filter(|_| self.editor_more || !matches!(ed.kind, EditKind::Step)), |mut d, notes| {
                             d = d.child(kit::label(&t, "Notes"));
                             if let Some(thread) = notes.elements.iter().find(|n| n.node_id == ed.id) {
                                 for note in &thread.entries {
